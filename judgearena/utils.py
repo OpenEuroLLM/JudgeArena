@@ -365,6 +365,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         ]
         if model_provider == "LlamaCpp":
             engine_kwargs["model_path"] = model_name
+            # Default n_ctx large enough for judge prompts (LlamaCpp default of 512 is too small)
+            if "n_ctx" not in engine_kwargs:
+                engine_kwargs["n_ctx"] = 8192
         else:
             engine_kwargs["model"] = model_name
 
