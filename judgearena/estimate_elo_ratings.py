@@ -2,105 +2,15 @@ import argparse
 import json
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from fast_langdetect import detect_language
-from huggingface_hub import snapshot_download
 from sklearn.linear_model import LogisticRegression
 
-from openjury.evaluate import (
-    annotate_battles,
-    PairScore,
-)
+from openjury.arenas_utils import load_arena_dataframe
+from openjury.evaluate import judge_and_parse_prefs
 from openjury.generate import generate_instructions
-from openjury.utils import make_model, cache_function_dataframe
-
-
-def load_arena_dataframe(
-    arena: str, comparia_revision: str = "7a40bce496c1f2aa3be4001da85a49cb4743042b"
-) -> pd.DataFrame:
-    """
-    :param arena:
-    :param comparia_revision:
-    :return: dataframe containing battles for the arena selected
-    """
-    assert arena in ["LMArena", "ComparIA"]
-    if arena == "LMArena":
-        # load LMSys
-        path = snapshot_download(
-            repo_id="lmarena-ai/arena-human-preference-100k",
-            repo_type="dataset",
-            allow_patterns="*parquet",
-            force_download=False,
-        )
-        df = pd.read_parquet(
-            Path(path) / "data" / "arena-explorer-preference-100k.parquet"
-        )
-        df["date"] = pd.to_datetime(df["tstamp"], unit="s")
-        df["benchmark"] = "LMArena"
-
-    else:
-        path = snapshot_download(
-            repo_id="ministere-culture/comparia-votes",
-            repo_type="dataset",
-            allow_patterns="*",
-            revision=comparia_revision,
-            force_download=False,
-        )
-
-        df = pd.read_parquet(Path(path) / "votes.parquet")
-
-        # unify schema
-        df["tstamp"] = df["timestamp"]
-        df["model_a"] = df["model_a_name"]
-        df["model_b"] = df["model_b_name"]
-
-        def get_winner(
-            chosen_model_name: str,
-            model_a: str,
-            model_b: str,
-            both_equal: bool,
-            **kwargs,
-        ):
-            if both_equal:
-                return "tie"
-            else:
-                if chosen_model_name is None or isinstance(chosen_model_name, float):
-                    return None
-                assert chosen_model_name in [
-                    model_a,
-                    model_b,
-                ], f"Chosen model: {chosen_model_name} but model_a: {model_a} and model_b: {model_b}"
-                return "model_a" if chosen_model_name == model_a else "model_b"
-
-        df["winner"] = df.apply(lambda row: get_winner(**row), axis=1)
-        df = df[~df.winner.isna()]
-        df["benchmark"] = "ComparIA"
-        df["question_id"] = df["id"]
-
-    cols = [
-        "question_id",
-        "tstamp",
-        "model_a",
-        "model_b",
-        "winner",
-        "conversation_a",
-        "conversation_b",
-        "benchmark",
-    ]
-    df = df.loc[:, cols]
-
-    # keep only one turn conversation for now as they are easier to evaluate
-    df["turns"] = df.apply(lambda row: len(row["conversation_a"]) - 1, axis=1)
-    df = df.loc[df.turns == 1]
-
-    df["lang"] = df.apply(
-        lambda row: detect_language(row["conversation_a"][0]["content"]).lower(), axis=1
-    )
-
-    return df
+from openjury.utils import make_model, cache_function_dataframe, compute_pref_summary
 
 
 @dataclass
@@ -120,6 +30,7 @@ class CliEloArgs:
     max_model_len: int | None = None
     chat_template: str | None = None
     result_folder: str = "results"
+    n_bootstraps: int = 20
     engine_kwargs: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -131,13 +42,15 @@ class CliEloArgs:
     @classmethod
     def parse_args(cls):
         parser = argparse.ArgumentParser(
-            prog="Estimate ELO rating for a model on an Arena (LMArena or ComparIA) with LLM judges",
+            prog="Estimate ELO rating for a model on an Arena (LMArena-100k, LMArena-140k, or ComparIA) with LLM judges",
         )
         parser.add_argument(
             "--arena",
-            help="The arena to use. Battles are sampled from this Arena.",
-            choices=["LMArena", "ComparIA"],
-            default="ComparIA",
+            help="The arena to use. Battles are sampled from this Arena. If not passed use contenation from all Arena. "
+            "Passing LMArena leads to loading the union of `LMArena-100k` and `LMArena-140k`",
+            choices=["LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"],
+            required=False,
+            # default="ComparIA",
         )
         parser.add_argument(
             "--model",
@@ -198,6 +111,13 @@ class CliEloArgs:
             default="results",
             help="The folder to save the results. Defaults to `results`. Evaluation results will be saved in"
             " `[result_folder]/[evaluation_name]`.",
+        )
+        parser.add_argument(
+            "--n_bootstraps",
+            type=int,
+            required=False,
+            default=10,
+            help="Number of bootstrap samples for ELO confidence intervals. Default is 10.",
         )
         parser.add_argument(
             "--truncate_all_input_chars",
@@ -281,6 +201,7 @@ class CliEloArgs:
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             result_folder=args.result_folder,
+            n_bootstraps=args.n_bootstraps,
             engine_kwargs=engine_kwargs,
         )
 
@@ -386,7 +307,7 @@ def compute_bradley_terry(
     X = X[:cur_row]
     Y = Y[:cur_row]
 
-    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=500)
+    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
     lr.fit(X, Y, sample_weight=sample_weights)
     elo_scores = scale * lr.coef_[0] + init_rating
 
@@ -453,9 +374,10 @@ def main():
         **extra_kwargs,
     )
 
+    replace_slash = lambda s: s.replace("/", "_")
     cache_suffix = (
-        f"{args.arena}_{args.model.replace("/", "_")}_"
-        f"{args.judge_model.replace("/", "_")}_{args.n_instructions}_{args.n_instructions_per_language}"
+        f"{args.arena}_{replace_slash(args.model)}_"
+        f"{replace_slash(args.judge_model)}_{args.n_instructions}_{args.n_instructions_per_language}"
     )
     completions_df = cache_function_dataframe(
         lambda: gen_fun(instructions=instructions, model=args.model),
@@ -510,7 +432,7 @@ def main():
             max_tokens=args.max_out_tokens_judge,
             **judge_extra_kwargs,
         )
-        anns = annotate_battles(
+        annotations, _, prefs = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
             instructions=instructions.tolist(),
             completions_A=completions_A,
@@ -521,10 +443,11 @@ def main():
         )
         return pd.DataFrame(
             {
-                "judge_completion": [a.judge_completion for a in anns],
-                "instruction": [a.instruction for a in anns],
-                "completion_A": [a.completion_A for a in anns],
-                "completion_B": [a.completion_B for a in anns],
+                "judge_completion": [a.judge_completion for a in annotations],
+                "instruction": [a.instruction for a in annotations],
+                "completion_A": [a.completion_A for a in annotations],
+                "completion_B": [a.completion_B for a in annotations],
+                "pref": prefs,
                 "use_model_a_as_opponent": use_model_a_as_opponent,
                 "our_model_is_position_a": our_model_is_position_a,
                 "opponent_model": opponent_models,
@@ -538,22 +461,19 @@ def main():
         cache_name=f"elo/{judge_cache_suffix}",
     )
 
-    # Restore position arrays from cache (in case loaded from disk)
+    # Restore position arrays and prefs from cache (in case loaded from disk)
     use_model_a_as_opponent = df_judge["use_model_a_as_opponent"].to_numpy()
     our_model_is_position_a = df_judge["our_model_is_position_a"].to_numpy()
     opponent_models = df_judge["opponent_model"].tolist()
+    prefs = df_judge["pref"].tolist()
 
     print(f"First judge output:\n{df_judge['judge_completion'].iloc[0][:500]}\n")
-
-    # Parse preferences: <0.5 means A wins, >0.5 means B wins, None means unparseable
-    score_parser = PairScore()
-    prefs = [score_parser.parse_model_raw(jc) for jc in df_judge["judge_completion"]]
 
     # Map preferences back to model-name-level battle results
     model_name = args.model
     battle_results = []
-    for i, (pref, is_pos_a, opp_model) in enumerate(
-        zip(prefs, our_model_is_position_a, opponent_models)
+    for pref, is_pos_a, opp_model in zip(
+        prefs, our_model_is_position_a, opponent_models
     ):
         if pref is None or pref == 0.5:
             winner = "tie"
@@ -574,21 +494,18 @@ def main():
     # LLM-judge battle results for our model
     df_llm_judge = pd.DataFrame(battle_results)
 
-    # Compute win/loss/tie counts and winrate
-    our_wins = sum(
-        1
-        for r in battle_results
-        if (r["model_a"] == model_name and r["winner"] == "model_a")
-        or (r["model_b"] == model_name and r["winner"] == "model_b")
+    # Normalize prefs so pref < 0.5 always means our model wins, then summarise
+    prefs_normalized = pd.Series(
+        [
+            p if (p is None or is_pos_a) else (1 - p)
+            for p, is_pos_a in zip(prefs, our_model_is_position_a)
+        ]
     )
-    our_losses = sum(
-        1
-        for r in battle_results
-        if (r["model_a"] == model_name and r["winner"] == "model_b")
-        or (r["model_b"] == model_name and r["winner"] == "model_a")
-    )
-    our_ties = sum(1 for r in battle_results if r["winner"] == "tie")
-    winrate = (our_wins + 0.5 * our_ties) / n if n > 0 else 0.0
+    summary = compute_pref_summary(prefs_normalized)
+    our_wins = summary["num_wins"]
+    our_losses = summary["num_losses"]
+    our_ties = summary["num_ties"]
+    winrate = summary["winrate"]
 
     print(f"\n=== Results for {model_name} ===")
     print(f"Battles: {n} | Wins: {our_wins} | Losses: {our_losses} | Ties: {our_ties}")
@@ -608,11 +525,11 @@ def main():
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Bootstrap Bradley-Terry ELO ratings
-    n_bootstraps = 10
+    n_bootstraps = args.n_bootstraps
 
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
-    print(f"\n=== ELO Ratings (Bradley-Terry, 10 bootstraps) ===")
+    print(f"\n=== ELO Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ===")
     print(
         f"Estimating ELO Ratings with {n_llm} LLM-judges for model {model_name} "
         f"and {n_human} human annotations for other models. Number of battles is indicated in parenthesis and "
