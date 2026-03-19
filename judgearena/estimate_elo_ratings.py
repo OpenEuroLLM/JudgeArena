@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-from openjury.arenas_utils import load_arena_dataframe
+from openjury.arenas_utils import load_arena_dataframe, _extract_instruction_text
 from openjury.evaluate import judge_and_parse_prefs
 from openjury.generate import generate_instructions
 from openjury.utils import make_model, cache_function_dataframe, compute_pref_summary
@@ -116,8 +116,8 @@ class CliEloArgs:
             "--n_bootstraps",
             type=int,
             required=False,
-            default=10,
-            help="Number of bootstrap samples for ELO confidence intervals. Default is 10.",
+            default=20,
+            help="Number of bootstrap samples for ELO confidence intervals. Default is 20.",
         )
         parser.add_argument(
             "--truncate_all_input_chars",
@@ -318,8 +318,9 @@ def compute_bradley_terry(
     return dict(pd.Series(elo_scores, index=models.index))
 
 
-def main():
-    args = CliEloArgs.parse_args()
+def main(args: CliEloArgs | None = None) -> dict:
+    if args is None:
+        args = CliEloArgs.parse_args()
 
     seed = 0
     rng = np.random.default_rng(seed)
@@ -351,7 +352,10 @@ def main():
 
     # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
-        [row["conversation_a"][0]["content"] for _, row in df_battles.iterrows()],
+        [
+            _extract_instruction_text(row["conversation_a"][0])
+            for _, row in df_battles.iterrows()
+        ],
         name="instruction",
     )
     print(f"\nFirst instruction:\n{instructions.iloc[0][:300]}\n")
@@ -398,9 +402,9 @@ def main():
 
     opponent_completions = [
         (
-            row["conversation_a"][1]["content"]
+            _extract_instruction_text(row["conversation_a"][1])
             if use_model_a_as_opponent[i]
-            else row["conversation_b"][1]["content"]
+            else _extract_instruction_text(row["conversation_b"][1])
         )
         for i, (_, row) in enumerate(df_battles.iterrows())
     ]
@@ -437,6 +441,7 @@ def main():
             instructions=instructions.tolist(),
             completions_A=completions_A,
             completions_B=completions_B,
+            swap_mode=args.swap_mode,
             provide_explanation=args.provide_explanation,
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=use_tqdm,
@@ -569,6 +574,16 @@ def main():
     else:
         print("  Not enough data to compute ELO ratings.")
 
+    return {
+        **summary,
+        "bootstrap_ratings": bootstrap_ratings,
+        "model_name": model_name,
+    }
+
+
+def cli():
+    main()
+
 
 if __name__ == "__main__":
-    main()
+    cli()

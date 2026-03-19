@@ -375,18 +375,21 @@ def judge_and_parse_prefs(
             use_tqdm=use_tqdm,
         )
 
+    _none_to_nan = lambda x: float("nan") if x is None else x
+
     score_parser = PairScore()
     prefs = pd.Series(
         [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
     )
 
     if swap_mode == "both":
+        prefs = prefs.apply(_none_to_nan)
         prefs_reversed = pd.Series(
             [
                 score_parser.parse_model_raw(a.judge_completion)
                 for a in annotations_reversed
             ]
-        )
+        ).apply(_none_to_nan)
         prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
 
     return annotations, annotations_reversed, prefs

@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -79,10 +80,11 @@ def _load_arena_dataframe(
             else:
                 if chosen_model_name is None or isinstance(chosen_model_name, float):
                     return None
-                assert chosen_model_name in [
-                    model_a,
-                    model_b,
-                ], f"Chosen model: {chosen_model_name} but model_a: {model_a} and model_b: {model_b}"
+                if chosen_model_name not in [model_a, model_b]:
+                    warnings.warn(
+                        f"Chosen model {chosen_model_name!r} not in model_a={model_a!r} or model_b={model_b!r}; skipping."
+                    )
+                    return None
                 return "model_a" if chosen_model_name == model_a else "model_b"
 
         df["winner"] = df.apply(lambda row: get_winner(**row), axis=1)
@@ -111,7 +113,13 @@ def _load_arena_dataframe(
 
     # keep only one turn conversation for now as they are easier to evaluate
     df["turns"] = df.apply(lambda row: len(row["conversation_a"]) - 1, axis=1)
+    n_before = len(df)
     df = df.loc[df.turns == 1]
+    n_dropped = n_before - len(df)
+    if n_dropped > 0:
+        print(
+            f"[{arena}] Dropped {n_dropped}/{n_before} multi-turn battles (keeping single-turn only)."
+        )
 
     return df
 
