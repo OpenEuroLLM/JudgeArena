@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.generate_and_evaluate:cli"
+judgearena-elo = "judgearena.estimate_elo_ratings:main"
 
 [project]
 name = "llm-judge-eval"
@@ -43,7 +44,7 @@ dev = [
     "black>=25.1.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
-    "slurmpilot2 @ git+https://github.com/geoalgo/slurmpilot.git@main",
+    "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
 
 [project.optional-dependencies]
