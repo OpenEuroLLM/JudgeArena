@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 from openjury.evaluate import annotate_battles, PairScore
+from openjury.utils import compute_pref_summary
 
 
 def print_results(results):
@@ -49,25 +52,6 @@ def print_results(results):
     print("=" * 60 + "\n")
 
 
-def compute_preference_stats(prefs: pd.Series) -> dict:
-    """Derive win/loss/tie counts and winrate from a Series of preferences."""
-    num_battles = len(prefs)
-    num_wins = int(sum(prefs < 0.5))
-    num_losses = int(sum(prefs > 0.5))
-    num_ties = int(sum(prefs == 0.5))
-    num_missing = num_battles - (num_wins + num_losses + num_ties)
-    denom = num_wins + num_losses + num_ties
-    winrate = float((num_wins + 0.5 * num_ties) / denom) if denom else 0.0
-    return {
-        "num_battles": num_battles,
-        "num_wins": num_wins,
-        "num_losses": num_losses,
-        "num_ties": num_ties,
-        "num_missing": num_missing,
-        "winrate": winrate,
-    }
-
-
 def _compute_grouped_stats(
     preferences: pd.Series,
     metadata: list[dict[str, object]],
@@ -80,7 +64,7 @@ def _compute_grouped_stats(
             continue
         grouped.setdefault(key, []).append(pref)
     return {
-        key: compute_preference_stats(pd.Series(vals))
+        key: compute_pref_summary(pd.Series(vals))
         for key, vals in grouped.items()
     }
 
@@ -97,7 +81,17 @@ def _parse_preferences_from_annotations(
     )
 
 
-def _judge_turn(
+@dataclass
+class JudgeAnnotationResult:
+    annotations: list
+    annotations_reversed: list
+    metadata_for_annotations: list[dict[str, object]]
+    metadata_for_reversed_annotations: list[dict[str, object]]
+    preferences: pd.Series
+    combined_metadata: list[dict[str, object]]
+
+
+def _make_judge_annotation(
     *,
     judge_chat_model,
     instructions: list[str],
@@ -111,16 +105,9 @@ def _judge_turn(
     use_tqdm: bool,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
-) -> tuple[
-    list,
-    list,
-    list[dict[str, object]],
-    list[dict[str, object]],
-    pd.Series,
-    list[dict[str, object]],
-]:
+) -> JudgeAnnotationResult:
     if not instructions:
-        return [], [], [], [], pd.Series(dtype=float), []
+        raise ValueError("instructions must be non-empty")
 
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
@@ -161,11 +148,11 @@ def _judge_turn(
         combined_metadata.extend(metadata)
 
     preferences = pd.concat(preference_parts).reset_index(drop=True)
-    return (
-        annotations,
-        annotations_reversed,
-        list(metadata),
-        metadata_for_reversed_annotations,
-        preferences,
-        combined_metadata,
+    return JudgeAnnotationResult(
+        annotations=annotations,
+        annotations_reversed=annotations_reversed,
+        metadata_for_annotations=list(metadata),
+        metadata_for_reversed_annotations=metadata_for_reversed_annotations,
+        preferences=preferences,
+        combined_metadata=combined_metadata,
     )

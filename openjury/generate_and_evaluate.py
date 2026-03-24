@@ -16,15 +16,17 @@ from openjury.config import CliArgs
 from openjury.evaluate import (
     PairScore,
 )
-from openjury.eval_runtime import _judge_turn, compute_preference_stats, print_results
+from openjury.eval_utils import _make_judge_annotation, print_results
 from openjury.generate import generate_instructions, generate_base
 from openjury.instruction_dataset import load_instructions
-from openjury.mt_bench.pipeline import (
+from openjury.repro import _to_jsonable
+from openjury.mt_bench.mt_bench_utils import (
     format_mt_bench_for_evaluation,
     run_mt_bench,
 )
 from openjury.utils import (
     cache_function_dataframe,
+    compute_pref_summary,
     data_root,
     download_hf,
     make_model,
@@ -205,14 +207,7 @@ def main(args: CliArgs):
     instruction_indices = instruction_subset.index.tolist()
     metadata = [{"instruction_index": idx} for idx in instruction_indices]
     score_parser = PairScore()
-    (
-        annotations,
-        annotations_reversed,
-        metadata_for_annotations,
-        metadata_for_reversed_annotations,
-        prefs,
-        _combined_metadata,
-    ) = _judge_turn(
+    judge_out = _make_judge_annotation(
         judge_chat_model=judge_chat_model,
         instructions=instruction_subset.tolist(),
         completions_A=completions_A.head(n_instructions).tolist(),
@@ -235,21 +230,21 @@ def main(args: CliArgs):
 
     # save argument for results analysis
     with open(res_folder / f"args-{name}.json", "w") as f:
-        json.dump(asdict(args), f, indent=2)
+        json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
 
     print(f"Saving results to {res_folder}")
-    df = pd.DataFrame(annotations)
+    df = pd.DataFrame(judge_out.annotations)
     df["instruction_index"] = [
-        meta["instruction_index"] for meta in metadata_for_annotations
+        meta["instruction_index"] for meta in judge_out.metadata_for_annotations
     ]
     df["model_A"] = args.model_A
     df["model_B"] = args.model_B
     df["judge"] = args.judge_model
 
     if args.swap_mode == "both":
-        df_reversed = pd.DataFrame(annotations_reversed)
+        df_reversed = pd.DataFrame(judge_out.annotations_reversed)
         df_reversed["instruction_index"] = [
-            meta["instruction_index"] for meta in metadata_for_reversed_annotations
+            meta["instruction_index"] for meta in judge_out.metadata_for_reversed_annotations
         ]
         df_reversed["model_A"] = args.model_B
         df_reversed["model_B"] = args.model_A
@@ -258,14 +253,14 @@ def main(args: CliArgs):
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    stats = compute_preference_stats(prefs)
+    stats = compute_pref_summary(judge_out.preferences)
     results = {
         "dataset": args.dataset,
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
         **stats,
-        "preferences": prefs.tolist(),
+        "preferences": judge_out.preferences.tolist(),
         "date": str(datetime.now().isoformat()),
         "user": os.getenv("USER", ""),
     }
@@ -273,9 +268,9 @@ def main(args: CliArgs):
     print_results(results)
 
     with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
-    return prefs
+    return judge_out.preferences
 
 
 def cli():

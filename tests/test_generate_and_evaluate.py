@@ -2,7 +2,8 @@ import pandas as pd
 import pytest
 
 import openjury.generate_and_evaluate as generate_and_evaluate
-import openjury.mt_bench.pipeline as mt_bench_pipeline
+import openjury.mt_bench.mt_bench_utils as mt_bench_pipeline
+from openjury.eval_utils import JudgeAnnotationResult
 from openjury.generate_and_evaluate import (
     main as main_generate_and_eval,
     CliArgs,
@@ -123,25 +124,25 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
     assert avg_pref == pytest.approx(0.5)
 
 
-def test_main_non_mt_bench_reuses_judge_turn(monkeypatch, tmp_path):
+def test_main_non_mt_bench_reuses_make_judge_annotation(monkeypatch, tmp_path):
     captured = {"calls": 0, "kwargs": None}
 
-    def _judge_turn_stub(**kwargs):
+    def _make_judge_annotation_stub(**kwargs):
         captured["calls"] += 1
         captured["kwargs"] = kwargs
-        return (
-            [{"judge_completion": "score A: 0 score B: 10"}],
-            [],
-            [{"instruction_index": 0}],
-            [],
-            pd.Series([1.0]),
-            [{"instruction_index": 0}],
+        return JudgeAnnotationResult(
+            annotations=[{"judge_completion": "score A: 0 score B: 10"}],
+            annotations_reversed=[],
+            metadata_for_annotations=[{"instruction_index": 0}],
+            metadata_for_reversed_annotations=[],
+            preferences=pd.Series([1.0]),
+            combined_metadata=[{"instruction_index": 0}],
         )
 
     monkeypatch.setattr(
         generate_and_evaluate,
-        "_judge_turn",
-        _judge_turn_stub,
+        "_make_judge_annotation",
+        _make_judge_annotation_stub,
     )
 
     prefs = main_generate_and_eval(

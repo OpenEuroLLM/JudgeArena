@@ -16,10 +16,9 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from openjury.evaluate import PairScore, load_judge_system_and_user_prompt
-from openjury.eval_runtime import (
+from openjury.eval_utils import (
     _compute_grouped_stats,
-    _judge_turn,
-    compute_preference_stats,
+    _make_judge_annotation,
     print_results,
 )
 from openjury.generate import generate_multiturn
@@ -29,7 +28,8 @@ from openjury.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
-from openjury.utils import cache_function_dataframe, make_model
+from openjury.repro import _to_jsonable
+from openjury.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 if TYPE_CHECKING:
     from openjury.config import CliArgs
@@ -235,12 +235,12 @@ def _save_mt_bench_results(
     res_folder.mkdir(parents=True, exist_ok=True)
 
     with open(res_folder / f"args-{name}.json", "w") as f:
-        json.dump(asdict(args), f, indent=2)
+        json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
 
     annotations_df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
     with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
 
 def _run_mt_bench_fastchat(
@@ -267,7 +267,7 @@ def _run_mt_bench_fastchat(
         )
     )
 
-    stats = compute_preference_stats(prefs)
+    stats = compute_pref_summary(prefs)
     results = {
         "dataset": args.dataset,
         "model_A": args.model_A,
@@ -329,14 +329,7 @@ def _run_mt_bench_openjury(
     combined_metadata: list[dict[str, object]] = []
 
     if instructions_turn_1:
-        (
-            annotations_turn_1,
-            annotations_turn_1_reversed,
-            metadata_turn_1_for_annotations,
-            metadata_turn_1_for_reversed_annotations,
-            prefs_turn_1,
-            combined_metadata_turn_1,
-        ) = _judge_turn(
+        turn_1 = _make_judge_annotation(
             judge_chat_model=judge_chat_model,
             instructions=instructions_turn_1,
             completions_A=completions_a_turn_1,
@@ -348,28 +341,21 @@ def _run_mt_bench_openjury(
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=args.use_tqdm,
         )
-        annotations.extend(annotations_turn_1)
-        annotations_reversed.extend(annotations_turn_1_reversed)
-        metadata_for_annotations.extend(metadata_turn_1_for_annotations)
+        annotations.extend(turn_1.annotations)
+        annotations_reversed.extend(turn_1.annotations_reversed)
+        metadata_for_annotations.extend(turn_1.metadata_for_annotations)
         metadata_for_reversed_annotations.extend(
-            metadata_turn_1_for_reversed_annotations
+            turn_1.metadata_for_reversed_annotations
         )
-        preference_parts.append(prefs_turn_1)
-        combined_metadata.extend(combined_metadata_turn_1)
+        preference_parts.append(turn_1.preferences)
+        combined_metadata.extend(turn_1.combined_metadata)
 
     if instructions_turn_2:
         mt_system_prompt, mt_user_prompt_template = load_judge_system_and_user_prompt(
             provide_explanation=args.provide_explanation,
             multi_turn=True,
         )
-        (
-            annotations_turn_2,
-            annotations_turn_2_reversed,
-            metadata_turn_2_for_annotations,
-            metadata_turn_2_for_reversed_annotations,
-            prefs_turn_2,
-            combined_metadata_turn_2,
-        ) = _judge_turn(
+        turn_2 = _make_judge_annotation(
             judge_chat_model=judge_chat_model,
             instructions=instructions_turn_2,
             completions_A=completions_a_turn_2,
@@ -383,21 +369,21 @@ def _run_mt_bench_openjury(
             system_prompt=mt_system_prompt,
             user_prompt_template=mt_user_prompt_template,
         )
-        annotations.extend(annotations_turn_2)
-        annotations_reversed.extend(annotations_turn_2_reversed)
-        metadata_for_annotations.extend(metadata_turn_2_for_annotations)
+        annotations.extend(turn_2.annotations)
+        annotations_reversed.extend(turn_2.annotations_reversed)
+        metadata_for_annotations.extend(turn_2.metadata_for_annotations)
         metadata_for_reversed_annotations.extend(
-            metadata_turn_2_for_reversed_annotations
+            turn_2.metadata_for_reversed_annotations
         )
-        preference_parts.append(prefs_turn_2)
-        combined_metadata.extend(combined_metadata_turn_2)
+        preference_parts.append(turn_2.preferences)
+        combined_metadata.extend(turn_2.combined_metadata)
 
     prefs = (
         pd.concat(preference_parts).reset_index(drop=True)
         if preference_parts
         else pd.Series(dtype=float)
     )
-    stats = compute_preference_stats(prefs)
+    stats = compute_pref_summary(prefs)
     results = {
         "dataset": args.dataset,
         "model_A": args.model_A,
