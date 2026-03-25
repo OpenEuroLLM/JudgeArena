@@ -17,9 +17,9 @@ import pandas as pd
 from datasets import Dataset
 from langchain.prompts import ChatPromptTemplate
 
-from openjury.instruction_dataset import load_instructions
-from openjury.utils import do_inference, make_model
-from openjury.utils import set_langchain_cache
+from judgearena.instruction_dataset import load_instructions
+from judgearena.utils import do_inference, make_model
+from judgearena.utils import set_langchain_cache
 
 # set_langchain_cache()
 
@@ -27,7 +27,7 @@ dataset_name = "openeurollm/ArenaHard-EU-v0-bis"
 
 """
 TODOs:
-- test with openjury
+- test with JudgeArena
 Done:
 - load AH
 - call translate

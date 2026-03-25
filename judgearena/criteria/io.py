@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from openjury.criteria.defaults import CRITERIA_BY_NAME
-from openjury.criteria.schema import Criterion, criteria_from_dict
+from judgearena.criteria.defaults import CRITERIA_BY_NAME
+from judgearena.criteria.schema import Criterion, criteria_from_dict
 
 
 def _load_criteria_data(path: str | Path) -> dict:

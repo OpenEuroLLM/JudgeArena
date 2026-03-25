@@ -9,9 +9,9 @@ import pandas as pd
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.language_models.llms import LLM
 
-from openjury.instruction_dataset import load_instructions
-from openjury.repro import write_run_metadata, _to_jsonable
-from openjury.utils import (
+from judgearena.instruction_dataset import load_instructions
+from judgearena.repro import write_run_metadata, _to_jsonable
+from judgearena.utils import (
     compute_pref_summary,
     read_df,
     data_root,
@@ -210,7 +210,7 @@ def evaluate_completions(
     try:
         write_run_metadata(
             output_dir=output_folder,
-            entrypoint="openjury.evaluate.evaluate_completions",
+            entrypoint="judgearena.evaluate.evaluate_completions",
             run=run_metadata,
             results=results,
             input_payloads={
