@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import Dataset
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.utils import do_inference, make_model

@@ -5,7 +5,7 @@ Example showing how to generate instruction quality with the prompt proposed in 
 import re
 
 from judgearena.utils import do_inference, make_model
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 max_len = 2000
 system_prompt = None
