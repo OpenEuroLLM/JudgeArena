@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from openjury.utils import data_root
+from judgearena.utils import data_root
 
 
 def load_m_arenahard(local_path, language: str | None = None):

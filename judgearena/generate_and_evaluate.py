@@ -13,16 +13,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from openjury.evaluate import (
+from judgearena.evaluate import (
     annotate_battles,
     PairScore,
     resolve_judge_prompts,
 )
-from openjury.generate import generate_instructions, generate_base
-from openjury.instruction_dataset import load_instructions
-from openjury.repro import write_run_metadata, _to_jsonable
-from openjury.utils import data_root, read_df, download_hf
-from openjury.utils import make_model, cache_function_dataframe, compute_pref_summary
+from judgearena.generate import generate_instructions, generate_base
+from judgearena.instruction_dataset import load_instructions
+from judgearena.repro import write_run_metadata, _to_jsonable
+from judgearena.utils import data_root, read_df, download_hf
+from judgearena.utils import make_model, cache_function_dataframe, compute_pref_summary
 
 
 def try_load_dataset_completions(
@@ -496,7 +496,7 @@ def main(args: CliArgs):
     try:
         write_run_metadata(
             output_dir=res_folder,
-            entrypoint="openjury.generate_and_evaluate.main",
+            entrypoint="judgearena.generate_and_evaluate.main",
             run=asdict(args),
             results=results,
             input_payloads={

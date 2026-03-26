@@ -1,10 +1,10 @@
 import pytest
 
-from openjury.criteria.defaults import CRITERIA_BY_NAME
-from openjury.criteria.io import (
+from judgearena.criteria.defaults import CRITERIA_BY_NAME
+from judgearena.criteria.io import (
     load_criteria_from_file,
 )
-from openjury.criteria.schema import SCALE_MAX, SCALE_MIN, Criterion, criterion_names
+from judgearena.criteria.schema import SCALE_MAX, SCALE_MIN, Criterion, criterion_names
 
 
 def test_get_default_criteria():

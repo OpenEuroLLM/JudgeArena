@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-import openjury.generate_and_evaluate as generate_and_evaluate
-from openjury.generate_and_evaluate import (
+import judgearena.generate_and_evaluate as generate_and_evaluate
+from judgearena.generate_and_evaluate import (
     main as main_generate_and_eval,
     CliArgs,
 )

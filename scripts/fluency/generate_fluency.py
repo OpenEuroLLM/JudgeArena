@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import Dataset
-from openjury.utils import do_inference, make_model
-from openjury.utils import set_langchain_cache
+from judgearena.utils import do_inference, make_model
+from judgearena.utils import set_langchain_cache
 
 set_langchain_cache()
 

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 METADATA_FILENAME = "run-metadata.v1.json"
-METADATA_SCHEMA_VERSION = "openjury-run-metadata/v1"
+METADATA_SCHEMA_VERSION = "judgearena-run-metadata/v1"
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)")
 
 

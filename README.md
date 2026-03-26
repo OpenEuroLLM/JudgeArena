@@ -1,7 +1,7 @@
-# 🏛️ OpenJury: LLM Evaluation with Swappable Judges
+# 🏛️ JudgeArena: LLM Evaluation with Swappable Judges
 
-OpenJury makes it easy to benchmark language models against each other while giving you complete control over the evaluation process. 
-Whether you're comparing proprietary models or testing your own fine-tuned creations, OpenJury lets you choose your judge.
+JudgeArena makes it easy to benchmark language models against each other while giving you complete control over the evaluation process.
+Whether you're comparing proprietary models or testing your own fine-tuned creations, JudgeArena lets you choose your judge.
 
 ## ✨ Key Features
 
@@ -22,7 +22,7 @@ Compared to other libraries, here is a breakdown of features:
 | **Arena-Hard-Auto** | ❌  | ❌  | ✅  | ❌  | ❌                         | ❌                                            |
 | **Lighteval** | ✅  | ❌  | ❌  | ❌  | ❌                         | ❌                                       |
 | **Evalchemy** | ✅  | ✅  | ❌  | ❌  | ❌                         | ❌                                           |
-| **OpenJury** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
+| **JudgeArena** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
 
 The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue 
 or send a PR, we will be happy to update the information.
@@ -32,8 +32,8 @@ or send a PR, we will be happy to update the information.
 ### Installation
 
 ```bash
-git clone https://github.com/OpenEuroLLM/OpenJury
-cd OpenJury
+git clone https://github.com/OpenEuroLLM/JudgeArena
+cd JudgeArena
 uv sync 
 uv sync --extra vllm      # Optional: install vLLM support
 uv sync --extra llamacpp   # Optional: install LlamaCpp support
@@ -44,7 +44,7 @@ uv sync --extra llamacpp   # Optional: install LlamaCpp support
 Compare two models head-to-head:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
@@ -85,12 +85,12 @@ The evaluation scripts expose four different length controls with different role
 ### Engine-Specific Configuration (`--engine_kwargs`)
 
 Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).  
-OpenJury lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
+JudgeArena lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
 
 For instance, to run vLLM with tensor parallelism across multiple GPUs:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
@@ -118,7 +118,7 @@ OpenRouter/deepseek/deepseek-chat-v3.1
 For instance, to run everything locally with vLLM:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
@@ -149,7 +149,7 @@ For absolute paths, this results in a double slash (e.g., `LlamaCpp//home/user/m
 **Mixed example** — local LlamaCpp model with a remote judge:
 
 ```bash
-uv run python openjury/generate_and_evaluate.py \
+uv run python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B OpenRouter/qwen/qwen-2.5-7b-instruct \
@@ -160,7 +160,7 @@ uv run python openjury/generate_and_evaluate.py \
 **Fully local example** — no API keys required (useful for verifying your setup):
 
 ```bash
-uv run python openjury/generate_and_evaluate.py \
+uv run python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
@@ -173,15 +173,15 @@ If you use remote endpoint, you would have to set your credentials.
 
 ### Chat Templates (vLLM)
 
-When using vLLM, OpenJury automatically picks the right inference method based on the model:
+When using vLLM, JudgeArena automatically picks the right inference method based on the model:
 
-- **Instruct/chat models** (e.g. `swiss-ai/Apertus-8B-Instruct-2509`): the tokenizer already defines a chat template, so OpenJury uses `vllm.LLM.chat()` and the template is applied automatically.
-- **Base/pretrained models** (e.g. `swiss-ai/Apertus-8B-2509`): these typically don't ship a chat template. OpenJury detects this and falls back to `vllm.LLM.generate()` (plain text, no chat formatting). A warning is printed when this happens.
+- **Instruct/chat models** (e.g. `swiss-ai/Apertus-8B-Instruct-2509`): the tokenizer already defines a chat template, so JudgeArena uses `vllm.LLM.chat()` and the template is applied automatically.
+- **Base/pretrained models** (e.g. `swiss-ai/Apertus-8B-2509`): these typically don't ship a chat template. JudgeArena detects this and falls back to `vllm.LLM.generate()` (plain text, no chat formatting). A warning is printed when this happens.
 
 If you need to force a specific chat template (for example, a base model that you know works with ChatML), pass it via `--chat_template`:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/swiss-ai/Apertus-8B-2509 \
   --model_B VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
@@ -207,12 +207,12 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 Pre-download all datasets before running jobs:
 
 ```bash
-python -c "from openjury.utils import download_all; download_all()"  # Download all datasets (optional)
+python -c "from judgearena.utils import download_all; download_all()"  # Download all datasets (optional)
 ```
 
 Datasets are stored in:
-- `$OPENJURY_DATA` (if set)
-- `~/openjury-data/` (default)
+- `$JUDGEARENA_DATA` if set; otherwise `$OPENJURY_DATA` if set (legacy)
+- `~/judgearena-data/` if neither variable is set
 
 ## 🛠️ Development
 
