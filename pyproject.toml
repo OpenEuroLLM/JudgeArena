@@ -68,9 +68,3 @@ dev = [
 [project.optional-dependencies]
 vllm = ["vllm==0.10.2", "transformers>=4.55.2,<5.0.0"]
 llamacpp = ["llama-cpp-python>=0.3.0"]
-
-[[tool.uv.index]]
-name = "testpypi"
-url = "https://test.pypi.org/simple/"
-publish-url = "https://test.pypi.org/legacy/"
-explicit = true
