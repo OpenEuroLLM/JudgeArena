@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 from dataclasses import dataclass, field
 from functools import partial
@@ -32,6 +33,7 @@ class CliEloArgs:
     result_folder: str = "results"
     n_bootstraps: int = 20
     seed: int = 0
+    baseline_model: str | None = None
     engine_kwargs: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -128,6 +130,14 @@ class CliEloArgs:
             help="Random seed for reproducibility. Default is 0.",
         )
         parser.add_argument(
+            "--baseline_model",
+            type=str,
+            required=False,
+            default=None,
+            help="Model name to anchor at 1000 ELO. All other ratings are expressed relative to this model. "
+            "Must be one of the models present in the arena battles. If not set, ratings are not anchored.",
+        )
+        parser.add_argument(
             "--truncate_all_input_chars",
             type=int,
             required=False,
@@ -211,6 +221,7 @@ class CliEloArgs:
             result_folder=args.result_folder,
             n_bootstraps=args.n_bootstraps,
             seed=args.seed,
+            baseline_model=args.baseline_model,
             engine_kwargs=engine_kwargs,
         )
 
@@ -387,10 +398,24 @@ def main(args: CliEloArgs | None = None) -> dict:
     )
 
     replace_slash = lambda s: s.replace("/", "_")
+    languages_str = "-".join(sorted(args.languages)) if args.languages else "all"
+    extra_kwargs_str = (
+        "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
+        if extra_kwargs
+        else ""
+    )
     cache_suffix = (
         f"{args.arena}_{replace_slash(args.model)}_"
-        f"{args.n_instructions}_{args.n_instructions_per_language}"
+        f"{args.n_instructions}_{args.n_instructions_per_language}_"
+        f"{languages_str}_{args.truncate_all_input_chars}_{args.max_out_tokens_models}"
+        + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
+    if len(cache_suffix) > 100:
+        cache_hash = hashlib.sha256(cache_suffix.encode()).hexdigest()[:16]
+        print(
+            f"Cache suffix too long ({len(cache_suffix)} chars), using hash: {cache_hash} (full: {cache_suffix})"
+        )
+        cache_suffix = cache_hash
     completions_df = cache_function_dataframe(
         lambda: gen_fun(instructions=instructions, model=args.model),
         ignore_cache=args.ignore_cache,
@@ -560,7 +585,9 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_sample = df_results.sample(
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
-        ratings = compute_bradley_terry(df_sample, winner_col="winner")
+        ratings = compute_bradley_terry(
+            df_sample, winner_col="winner", baseline_model=args.baseline_model
+        )
         bootstrap_ratings.append(ratings)
 
     if bootstrap_ratings:
