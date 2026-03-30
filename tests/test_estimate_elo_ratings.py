@@ -4,10 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import openjury.estimate_elo_ratings as estimate_elo_ratings
-from openjury.estimate_elo_ratings import CliEloArgs, compute_bradley_terry, main
-from openjury.evaluate import JudgeAnnotation, judge_and_parse_prefs
-from openjury.utils import make_model
+import judgearena.estimate_elo_ratings as estimate_elo_ratings
+from judgearena.estimate_elo_ratings import CliEloArgs, compute_bradley_terry, main
+from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
+from judgearena.utils import make_model
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]

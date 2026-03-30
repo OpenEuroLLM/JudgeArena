@@ -10,16 +10,12 @@ from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from openjury.evaluate import (
+from judgearena.evaluate import (
     judge_and_parse_prefs,
-    resolve_judge_prompts,
 )
 from judgearena.evaluate import (
-    annotate_battles,
-    PairScore,
     resolve_judge_prompts,
 )
 from judgearena.generate import generate_instructions, generate_base
@@ -162,7 +158,7 @@ class CliArgs:
             required=False,
             default=8192,
             help="Character-level truncation applied before tokenization: truncates each instruction "
-            "before model A/B generation and truncates each completion before judge evaluation.",   
+            "before model A/B generation and truncates each completion before judge evaluation.",
         )
         parser.add_argument(
             "--max_out_tokens_models",
@@ -210,15 +206,13 @@ class CliArgs:
             default="{}",
             help=(
                 "JSON dict of engine-specific kwargs forwarded to the underlying engine. "
-                "Example for vLLM: '{\"tensor_parallel_size\": 2, \"gpu_memory_utilization\": 0.9}'."
+                'Example for vLLM: \'{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}\'.'
             ),
         )
         args = parser.parse_args()
 
         try:
-            engine_kwargs = (
-                json.loads(args.engine_kwargs) if args.engine_kwargs else {}
-            )
+            engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
@@ -337,7 +331,9 @@ def main(args: CliArgs):
         args.dataset, args.model_A, n_instructions
     )
     if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[:, "completion"]
+        completions_A = dataset_completions_A.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_A = cache_function_dataframe(
             lambda: gen_fun(
@@ -354,7 +350,9 @@ def main(args: CliArgs):
         args.dataset, args.model_B, n_instructions
     )
     if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[:, "completion"]
+        completions_B = dataset_completions_B.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_B = cache_function_dataframe(
             lambda: gen_fun(

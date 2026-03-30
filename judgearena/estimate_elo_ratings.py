@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-from openjury.arenas_utils import load_arena_dataframe, _extract_instruction_text
-from openjury.evaluate import judge_and_parse_prefs
-from openjury.generate import generate_instructions
-from openjury.utils import make_model, cache_function_dataframe, compute_pref_summary
+from judgearena.arenas_utils import load_arena_dataframe, _extract_instruction_text
+from judgearena.evaluate import judge_and_parse_prefs
+from judgearena.generate import generate_instructions
+from judgearena.utils import make_model, cache_function_dataframe, compute_pref_summary
 
 
 @dataclass
