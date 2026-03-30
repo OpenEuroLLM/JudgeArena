@@ -327,3 +327,75 @@ def annotate_battles(
             )
         )
     return annotations
+
+
+def judge_and_parse_prefs(
+    judge_chat_model,
+    instructions: list[str],
+    completions_A: list[str],
+    completions_B: list[str],
+    swap_mode: str = "fixed",
+    provide_explanation: bool = False,
+    system_prompt: str | None = None,
+    user_prompt_template: str | None = None,
+    truncate_input_chars: int = 8192,
+    use_tqdm: bool = False,
+) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
+    """Run judge annotation and parse preferences, handling swap_mode='both'.
+
+    Returns:
+        annotations: original-order JudgeAnnotations
+        annotations_reversed: reversed-order JudgeAnnotations (None if swap_mode != "both")
+        prefs: pd.Series of floats (0=A wins, 0.5=tie, 1=B wins, None=unparseable),
+               already combined for swap_mode="both"
+    """
+    if swap_mode == "both":
+        print("Correction for judge bias towards a certain model position is set.")
+        print(
+            f"Evaluating completions with models reversed with judge {judge_chat_model}."
+        )
+
+    annotations = annotate_battles(
+        judge_chat_model=judge_chat_model,
+        instructions=instructions,
+        completions_A=completions_A,
+        completions_B=completions_B,
+        provide_explanation=provide_explanation,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        truncate_input_chars=truncate_input_chars,
+        use_tqdm=use_tqdm,
+    )
+
+    annotations_reversed = None
+    if swap_mode == "both":
+        annotations_reversed = annotate_battles(
+            judge_chat_model=judge_chat_model,
+            instructions=instructions,
+            completions_A=completions_B,
+            completions_B=completions_A,
+            provide_explanation=provide_explanation,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            truncate_input_chars=truncate_input_chars,
+            use_tqdm=use_tqdm,
+        )
+
+    _none_to_nan = lambda x: float("nan") if x is None else x
+
+    score_parser = PairScore()
+    prefs = pd.Series(
+        [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
+    )
+
+    if swap_mode == "both":
+        prefs = prefs.apply(_none_to_nan)
+        prefs_reversed = pd.Series(
+            [
+                score_parser.parse_model_raw(a.judge_completion)
+                for a in annotations_reversed
+            ]
+        ).apply(_none_to_nan)
+        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
+
+    return annotations, annotations_reversed, prefs

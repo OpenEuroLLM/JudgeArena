@@ -202,6 +202,60 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 | `m-arena-hard-EU`     | All EU languages combined                                                                      |
 | `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
+## 📈 Estimating ELO Ratings
+
+OpenJury can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
+The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
+
+### Quick start
+
+```bash
+judgearena-elo \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+Alternatively, if running directly from the repository without installing:
+
+```bash
+uv run python openjury/estimate_elo_ratings.py \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+### Key options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--arena` | `ComparIA` | Arena to sample opponents from: `LMArena-100k`, `LMArena-140k`, or `ComparIA` |
+| `--model` | *(required)* | Model under evaluation (same format as `openjury`) |
+| `--judge_model` | *(required)* | LLM judge (same format as `openjury`) |
+| `--n_instructions` | all | Number of arena battles to use for evaluation |
+| `--n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
+| `--languages` | all | Restrict to specific language codes, e.g. `en fr de` |
+| `--n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
+| `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
+| `--result_folder` | `results` | Directory where annotations and results are saved |
+
+### Output
+
+The script prints win/loss/tie counts, win rate, and a ranked ELO leaderboard with confidence intervals:
+
+```
+=== Results for meta-llama/Llama-3.3-70B-Instruct-Turbo ===
+Battles: 200 | Wins: 112 | Losses: 71 | Ties: 17
+Win rate: 60.25%
+
+=== ELO Ratings (Bradley-Terry, 20 bootstraps) ===
+  gpt-4o  (12453): 1132.4 ± 3.1
+  meta-llama/Llama-3.3-70B-Instruct-Turbo  (200) <-----: 1089.7 ± 8.2
+  ...
+```
+
 ### Offline Setup (Slurm/Air-Gapped Environments)
 
 Pre-download all datasets before running jobs:
