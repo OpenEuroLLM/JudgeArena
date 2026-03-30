@@ -6,11 +6,25 @@ build-backend = "setuptools.build_meta"
 judgearena = "judgearena.generate_and_evaluate:cli"
 
 [project]
-name = "llm-judge-eval"
+name = "judgearena"
 version = "0.1.0"
-description = "Add your description here"
+description = "A toolkit for LLM-as-a-judge evaluation and arena benchmarks."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+maintainers = [
+    { name = "Erlis Lushtaku", email = "erlislushtaku@gmail.com" },
+    { name = "David Salinas" },
+]
+keywords = ["llm", "evaluation", "benchmark", "arena", "langchain", "nlp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "datasets>=4.0.0",
     "fast-langdetect>=1.0.0",
@@ -30,6 +44,11 @@ dependencies = [
     "tqdm>=4.67.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/OpenEuroLLM/JudgeArena"
+Repository = "https://github.com/OpenEuroLLM/JudgeArena"
+Issues = "https://github.com/OpenEuroLLM/JudgeArena/issues"
+
 [tool.setuptools.packages.find]
 include = ["judgearena*"]
 exclude = ["slurmpilot_scripts*"]
@@ -43,7 +62,7 @@ dev = [
     "black>=25.1.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
-    "slurmpilot2 @ git+https://github.com/geoalgo/slurmpilot.git@main",
+    "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
 
 [project.optional-dependencies]
