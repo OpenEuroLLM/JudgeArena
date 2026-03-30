@@ -12,7 +12,7 @@ description = "A toolkit for LLM-as-a-judge evaluation and arena benchmarks."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-authors = [
+maintainers = [
     { name = "Erlis Lushtaku", email = "erlislushtaku@gmail.com" },
     { name = "David Salinas" },
 ]
