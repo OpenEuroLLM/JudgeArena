@@ -31,6 +31,7 @@ class CliEloArgs:
     chat_template: str | None = None
     result_folder: str = "results"
     n_bootstraps: int = 20
+    seed: int = 0
     engine_kwargs: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -46,7 +47,7 @@ class CliEloArgs:
         )
         parser.add_argument(
             "--arena",
-            help="The arena to use. Battles are sampled from this Arena. If not passed use contenation from all Arena. "
+            help="The arena to use. Battles are sampled from this Arena. If not passed use concatenation from all Arena. "
             "Passing LMArena leads to loading the union of `LMArena-100k` and `LMArena-140k`",
             choices=["LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"],
             required=False,
@@ -118,6 +119,13 @@ class CliEloArgs:
             required=False,
             default=20,
             help="Number of bootstrap samples for ELO confidence intervals. Default is 20.",
+        )
+        parser.add_argument(
+            "--seed",
+            type=int,
+            required=False,
+            default=0,
+            help="Random seed for reproducibility. Default is 0.",
         )
         parser.add_argument(
             "--truncate_all_input_chars",
@@ -202,6 +210,7 @@ class CliEloArgs:
             chat_template=args.chat_template,
             result_folder=args.result_folder,
             n_bootstraps=args.n_bootstraps,
+            seed=args.seed,
             engine_kwargs=engine_kwargs,
         )
 
@@ -322,8 +331,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     if args is None:
         args = CliEloArgs.parse_args()
 
-    seed = 0
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
     print(f"\n=== Step 1: Loading battles from {args.arena} ===")
@@ -381,7 +389,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     replace_slash = lambda s: s.replace("/", "_")
     cache_suffix = (
         f"{args.arena}_{replace_slash(args.model)}_"
-        f"{replace_slash(args.judge_model)}_{args.n_instructions}_{args.n_instructions_per_language}"
+        f"{args.n_instructions}_{args.n_instructions_per_language}"
     )
     completions_df = cache_function_dataframe(
         lambda: gen_fun(instructions=instructions, model=args.model),
@@ -552,22 +560,19 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_sample = df_results.sample(
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
-        try:
-            ratings = compute_bradley_terry(df_sample, winner_col="winner")
-            bootstrap_ratings.append(ratings)
-        except Exception:
-            pass
+        ratings = compute_bradley_terry(df_sample, winner_col="winner")
+        bootstrap_ratings.append(ratings)
 
     if bootstrap_ratings:
         all_model_names = sorted(
             set(df_results["model_a"]) | set(df_results["model_b"])
         )
         mean_ratings = {
-            m: np.mean([r.get(m, 1000) for r in bootstrap_ratings])
+            m: np.nanmean([r.get(m, np.nan) for r in bootstrap_ratings])
             for m in all_model_names
         }
         for m in sorted(all_model_names, key=lambda x: -mean_ratings[x]):
-            vals = [r.get(m, 1000) for r in bootstrap_ratings]
+            vals = [r[m] for r in bootstrap_ratings if m in r]
             suffix = " <-----" if m == model_name else ""
             count = battle_counts.get(m, 0)
             print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")

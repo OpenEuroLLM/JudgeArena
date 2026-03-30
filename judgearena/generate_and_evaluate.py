@@ -131,7 +131,7 @@ class CliArgs:
             choices=["fixed", "both"],
             default="fixed",
             help="Model comparison order mode. 'fixed': always use model order A-B. 'both': correct for model order "
-            "bias by evaluating each instruction twice, once as A-B and once as B-A, and average. This helps account "
+            "bias by evaluating each instruction twice, once as A-B and once as B-A. This helps account "
             "for judge position bias. Default is 'fixed'.",
         )
         parser.add_argument(
@@ -408,11 +408,6 @@ def main(args: CliArgs):
         provide_explanation=args.provide_explanation,
         system_prompt=system_prompt,
     )
-    if args.swap_mode == "both":
-        print("Correction for judge bias towards a certain model position is set.")
-        print(
-            f"Evaluating completions with models reversed with judge {args.judge_model}."
-        )
 
     annotations, annotations_reversed, prefs = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
