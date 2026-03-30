@@ -352,7 +352,7 @@ def judge_and_parse_prefs(
     if swap_mode == "both":
         print("Correction for judge bias towards a certain model position is set.")
         print(
-            f"Evaluating completions with models reversed with judge {args.judge_model}."
+            f"Evaluating completions with models reversed with judge {judge_chat_model}."
         )
 
     annotations = annotate_battles(
