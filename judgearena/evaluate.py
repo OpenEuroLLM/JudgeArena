@@ -9,6 +9,11 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.llms import LLM
 
+from judgearena.instruction_dataset.arena_hard import (
+    canonical_dataset_name,
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.instruction_dataset import load_instructions
 from judgearena.repro import write_run_metadata, _to_jsonable
 from judgearena.utils import (
@@ -110,8 +115,12 @@ def evaluate_completions(
     :return:
     """
     run_started_at = datetime.now(timezone.utc)
+    canonical_dataset = canonical_dataset_name(dataset)
     local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
+    if is_arena_hard_dataset(dataset):
+        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+    else:
+        download_hf(name=dataset, local_path=local_path_tables)
 
     instructions = load_instructions(
         dataset=dataset,
@@ -119,7 +128,9 @@ def evaluate_completions(
 
     # A bit ugly, only loads if local path exist as we do not have a local path of completion for cases such as
     # m-arena-hard.
-    dataset_output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
+    dataset_output_path = (
+        local_path_tables / "model_outputs" / f"{canonical_dataset}.csv.zip"
+    )
     if dataset_output_path.exists():
         df_outputs = read_df(dataset_output_path)
         # empty strings are encoded as Nan in csv

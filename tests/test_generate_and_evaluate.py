@@ -47,7 +47,15 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "dataset", ["alpaca-eval", "fluency-french", "m-arena-hard-EU"]
+    "dataset",
+    [
+        "alpaca-eval",
+        "arena-hard",
+        "arena-hard-v2.0",
+        "arena-hard-v0.1",
+        "fluency-french",
+        "m-arena-hard-EU",
+    ],
 )
 def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):
     prefs = main_generate_and_eval(
@@ -68,7 +76,7 @@ def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):
 
 def test_generate_and_evaluate_correct_order_bias(tmp_path):
     """Test the correction for model order bias.
-    
+
     In this test, a judge that is totally biased towards model B should be corrected to be neutral.
     Since the judge favors model B regardless of the order and the completions, the average
     preference should be 0.5.

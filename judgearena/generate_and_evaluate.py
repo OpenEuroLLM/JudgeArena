@@ -13,6 +13,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from judgearena.instruction_dataset.arena_hard import (
+    canonical_dataset_name,
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.evaluate import (
     annotate_battles,
     PairScore,
@@ -38,9 +43,13 @@ def try_load_dataset_completions(
     Returns a DataFrame with columns ``completion`` and ``instruction_index``,
     or ``None`` when no pre-existing completions are found.
     """
+    canonical_dataset = canonical_dataset_name(dataset)
     local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
-    output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
+    if is_arena_hard_dataset(dataset):
+        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+    else:
+        download_hf(name=dataset, local_path=local_path_tables)
+    output_path = local_path_tables / "model_outputs" / f"{canonical_dataset}.csv.zip"
     if not output_path.exists():
         return None
     df_outputs = read_df(output_path)
@@ -50,7 +59,9 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    print(f"Found pre-existing completions for '{model}' in {dataset} dataset.")
+    print(
+        f"Found pre-existing completions for '{model}' in dataset '{dataset}' (canonical: {canonical_dataset})."
+    )
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)
@@ -95,7 +106,8 @@ class CliArgs:
         )
         parser.add_argument(
             "--dataset",
-            help="The dataset to use. For instance `alpaca-eval`, `arena-hard`, `m-arena-hard-EU` for instruction "
+            help="The dataset to use. For instance `alpaca-eval`, `arena-hard` (alias to v2.0), "
+            "`arena-hard-v2.0`, `arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
             "tuning cases or `french-contexts`, `spanish-contexts` for base models.",
         )
         parser.add_argument(
@@ -158,7 +170,7 @@ class CliArgs:
             required=False,
             default=8192,
             help="Character-level truncation applied before tokenization: truncates each instruction "
-            "before model A/B generation and truncates each completion before judge evaluation.",   
+            "before model A/B generation and truncates each completion before judge evaluation.",
         )
         parser.add_argument(
             "--max_out_tokens_models",
@@ -206,15 +218,13 @@ class CliArgs:
             default="{}",
             help=(
                 "JSON dict of engine-specific kwargs forwarded to the underlying engine. "
-                "Example for vLLM: '{\"tensor_parallel_size\": 2, \"gpu_memory_utilization\": 0.9}'."
+                'Example for vLLM: \'{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}\'.'
             ),
         )
         args = parser.parse_args()
 
         try:
-            engine_kwargs = (
-                json.loads(args.engine_kwargs) if args.engine_kwargs else {}
-            )
+            engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
@@ -333,7 +343,9 @@ def main(args: CliArgs):
         args.dataset, args.model_A, n_instructions
     )
     if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[:, "completion"]
+        completions_A = dataset_completions_A.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_A = cache_function_dataframe(
             lambda: gen_fun(
@@ -350,7 +362,9 @@ def main(args: CliArgs):
         args.dataset, args.model_B, n_instructions
     )
     if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[:, "completion"]
+        completions_B = dataset_completions_B.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_B = cache_function_dataframe(
             lambda: gen_fun(

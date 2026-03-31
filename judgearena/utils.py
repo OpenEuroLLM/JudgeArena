@@ -13,6 +13,9 @@ from langchain_openai import ChatOpenAI
 from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
 
+from judgearena.instruction_dataset.arena_hard import download_arena_hard
+
+
 def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
     if raw:
@@ -176,7 +179,13 @@ class ChatVLLM:
           default chat template.
     """
 
-    def __init__(self, model: str, max_tokens: int = 8192, chat_template: str | None = None, **vllm_kwargs):
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int = 8192,
+        chat_template: str | None = None,
+        **vllm_kwargs,
+    ):
         from vllm import LLM, SamplingParams
 
         self.model_path = model
@@ -188,6 +197,7 @@ class ChatVLLM:
         if max_model_len is not None:
             try:
                 from transformers import AutoConfig
+
                 config = AutoConfig.from_pretrained(model, trust_remote_code=True)
                 model_max_pos = getattr(config, "max_position_embeddings", None)
                 if model_max_pos is not None and max_model_len > model_max_pos:
@@ -277,7 +287,11 @@ class ChatVLLM:
         if hasattr(input_item, "to_string"):
             return input_item.to_string()
         # List of dicts (messages) - concatenate contents
-        if isinstance(input_item, list) and input_item and isinstance(input_item[0], dict):
+        if (
+            isinstance(input_item, list)
+            and input_item
+            and isinstance(input_item[0], dict)
+        ):
             return "\n".join(msg["content"] for msg in input_item)
         raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
 
@@ -389,9 +403,12 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 def download_all():
     print(f"Downloading all dataset in {data_root}")
-    for dataset in ["alpaca-eval", "arena-hard", "m-arena-hard"]:
+    for dataset in ["alpaca-eval", "m-arena-hard"]:
         local_path_tables = data_root / "tables"
         download_hf(name=dataset, local_path=local_path_tables)
+    local_path_tables = data_root / "tables"
+    download_arena_hard(dataset="arena-hard-v0.1", local_tables_path=local_path_tables)
+    download_arena_hard(dataset="arena-hard-v2.0", local_tables_path=local_path_tables)
 
     snapshot_download(
         repo_id="geoalgo/multilingual-contexts-to-be-completed",
