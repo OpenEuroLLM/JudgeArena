@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import openjury.instruction_dataset.mt_bench as mt_bench
 import openjury.utils as utils
 
