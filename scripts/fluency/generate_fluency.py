@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import Dataset
-from openjury.utils import do_inference, make_model
-from openjury.utils import set_langchain_cache
+
+from judgearena.utils import do_inference, make_model, set_langchain_cache
 
 set_langchain_cache()
 
@@ -63,7 +63,7 @@ def make_fluency_prompt(lang: str, n_sentences_to_generate: int) -> str:
     prompt = f"""\
 Please generate a list of {n_sentences_to_generate} sentences that could be used to compare different LLM pretrain models.
 
-For each sentence, I will compare the completion of a base pre-trained models (**not an instruction tuned model**) with an LLM-judge to evaluate the fluency in a generative settings. 
+For each sentence, I will compare the completion of a base pre-trained models (**not an instruction tuned model**) with an LLM-judge to evaluate the fluency in a generative settings.
 
 * All sentences should be in {lang}.
 * All sentences should cut out after a random number of tokens (between 5 and 10 tokens).

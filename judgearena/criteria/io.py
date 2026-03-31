@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from openjury.criteria.defaults import CRITERIA_BY_NAME
-from openjury.criteria.schema import Criterion, criteria_from_dict
+from judgearena.criteria.defaults import CRITERIA_BY_NAME
+from judgearena.criteria.schema import Criterion, criteria_from_dict
 
 
 def _load_criteria_data(path: str | Path) -> dict:
@@ -15,8 +15,7 @@ def _load_criteria_data(path: str | Path) -> dict:
     suffix = path.suffix.lower()
     if suffix not in {".yaml", ".yml"}:
         raise ValueError(
-            f"Unsupported criteria file format '{path.suffix}'. "
-            "Use .yaml or .yml."
+            f"Unsupported criteria file format '{path.suffix}'. Use .yaml or .yml."
         )
 
     data = yaml.safe_load(path.read_text())

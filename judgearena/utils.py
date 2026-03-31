@@ -1,20 +1,27 @@
-import time
 import asyncio
 import os
+import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from huggingface_hub import snapshot_download
 import pandas as pd
-from tqdm.asyncio import tqdm
-from langchain_openai import ChatOpenAI
+from huggingface_hub import snapshot_download
 from langchain_community.cache import SQLiteCache
+from langchain_community.llms import LlamaCpp
 from langchain_core.globals import set_llm_cache
+from langchain_openai import ChatOpenAI
+from tqdm.asyncio import tqdm
 
-data_root = Path(
-    os.environ.get("OPENJURY_DATA", Path("~/openjury-data/").expanduser())
-).expanduser()
+
+def _data_root_path() -> Path:
+    raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
+    if raw:
+        return Path(raw).expanduser()
+    return Path("~/judgearena-data/").expanduser()
+
+
+data_root = _data_root_path()
 
 
 def set_langchain_cache():
@@ -40,23 +47,6 @@ def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
     else:
         assert filename.name.endswith(".parquet"), f"Unsupported extension {filename}"
         return pd.read_parquet(filename, **pandas_kwargs)
-
-
-def truncate(s: str, max_len: int | None = None) -> str:
-    if not isinstance(s, str):
-        return ""
-    if max_len is not None:
-        return s[:max_len]
-    return s
-
-
-def safe_text(value: object, truncate_chars: int | None) -> str:
-    if value is None:
-        return ""
-    is_missing = pd.isna(value)
-    if isinstance(is_missing, bool) and is_missing:
-        return ""
-    return truncate(str(value), max_len=truncate_chars)
 
 
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
@@ -172,141 +162,7 @@ class DummyModel:
         return self.message
 
 
-class BaseLocalModel:
-    """Shared prompt conversion and invoke helpers for local model wrappers."""
-
-    def _to_messages(self, input_item) -> list[dict]:
-        """Convert LangChain prompt input to OpenAI-style messages."""
-        role_map = {"human": "user", "ai": "assistant", "system": "system"}
-
-        if hasattr(input_item, "to_messages"):
-            lc_messages = input_item.to_messages()
-            return [
-                {"role": role_map.get(msg.type, msg.type), "content": msg.content}
-                for msg in lc_messages
-            ]
-        elif (
-            isinstance(input_item, list)
-            and input_item
-            and isinstance(input_item[0], tuple)
-        ):
-            return [
-                {"role": role if role != "human" else "user", "content": content}
-                for role, content in input_item
-            ]
-        elif (
-            isinstance(input_item, list)
-            and input_item
-            and isinstance(input_item[0], dict)
-        ):
-            return input_item
-        elif isinstance(input_item, str):
-            return [{"role": "user", "content": input_item}]
-        else:
-            raise ValueError(f"Unsupported input type: {type(input_item)}")
-
-    def _to_raw_text(self, input_item) -> str:
-        """Extract raw text from an input item for text-completion mode."""
-        if isinstance(input_item, str):
-            return input_item
-        if hasattr(input_item, "to_string"):
-            return input_item.to_string()
-        if (
-            isinstance(input_item, list)
-            and input_item
-            and isinstance(input_item[0], dict)
-        ):
-            return "\n".join(msg["content"] for msg in input_item)
-        raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
-
-    def invoke(self, input_item, **invoke_kwargs) -> str:
-        return self.batch([input_item], **invoke_kwargs)[0]
-
-    async def ainvoke(self, input_item, **invoke_kwargs):
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.invoke(input_item, **invoke_kwargs)
-        )
-
-
-class ChatLlamaCppModel(BaseLocalModel):
-    """LlamaCpp wrapper that auto-detects and applies the GGUF chat template.
-
-    Mirrors the ChatVLLM pattern but for local GGUF models via llama-cpp-python.
-
-    Chat template handling:
-        - If the GGUF file embeds a chat template (typical for instruct models),
-          uses ``create_chat_completion()`` which applies the template and
-          handles EOS tokens correctly.
-        - If no template is found (base/pretrained models), falls back to
-          ``create_completion()`` (text mode) and emits a warning.
-
-    Unlike langchain's ``ChatLlamaCpp``, this wrapper explicitly calls
-    ``Llama.reset()`` between conversations to clear stale KV-cache state.
-
-    Sampling defaults:
-        - ``temperature=None`` means do not pass temperature explicitly and keep
-          llama-cpp's backend default behavior.
-    """
-
-    def __init__(
-        self,
-        model_path: str,
-        max_tokens: int = 1024,
-        n_ctx: int = 0,
-        temperature: float | None = None,
-        **kwargs,
-    ):
-        from llama_cpp import Llama
-
-        self.model_path = model_path
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.llama = Llama(
-            model_path=model_path,
-            n_ctx=n_ctx,
-            verbose=True,
-            **kwargs,
-        )
-
-        chat_template = self.llama.metadata.get("tokenizer.chat_template")
-        if chat_template:
-            self._use_generate = False
-            print(f"ChatLlamaCppModel: using GGUF chat template for '{model_path}'")
-        else:
-            self._use_generate = True
-            warnings.warn(
-                f"Model '{model_path}' does not embed a chat template. "
-                f"Falling back to text-completion mode (no chat formatting). "
-                f"Override with --chat_template if this model needs one.",
-            )
-
-    def batch(self, inputs: list, **kwargs) -> list[str]:
-        """Process a batch of inputs, resetting KV cache between conversations."""
-        results = []
-        for inp in inputs:
-            self.llama.reset()
-            if self._use_generate:
-                text = self._to_raw_text(inp)
-                create_kwargs = {"prompt": text, "max_tokens": self.max_tokens}
-                if self.temperature is not None:
-                    create_kwargs["temperature"] = self.temperature
-                response = self.llama.create_completion(**create_kwargs)
-                results.append(response["choices"][0]["text"])
-            else:
-                messages = self._to_messages(inp)
-                create_kwargs = {"messages": messages, "max_tokens": self.max_tokens}
-                if self.temperature is not None:
-                    create_kwargs["temperature"] = self.temperature
-                response = self.llama.create_chat_completion(**create_kwargs)
-                results.append(response["choices"][0]["message"]["content"])
-        return results
-
-    def set_temperature(self, temperature: float | None) -> None:
-        self.temperature = None if temperature is None else float(temperature)
-
-
-class ChatVLLM(BaseLocalModel):
+class ChatVLLM:
     """VLLM wrapper that auto-detects whether to use chat() or generate().
 
     Chat template handling:
@@ -319,18 +175,12 @@ class ChatVLLM(BaseLocalModel):
           falls back to ``llm.generate()`` and emits a warning.  This avoids the
           ``ValueError`` raised by ``transformers >= v4.44`` which removed the
           default chat template.
-
-    Sampling defaults:
-        - Uses ``temperature=0.6`` and ``top_p=0.95`` unless explicitly
-          overridden.
     """
 
     def __init__(
         self,
         model: str,
         max_tokens: int = 8192,
-        temperature: float = 0.6,
-        top_p: float = 0.95,
         chat_template: str | None = None,
         **vllm_kwargs,
     ):
@@ -351,7 +201,8 @@ class ChatVLLM(BaseLocalModel):
                 if model_max_pos is not None and max_model_len > model_max_pos:
                     warnings.warn(
                         f"Capping max_model_len from {max_model_len} to "
-                        f"{model_max_pos} (max_position_embeddings) for '{model}'."
+                        f"{model_max_pos} (max_position_embeddings) for '{model}'.",
+                        stacklevel=2,
                     )
                     vllm_kwargs["max_model_len"] = model_max_pos
             except Exception as e:
@@ -360,16 +211,14 @@ class ChatVLLM(BaseLocalModel):
                     f"max_position_embeddings for '{model}': {e}. "
                     "Proceeding without clamping; vLLM may raise if the value is too large.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
-        self._SamplingParams = SamplingParams
-        self._temperature = temperature
-        self._top_p = top_p
-        self.sampling_params = self._SamplingParams(
+        self.sampling_params = SamplingParams(
             max_tokens=max_tokens,
-            temperature=self._temperature,
-            top_p=self._top_p,
+            temperature=0.6,
+            top_p=0.95,
         )
 
         # Resolve chat template:
@@ -387,6 +236,7 @@ class ChatVLLM(BaseLocalModel):
                     f"Model '{model}' tokenizer does not define a chat template. "
                     f"Falling back to llm.generate() (no chat formatting). "
                     f"Override with --chat_template if this model needs one.",
+                    stacklevel=2,
                 )
                 self.chat_template = None
                 self._use_generate = True
@@ -395,13 +245,56 @@ class ChatVLLM(BaseLocalModel):
                 self._use_generate = False
                 print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
 
-    def set_temperature(self, temperature: float) -> None:
-        self._temperature = float(temperature)
-        self.sampling_params = self._SamplingParams(
-            max_tokens=self.max_tokens,
-            temperature=self._temperature,
-            top_p=self._top_p,
-        )
+    def _to_messages(self, input_item) -> list[dict]:
+        """Convert LangChain prompt input to OpenAI-style messages."""
+        # Map LangChain message types to OpenAI roles
+        role_map = {"human": "user", "ai": "assistant", "system": "system"}
+
+        # Handle ChatPromptValue from LangChain
+        if hasattr(input_item, "to_messages"):
+            lc_messages = input_item.to_messages()
+            return [
+                {"role": role_map.get(msg.type, msg.type), "content": msg.content}
+                for msg in lc_messages
+            ]
+        # Handle list of tuples like [("system", "..."), ("user", "...")]
+        elif (
+            isinstance(input_item, list)
+            and input_item
+            and isinstance(input_item[0], tuple)
+        ):
+            return [
+                {"role": role if role != "human" else "user", "content": content}
+                for role, content in input_item
+            ]
+        # Handle already formatted messages
+        elif (
+            isinstance(input_item, list)
+            and input_item
+            and isinstance(input_item[0], dict)
+        ):
+            return input_item
+        # Handle plain string (wrap as user message)
+        elif isinstance(input_item, str):
+            return [{"role": "user", "content": input_item}]
+        else:
+            raise ValueError(f"Unsupported input type: {type(input_item)}")
+
+    def _to_raw_text(self, input_item) -> str:
+        """Extract raw text from an input item for use with llm.generate()."""
+        if isinstance(input_item, str):
+            return input_item
+        # ChatPromptValue from LangChain
+        if hasattr(input_item, "to_string"):
+            return input_item.to_string()
+        # List of dicts (messages) - concatenate contents
+        if (
+            isinstance(input_item, list)
+            and input_item
+            and isinstance(input_item[0], dict)
+        ):
+            return "\n".join(msg["content"] for msg in input_item)
+        raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
 
     def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
         """Process a batch of inputs using vllm.LLM.chat() or llm.generate().
@@ -422,21 +315,28 @@ class ChatVLLM(BaseLocalModel):
             )
         return [out.outputs[0].text for out in outputs]
 
+    def invoke(self, input_item, **invoke_kwargs) -> str:
+        """Process a single input."""
+        results = self.batch([input_item], **invoke_kwargs)
+        return results[0]
 
-def make_model(
-    model: str,
-    max_tokens: int | None = 8192,
-    temperature: float | None = None,
-    **engine_kwargs,
-):
+    async def ainvoke(self, input_item, **invoke_kwargs):
+        """Async version - runs sync version in executor for compatibility."""
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.invoke(input_item, **invoke_kwargs)
+        )
+
+
+def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
 
     Args:
         model: Format ``{Provider}/{model_path}``, e.g.
             ``VLLM/meta-llama/Llama-3.3-70B-Instruct``.
         max_tokens: Maximum tokens the model may generate.
-        temperature: Optional generation temperature override. ``None`` keeps
-            each provider wrapper's default temperature behavior.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
     """
     # Avoid mutating the original engine_kwargs dictionary
@@ -446,8 +346,6 @@ def make_model(
 
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
-    if temperature is not None:
-        engine_kwargs["temperature"] = temperature
 
     model_provider = model.split("/")[0]
 
@@ -466,6 +364,7 @@ def make_model(
             model=model_name,
             **engine_kwargs,
         )
+
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
         return ChatOpenAI(
@@ -474,15 +373,15 @@ def make_model(
             model=model_name,
             **engine_kwargs,
         )
-    elif model_provider == "LlamaCpp":
-        engine_kwargs["model_path"] = model_name
-        engine_kwargs.setdefault("n_ctx", 0)
-        return ChatLlamaCppModel(**engine_kwargs)
     else:
         model_classes = [
+            LlamaCpp,
             ChatOpenAI,
         ]
-        engine_kwargs["model"] = model_name
+        if model_provider == "LlamaCpp":
+            engine_kwargs["model_path"] = model_name
+        else:
+            engine_kwargs["model"] = model_name
 
         try:
             from langchain_together.llms import Together
@@ -497,15 +396,13 @@ def make_model(
         except ImportError as e:
             print(str(e))
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
-        assert (
-            model_provider in model_cls_dict
-        ), f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        assert model_provider in model_cls_dict, (
+            f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        )
         return model_cls_dict[model_provider](**engine_kwargs)
 
 
 def download_all():
-    from openjury.instruction_dataset.mt_bench import download_mt_bench
-
     print(f"Downloading all dataset in {data_root}")
     for dataset in ["alpaca-eval", "arena-hard", "m-arena-hard"]:
         local_path_tables = data_root / "tables"
@@ -518,8 +415,6 @@ def download_all():
         local_dir=data_root / "contexts",
         force_download=False,
     )
-
-    download_mt_bench()
 
 
 class Timeblock:
@@ -553,9 +448,10 @@ def cache_function_dataframe(
     ignore_cache: bool = False,
     cache_path: Path | None = None,
 ) -> pd.DataFrame:
-    f"""
+    """
     :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
+    :param cache_name: the cache of the function result is written into
+        `{cache_path}/{cache_name}.csv.zip`
     :param ignore_cache: whether to recompute even if the cache is present
     :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
     :return: result of fun()
@@ -604,7 +500,7 @@ def compute_cohen_kappa(y1: list[str], y2: list[str]) -> float:
     for cat1 in categories:
         matrix[cat1] = {cat2: 0 for cat2 in categories}
 
-    for label1, label2 in zip(y1, y2):
+    for label1, label2 in zip(y1, y2, strict=True):
         matrix[label1][label2] += 1
 
     # Compute observed agreement (p_o)

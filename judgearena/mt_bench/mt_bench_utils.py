@@ -15,18 +15,19 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from openjury.eval_utils import _compute_grouped_stats, print_results
-from openjury.generate import generate_multiturn
-from openjury.instruction_dataset import load_instructions
-from openjury.mt_bench.fastchat_compat import (
+from judgearena.eval_utils import _compute_grouped_stats, print_results
+from judgearena.generate import generate_multiturn
+from judgearena.instruction_dataset import load_instructions
+from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
-from openjury.repro import _to_jsonable
-from openjury.utils import cache_function_dataframe, compute_pref_summary, make_model
+from judgearena.repro import _to_jsonable
+from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 if TYPE_CHECKING:
-    from openjury.config import CliArgs
+    from judgearena.config import CliArgs
+
 
 def _generate_mt_bench_completions(
     args: CliArgs,

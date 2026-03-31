@@ -4,8 +4,9 @@ Example showing how to generate instruction quality with the prompt proposed in 
 
 import re
 
-from openjury.utils import do_inference, make_model
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
+
+from judgearena.utils import do_inference, make_model
 
 max_len = 2000
 system_prompt = None
@@ -31,7 +32,7 @@ After analyzing the input prompt based on these criteria, you must list the crit
 **Do not put any explanation.**
 **Always return an output in the form of a list with the list of criteria satistied if any.**
 
-Criteria Satisfied: 
+Criteria Satisfied:
 """
 
 judge_chat_model = make_model("OpenRouter/deepseek/deepseek-chat-v3.1", max_tokens=20)

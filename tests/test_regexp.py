@@ -1,4 +1,4 @@
-from openjury.evaluate import PairScore
+from judgearena.evaluate import PairScore
 
 
 def test_pair_score():
@@ -23,7 +23,7 @@ score A: 10
 score B: -5
 ```
 
-In this case, Model A provided a correct and relevant response, listing two countries that start with S. On the other hand, Model B's response was completely irrelevant to the question asked, indicating a lack of understanding or ability to address the topic at hand. Therefore, Model A is significantly better than Model B in this scenario.    
+In this case, Model A provided a correct and relevant response, listing two countries that start with S. On the other hand, Model B's response was completely irrelevant to the question asked, indicating a lack of understanding or ability to address the topic at hand. Therefore, Model A is significantly better than Model B in this scenario.
 """
     score = PairScore()
     assert score.parse_model_raw(s) == 0.010986942630593188

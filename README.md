@@ -1,7 +1,7 @@
-# 🏛️ OpenJury: LLM Evaluation with Swappable Judges
+# 🏛️ JudgeArena: LLM Evaluation with Swappable Judges
 
-OpenJury makes it easy to benchmark language models against each other while giving you complete control over the evaluation process. 
-Whether you're comparing proprietary models or testing your own fine-tuned creations, OpenJury lets you choose your judge.
+JudgeArena makes it easy to benchmark language models against each other while giving you complete control over the evaluation process.
+Whether you're comparing proprietary models or testing your own fine-tuned creations, JudgeArena lets you choose your judge.
 
 ## ✨ Key Features
 
@@ -22,9 +22,9 @@ Compared to other libraries, here is a breakdown of features:
 | **Arena-Hard-Auto** | ❌  | ❌  | ✅  | ❌  | ❌                         | ❌                                            |
 | **Lighteval** | ✅  | ❌  | ❌  | ❌  | ❌                         | ❌                                       |
 | **Evalchemy** | ✅  | ✅  | ❌  | ❌  | ❌                         | ❌                                           |
-| **OpenJury** | ✅  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
+| **JudgeArena** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
 
-The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue 
+The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue
 or send a PR, we will be happy to update the information.
 
 ## 🚀 Quick Start
@@ -32,9 +32,9 @@ or send a PR, we will be happy to update the information.
 ### Installation
 
 ```bash
-git clone https://github.com/OpenEuroLLM/OpenJury
-cd OpenJury
-uv sync 
+git clone https://github.com/OpenEuroLLM/JudgeArena
+cd JudgeArena
+uv sync
 uv sync --extra vllm      # Optional: install vLLM support
 uv sync --extra llamacpp   # Optional: install LlamaCpp support
 ```
@@ -44,24 +44,24 @@ uv sync --extra llamacpp   # Optional: install LlamaCpp support
 Compare two models head-to-head:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10 
+  --n_instructions 10
 ```
 
 **What happens here?**
 - Use completions available for `gpt4_1106_preview` in Alpaca-Eval dataset
 - Generates completions for `model_B` if not already cached on `vLLM`
-- Compares two models using `deepseek-chat-v3.1` which the cheapest option available on `OpenRouter` 
+- Compares two models using `deepseek-chat-v3.1` which the cheapest option available on `OpenRouter`
 
 It will then display the results of the battles:
 
 ```bash
 ============================================================
-                  🏆 MODEL BATTLE RESULTS 🏆                  
+                  🏆 MODEL BATTLE RESULTS 🏆
 📊 Dataset: alpaca-eval
 🤖 Competitors: Model A: gpt4_1106_preview vs Model B: VLLM/utter-project/EuroLLM-9B
 ⚖️ Judge: OpenRouter/deepseek/deepseek-chat-v3.1
@@ -84,13 +84,13 @@ The evaluation scripts expose four different length controls with different role
 
 ### Engine-Specific Configuration (`--engine_kwargs`)
 
-Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).  
-OpenJury lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
+Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).
+JudgeArena lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
 
 For instance, to run vLLM with tensor parallelism across multiple GPUs:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
@@ -118,12 +118,12 @@ OpenRouter/deepseek/deepseek-chat-v3.1
 For instance, to run everything locally with vLLM:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
-  --n_instructions 10 
+  --n_instructions 10
 ```
 
 ### Running locally with LlamaCpp
@@ -149,7 +149,7 @@ For absolute paths, this results in a double slash (e.g., `LlamaCpp//home/user/m
 **Mixed example** — local LlamaCpp model with a remote judge:
 
 ```bash
-uv run python openjury/generate_and_evaluate.py \
+uv run python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B OpenRouter/qwen/qwen-2.5-7b-instruct \
@@ -160,7 +160,7 @@ uv run python openjury/generate_and_evaluate.py \
 **Fully local example** — no API keys required (useful for verifying your setup):
 
 ```bash
-uv run python openjury/generate_and_evaluate.py \
+uv run python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
@@ -173,15 +173,15 @@ If you use remote endpoint, you would have to set your credentials.
 
 ### Chat Templates (vLLM)
 
-When using vLLM, OpenJury automatically picks the right inference method based on the model:
+When using vLLM, JudgeArena automatically picks the right inference method based on the model:
 
-- **Instruct/chat models** (e.g. `swiss-ai/Apertus-8B-Instruct-2509`): the tokenizer already defines a chat template, so OpenJury uses `vllm.LLM.chat()` and the template is applied automatically.
-- **Base/pretrained models** (e.g. `swiss-ai/Apertus-8B-2509`): these typically don't ship a chat template. OpenJury detects this and falls back to `vllm.LLM.generate()` (plain text, no chat formatting). A warning is printed when this happens.
+- **Instruct/chat models** (e.g. `swiss-ai/Apertus-8B-Instruct-2509`): the tokenizer already defines a chat template, so JudgeArena uses `vllm.LLM.chat()` and the template is applied automatically.
+- **Base/pretrained models** (e.g. `swiss-ai/Apertus-8B-2509`): these typically don't ship a chat template. JudgeArena detects this and falls back to `vllm.LLM.generate()` (plain text, no chat formatting). A warning is printed when this happens.
 
 If you need to force a specific chat template (for example, a base model that you know works with ChatML), pass it via `--chat_template`:
 
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset alpaca-eval \
   --model_A VLLM/swiss-ai/Apertus-8B-2509 \
   --model_B VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
@@ -191,30 +191,10 @@ python openjury/generate_and_evaluate.py \
 
 This override applies to all vLLM models in the run. For remote providers (OpenAI, Together, OpenRouter), the flag is ignored since they handle templates server-side.
 
-### MT-Bench (Multi-Turn Evaluation)
-
-MT-Bench evaluates multi-turn conversation ability using 80 two-turn questions across 8 categories
-(writing, roleplay, reasoning, math, coding, extraction, STEM, humanities).
-It uses category-dependent judge prompts and reference answers for math/reasoning/coding.
-OpenJury runs MT-Bench using the FastChat-compatible judge prompt family and `[[A]]/[[B]]/[[C]]` verdict format.
-Questions are automatically downloaded from the [LMSYS MT-Bench HuggingFace space](https://huggingface.co/spaces/lmsys/mt-bench).
-
-```bash
-uv run python openjury/generate_and_evaluate.py \
-  --dataset mt-bench \
-  --model_A VLLM/Qwen/Qwen2.5-7B-Instruct \
-  --model_B OpenRouter/openai/gpt-4o \
-  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10
-```
-
-Results include per-category and per-turn win rate breakdowns. Use `--swap_mode both` to correct for judge position bias.
-
 ## 📊 Supported Datasets
 
 | Dataset               | Description                                                                                    |
 |-----------------------|------------------------------------------------------------------------------------------------|
-| `mt-bench`            | 80 multi-turn (2-turn) questions across 8 categories ([LMSYS MT-Bench](https://arxiv.org/abs/2306.05685)) |
 | `alpaca-eval`         | General instruction-following benchmark                                                        |
 | `arena-hard`          | More challenging evaluation suite                                                              |
 | `m-arena-hard`        | Translated version of Arena-Hard in 23 languages                                               |
@@ -222,17 +202,71 @@ Results include per-category and per-turn win rate breakdowns. Use `--swap_mode 
 | `m-arena-hard-EU`     | All EU languages combined                                                                      |
 | `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
+## 📈 Estimating ELO Ratings
+
+OpenJury can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
+The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
+
+### Quick start
+
+```bash
+judgearena-elo \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+Alternatively, if running directly from the repository without installing:
+
+```bash
+uv run python openjury/estimate_elo_ratings.py \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+### Key options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--arena` | `ComparIA` | Arena to sample opponents from: `LMArena-100k`, `LMArena-140k`, or `ComparIA` |
+| `--model` | *(required)* | Model under evaluation (same format as `openjury`) |
+| `--judge_model` | *(required)* | LLM judge (same format as `openjury`) |
+| `--n_instructions` | all | Number of arena battles to use for evaluation |
+| `--n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
+| `--languages` | all | Restrict to specific language codes, e.g. `en fr de` |
+| `--n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
+| `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
+| `--result_folder` | `results` | Directory where annotations and results are saved |
+
+### Output
+
+The script prints win/loss/tie counts, win rate, and a ranked ELO leaderboard with confidence intervals:
+
+```
+=== Results for meta-llama/Llama-3.3-70B-Instruct-Turbo ===
+Battles: 200 | Wins: 112 | Losses: 71 | Ties: 17
+Win rate: 60.25%
+
+=== ELO Ratings (Bradley-Terry, 20 bootstraps) ===
+  gpt-4o  (12453): 1132.4 ± 3.1
+  meta-llama/Llama-3.3-70B-Instruct-Turbo  (200) <-----: 1089.7 ± 8.2
+  ...
+```
+
 ### Offline Setup (Slurm/Air-Gapped Environments)
 
 Pre-download all datasets before running jobs:
 
 ```bash
-python -c "from openjury.utils import download_all; download_all()"  # Download all datasets (optional)
+python -c "from judgearena.utils import download_all; download_all()"  # Download all datasets (optional)
 ```
 
 Datasets are stored in:
-- `$OPENJURY_DATA` (if set)
-- `~/openjury-data/` (default)
+- `$JUDGEARENA_DATA` if set; otherwise `$OPENJURY_DATA` if set (legacy)
+- `~/judgearena-data/` if neither variable is set
 
 ## 🛠️ Development
 

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from openjury.evaluate import annotate_battles, PairScore
-from openjury.utils import compute_pref_summary
+from judgearena.evaluate import PairScore, annotate_battles
+from judgearena.utils import compute_pref_summary
 
 
 def print_results(results):
@@ -58,15 +58,12 @@ def _compute_grouped_stats(
     group_by: str,
 ) -> dict[object, dict[str, float | int]]:
     grouped: dict[object, list[float]] = {}
-    for meta, pref in zip(metadata, preferences):
+    for meta, pref in zip(metadata, preferences, strict=True):
         key = meta.get(group_by)
         if key is None:
             continue
         grouped.setdefault(key, []).append(pref)
-    return {
-        key: compute_pref_summary(pd.Series(vals))
-        for key, vals in grouped.items()
-    }
+    return {key: compute_pref_summary(pd.Series(vals)) for key, vals in grouped.items()}
 
 
 def _parse_preferences_from_annotations(

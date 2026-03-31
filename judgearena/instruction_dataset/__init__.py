@@ -1,11 +1,12 @@
 import pandas as pd
-from openjury.instruction_dataset.m_arenahard import load_m_arenahard
-from openjury.utils import data_root, download_hf, read_df
+
+from judgearena.instruction_dataset.m_arenahard import load_m_arenahard
+from judgearena.utils import data_root, download_hf, read_df
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
     if dataset == "mt-bench":
-        from openjury.instruction_dataset.mt_bench import load_mt_bench
+        from judgearena.instruction_dataset.mt_bench import load_mt_bench
 
         df_instructions = load_mt_bench()
 

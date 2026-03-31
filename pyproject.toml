@@ -3,14 +3,29 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-openjury = "openjury.generate_and_evaluate:cli"
+judgearena = "judgearena.generate_and_evaluate:cli"
+judgearena-elo = "judgearena.estimate_elo_ratings:main"
 
 [project]
-name = "llm-judge-eval"
+name = "judgearena"
 version = "0.1.0"
-description = "Add your description here"
+description = "A toolkit for LLM-as-a-judge evaluation and arena benchmarks."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+maintainers = [
+    { name = "Erlis Lushtaku", email = "erlislushtaku@gmail.com" },
+    { name = "David Salinas" },
+]
+keywords = ["llm", "evaluation", "benchmark", "arena", "langchain", "nlp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "datasets>=4.0.0",
     "fast-langdetect>=1.0.0",
@@ -18,6 +33,7 @@ dependencies = [
     "ipython>=9.5.0",
     "joblib>=1.5.2",
     "jupyter>=1.1.1",
+    "langchain-core>=0.3.27",
     "langchain>=0.3.27",
     "langchain-community>=0.3.29",
     "langchain-openai>=0.3.32",
@@ -25,25 +41,44 @@ dependencies = [
     "matplotlib>=3.10.6",
     "pandas>=2.3.2",
     "pyyaml>=6.0.2",
+    "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
     "tqdm>=4.67.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/OpenEuroLLM/JudgeArena"
+Repository = "https://github.com/OpenEuroLLM/JudgeArena"
+Issues = "https://github.com/OpenEuroLLM/JudgeArena/issues"
+
 [tool.setuptools.packages.find]
-include = ["openjury*"]
+include = ["judgearena*"]
 exclude = ["slurmpilot_scripts*"]
 
 [tool.setuptools.package-data]
-"openjury.criteria" = ["data/*.yaml"]
-"openjury.prompts" = ["*.txt"]
+"judgearena.criteria" = ["data/*.yaml"]
+"judgearena.prompts" = ["*.txt"]
 
 [dependency-groups]
 dev = [
-    "black>=25.1.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
+    "ruff>=0.11.0",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501", "N806", "N815", "N803"]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [project.optional-dependencies]
 vllm = ["vllm==0.10.2", "transformers>=4.55.2,<5.0.0"]

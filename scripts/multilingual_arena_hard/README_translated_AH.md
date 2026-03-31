@@ -39,13 +39,13 @@ for example in dataset["train"]:
     print(example["prompt"])
 ```
 
-### Using with OpenJury for Model Evaluation
+### Using with JudgeArena for Model Evaluation
 
 **TODO coming soon**
 
-Evaluate and compare two models using the OpenJury framework:
+Evaluate and compare two models using the JudgeArena framework:
 ```bash
-python openjury/generate_and_evaluate.py \
+python judgearena/generate_and_evaluate.py \
   --dataset arena-hard-EU \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
@@ -54,7 +54,7 @@ python openjury/generate_and_evaluate.py \
   --n_instructions 100
 ```
 
-For more information, visit the [OpenJury repository](https://github.com/OpenEuroLLM/OpenJury).
+For more information, visit the [JudgeArena repository](https://github.com/OpenEuroLLM/JudgeArena).
 
 ## Dataset Structure
 
@@ -86,7 +86,7 @@ Each example contains the following fields:
 
 The complete translation pipeline is open-source and can be used to extend this dataset to additional languages:
 
-👉 [Translation Script](https://github.com/OpenEuroLLM/OpenJury/blob/main/examples/translate_arena_hard.py)
+👉 [Translation Script](https://github.com/OpenEuroLLM/JudgeArena/blob/main/scripts/multilingual_arena_hard/translate_arena_hard.py)
 
 
 ### Translation Process
@@ -102,7 +102,7 @@ This dataset is released under the **Apache 2.0 License**, allowing for both aca
 
 ## Contributions & Feedback
 
-We welcome contributions to expand language coverage or improve translation quality. Please open an issue or pull request in the [OpenJury repository](https://github.com/OpenEuroLLM/OpenJury).
+We welcome contributions to expand language coverage or improve translation quality. Please open an issue or pull request in the [JudgeArena repository](https://github.com/OpenEuroLLM/JudgeArena).
 
 ## Acknowledgments
 

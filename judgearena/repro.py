@@ -14,18 +14,18 @@ import platform
 import re
 import subprocess
 import tomllib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
 METADATA_FILENAME = "run-metadata.v1.json"
-METADATA_SCHEMA_VERSION = "openjury-run-metadata/v1"
+METADATA_SCHEMA_VERSION = "judgearena-run-metadata/v1"
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)")
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -175,7 +175,9 @@ def _get_git_hash(start_path: Path) -> str | None:
     return _run_git(["rev-parse", "HEAD"], cwd=root)
 
 
-def _collect_artifacts(output_dir: Path, metadata_filename: str) -> list[dict[str, Any]]:
+def _collect_artifacts(
+    output_dir: Path, metadata_filename: str
+) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
     for path in sorted(output_dir.rglob("*")):
         if not path.is_file():
@@ -218,6 +220,7 @@ def _compact_results(results: dict[str, Any] | None) -> dict[str, Any]:
         payload["preferences_count"] = count
     return payload
 
+
 def write_run_metadata(
     *,
     output_dir: str | Path,
@@ -237,7 +240,7 @@ def write_run_metadata(
     finished = _utc_now()
     started = started_at_utc or finished
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
+        started = started.replace(tzinfo=UTC)
     duration_sec = max(0.0, (finished - started).total_seconds())
 
     metadata: dict[str, Any] = {
@@ -278,9 +281,7 @@ def write_run_metadata(
 
     judge_user_prompt_template_hash = _hash_string_sha256(judge_user_prompt_template)
     if judge_user_prompt_template_hash:
-        metadata["judge_user_prompt_template_sha256"] = (
-            judge_user_prompt_template_hash
-        )
+        metadata["judge_user_prompt_template_sha256"] = judge_user_prompt_template_hash
 
     metadata["artifacts"] = _collect_artifacts(
         output_path, metadata_filename=metadata_filename

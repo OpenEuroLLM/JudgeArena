@@ -8,9 +8,8 @@ from typing import Any, Literal
 import pandas as pd
 from langchain.prompts import ChatPromptTemplate
 
-from openjury.mt_bench.common import iter_mt_bench_pairwise_rows
-from openjury.utils import do_inference
-
+from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
+from judgearena.utils import do_inference
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -194,7 +193,9 @@ def _map_verdict_to_winner(verdict: FastChatVerdict, swapped: bool) -> PairwiseW
     return "error"
 
 
-def _conservative_winner(g1: PairwiseWinner, g2: PairwiseWinner) -> tuple[PairwiseWinner, bool]:
+def _conservative_winner(
+    g1: PairwiseWinner, g2: PairwiseWinner
+) -> tuple[PairwiseWinner, bool]:
     """Conservative position-bias handling (FastChat/MT-Bench paper).
 
     Declare a winner only if the two orderings agree; otherwise treat as tie.
@@ -239,8 +240,14 @@ def _group_indices_by_prompt(
 def _swap_prompt_kwargs(kwargs: dict[str, str], *, multi_turn: bool) -> dict[str, str]:
     swapped = dict(kwargs)
     if multi_turn:
-        swapped["answer_a_1"], swapped["answer_b_1"] = swapped["answer_b_1"], swapped["answer_a_1"]
-        swapped["answer_a_2"], swapped["answer_b_2"] = swapped["answer_b_2"], swapped["answer_a_2"]
+        swapped["answer_a_1"], swapped["answer_b_1"] = (
+            swapped["answer_b_1"],
+            swapped["answer_a_1"],
+        )
+        swapped["answer_a_2"], swapped["answer_b_2"] = (
+            swapped["answer_b_2"],
+            swapped["answer_a_2"],
+        )
         return swapped
     swapped["answer_a"], swapped["answer_b"] = swapped["answer_b"], swapped["answer_a"]
     return swapped
@@ -257,7 +264,7 @@ def _infer_by_prompt_groups(
     grouped_indices = _group_indices_by_prompt(items)
 
     judgments: list[str] = [""] * len(items)
-    for prompt_name, idxs in grouped_indices.items():
+    for _prompt_name, idxs in grouped_indices.items():
         prompt: FastChatPairwisePrompt = items[idxs[0]]["prompt"]
         prompt_template = ChatPromptTemplate.from_messages(
             [("system", prompt.system_prompt), ("user", prompt.user_prompt_template)]
@@ -276,7 +283,7 @@ def _infer_by_prompt_groups(
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
         )
-        for i, out in zip(idxs, outs):
+        for i, out in zip(idxs, outs, strict=True):
             judgments[i] = str(out)
     return judgments
 
@@ -459,13 +466,15 @@ def judge_mt_bench_pairwise_fastchat(
 
     for idx, item in enumerate(items):
         g2_raw = g2_judgments[idx] if g2_judgments is not None else None
-        annotation_row, item_metadata, preference, inconsistent = _resolve_fastchat_item_result(
-            item=item,
-            g1_raw=g1_judgments[idx],
-            g2_raw=g2_raw,
-            judge_model=judge_model,
-            model_a=model_a,
-            model_b=model_b,
+        annotation_row, item_metadata, preference, inconsistent = (
+            _resolve_fastchat_item_result(
+                item=item,
+                g1_raw=g1_judgments[idx],
+                g2_raw=g2_raw,
+                judge_model=judge_model,
+                model_a=model_a,
+                model_b=model_b,
+            )
         )
         if inconsistent:
             num_inconsistent += 1
@@ -474,4 +483,3 @@ def judge_mt_bench_pairwise_fastchat(
         prefs.append(preference)
 
     return pd.Series(prefs, dtype=float), annotations, metadata, num_inconsistent
-

@@ -1,6 +1,6 @@
 import json
 
-import openjury.repro as repro
+import judgearena.repro as repro
 
 
 def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
@@ -9,12 +9,14 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: "a" * 40)
 
-    (tmp_path / "annotations.csv").write_text("instruction_index,judge_completion\n0,a\n")
+    (tmp_path / "annotations.csv").write_text(
+        "instruction_index,judge_completion\n0,a\n"
+    )
     (tmp_path / "results.json").write_text("{}")
 
     metadata_path = repro.write_run_metadata(
         output_dir=tmp_path,
-        entrypoint="openjury.test.entrypoint",
+        entrypoint="judgearena.test.entrypoint",
         run={"dataset": "alpaca-eval"},
         results={
             "num_battles": 3,
@@ -33,7 +35,7 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
 
     metadata = json.loads(metadata_path.read_text())
     assert metadata["schema_version"] == repro.METADATA_SCHEMA_VERSION
-    assert metadata["entrypoint"] == "openjury.test.entrypoint"
+    assert metadata["entrypoint"] == "judgearena.test.entrypoint"
     assert metadata["results"]["num_battles"] == 3
     assert metadata["results"]["preferences_count"] == 3
     assert metadata["results"]["judge_score"] is None
@@ -55,13 +57,13 @@ def test_write_run_metadata_hashes_instruction_indices_as_set(tmp_path, monkeypa
 
     metadata_path_a = repro.write_run_metadata(
         output_dir=tmp_path / "run_a",
-        entrypoint="openjury.test.entrypoint",
+        entrypoint="judgearena.test.entrypoint",
         run={"dataset": "alpaca-eval"},
         input_payloads={"instruction_index": [9, 1, 5, 9]},
     )
     metadata_path_b = repro.write_run_metadata(
         output_dir=tmp_path / "run_b",
-        entrypoint="openjury.test.entrypoint",
+        entrypoint="judgearena.test.entrypoint",
         run={"dataset": "alpaca-eval"},
         input_payloads={"instruction_index": [5, 9, 1]},
     )
@@ -82,7 +84,7 @@ def test_write_run_metadata_omits_optional_fields_when_inputs_missing(
 
     metadata_path = repro.write_run_metadata(
         output_dir=tmp_path,
-        entrypoint="openjury.test.entrypoint",
+        entrypoint="judgearena.test.entrypoint",
         run={"dataset": "alpaca-eval"},
     )
 

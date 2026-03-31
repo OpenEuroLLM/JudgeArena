@@ -1,16 +1,17 @@
+import warnings
 from pathlib import Path
 from urllib.request import urlretrieve
-import warnings
 
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from openjury.utils import data_root
+from judgearena.utils import data_root
 
 FASTCHAT_GPT4_REFERENCE_URL = (
     "https://raw.githubusercontent.com/lm-sys/FastChat/main/"
     "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
 )
+
 
 def _download_gpt4_references(local_dir: Path) -> Path | None:
     reference_dir = local_dir / "reference_answer"
@@ -25,6 +26,7 @@ def _download_gpt4_references(local_dir: Path) -> Path | None:
             "Could not download MT-Bench GPT-4 reference answers from FastChat. "
             f"Falling back to inline references from question.jsonl: {e}",
             RuntimeWarning,
+            stacklevel=2,
         )
         return None
     return gpt4_reference_path
@@ -113,6 +115,7 @@ def load_mt_bench() -> pd.DataFrame:
                 "Failed to parse GPT-4 reference answers from FastChat. "
                 f"Falling back to inline references from question.jsonl: {e}",
                 RuntimeWarning,
+                stacklevel=2,
             )
             use_inline_reference_fallback = True
 
@@ -163,4 +166,3 @@ def load_mt_bench() -> pd.DataFrame:
         )
 
     return pd.DataFrame(rows)
-

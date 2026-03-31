@@ -6,12 +6,12 @@ from importlib.resources import files
 
 import yaml
 
-from openjury.criteria.schema import Criterion, criteria_from_dict
+from judgearena.criteria.schema import Criterion, criteria_from_dict
 
 
 def _load_builtin_criteria(filename: str) -> list[Criterion]:
     data = yaml.safe_load(
-        files("openjury.criteria").joinpath("data").joinpath(filename).read_text()
+        files("judgearena.criteria").joinpath("data").joinpath(filename).read_text()
     )
     if not isinstance(data, dict):
         raise ValueError(f"Built-in criteria file '{filename}' must define a mapping.")

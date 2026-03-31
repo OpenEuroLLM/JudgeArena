@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 import pandas as pd
 
-from openjury.utils import safe_text
+from judgearena.utils import safe_text
 
 
 @dataclass(frozen=True)

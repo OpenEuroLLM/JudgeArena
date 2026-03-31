@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 SCALE_MIN = 1
 SCALE_MAX = 10
 

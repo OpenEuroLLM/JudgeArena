@@ -15,11 +15,10 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import Dataset
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
-from openjury.instruction_dataset import load_instructions
-from openjury.utils import do_inference, make_model
-from openjury.utils import set_langchain_cache
+from judgearena.instruction_dataset import load_instructions
+from judgearena.utils import do_inference, make_model
 
 # set_langchain_cache()
 
@@ -27,7 +26,7 @@ dataset_name = "openeurollm/ArenaHard-EU-v0-bis"
 
 """
 TODOs:
-- test with openjury
+- test with JudgeArena
 Done:
 - load AH
 - call translate
@@ -114,16 +113,16 @@ def generate_translations():
 
         user_prompt_template = f"""\
         Your task is to translate the following text from English to {target_language}.
-        
+
         Important:
         * Do not answer the instruction, just translate it.
         * If any code is present in the instruction, **do not change it and do not translate it**.
         * Keep a formality adapted for the target language, most language would not use "Vous" or "Sie" when talking to a chatbot.
-        
+
         # Input text
         {{instruction}}
-        
-        # Output text (just output the translation and nothing else as your ouput will be parsed)\n         
+
+        # Output text (just output the translation and nothing else as your ouput will be parsed)\n
         """
 
         judge_chat_model = make_model(translator_model, max_tokens=32768)

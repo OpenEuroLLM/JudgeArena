@@ -27,9 +27,9 @@ class CliArgs:
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
-        assert (
-            self.swap_mode in supported_modes
-        ), f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        assert self.swap_mode in supported_modes, (
+            f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        )
 
     @classmethod
     def parse_args(cls):
@@ -149,19 +149,17 @@ class CliArgs:
             default="{}",
             help=(
                 "JSON dict of engine-specific kwargs forwarded to the underlying engine. "
-                "Example for vLLM: '{\"tensor_parallel_size\": 2, \"gpu_memory_utilization\": 0.9}'."
+                'Example for vLLM: \'{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}\'.'
             ),
         )
         args = parser.parse_args()
 
         try:
-            engine_kwargs = (
-                json.loads(args.engine_kwargs) if args.engine_kwargs else {}
-            )
+            engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
-            raise SystemExit(f"Failed to parse --engine_kwargs: {e}")
+            raise SystemExit(f"Failed to parse --engine_kwargs: {e}") from e
 
         return cls(
             dataset=args.dataset,
