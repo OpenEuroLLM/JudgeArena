@@ -1,5 +1,5 @@
-import openjury.instruction_dataset.mt_bench as mt_bench
-import openjury.utils as utils
+import judgearena.instruction_dataset.mt_bench as mt_bench
+import judgearena.utils as utils
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):

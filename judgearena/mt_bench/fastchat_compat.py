@@ -1,3 +1,5 @@
+"""MT-Bench pairwise judging aligned with FastChat ``llm_judge`` (``data/judge_prompts.jsonl``)."""
+
 from __future__ import annotations
 
 import math
@@ -6,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
 from judgearena.utils import do_inference
@@ -20,9 +22,15 @@ FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "reasoning": 0.0,
     "stem": 0.1,
     "humanities": 0.1,
+    "arena-hard-200": 0.0,
 }
 
-FASTCHAT_NEED_REF_CATS: set[str] = {"math", "reasoning", "coding"}
+FASTCHAT_NEED_REF_CATS: set[str] = {
+    "math",
+    "reasoning",
+    "coding",
+    "arena-hard-200",
+}
 
 FastChatVerdict = Literal["A", "B", "tie", "error"]
 PairwiseWinner = Literal["model_A", "model_B", "tie", "error"]
@@ -78,7 +86,7 @@ def _build_user_prompt_template(*, multi_turn: bool, ref_based: bool) -> str:
         ref_block_filename = (
             _USER_MULTI_REF_BLOCK_FILE if multi_turn else _USER_SINGLE_REF_BLOCK_FILE
         )
-        reference_block = _load_prompt_text(ref_block_filename)
+        reference_block = _load_prompt_text(ref_block_filename).rstrip("\n") + "\n\n"
     return _render_prompt_text(base_filename, reference_block=reference_block)
 
 
