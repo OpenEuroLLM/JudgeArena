@@ -196,6 +196,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 MT-Bench evaluates multi-turn conversation ability using 80 two-turn questions across 8 categories
 (writing, roleplay, reasoning, math, coding, extraction, STEM, humanities).
 It uses category-dependent judge prompts and reference answers for math/reasoning/coding.
+OpenJury runs MT-Bench using the FastChat-compatible judge prompt family and `[[A]]/[[B]]/[[C]]` verdict format.
 Questions are automatically downloaded from the [LMSYS MT-Bench HuggingFace space](https://huggingface.co/spaces/lmsys/mt-bench).
 
 ```bash

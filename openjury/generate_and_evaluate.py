@@ -21,7 +21,6 @@ from openjury.generate import generate_instructions, generate_base
 from openjury.instruction_dataset import load_instructions
 from openjury.repro import _to_jsonable
 from openjury.mt_bench.mt_bench_utils import (
-    format_mt_bench_for_evaluation,
     run_mt_bench,
 )
 from openjury.utils import (

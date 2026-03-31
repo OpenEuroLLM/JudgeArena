@@ -22,8 +22,6 @@ class CliArgs:
     max_out_tokens_judge: int = 32768
     max_model_len: int | None = None
     chat_template: str | None = None
-    mt_bench_turns: str = "both"
-    mt_bench_compatibility: str = "openjury"
     result_folder: str = "results"
     engine_kwargs: dict = field(default_factory=dict)
 
@@ -32,10 +30,6 @@ class CliArgs:
         assert (
             self.swap_mode in supported_modes
         ), f"Only {supported_modes} modes are supported but got {self.swap_mode}."
-        supported_mt_bench_modes = ["openjury", "fastchat"]
-        assert (
-            self.mt_bench_compatibility in supported_mt_bench_modes
-        ), f"Only {supported_mt_bench_modes} are supported but got {self.mt_bench_compatibility}."
 
     @classmethod
     def parse_args(cls):
@@ -149,27 +143,6 @@ class CliArgs:
             "If not provided, ChatML is used as fallback for models without a chat template.",
         )
         parser.add_argument(
-            "--mt_bench_turns",
-            type=str,
-            choices=["both", "single", "multi"],
-            default="both",
-            help="Which MT-Bench turns to evaluate. 'single': only turn 1, "
-            "'multi': only turn 2 (with full conversation context), "
-            "'both' (default): evaluate both turns.",
-        )
-        parser.add_argument(
-            "--mt_bench_compatibility",
-            type=str,
-            choices=["openjury", "fastchat"],
-            default="openjury",
-            help=(
-                "MT-Bench evaluation/generation mode. "
-                "'openjury' (default): OpenJury score_A/score_B prompt + softmax preference. "
-                "'fastchat': use FastChat/MT-Bench pairwise prompts with [[A]]/[[B]]/[[C]] verdict parsing, "
-                "conservative position-bias handling, judge temperature=0, and MT-Bench category temperatures."
-            ),
-        )
-        parser.add_argument(
             "--engine_kwargs",
             type=str,
             required=False,
@@ -205,8 +178,6 @@ class CliArgs:
             max_out_tokens_judge=args.max_out_tokens_judge,
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
-            mt_bench_turns=args.mt_bench_turns,
-            mt_bench_compatibility=args.mt_bench_compatibility,
             result_folder=args.result_folder,
             engine_kwargs=engine_kwargs,
         )
