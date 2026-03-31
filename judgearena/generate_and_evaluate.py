@@ -221,7 +221,7 @@ class CliArgs:
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
-            raise SystemExit(f"Failed to parse --engine_kwargs: {e}")
+            raise SystemExit(f"Failed to parse --engine_kwargs: {e}") from e
 
         return cls(
             dataset=args.dataset,

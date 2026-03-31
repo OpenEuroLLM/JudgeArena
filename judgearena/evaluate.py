@@ -303,7 +303,7 @@ def annotate_battles(
                 "completion_B": truncate(completion_B, max_len=truncate_input_chars),
             }
             for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B
+                instructions, completions_A, completions_B, strict=True
             )
         ]
     )
@@ -316,7 +316,7 @@ def annotate_battles(
 
     annotations = []
     for judge_completion, instruction, completion_A, completion_B in zip(
-        judge_completions, instructions, completions_A, completions_B
+        judge_completions, instructions, completions_A, completions_B, strict=True
     ):
         annotations.append(
             JudgeAnnotation(
