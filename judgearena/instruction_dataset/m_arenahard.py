@@ -1,4 +1,5 @@
 from pathlib import Path
+
 import pandas as pd
 from huggingface_hub import snapshot_download
 
@@ -9,7 +10,7 @@ def load_m_arenahard(local_path, language: str | None = None):
     snapshot_download(
         repo_id="CohereLabs/m-ArenaHard",
         repo_type="dataset",
-        allow_patterns=f"*",
+        allow_patterns="*",
         local_dir=local_path / "m-ArenaHard",
         force_download=False,
     )
@@ -46,7 +47,7 @@ def load_m_arenahard(local_path, language: str | None = None):
 
     # update index to still be unique by appendix language as a suffix
     df_res["question_id"] = df_res.apply(
-        lambda row: f'{row["question_id"]}-{row["lang"]}', axis=1
+        lambda row: f"{row['question_id']}-{row['lang']}", axis=1
     )
 
     return df_res

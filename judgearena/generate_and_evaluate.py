@@ -6,23 +6,28 @@ and then evaluates them using a judge model.
 import argparse
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from judgearena.evaluate import (
-    annotate_battles,
     PairScore,
+    annotate_battles,
     resolve_judge_prompts,
 )
-from judgearena.generate import generate_instructions, generate_base
+from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
-from judgearena.repro import write_run_metadata, _to_jsonable
-from judgearena.utils import data_root, read_df, download_hf
-from judgearena.utils import make_model, cache_function_dataframe, compute_pref_summary
+from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.utils import (
+    cache_function_dataframe,
+    compute_pref_summary,
+    data_root,
+    download_hf,
+    make_model,
+    read_df,
+)
 
 
 def try_load_dataset_completions(
@@ -84,9 +89,9 @@ class CliArgs:
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
-        assert (
-            self.swap_mode in supported_modes
-        ), f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        assert self.swap_mode in supported_modes, (
+            f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        )
 
     @classmethod
     def parse_args(cls):
@@ -158,7 +163,7 @@ class CliArgs:
             required=False,
             default=8192,
             help="Character-level truncation applied before tokenization: truncates each instruction "
-            "before model A/B generation and truncates each completion before judge evaluation.",   
+            "before model A/B generation and truncates each completion before judge evaluation.",
         )
         parser.add_argument(
             "--max_out_tokens_models",
@@ -206,15 +211,13 @@ class CliArgs:
             default="{}",
             help=(
                 "JSON dict of engine-specific kwargs forwarded to the underlying engine. "
-                "Example for vLLM: '{\"tensor_parallel_size\": 2, \"gpu_memory_utilization\": 0.9}'."
+                'Example for vLLM: \'{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}\'.'
             ),
         )
         args = parser.parse_args()
 
         try:
-            engine_kwargs = (
-                json.loads(args.engine_kwargs) if args.engine_kwargs else {}
-            )
+            engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
@@ -255,7 +258,7 @@ def print_results(results):
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
     print(f"⚖️ Judge: {results['judge_model']}")
-    print(f"📈 Results Summary:")
+    print("📈 Results Summary:")
     print(f"   Total Battles: {results['num_battles']}")
     print(f"   Win Rate (A): {results['winrate']:.1%}")
     print(f"   ✅ Wins:   {results['num_wins']}")
@@ -276,7 +279,7 @@ def main(args: CliArgs):
     3) create annotations
     """
 
-    run_started_at = datetime.now(timezone.utc)
+    run_started_at = datetime.now(UTC)
     print(
         f"Using dataset {args.dataset} and evaluating models {args.model_A} and {args.model_B}."
     )
@@ -333,7 +336,9 @@ def main(args: CliArgs):
         args.dataset, args.model_A, n_instructions
     )
     if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[:, "completion"]
+        completions_A = dataset_completions_A.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_A = cache_function_dataframe(
             lambda: gen_fun(
@@ -350,7 +355,9 @@ def main(args: CliArgs):
         args.dataset, args.model_B, n_instructions
     )
     if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[:, "completion"]
+        completions_B = dataset_completions_B.set_index("instruction_index").loc[
+            :, "completion"
+        ]
     else:
         completions_B = cache_function_dataframe(
             lambda: gen_fun(

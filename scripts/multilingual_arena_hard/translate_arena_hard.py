@@ -19,7 +19,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.utils import do_inference, make_model
-from judgearena.utils import set_langchain_cache
 
 # set_langchain_cache()
 
@@ -114,16 +113,16 @@ def generate_translations():
 
         user_prompt_template = f"""\
         Your task is to translate the following text from English to {target_language}.
-        
+
         Important:
         * Do not answer the instruction, just translate it.
         * If any code is present in the instruction, **do not change it and do not translate it**.
         * Keep a formality adapted for the target language, most language would not use "Vous" or "Sie" when talking to a chatbot.
-        
+
         # Input text
         {{instruction}}
-        
-        # Output text (just output the translation and nothing else as your ouput will be parsed)\n         
+
+        # Output text (just output the translation and nothing else as your ouput will be parsed)\n
         """
 
         judge_chat_model = make_model(translator_model, max_tokens=32768)

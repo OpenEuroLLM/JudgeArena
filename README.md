@@ -24,7 +24,7 @@ Compared to other libraries, here is a breakdown of features:
 | **Evalchemy** | ✅  | ✅  | ❌  | ❌  | ❌                         | ❌                                           |
 | **JudgeArena** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
 
-The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue 
+The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue
 or send a PR, we will be happy to update the information.
 
 ## 🚀 Quick Start
@@ -34,7 +34,7 @@ or send a PR, we will be happy to update the information.
 ```bash
 git clone https://github.com/OpenEuroLLM/JudgeArena
 cd JudgeArena
-uv sync 
+uv sync
 uv sync --extra vllm      # Optional: install vLLM support
 uv sync --extra llamacpp   # Optional: install LlamaCpp support
 ```
@@ -49,19 +49,19 @@ python judgearena/generate_and_evaluate.py \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10 
+  --n_instructions 10
 ```
 
 **What happens here?**
 - Use completions available for `gpt4_1106_preview` in Alpaca-Eval dataset
 - Generates completions for `model_B` if not already cached on `vLLM`
-- Compares two models using `deepseek-chat-v3.1` which the cheapest option available on `OpenRouter` 
+- Compares two models using `deepseek-chat-v3.1` which the cheapest option available on `OpenRouter`
 
 It will then display the results of the battles:
 
 ```bash
 ============================================================
-                  🏆 MODEL BATTLE RESULTS 🏆                  
+                  🏆 MODEL BATTLE RESULTS 🏆
 📊 Dataset: alpaca-eval
 🤖 Competitors: Model A: gpt4_1106_preview vs Model B: VLLM/utter-project/EuroLLM-9B
 ⚖️ Judge: OpenRouter/deepseek/deepseek-chat-v3.1
@@ -84,7 +84,7 @@ The evaluation scripts expose four different length controls with different role
 
 ### Engine-Specific Configuration (`--engine_kwargs`)
 
-Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).  
+Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).
 JudgeArena lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
 
 For instance, to run vLLM with tensor parallelism across multiple GPUs:
@@ -123,7 +123,7 @@ python judgearena/generate_and_evaluate.py \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
-  --n_instructions 10 
+  --n_instructions 10
 ```
 
 ### Running locally with LlamaCpp

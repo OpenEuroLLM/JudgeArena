@@ -9,7 +9,9 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: "a" * 40)
 
-    (tmp_path / "annotations.csv").write_text("instruction_index,judge_completion\n0,a\n")
+    (tmp_path / "annotations.csv").write_text(
+        "instruction_index,judge_completion\n0,a\n"
+    )
     (tmp_path / "results.json").write_text("{}")
 
     metadata_path = repro.write_run_metadata(

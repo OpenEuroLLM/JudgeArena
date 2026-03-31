@@ -1,17 +1,18 @@
-import time
 import asyncio
 import os
+import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from huggingface_hub import snapshot_download
 import pandas as pd
-from tqdm.asyncio import tqdm
-from langchain_community.llms import LlamaCpp
-from langchain_openai import ChatOpenAI
+from huggingface_hub import snapshot_download
 from langchain_community.cache import SQLiteCache
+from langchain_community.llms import LlamaCpp
 from langchain_core.globals import set_llm_cache
+from langchain_openai import ChatOpenAI
+from tqdm.asyncio import tqdm
+
 
 def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
@@ -176,7 +177,13 @@ class ChatVLLM:
           default chat template.
     """
 
-    def __init__(self, model: str, max_tokens: int = 8192, chat_template: str | None = None, **vllm_kwargs):
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int = 8192,
+        chat_template: str | None = None,
+        **vllm_kwargs,
+    ):
         from vllm import LLM, SamplingParams
 
         self.model_path = model
@@ -188,6 +195,7 @@ class ChatVLLM:
         if max_model_len is not None:
             try:
                 from transformers import AutoConfig
+
                 config = AutoConfig.from_pretrained(model, trust_remote_code=True)
                 model_max_pos = getattr(config, "max_position_embeddings", None)
                 if model_max_pos is not None and max_model_len > model_max_pos:
@@ -277,7 +285,11 @@ class ChatVLLM:
         if hasattr(input_item, "to_string"):
             return input_item.to_string()
         # List of dicts (messages) - concatenate contents
-        if isinstance(input_item, list) and input_item and isinstance(input_item[0], dict):
+        if (
+            isinstance(input_item, list)
+            and input_item
+            and isinstance(input_item[0], dict)
+        ):
             return "\n".join(msg["content"] for msg in input_item)
         raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
 
@@ -381,9 +393,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         except ImportError as e:
             print(str(e))
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
-        assert (
-            model_provider in model_cls_dict
-        ), f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        assert model_provider in model_cls_dict, (
+            f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        )
         return model_cls_dict[model_provider](**engine_kwargs)
 
 
