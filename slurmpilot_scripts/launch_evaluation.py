@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from slurmpilot import SlurmPilot, JobCreationInfo, unify
+from slurmpilot import JobCreationInfo, SlurmPilot, unify
 
 cluster = "kislurm"
 slurm = SlurmPilot(clusters=[cluster])

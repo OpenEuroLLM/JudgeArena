@@ -82,7 +82,8 @@ def _load_arena_dataframe(
                     return None
                 if chosen_model_name not in [model_a, model_b]:
                     warnings.warn(
-                        f"Chosen model {chosen_model_name!r} not in model_a={model_a!r} or model_b={model_b!r}; skipping."
+                        f"Chosen model {chosen_model_name!r} not in model_a={model_a!r} or model_b={model_b!r}; skipping.",
+                        stacklevel=2,
                     )
                     return None
                 return "model_a" if chosen_model_name == model_a else "model_b"

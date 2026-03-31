@@ -1,17 +1,18 @@
-import time
 import asyncio
 import os
+import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from huggingface_hub import snapshot_download
 import pandas as pd
-from tqdm.asyncio import tqdm
-from langchain_community.llms import LlamaCpp
-from langchain_openai import ChatOpenAI
+from huggingface_hub import snapshot_download
 from langchain_community.cache import SQLiteCache
+from langchain_community.llms import LlamaCpp
 from langchain_core.globals import set_llm_cache
+from langchain_openai import ChatOpenAI
+from tqdm.asyncio import tqdm
+
 
 def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
@@ -200,7 +201,8 @@ class ChatVLLM:
                 if model_max_pos is not None and max_model_len > model_max_pos:
                     warnings.warn(
                         f"Capping max_model_len from {max_model_len} to "
-                        f"{model_max_pos} (max_position_embeddings) for '{model}'."
+                        f"{model_max_pos} (max_position_embeddings) for '{model}'.",
+                        stacklevel=2,
                     )
                     vllm_kwargs["max_model_len"] = model_max_pos
             except Exception as e:
@@ -209,6 +211,7 @@ class ChatVLLM:
                     f"max_position_embeddings for '{model}': {e}. "
                     "Proceeding without clamping; vLLM may raise if the value is too large.",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
@@ -233,6 +236,7 @@ class ChatVLLM:
                     f"Model '{model}' tokenizer does not define a chat template. "
                     f"Falling back to llm.generate() (no chat formatting). "
                     f"Override with --chat_template if this model needs one.",
+                    stacklevel=2,
                 )
                 self.chat_template = None
                 self._use_generate = True
@@ -392,9 +396,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         except ImportError as e:
             print(str(e))
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
-        assert (
-            model_provider in model_cls_dict
-        ), f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        assert model_provider in model_cls_dict, (
+            f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
+        )
         return model_cls_dict[model_provider](**engine_kwargs)
 
 
@@ -444,9 +448,10 @@ def cache_function_dataframe(
     ignore_cache: bool = False,
     cache_path: Path | None = None,
 ) -> pd.DataFrame:
-    f"""
+    """
     :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
+    :param cache_name: the cache of the function result is written into
+        `{cache_path}/{cache_name}.csv.zip`
     :param ignore_cache: whether to recompute even if the cache is present
     :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
     :return: result of fun()
@@ -495,7 +500,7 @@ def compute_cohen_kappa(y1: list[str], y2: list[str]) -> float:
     for cat1 in categories:
         matrix[cat1] = {cat2: 0 for cat2 in categories}
 
-    for label1, label2 in zip(y1, y2):
+    for label1, label2 in zip(y1, y2, strict=True):
         matrix[label1][label2] += 1
 
     # Compute observed agreement (p_o)

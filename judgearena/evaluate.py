@@ -1,22 +1,22 @@
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.llms import LLM
+from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
-from judgearena.repro import write_run_metadata, _to_jsonable
+from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
-    read_df,
     data_root,
-    download_hf,
     do_inference,
+    download_hf,
+    read_df,
 )
 
 
@@ -55,13 +55,13 @@ def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
 ) -> tuple[str, str]:
     # Prepare judge
-    with open(Path(__file__).parent / "prompts" / "system-prompt.txt", "r") as f:
+    with open(Path(__file__).parent / "prompts" / "system-prompt.txt") as f:
         system_prompt = str(f.read())
 
     prompt_filename = (
         "prompt-with-explanation.txt" if provide_explanation else "prompt.txt"
     )
-    with open(Path(__file__).parent / "prompts" / prompt_filename, "r") as f:
+    with open(Path(__file__).parent / "prompts" / prompt_filename) as f:
         user_prompt_template = str(f.read())
 
     return system_prompt, user_prompt_template
@@ -109,7 +109,7 @@ def evaluate_completions(
     exceeding context limit
     :return:
     """
-    run_started_at = datetime.now(timezone.utc)
+    run_started_at = datetime.now(UTC)
     local_path_tables = data_root / "tables"
     download_hf(name=dataset, local_path=local_path_tables)
 
@@ -140,9 +140,9 @@ def evaluate_completions(
             return df.loc[:, "output"]
         else:
             print(f"Loading {method} from {dataset} dataset.")
-            assert (
-                method in df_outputs.columns
-            ), f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
+            assert method in df_outputs.columns, (
+                f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
+            )
             return df_outputs.loc[:, method].sort_index()
 
     completions_A = get_output(df_outputs=df_outputs, dataset=dataset, method=method_A)
@@ -151,9 +151,9 @@ def evaluate_completions(
         instructions = instructions.head(num_annotations)
         completions_A = completions_A.head(num_annotations)
         completions_B = completions_B.head(num_annotations)
-    assert (
-        completions_A.index.tolist() == completions_B.index.tolist()
-    ), f"Index mismatch between methods {method_A} and {method_B}."
+    assert completions_A.index.tolist() == completions_B.index.tolist(), (
+        f"Index mismatch between methods {method_A} and {method_B}."
+    )
 
     if judge_chat_model is None:
         from langchain_together.llms import Together
@@ -303,7 +303,7 @@ def annotate_battles(
                 "completion_B": truncate(completion_B, max_len=truncate_input_chars),
             }
             for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B
+                instructions, completions_A, completions_B, strict=True
             )
         ]
     )
@@ -316,7 +316,7 @@ def annotate_battles(
 
     annotations = []
     for judge_completion, instruction, completion_A, completion_B in zip(
-        judge_completions, instructions, completions_A, completions_B
+        judge_completions, instructions, completions_A, completions_B, strict=True
     ):
         annotations.append(
             JudgeAnnotation(
@@ -381,7 +381,8 @@ def judge_and_parse_prefs(
             use_tqdm=use_tqdm,
         )
 
-    _none_to_nan = lambda x: float("nan") if x is None else x
+    def _none_to_nan(x):
+        return float("nan") if x is None else x
 
     score_parser = PairScore()
     prefs = pd.Series(

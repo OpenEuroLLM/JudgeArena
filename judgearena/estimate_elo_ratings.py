@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-from judgearena.arenas_utils import load_arena_dataframe, _extract_instruction_text
+from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
-from judgearena.utils import make_model, cache_function_dataframe, compute_pref_summary
+from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 
 @dataclass
@@ -38,9 +38,9 @@ class CliEloArgs:
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
-        assert (
-            self.swap_mode in supported_modes
-        ), f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        assert self.swap_mode in supported_modes, (
+            f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        )
 
     @classmethod
     def parse_args(cls):
@@ -201,7 +201,7 @@ class CliEloArgs:
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
-            raise SystemExit(f"Failed to parse --engine_kwargs: {e}")
+            raise SystemExit(f"Failed to parse --engine_kwargs: {e}") from e
 
         return cls(
             arena=args.arena,
@@ -397,7 +397,9 @@ def main(args: CliEloArgs | None = None) -> dict:
         **extra_kwargs,
     )
 
-    replace_slash = lambda s: s.replace("/", "_")
+    def replace_slash(s: str) -> str:
+        return s.replace("/", "_")
+
     languages_str = "-".join(sorted(args.languages)) if args.languages else "all"
     extra_kwargs_str = (
         "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
@@ -511,7 +513,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     model_name = args.model
     battle_results = []
     for pref, is_pos_a, opp_model in zip(
-        prefs, our_model_is_position_a, opponent_models
+        prefs, our_model_is_position_a, opponent_models, strict=True
     ):
         if pref is None or pref == 0.5:
             winner = "tie"
@@ -536,7 +538,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     prefs_normalized = pd.Series(
         [
             p if (p is None or is_pos_a) else (1 - p)
-            for p, is_pos_a in zip(prefs, our_model_is_position_a)
+            for p, is_pos_a in zip(prefs, our_model_is_position_a, strict=True)
         ]
     )
     summary = compute_pref_summary(prefs_normalized)

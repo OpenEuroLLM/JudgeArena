@@ -6,7 +6,7 @@ TODOs:
 * CI [high/large]
 * implement CI judge option
 * implement domain filter in CI (maybe pass a regexp by column?)
-* report cost? 
+* report cost?
 
 Done:
 * support alpaca-eval
@@ -22,7 +22,7 @@ Done:
 * CLI launcher [medium/large]
 * put contexts in HF dataset [high/small]
 * mAH: instruction loader [DONE]
-* mAH: generate instructions for two models [DONE] 
+* mAH: generate instructions for two models [DONE]
 * mAH: make comparison [DONE]
 * mAH: support using all languages at once [high/medium]
 * unit-test
@@ -37,4 +37,4 @@ Done:
   * small refactor `annotate` needs to return just the judge completion, not the parsed one
   * perhaps change to `annotate_pair` and `annotate_single`
   * then provide example
-* support evaluation with input swap 
+* support evaluation with input swap

@@ -15,8 +15,7 @@ def _load_criteria_data(path: str | Path) -> dict:
     suffix = path.suffix.lower()
     if suffix not in {".yaml", ".yml"}:
         raise ValueError(
-            f"Unsupported criteria file format '{path.suffix}'. "
-            "Use .yaml or .yml."
+            f"Unsupported criteria file format '{path.suffix}'. Use .yaml or .yml."
         )
 
     data = yaml.safe_load(path.read_text())

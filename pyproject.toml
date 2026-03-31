@@ -61,11 +61,24 @@ exclude = ["slurmpilot_scripts*"]
 
 [dependency-groups]
 dev = [
-    "black>=25.1.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
+    "ruff>=0.11.0",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501", "N806", "N815", "N803"]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [project.optional-dependencies]
 vllm = ["vllm==0.10.2", "transformers>=4.55.2,<5.0.0"]
