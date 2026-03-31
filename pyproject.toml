@@ -71,6 +71,7 @@ line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501", "N806", "N815", "N803"]
 fixable = ["ALL"]
 
 [tool.ruff.format]
