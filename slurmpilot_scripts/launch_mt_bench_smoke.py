@@ -2,13 +2,12 @@ from pathlib import Path
 
 from slurmpilot import JobCreationInfo, SlurmPilot, unify
 
-
 CLUSTER = "kislurm"
 REMOTE_PROJECT_ROOT = Path("/work/dlclarge1/lushtake-hiwi/JudgeArena")
 LOCAL_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PYTHON_BINARY = REMOTE_PROJECT_ROOT / ".venv" / "bin" / "python"
 ENTRYPOINT = "generate_and_evaluate.py"
-SRC_DIR = str(LOCAL_PROJECT_ROOT / "openjury")
+SRC_DIR = str(LOCAL_PROJECT_ROOT / "judgearena")
 
 # Use L40S partitions from the all_dlc / ml_dlc families.
 # For this cluster/account, mldlc2 and testdlc2 are available.
