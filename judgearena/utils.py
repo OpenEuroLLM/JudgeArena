@@ -69,6 +69,19 @@ def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     }
 
 
+def truncate(s: str, max_len: int | None = None) -> str:
+    """Truncate a string to *max_len* characters.
+
+    Non-string inputs (e.g. ``None`` or ``float('nan')``) are coerced to the
+    empty string so that callers don't have to guard against missing data.
+    """
+    if not isinstance(s, str):
+        return ""
+    if max_len is not None:
+        return s[:max_len]
+    return s
+
+
 def do_inference(chat_model, inputs, use_tqdm: bool = False):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
