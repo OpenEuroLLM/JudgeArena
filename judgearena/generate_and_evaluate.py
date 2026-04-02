@@ -15,6 +15,7 @@ import pandas as pd
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
+from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
@@ -284,6 +285,9 @@ def main(args: CliArgs):
     # if not args.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
+
+    if args.dataset == "mt-bench":
+        return run_mt_bench(args, ignore_cache)
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in args.dataset

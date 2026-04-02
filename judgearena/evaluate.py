@@ -51,18 +51,31 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
+_COMPLETION_LABEL_SINGLE = "Answer"
+_COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
+_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
+_SCORE_FENCE = "\n```"
+
+
 def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
+    multi_turn: bool = False,
 ) -> tuple[str, str]:
-    # Prepare judge
-    with open(Path(__file__).parent / "prompts" / "system-prompt.txt") as f:
-        system_prompt = str(f.read())
+    prompts_dir = Path(__file__).parent / "prompts"
+    system_prompt = (prompts_dir / "system-prompt.txt").read_text()
 
     prompt_filename = (
         "prompt-with-explanation.txt" if provide_explanation else "prompt.txt"
     )
-    with open(Path(__file__).parent / "prompts" / prompt_filename) as f:
-        user_prompt_template = str(f.read())
+    user_prompt_template = (prompts_dir / prompt_filename).read_text()
+    user_prompt_template = user_prompt_template.replace(
+        "{completion_label}",
+        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
+    )
+    user_prompt_template = user_prompt_template.replace(
+        "{explanation_suffix}",
+        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
+    )
 
     return system_prompt, user_prompt_template
 
@@ -70,11 +83,14 @@ def load_judge_system_and_user_prompt(
 def resolve_judge_prompts(
     *,
     provide_explanation: bool,
+    multi_turn: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
 ) -> tuple[str, str]:
     default_system_prompt, default_user_prompt_template = (
-        load_judge_system_and_user_prompt(provide_explanation=provide_explanation)
+        load_judge_system_and_user_prompt(
+            provide_explanation=provide_explanation, multi_turn=multi_turn
+        )
     )
     return (
         system_prompt if system_prompt is not None else default_system_prompt,

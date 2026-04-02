@@ -49,6 +49,23 @@ def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
         return pd.read_parquet(filename, **pandas_kwargs)
 
 
+def truncate(s: str, max_len: int | None = None) -> str:
+    if not isinstance(s, str):
+        return ""
+    if max_len is not None:
+        return s[:max_len]
+    return s
+
+
+def safe_text(value: object, truncate_chars: int | None) -> str:
+    if value is None:
+        return ""
+    is_missing = pd.isna(value)
+    if isinstance(is_missing, bool) and is_missing:
+        return ""
+    return truncate(str(value), max_len=truncate_chars)
+
+
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B)."""
     prefs = pd.Series(prefs, dtype="float64")
@@ -415,6 +432,10 @@ def download_all():
         local_dir=data_root / "contexts",
         force_download=False,
     )
+
+    from judgearena.instruction_dataset.mt_bench import download_mt_bench
+
+    download_mt_bench()
 
 
 class Timeblock:

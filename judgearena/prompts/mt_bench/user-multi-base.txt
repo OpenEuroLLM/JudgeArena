@@ -1,0 +1,32 @@
+{reference_block}<|The Start of Assistant A's Conversation with User|>
+
+### User:
+{{question_1}}
+
+### Assistant A:
+{{answer_a_1}}
+
+### User:
+{{question_2}}
+
+### Assistant A:
+{{answer_a_2}}
+
+<|The End of Assistant A's Conversation with User|>
+
+
+<|The Start of Assistant B's Conversation with User|>
+
+### User:
+{{question_1}}
+
+### Assistant B:
+{{answer_b_1}}
+
+### User:
+{{question_2}}
+
+### Assistant B:
+{{answer_b_2}}
+
+<|The End of Assistant B's Conversation with User|>
