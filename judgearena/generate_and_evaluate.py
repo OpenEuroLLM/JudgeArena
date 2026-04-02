@@ -13,13 +13,17 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
-from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
+from judgearena.evaluate import (
+    build_annotation_dataframe,
+    build_evaluation_result,
+    judge_and_parse_prefs,
+    resolve_judge_prompts,
+    save_evaluation_result,
+)
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
-from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
-    compute_pref_summary,
     data_root,
     download_hf,
     make_model,
@@ -305,64 +309,49 @@ def main(args: CliArgs):
         use_tqdm=args.use_tqdm,
     )
 
-    df = pd.DataFrame(annotations)
-    df["instruction_index"] = instructions.head(n_instructions).index.tolist()
-    df["model_A"] = args.model_A
-    df["model_B"] = args.model_B
-    df["judge"] = args.judge_model
+    eval_instruction_indices = instructions.head(n_instructions).index.tolist()
 
-    if args.swap_mode == "both":
-        df_reversed = pd.DataFrame(annotations_reversed)
-        df_reversed["instruction_index"] = instructions.head(
-            n_instructions
-        ).index.tolist()
-        df_reversed["model_A"] = args.model_B
-        df_reversed["model_B"] = args.model_A
-        df_reversed["judge"] = args.judge_model
-        df = pd.concat([df, df_reversed])
+    annotations_df = build_annotation_dataframe(
+        annotations=annotations,
+        annotations_reversed=annotations_reversed,
+        instruction_indices=eval_instruction_indices,
+        model_A=args.model_A,
+        model_B=args.model_B,
+        judge_model=args.judge_model,
+    )
 
-    df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
-
-    # compute and report statistics
-    summary = compute_pref_summary(prefs)
-
-    results = {
+    run_config = {
         "dataset": args.dataset,
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
-        **summary,
-        "preferences": prefs.tolist(),
     }
+
+    eval_result = build_evaluation_result(
+        annotations_df=annotations_df,
+        prefs=prefs,
+        run_config=run_config,
+    )
+
+    save_evaluation_result(
+        eval_result,
+        output_dir=res_folder,
+        entrypoint="judgearena.generate_and_evaluate.main",
+        judge_system_prompt=effective_judge_system_prompt,
+        judge_user_prompt_template=judge_user_prompt_template,
+        input_payloads={
+            "instruction_index": eval_instruction_indices,
+            "instructions": instructions.head(n_instructions).tolist(),
+            "completions_A": completions_A.head(n_instructions).tolist(),
+            "completions_B": completions_B.head(n_instructions).tolist(),
+        },
+        started_at_utc=run_started_at,
+        annotations_filename=f"{name}-annotations.csv",
+        results_filename=f"results-{name}.json",
+    )
+
     print(f"{args.model_A} vs {args.model_B} judged by {args.judge_model}")
-    print_results(results)
-
-    with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
-
-    eval_instruction_index = instructions.head(n_instructions).index.tolist()
-    eval_instructions = instructions.head(n_instructions).tolist()
-    eval_completions_A = completions_A.head(n_instructions).tolist()
-    eval_completions_B = completions_B.head(n_instructions).tolist()
-
-    try:
-        write_run_metadata(
-            output_dir=res_folder,
-            entrypoint="judgearena.generate_and_evaluate.main",
-            run=asdict(args),
-            results=results,
-            input_payloads={
-                "instruction_index": eval_instruction_index,
-                "instructions": eval_instructions,
-                "completions_A": eval_completions_A,
-                "completions_B": eval_completions_B,
-            },
-            judge_system_prompt=effective_judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
-            started_at_utc=run_started_at,
-        )
-    except OSError as e:
-        print(f"Warning: failed to write run metadata: {e}")
+    print_results(eval_result.results)
 
     return prefs
 
