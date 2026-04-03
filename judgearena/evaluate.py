@@ -245,10 +245,11 @@ def evaluate_completions(
 
 @dataclass
 class JudgeAnnotation:
-    judge_completion: str
-    instruction: str
-    completion_A: str
-    completion_B: str
+    instruction: str  # instruction from the user
+    completion_A: str  # completion of the first model
+    completion_B: str  # completion of the second model
+    judge_completion: str  # output of the judge
+    judge_input: str | None = None  # input that was passed to the judge
 
 
 def annotate_battles(
@@ -331,11 +332,17 @@ def annotate_battles(
     )
 
     annotations = []
-    for judge_completion, instruction, completion_A, completion_B in zip(
-        judge_completions, instructions, completions_A, completions_B, strict=True
+    for judge_input, judge_completion, instruction, completion_A, completion_B in zip(
+        inputs,
+        judge_completions,
+        instructions,
+        completions_A,
+        completions_B,
+        strict=True,
     ):
         annotations.append(
             JudgeAnnotation(
+                judge_input=judge_input,
                 judge_completion=judge_completion,
                 instruction=instruction,
                 completion_A=completion_A,

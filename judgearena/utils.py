@@ -86,6 +86,28 @@ def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     }
 
 
+def _is_retryable_error(e: Exception) -> bool:
+    """Return True if the exception is a transient server error that should be retried.
+
+    Handles two formats:
+    - String representation contains the HTTP code (most providers)
+    - ValueError raised by langchain-openai with a dict arg: {'message': ..., 'code': 429}
+    """
+    # langchain-openai raises ValueError(response_dict.get("error")) where the
+    # error value is a dict like {'message': '...', 'code': 408}
+    _RETRYABLE_CODES = {408, 429, 502, 503, 504}
+    if isinstance(e, ValueError) and e.args:
+        arg = e.args[0]
+        if isinstance(arg, dict) and arg.get("code") in _RETRYABLE_CODES:
+            return True
+
+    error_str = str(e)
+    return (
+        any(str(code) in error_str for code in _RETRYABLE_CODES)
+        or "rate" in error_str.lower()
+    )
+
+
 def do_inference(chat_model, inputs, use_tqdm: bool = False):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
@@ -104,8 +126,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         pbar.update(1)
                         return result
                     except Exception as e:
-                        is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
-                        if attempt == max_retries - 1 or not is_rate_limit:
+                        if attempt == max_retries - 1 or not _is_retryable_error(e):
                             raise
                         delay = base_delay * (2**attempt)
                         print(
@@ -139,14 +160,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
                     return results
                 except Exception as e:
-                    is_server_error = (
-                        "429" in str(e)
-                        or "500" in str(e)
-                        or "502" in str(e)
-                        or "503" in str(e)
-                        or "rate" in str(e).lower()
-                    )
-                    if attempt == max_retries - 1 or not is_server_error:
+                    if attempt == max_retries - 1 or not _is_retryable_error(e):
                         raise
                     delay = base_delay * (2**attempt)
                     next_chunks = 4 ** (attempt + 1)
