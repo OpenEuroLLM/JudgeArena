@@ -205,7 +205,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 For Arena-Hard, JudgeArena resolves baseline metadata by dataset version:
 - `arena-hard-v0.1`: `gpt-4-0314`
-- `arena-hard-v2.0` / `arena-hard`: `o3-mini-2025-01-31` (standard prompts)
+- `arena-hard-v2.0`: `o3-mini-2025-01-31` (standard prompts)
 
 ### Offline Setup (Slurm/Air-Gapped Environments)
 

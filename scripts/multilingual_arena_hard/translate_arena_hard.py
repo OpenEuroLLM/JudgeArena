@@ -78,7 +78,7 @@ translator_model = "OpenRouter/openai/gpt-5"
 # translator_model = "OpenRouter/deepseek/deepseek-chat-v3.1"
 n_instructions = 10
 df_instructions = load_instructions(
-    "arena-hard",
+    "arena-hard-v2.0",
     n_instructions=n_instructions,
 )
 # languages = [("fra", "French")]
@@ -114,16 +114,16 @@ def generate_translations():
 
         user_prompt_template = f"""\
         Your task is to translate the following text from English to {target_language}.
-        
+
         Important:
         * Do not answer the instruction, just translate it.
         * If any code is present in the instruction, **do not change it and do not translate it**.
         * Keep a formality adapted for the target language, most language would not use "Vous" or "Sie" when talking to a chatbot.
-        
+
         # Input text
         {{instruction}}
-        
-        # Output text (just output the translation and nothing else as your ouput will be parsed)\n         
+
+        # Output text (just output the translation and nothing else as your ouput will be parsed)\n
         """
 
         judge_chat_model = make_model(translator_model, max_tokens=32768)

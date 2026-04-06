@@ -6,14 +6,11 @@ import judgearena.generate_and_evaluate as generate_and_evaluate
 import judgearena.instruction_dataset as instruction_dataset
 from judgearena.instruction_dataset.arena_hard import (
     arena_hard_baseline_model,
-    canonical_dataset_name,
     normalize_official_arena_hard,
 )
 
 
-def test_arena_hard_alias_and_baseline_resolution():
-    assert canonical_dataset_name("arena-hard") == "arena-hard-v2.0"
-    assert canonical_dataset_name("arena-hard-v0.1") == "arena-hard-v0.1"
+def test_arena_hard_baseline_resolution():
     assert arena_hard_baseline_model("arena-hard-v0.1") == "gpt-4-0314"
     assert arena_hard_baseline_model("arena-hard-v2.0") == "o3-mini-2025-01-31"
 
@@ -38,7 +35,7 @@ def test_normalize_official_arena_hard_v01_shape():
     assert set(df_outputs.columns) == {"instruction_index", "model", "output"}
 
 
-def test_load_instructions_uses_canonical_filename_for_alias(monkeypatch):
+def test_load_instructions_uses_explicit_version_filename(monkeypatch):
     captured = {}
 
     def _fake_ensure(dataset: str, local_tables_path: Path):
@@ -56,14 +53,14 @@ def test_load_instructions_uses_canonical_filename_for_alias(monkeypatch):
 
     monkeypatch.setattr(instruction_dataset, "download_arena_hard", _fake_ensure)
     monkeypatch.setattr(instruction_dataset, "read_df", _fake_read_df)
-    df = instruction_dataset.load_instructions(dataset="arena-hard")
+    df = instruction_dataset.load_instructions(dataset="arena-hard-v2.0")
 
-    assert captured["dataset"] == "arena-hard"
+    assert captured["dataset"] == "arena-hard-v2.0"
     assert captured["path"].name == "arena-hard-v2.0.csv"
     assert df.index.tolist() == ["0", "1"]
 
 
-def test_try_load_dataset_completions_uses_canonical_output_file(monkeypatch, tmp_path):
+def test_try_load_dataset_completions_uses_dataset_output_file(monkeypatch, tmp_path):
     tables_dir = tmp_path / "tables" / "model_outputs"
     tables_dir.mkdir(parents=True, exist_ok=True)
     output_path = tables_dir / "arena-hard-v2.0.csv.zip"
@@ -83,7 +80,7 @@ def test_try_load_dataset_completions_uses_canonical_output_file(monkeypatch, tm
     )
 
     loaded = generate_and_evaluate.try_load_dataset_completions(
-        dataset="arena-hard", model="baseline", n_instructions=None
+        dataset="arena-hard-v2.0", model="baseline", n_instructions=None
     )
 
     assert loaded is not None

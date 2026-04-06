@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 
 from judgearena.instruction_dataset.arena_hard import (
-    canonical_dataset_name,
     download_arena_hard,
     is_arena_hard_dataset,
 )
@@ -43,13 +42,12 @@ def try_load_dataset_completions(
     Returns a DataFrame with columns ``completion`` and ``instruction_index``,
     or ``None`` when no pre-existing completions are found.
     """
-    canonical_dataset = canonical_dataset_name(dataset)
     local_path_tables = data_root / "tables"
     if is_arena_hard_dataset(dataset):
         download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
     else:
         download_hf(name=dataset, local_path=local_path_tables)
-    output_path = local_path_tables / "model_outputs" / f"{canonical_dataset}.csv.zip"
+    output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
     if not output_path.exists():
         return None
     df_outputs = read_df(output_path)
@@ -59,9 +57,7 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    print(
-        f"Found pre-existing completions for '{model}' in dataset '{dataset}' (canonical: {canonical_dataset})."
-    )
+    print(f"Found pre-existing completions for '{model}' in dataset '{dataset}'.")
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)
@@ -106,8 +102,8 @@ class CliArgs:
         )
         parser.add_argument(
             "--dataset",
-            help="The dataset to use. For instance `alpaca-eval`, `arena-hard` (alias to v2.0), "
-            "`arena-hard-v2.0`, `arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
+            help="The dataset to use. For instance `alpaca-eval`, `arena-hard-v2.0`, "
+            "`arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
             "tuning cases or `french-contexts`, `spanish-contexts` for base models.",
         )
         parser.add_argument(

@@ -50,7 +50,6 @@ def mock_external_data_and_cache(monkeypatch):
     "dataset",
     [
         "alpaca-eval",
-        "arena-hard",
         "arena-hard-v2.0",
         "arena-hard-v0.1",
         "fluency-french",

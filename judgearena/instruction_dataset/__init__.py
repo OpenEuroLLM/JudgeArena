@@ -1,6 +1,5 @@
 import pandas as pd
 from judgearena.instruction_dataset.arena_hard import (
-    canonical_dataset_name,
     download_arena_hard,
     is_arena_hard_dataset,
 )
@@ -59,19 +58,15 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
     else:
         assert dataset in [
             "alpaca-eval",
-            "arena-hard",
             "arena-hard-v0.1",
             "arena-hard-v2.0",
         ]
-        canonical_dataset = canonical_dataset_name(dataset)
         local_path_tables = data_root / "tables"
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
         else:
             download_hf(name=dataset, local_path=local_path_tables)
-        df_instructions = read_df(
-            local_path_tables / "instructions" / f"{canonical_dataset}.csv"
-        )
+        df_instructions = read_df(local_path_tables / "instructions" / f"{dataset}.csv")
 
     df_instructions = df_instructions.set_index("instruction_index").sort_index()
     print(f"Loaded {len(df_instructions)} instructions for {dataset}.")

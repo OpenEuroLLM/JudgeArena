@@ -13,7 +13,10 @@ from langchain_openai import ChatOpenAI
 from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
 
-from judgearena.instruction_dataset.arena_hard import download_arena_hard
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 
 
 def _data_root_path() -> Path:
@@ -403,12 +406,17 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 def download_all():
     print(f"Downloading all dataset in {data_root}")
-    for dataset in ["alpaca-eval", "m-arena-hard"]:
-        local_path_tables = data_root / "tables"
-        download_hf(name=dataset, local_path=local_path_tables)
     local_path_tables = data_root / "tables"
-    download_arena_hard(dataset="arena-hard-v0.1", local_tables_path=local_path_tables)
-    download_arena_hard(dataset="arena-hard-v2.0", local_tables_path=local_path_tables)
+    for dataset in [
+        "alpaca-eval",
+        "arena-hard-v0.1",
+        "arena-hard-v2.0",
+        "m-arena-hard",
+    ]:
+        if is_arena_hard_dataset(dataset):
+            download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+        else:
+            download_hf(name=dataset, local_path=local_path_tables)
 
     snapshot_download(
         repo_id="geoalgo/multilingual-contexts-to-be-completed",
