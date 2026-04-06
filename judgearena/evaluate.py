@@ -17,6 +17,7 @@ from judgearena.utils import (
     do_inference,
     download_hf,
     read_df,
+    truncate,
 )
 
 
@@ -49,6 +50,18 @@ class PairScore:
             return None
         else:
             return float(m.group(group_index).strip(" "))
+
+
+_PAIR_SCORE_MIN = 0
+_PAIR_SCORE_MAX = 10
+
+
+def build_pair_score_output_choices() -> list[str]:
+    return [
+        f"score_A: {a}\nscore_B: {b}"
+        for a in range(_PAIR_SCORE_MIN, _PAIR_SCORE_MAX + 1)
+        for b in range(_PAIR_SCORE_MIN, _PAIR_SCORE_MAX + 1)
+    ]
 
 
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -302,27 +315,30 @@ def annotate_battles(
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", user_prompt_template)]
     )
-
-    def truncate(s: str, max_len: int | None = None):
-        if not isinstance(s, str):
-            return ""
-        if max_len is not None:
-            return s[:max_len]
-        else:
-            return s
-
-    inputs = prompt_template.batch(
-        [
+    truncated_completion_count = 0
+    input_payloads = []
+    for user_prompt, completion_A, completion_B in zip(
+        instructions, completions_A, completions_B, strict=True
+    ):
+        truncated_completion_A = truncate(completion_A, max_len=truncate_input_chars)
+        truncated_completion_B = truncate(completion_B, max_len=truncate_input_chars)
+        truncated_completion_count += int(truncated_completion_A != completion_A)
+        truncated_completion_count += int(truncated_completion_B != completion_B)
+        input_payloads.append(
             {
                 "user_prompt": user_prompt,
-                "completion_A": truncate(completion_A, max_len=truncate_input_chars),
-                "completion_B": truncate(completion_B, max_len=truncate_input_chars),
+                "completion_A": truncated_completion_A,
+                "completion_B": truncated_completion_B,
             }
-            for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B, strict=True
-            )
-        ]
-    )
+        )
+    if truncated_completion_count:
+        print(
+            "Warning: truncated "
+            f"{truncated_completion_count} judge completions to "
+            f"{truncate_input_chars} characters before evaluation."
+        )
+    inputs = prompt_template.batch(input_payloads)
+
     print(f"Start LLM judge annotation ({len(inputs)} annotations).")
     judge_completions = do_inference(
         chat_model=judge_chat_model,

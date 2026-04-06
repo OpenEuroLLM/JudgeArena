@@ -202,6 +202,7 @@ class ChatVLLM:
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
+        from vllm.sampling_params import StructuredOutputsParams
 
         self.model_path = model
         self.max_tokens = max_tokens
@@ -230,13 +231,19 @@ class ChatVLLM:
                     RuntimeWarning,
                     stacklevel=2,
                 )
+        self._sampling_params_kwargs = {
+            "max_tokens": max_tokens,
+            "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
+            "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
+        }
+        structured_outputs_choice = vllm_kwargs.pop("structured_outputs_choice", None)
+        if structured_outputs_choice is not None:
+            self._sampling_params_kwargs["structured_outputs"] = (
+                StructuredOutputsParams(choice=structured_outputs_choice)
+            )
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
-        self.sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
-        )
 
         # Resolve chat template:
         # 1. Explicit override always wins → use chat() with that template
@@ -261,6 +268,12 @@ class ChatVLLM:
                 self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False
                 print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
+
+    def set_temperature(self, temperature: float) -> None:
+        from vllm import SamplingParams
+
+        self._sampling_params_kwargs["temperature"] = float(temperature)
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
     def _to_messages(self, input_item) -> list[dict]:
         """Convert LangChain prompt input to OpenAI-style messages."""

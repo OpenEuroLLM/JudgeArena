@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
+from judgearena.evaluate import (
+    build_pair_score_output_choices,
+    judge_and_parse_prefs,
+    resolve_judge_prompts,
+)
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
@@ -30,16 +34,40 @@ from judgearena.utils import (
 def try_load_dataset_completions(
     dataset: str, model: str, n_instructions: int | None
 ) -> pd.DataFrame | None:
-    """Try loading pre-existing completions from the dataset.
+    """Try loading pre-existing completions from the dataset or a local file.
 
     Some datasets (e.g. alpaca-eval) ship with completions for well-known
     models such as ``gpt4_1106_preview``.  When ``model`` matches a column in
     ``model_outputs/{dataset}.csv.zip``, those completions are returned
     directly so that no model instantiation / generation is needed.
 
+    ``model`` may also be a local dataframe path. Local files must contain
+    ``instruction_index`` and ``output`` columns.
+
     Returns a DataFrame with columns ``completion`` and ``instruction_index``,
     or ``None`` when no pre-existing completions are found.
     """
+    local_path = Path(model)
+    if local_path.exists():
+        print(f"Loading completions from local path '{local_path}'.")
+        df_outputs = read_df(local_path)
+        required_columns = {"instruction_index", "output"}
+        missing_columns = required_columns.difference(df_outputs.columns)
+        if missing_columns:
+            missing_columns_list = ", ".join(sorted(missing_columns))
+            raise ValueError(
+                f"Local completion file '{local_path}' is missing required columns: "
+                f"{missing_columns_list}."
+            )
+
+        df_outputs = df_outputs.loc[:, ["instruction_index", "output"]].rename(
+            columns={"output": "completion"}
+        )
+        df_outputs.loc[:, "completion"] = df_outputs.loc[:, "completion"].fillna("")
+        if n_instructions is not None:
+            df_outputs = df_outputs.head(n_instructions)
+        return df_outputs
+
     local_path_tables = data_root / "tables"
     download_hf(name=dataset, local_path=local_path_tables)
     output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
@@ -337,7 +365,7 @@ def main(args: CliArgs):
     )
     if dataset_completions_A is not None:
         completions_A = dataset_completions_A.set_index("instruction_index").loc[
-            :, "completion"
+            instructions.index, "completion"
         ]
     else:
         completions_A = cache_function_dataframe(
@@ -356,7 +384,7 @@ def main(args: CliArgs):
     )
     if dataset_completions_B is not None:
         completions_B = dataset_completions_B.set_index("instruction_index").loc[
-            :, "completion"
+            instructions.index, "completion"
         ]
     else:
         completions_B = cache_function_dataframe(
@@ -377,12 +405,18 @@ def main(args: CliArgs):
     print(completions_B.values[0])
     print(f"Evaluating completions with judge {args.judge_model}.")
 
+    judge_model_kwargs = dict(args.engine_kwargs)
+    if not args.provide_explanation and args.judge_model.split("/")[0] == "VLLM":
+        judge_model_kwargs["structured_outputs_choice"] = (
+            build_pair_score_output_choices()
+        )
+
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_model_len,
         chat_template=args.chat_template,
-        **args.engine_kwargs,
+        **judge_model_kwargs,
     )
 
     name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
