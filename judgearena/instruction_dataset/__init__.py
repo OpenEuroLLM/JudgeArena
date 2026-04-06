@@ -1,4 +1,5 @@
 import pandas as pd
+
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -8,7 +9,12 @@ from judgearena.utils import data_root, download_hf, read_df
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
-    if "m-arena-hard" in dataset:
+    if dataset == "mt-bench":
+        from judgearena.instruction_dataset.mt_bench import load_mt_bench
+
+        df_instructions = load_mt_bench()
+
+    elif "m-arena-hard" in dataset:
         if dataset == "m-arena-hard":
             language = None
         else:

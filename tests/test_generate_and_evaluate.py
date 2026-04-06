@@ -3,8 +3,10 @@ import pytest
 
 import judgearena.generate_and_evaluate as generate_and_evaluate
 from judgearena.generate_and_evaluate import (
-    main as main_generate_and_eval,
     CliArgs,
+)
+from judgearena.generate_and_evaluate import (
+    main as main_generate_and_eval,
 )
 
 

@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.generate_and_evaluate:cli"
+judgearena-elo = "judgearena.estimate_elo_ratings:main"
 
 [project]
 name = "judgearena"
@@ -40,6 +41,7 @@ dependencies = [
     "matplotlib>=3.10.6",
     "pandas>=2.3.2",
     "pyyaml>=6.0.2",
+    "scikit-learn>=1.8.0",
     "seaborn>=0.13.2",
     "tqdm>=4.67.1",
 ]
@@ -59,11 +61,24 @@ exclude = ["slurmpilot_scripts*"]
 
 [dependency-groups]
 dev = [
-    "black>=25.1.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
+    "ruff>=0.11.0",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501", "N806", "N815", "N803"]
+fixable = ["ALL"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [project.optional-dependencies]
 vllm = ["vllm==0.10.2", "transformers>=4.55.2,<5.0.0"]

@@ -19,7 +19,6 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.utils import do_inference, make_model
-from judgearena.utils import set_langchain_cache
 
 # set_langchain_cache()
 

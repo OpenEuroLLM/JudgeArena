@@ -1,26 +1,26 @@
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.llms import LLM
+from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.instruction_dataset import load_instructions
-from judgearena.repro import write_run_metadata, _to_jsonable
+from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
-    read_df,
     data_root,
-    download_hf,
     do_inference,
+    download_hf,
+    read_df,
 )
 
 
@@ -55,18 +55,31 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
+_COMPLETION_LABEL_SINGLE = "Answer"
+_COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
+_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
+_SCORE_FENCE = "\n```"
+
+
 def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
+    multi_turn: bool = False,
 ) -> tuple[str, str]:
-    # Prepare judge
-    with open(Path(__file__).parent / "prompts" / "system-prompt.txt", "r") as f:
-        system_prompt = str(f.read())
+    prompts_dir = Path(__file__).parent / "prompts"
+    system_prompt = (prompts_dir / "system-prompt.txt").read_text()
 
     prompt_filename = (
         "prompt-with-explanation.txt" if provide_explanation else "prompt.txt"
     )
-    with open(Path(__file__).parent / "prompts" / prompt_filename, "r") as f:
-        user_prompt_template = str(f.read())
+    user_prompt_template = (prompts_dir / prompt_filename).read_text()
+    user_prompt_template = user_prompt_template.replace(
+        "{completion_label}",
+        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
+    )
+    user_prompt_template = user_prompt_template.replace(
+        "{explanation_suffix}",
+        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
+    )
 
     return system_prompt, user_prompt_template
 
@@ -74,11 +87,14 @@ def load_judge_system_and_user_prompt(
 def resolve_judge_prompts(
     *,
     provide_explanation: bool,
+    multi_turn: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
 ) -> tuple[str, str]:
     default_system_prompt, default_user_prompt_template = (
-        load_judge_system_and_user_prompt(provide_explanation=provide_explanation)
+        load_judge_system_and_user_prompt(
+            provide_explanation=provide_explanation, multi_turn=multi_turn
+        )
     )
     return (
         system_prompt if system_prompt is not None else default_system_prompt,
@@ -113,7 +129,7 @@ def evaluate_completions(
     exceeding context limit
     :return:
     """
-    run_started_at = datetime.now(timezone.utc)
+    run_started_at = datetime.now(UTC)
     local_path_tables = data_root / "tables"
     if is_arena_hard_dataset(dataset):
         download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
@@ -147,9 +163,9 @@ def evaluate_completions(
             return df.loc[:, "output"]
         else:
             print(f"Loading {method} from {dataset} dataset.")
-            assert (
-                method in df_outputs.columns
-            ), f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
+            assert method in df_outputs.columns, (
+                f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
+            )
             return df_outputs.loc[:, method].sort_index()
 
     completions_A = get_output(df_outputs=df_outputs, dataset=dataset, method=method_A)
@@ -158,9 +174,9 @@ def evaluate_completions(
         instructions = instructions.head(num_annotations)
         completions_A = completions_A.head(num_annotations)
         completions_B = completions_B.head(num_annotations)
-    assert (
-        completions_A.index.tolist() == completions_B.index.tolist()
-    ), f"Index mismatch between methods {method_A} and {method_B}."
+    assert completions_A.index.tolist() == completions_B.index.tolist(), (
+        f"Index mismatch between methods {method_A} and {method_B}."
+    )
 
     if judge_chat_model is None:
         from langchain_together.llms import Together
@@ -310,7 +326,7 @@ def annotate_battles(
                 "completion_B": truncate(completion_B, max_len=truncate_input_chars),
             }
             for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B
+                instructions, completions_A, completions_B, strict=True
             )
         ]
     )
@@ -323,7 +339,7 @@ def annotate_battles(
 
     annotations = []
     for judge_completion, instruction, completion_A, completion_B in zip(
-        judge_completions, instructions, completions_A, completions_B
+        judge_completions, instructions, completions_A, completions_B, strict=True
     ):
         annotations.append(
             JudgeAnnotation(
@@ -334,3 +350,76 @@ def annotate_battles(
             )
         )
     return annotations
+
+
+def judge_and_parse_prefs(
+    judge_chat_model,
+    instructions: list[str],
+    completions_A: list[str],
+    completions_B: list[str],
+    swap_mode: str = "fixed",
+    provide_explanation: bool = False,
+    system_prompt: str | None = None,
+    user_prompt_template: str | None = None,
+    truncate_input_chars: int = 8192,
+    use_tqdm: bool = False,
+) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
+    """Run judge annotation and parse preferences, handling swap_mode='both'.
+
+    Returns:
+        annotations: original-order JudgeAnnotations
+        annotations_reversed: reversed-order JudgeAnnotations (None if swap_mode != "both")
+        prefs: pd.Series of floats (0=A wins, 0.5=tie, 1=B wins, None=unparseable),
+               already combined for swap_mode="both"
+    """
+    if swap_mode == "both":
+        print("Correction for judge bias towards a certain model position is set.")
+        print(
+            f"Evaluating completions with models reversed with judge {judge_chat_model}."
+        )
+
+    annotations = annotate_battles(
+        judge_chat_model=judge_chat_model,
+        instructions=instructions,
+        completions_A=completions_A,
+        completions_B=completions_B,
+        provide_explanation=provide_explanation,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        truncate_input_chars=truncate_input_chars,
+        use_tqdm=use_tqdm,
+    )
+
+    annotations_reversed = None
+    if swap_mode == "both":
+        annotations_reversed = annotate_battles(
+            judge_chat_model=judge_chat_model,
+            instructions=instructions,
+            completions_A=completions_B,
+            completions_B=completions_A,
+            provide_explanation=provide_explanation,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            truncate_input_chars=truncate_input_chars,
+            use_tqdm=use_tqdm,
+        )
+
+    def _none_to_nan(x):
+        return float("nan") if x is None else x
+
+    score_parser = PairScore()
+    prefs = pd.Series(
+        [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
+    )
+
+    if swap_mode == "both":
+        prefs = prefs.apply(_none_to_nan)
+        prefs_reversed = pd.Series(
+            [
+                score_parser.parse_model_raw(a.judge_completion)
+                for a in annotations_reversed
+            ]
+        ).apply(_none_to_nan)
+        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
+
+    return annotations, annotations_reversed, prefs

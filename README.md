@@ -196,7 +196,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 | Dataset               | Description                                                                                    |
 |-----------------------|------------------------------------------------------------------------------------------------|
 | `alpaca-eval`         | General instruction-following benchmark                                                        |
-| `arena-hard-v2.0` / `arena-hard`     | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                             |
+| `arena-hard-v2.0`     | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                             |
 | `arena-hard-v0.1`     | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                      |
 | `m-arena-hard`        | Translated version of Arena-Hard in 23 languages                                               |
 | `m-arena-hard-{lang}` | Language-specific variants (e.g., `ar`, `cs`, `de`)                                            |
@@ -206,6 +206,60 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 For Arena-Hard, JudgeArena resolves baseline metadata by dataset version:
 - `arena-hard-v0.1`: `gpt-4-0314`
 - `arena-hard-v2.0`: `o3-mini-2025-01-31` (standard prompts)
+
+## 📈 Estimating ELO Ratings
+
+JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
+The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
+
+### Quick start
+
+```bash
+judgearena-elo \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+Alternatively, if running directly from the repository without installing:
+
+```bash
+uv run python judgearena/estimate_elo_ratings.py \
+  --arena ComparIA \
+  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200
+```
+
+### Key options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--arena` | `ComparIA` | Arena to sample opponents from: `LMArena-100k`, `LMArena-140k`, or `ComparIA` |
+| `--model` | *(required)* | Model under evaluation (same format as `judgearena`) |
+| `--judge_model` | *(required)* | LLM judge (same format as `judgearena`) |
+| `--n_instructions` | all | Number of arena battles to use for evaluation |
+| `--n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
+| `--languages` | all | Restrict to specific language codes, e.g. `en fr de` |
+| `--n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
+| `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
+| `--result_folder` | `results` | Directory where annotations and results are saved |
+
+### Output
+
+The script prints win/loss/tie counts, win rate, and a ranked ELO leaderboard with confidence intervals:
+
+```
+=== Results for meta-llama/Llama-3.3-70B-Instruct-Turbo ===
+Battles: 200 | Wins: 112 | Losses: 71 | Ties: 17
+Win rate: 60.25%
+
+=== ELO Ratings (Bradley-Terry, 20 bootstraps) ===
+  gpt-4o  (12453): 1132.4 ± 3.1
+  meta-llama/Llama-3.3-70B-Instruct-Turbo  (200) <-----: 1089.7 ± 8.2
+  ...
+```
 
 ### Offline Setup (Slurm/Air-Gapped Environments)
 

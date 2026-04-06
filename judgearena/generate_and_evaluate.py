@@ -6,27 +6,29 @@ and then evaluates them using a judge model.
 import argparse
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
+from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
+from judgearena.generate import generate_base, generate_instructions
+from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.evaluate import (
-    annotate_battles,
-    PairScore,
-    resolve_judge_prompts,
+from judgearena.mt_bench.mt_bench_utils import run_mt_bench
+from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.utils import (
+    cache_function_dataframe,
+    compute_pref_summary,
+    data_root,
+    download_hf,
+    make_model,
+    read_df,
 )
-from judgearena.generate import generate_instructions, generate_base
-from judgearena.instruction_dataset import load_instructions
-from judgearena.repro import write_run_metadata, _to_jsonable
-from judgearena.utils import data_root, read_df, download_hf
-from judgearena.utils import make_model, cache_function_dataframe, compute_pref_summary
 
 
 def try_load_dataset_completions(
@@ -91,9 +93,9 @@ class CliArgs:
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
-        assert (
-            self.swap_mode in supported_modes
-        ), f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        assert self.swap_mode in supported_modes, (
+            f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        )
 
     @classmethod
     def parse_args(cls):
@@ -139,7 +141,7 @@ class CliArgs:
             choices=["fixed", "both"],
             default="fixed",
             help="Model comparison order mode. 'fixed': always use model order A-B. 'both': correct for model order "
-            "bias by evaluating each instruction twice, once as A-B and once as B-A, and average. This helps account "
+            "bias by evaluating each instruction twice, once as A-B and once as B-A. This helps account "
             "for judge position bias. Default is 'fixed'.",
         )
         parser.add_argument(
@@ -224,7 +226,7 @@ class CliArgs:
             if not isinstance(engine_kwargs, dict):
                 raise ValueError("engine_kwargs must be a JSON object")
         except Exception as e:
-            raise SystemExit(f"Failed to parse --engine_kwargs: {e}")
+            raise SystemExit(f"Failed to parse --engine_kwargs: {e}") from e
 
         return cls(
             dataset=args.dataset,
@@ -261,7 +263,7 @@ def print_results(results):
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
     print(f"⚖️ Judge: {results['judge_model']}")
-    print(f"📈 Results Summary:")
+    print("📈 Results Summary:")
     print(f"   Total Battles: {results['num_battles']}")
     print(f"   Win Rate (A): {results['winrate']:.1%}")
     print(f"   ✅ Wins:   {results['num_wins']}")
@@ -282,7 +284,7 @@ def main(args: CliArgs):
     3) create annotations
     """
 
-    run_started_at = datetime.now(timezone.utc)
+    run_started_at = datetime.now(UTC)
     print(
         f"Using dataset {args.dataset} and evaluating models {args.model_A} and {args.model_B}."
     )
@@ -291,6 +293,9 @@ def main(args: CliArgs):
     # if not args.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
+
+    if args.dataset == "mt-bench":
+        return run_mt_bench(args, ignore_cache)
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in args.dataset
@@ -416,34 +421,19 @@ def main(args: CliArgs):
         provide_explanation=args.provide_explanation,
         system_prompt=system_prompt,
     )
-    annotations = annotate_battles(
+
+    annotations, annotations_reversed, prefs = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
         instructions=instructions.head(n_instructions).tolist(),
         completions_A=completions_A.head(n_instructions).tolist(),
         completions_B=completions_B.head(n_instructions).tolist(),
+        swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
         system_prompt=effective_judge_system_prompt,
         user_prompt_template=judge_user_prompt_template,
         truncate_input_chars=args.truncate_all_input_chars,
         use_tqdm=args.use_tqdm,
     )
-
-    if args.swap_mode == "both":
-        print("Correction for judge bias towards a certain model position is set.")
-        print(
-            f"Evaluating completions with models reversed with judge {args.judge_model}."
-        )
-        annotations_reversed = annotate_battles(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions.head(n_instructions).tolist(),
-            completions_A=completions_B.head(n_instructions).tolist(),
-            completions_B=completions_A.head(n_instructions).tolist(),
-            provide_explanation=args.provide_explanation,
-            system_prompt=effective_judge_system_prompt,
-            user_prompt_template=judge_user_prompt_template,
-            truncate_input_chars=args.truncate_all_input_chars,
-            use_tqdm=args.use_tqdm,
-        )
 
     df = pd.DataFrame(annotations)
     df["instruction_index"] = instructions.head(n_instructions).index.tolist()
@@ -462,24 +452,6 @@ def main(args: CliArgs):
         df = pd.concat([df, df_reversed])
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
-
-    # compute preferences between A and B
-    score_parser = PairScore()
-    prefs = pd.Series(
-        [
-            score_parser.parse_model_raw(annotation.judge_completion)
-            for annotation in annotations
-        ]
-    )
-
-    if args.swap_mode == "both":
-        prefs_reversed = pd.Series(
-            [
-                score_parser.parse_model_raw(annotation.judge_completion)
-                for annotation in annotations_reversed
-            ]
-        )
-        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
 
     # compute and report statistics
     summary = compute_pref_summary(prefs)
