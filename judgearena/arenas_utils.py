@@ -178,7 +178,7 @@ def load_arena_dataframe(
     if arena is None:
         arenas = KNOWN_ARENAS
     elif arena == "LMArena":
-        arenas = ["LMArena-100k", "LMArena-140k"]
+        arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
         return _load_arena_dataframe(arena, comparia_revision)
     return pd.concat(
