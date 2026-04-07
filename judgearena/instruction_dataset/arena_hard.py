@@ -4,7 +4,6 @@ from pathlib import Path
 import pandas as pd
 from datasets import Dataset, DatasetDict, IterableDataset, load_dataset
 
-
 ARENA_HARD_HF_REPO_ID = "lmarena-ai/arena-hard-auto"
 
 
