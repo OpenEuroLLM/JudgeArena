@@ -407,9 +407,7 @@ def main(args: CliArgs):
 
     judge_model_kwargs = dict(args.engine_kwargs)
     if not args.provide_explanation and args.judge_model.split("/")[0] == "VLLM":
-        judge_model_kwargs["structured_outputs_json"] = (
-            build_pair_score_json_schema()
-        )
+        judge_model_kwargs["structured_outputs_json"] = build_pair_score_json_schema()
 
     judge_chat_model = make_model(
         model=args.judge_model,
