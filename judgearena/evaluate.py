@@ -10,6 +10,10 @@ from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -127,7 +131,10 @@ def evaluate_completions(
     """
     run_started_at = datetime.now(UTC)
     local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
+    if is_arena_hard_dataset(dataset):
+        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+    else:
+        download_hf(name=dataset, local_path=local_path_tables)
 
     instructions = load_instructions(
         dataset=dataset,

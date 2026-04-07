@@ -1,7 +1,5 @@
 TODOs:
-* push on pypi
 * document on the fly evaluations with custom prompt
-* support MT-bench
 * handle errors
 * CI [high/large]
 * implement CI judge option
@@ -9,6 +7,8 @@ TODOs:
 * report cost?
 
 Done:
+* push on pypi
+* support MT-bench
 * support alpaca-eval
 * support arena-hard
 * test together judge
