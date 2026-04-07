@@ -56,12 +56,21 @@ _PAIR_SCORE_MIN = 0
 _PAIR_SCORE_MAX = 10
 
 
-def build_pair_score_output_choices() -> list[str]:
-    return [
-        f"score_A: {a}\nscore_B: {b}"
-        for a in range(_PAIR_SCORE_MIN, _PAIR_SCORE_MAX + 1)
-        for b in range(_PAIR_SCORE_MIN, _PAIR_SCORE_MAX + 1)
-    ]
+def build_pair_score_json_schema() -> dict:
+    score_field = {
+        "type": "integer",
+        "minimum": _PAIR_SCORE_MIN,
+        "maximum": _PAIR_SCORE_MAX,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "score_A": score_field,
+            "score_B": score_field,
+        },
+        "required": ["score_A", "score_B"],
+        "additionalProperties": False,
+    }
 
 
 _COMPLETION_LABEL_SINGLE = "Answer"

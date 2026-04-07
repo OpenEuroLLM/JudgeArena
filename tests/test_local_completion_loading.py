@@ -6,13 +6,16 @@ from judgearena.generate_and_evaluate import CliArgs
 from judgearena.generate_and_evaluate import main as main_generate_and_eval
 
 
-def test_build_pair_score_output_choices_covers_all_integer_pairs():
-    choices = evaluate.build_pair_score_output_choices()
+def test_build_pair_score_json_schema_covers_valid_range():
+    schema = evaluate.build_pair_score_json_schema()
 
-    assert len(choices) == 121
-    assert len(set(choices)) == 121
-    assert "score_A: 0\nscore_B: 0" in choices
-    assert "score_A: 10\nscore_B: 10" in choices
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"score_A", "score_B"}
+    for key in ("score_A", "score_B"):
+        assert schema["properties"][key]["type"] == "integer"
+        assert schema["properties"][key]["minimum"] == 0
+        assert schema["properties"][key]["maximum"] == 10
+    assert schema["additionalProperties"] is False
 
 
 def test_main_aligns_local_reference_by_instruction_index(tmp_path, monkeypatch):

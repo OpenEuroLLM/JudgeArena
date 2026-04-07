@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.evaluate import (
-    build_pair_score_output_choices,
+    build_pair_score_json_schema,
     judge_and_parse_prefs,
     resolve_judge_prompts,
 )
@@ -407,8 +407,8 @@ def main(args: CliArgs):
 
     judge_model_kwargs = dict(args.engine_kwargs)
     if not args.provide_explanation and args.judge_model.split("/")[0] == "VLLM":
-        judge_model_kwargs["structured_outputs_choice"] = (
-            build_pair_score_output_choices()
+        judge_model_kwargs["structured_outputs_json"] = (
+            build_pair_score_json_schema()
         )
 
     judge_chat_model = make_model(

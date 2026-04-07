@@ -236,10 +236,10 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
-        structured_outputs_choice = vllm_kwargs.pop("structured_outputs_choice", None)
-        if structured_outputs_choice is not None:
+        structured_outputs_json = vllm_kwargs.pop("structured_outputs_json", None)
+        if structured_outputs_json is not None:
             self._sampling_params_kwargs["structured_outputs"] = (
-                StructuredOutputsParams(choice=structured_outputs_choice)
+                StructuredOutputsParams(json=structured_outputs_json)
             )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
