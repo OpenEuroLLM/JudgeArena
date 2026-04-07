@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from dataclasses import dataclass, field
 
 
@@ -74,8 +73,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Model comparison order mode. 'fixed': always use model order A-B. "
             "'both': correct for model order bias by evaluating each instruction "
-            "twice, once as A-B and once as B-A, and average. This helps account "
-            "for judge position bias. Default is 'fixed'."
+            "twice, once as A-B and once as B-A, and concatenating the results. "
+            "This helps account for judge position bias. Default is 'fixed'."
         ),
     )
     parser.add_argument(
