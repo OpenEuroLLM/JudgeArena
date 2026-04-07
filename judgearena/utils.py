@@ -179,6 +179,15 @@ class DummyModel:
         return self.message
 
 
+_DISABLE_THINKING_PREFIX = "{%- set enable_thinking = false %}\n"
+
+
+def _disable_thinking_chat_template(template: str) -> str:
+    if "{%- set enable_thinking = false" in template:
+        return template
+    return _DISABLE_THINKING_PREFIX + template
+
+
 class ChatVLLM:
     """VLLM wrapper that auto-detects whether to use chat() or generate().
 
@@ -206,6 +215,7 @@ class ChatVLLM:
 
         self.model_path = model
         self.max_tokens = max_tokens
+        disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
 
         # Cap max_model_len to the model's max_position_embeddings so that
         # vLLM doesn't reject an overly large context window.
@@ -250,7 +260,11 @@ class ChatVLLM:
         # 2. If tokenizer has one, use it → use chat() (pass None to vLLM)
         # 3. No template found → fall back to generate() for base models
         if chat_template:
-            self.chat_template = chat_template
+            self.chat_template = (
+                _disable_thinking_chat_template(chat_template)
+                if disable_thinking
+                else chat_template
+            )
             self._use_generate = False
             print(f"ChatVLLM: using explicit chat template for '{model}'")
         else:
@@ -265,9 +279,18 @@ class ChatVLLM:
                 self.chat_template = None
                 self._use_generate = True
             else:
-                self.chat_template = None  # let vLLM use the tokenizer's own
+                self.chat_template = (
+                    _disable_thinking_chat_template(tokenizer.chat_template)
+                    if disable_thinking
+                    else None
+                )
                 self._use_generate = False
-                print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
+                if disable_thinking:
+                    print(
+                        f"ChatVLLM: using tokenizer chat template with thinking disabled for '{model}'"
+                    )
+                else:
+                    print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
 
     def set_temperature(self, temperature: float) -> None:
         from vllm import SamplingParams

@@ -1,4 +1,10 @@
+from types import SimpleNamespace
+
+import pandas as pd
+
 import judgearena.instruction_dataset.mt_bench as mt_bench
+import judgearena.mt_bench.fastchat_compat as fastchat_compat
+import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
 
 
@@ -62,3 +68,203 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     ]
     assert calls["contexts"] == 1
     assert calls["mt_bench"] == 1
+
+
+def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):
+    answer_path = tmp_path / "data" / "mt_bench" / "model_answer" / "gpt-4.jsonl"
+    answer_path.parent.mkdir(parents=True, exist_ok=True)
+    answer_path.write_text(
+        '{"question_id": 2, "choices": [{"turns": ["A2", "B2"]}]}\n'
+        '{"question_id": 1, "choices": [{"turns": ["A1"]}]}\n'
+    )
+
+    df_answers = mt_bench.load_mt_bench_model_answers("gpt-4", local_dir=tmp_path)
+
+    assert df_answers.to_dict(orient="records") == [
+        {
+            "instruction_index": 1,
+            "completion_turn_1": "A1",
+            "completion_turn_2": "",
+        },
+        {
+            "instruction_index": 2,
+            "completion_turn_1": "A2",
+            "completion_turn_2": "B2",
+        },
+    ]
+
+
+def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1", "Q2"], "turn_2": ["Q1b", "Q2b"]},
+        index=pd.Index([1, 2], name="instruction_index"),
+    )
+    generated_models = []
+    generation_kwargs = []
+
+    monkeypatch.setattr(
+        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
+    )
+
+    def fake_generate_multiturn(
+        *,
+        questions,
+        model,
+        truncate_input_chars,
+        max_tokens,
+        use_tqdm,
+        max_model_len,
+        chat_template,
+        temperature_config,
+        **engine_kwargs,
+    ):
+        generated_models.append(model)
+        generation_kwargs.append(engine_kwargs)
+        return pd.DataFrame(
+            {
+                "instruction_index": [1, 2],
+                "completion_turn_1": ["Gen A1", "Gen A2"],
+                "completion_turn_2": ["Gen B1", "Gen B2"],
+            }
+        )
+
+    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate_multiturn)
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: (
+            pd.DataFrame(
+                {
+                    "instruction_index": [2, 1],
+                    "completion_turn_1": ["Base A2", "Base A1"],
+                    "completion_turn_2": ["Base B2", "Base B1"],
+                }
+            )
+            if model == "gpt-4"
+            else None
+        ),
+    )
+
+    args = SimpleNamespace(
+        model_A="VLLM/example/model-a",
+        model_B="gpt-4",
+        n_instructions=2,
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        use_tqdm=False,
+        max_model_len=16384,
+        chat_template=None,
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
+    )
+
+    completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
+        args=args,
+        questions_df=questions_df,
+        ignore_cache=False,
+    )
+
+    assert generated_models == ["VLLM/example/model-a"]
+    assert generation_kwargs == [
+        {"gpu_memory_utilization": 0.7, "language_model_only": True}
+    ]
+    assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
+    assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
+    assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
+
+
+def test_parse_fastchat_verdict_accepts_plain_structured_labels():
+    assert fastchat_compat._parse_fastchat_verdict("A") == "A"
+    assert fastchat_compat._parse_fastchat_verdict("B") == "B"
+    assert fastchat_compat._parse_fastchat_verdict("C") == "tie"
+
+
+def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda args, questions_df, ignore_cache: (
+            pd.DataFrame(
+                {
+                    "completion_turn_1": ["A1"],
+                    "completion_turn_2": ["A2"],
+                },
+                index=questions_df.index,
+            ),
+            pd.DataFrame(
+                {
+                    "completion_turn_1": ["B1"],
+                    "completion_turn_2": ["B2"],
+                },
+                index=questions_df.index,
+            ),
+        ),
+    )
+
+    def fake_make_model(
+        *, model, max_tokens, temperature, max_model_len, chat_template, **kwargs
+    ):
+        captured["make_model"] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "max_model_len": max_model_len,
+            "chat_template": chat_template,
+            "kwargs": kwargs,
+        }
+        return object()
+
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+
+    def fake_run_mt_bench_fastchat(**kwargs):
+        captured["run_mt_bench_fastchat"] = kwargs
+        return pd.Series(
+            kwargs["questions_df"].index.to_list(),
+            dtype=float,
+        )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        fake_run_mt_bench_fastchat,
+    )
+
+    args = SimpleNamespace(
+        dataset="mt-bench",
+        model_A="VLLM/example/model-a",
+        model_B="gpt-4",
+        judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
+        n_instructions=1,
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        max_out_tokens_judge=256,
+        use_tqdm=False,
+        max_model_len=16384,
+        chat_template=None,
+        provide_explanation=False,
+        swap_mode="fixed",
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
+    )
+
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    assert args.swap_mode == "both"
+    assert args.max_out_tokens_judge == 1024
+    assert captured["make_model"]["max_tokens"] == 1024
+    assert captured["make_model"]["kwargs"] == {
+        "disable_thinking": True,
+        "gpu_memory_utilization": 0.7,
+        "language_model_only": True,
+    }
+    assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
+    assert captured["run_mt_bench_fastchat"]["constrained_plain_verdict"] is False

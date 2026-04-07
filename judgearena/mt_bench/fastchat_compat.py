@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -52,6 +52,16 @@ _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
 _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 
+_BRACKETED_VERDICT_INSTRUCTION = (
+    "After providing your explanation, output your final verdict by strictly "
+    'following this format: "[[A]]" if assistant A is better, "[[B]]" if '
+    'assistant B is better, and "[[C]]" for a tie.'
+)
+_PLAIN_VERDICT_INSTRUCTION = (
+    'Output only one final verdict token: "A" if assistant A is better, "B" '
+    'if assistant B is better, and "C" for a tie.'
+)
+
 
 def _load_prompt_text(filename: str) -> str:
     path = _PROMPTS_DIR / filename
@@ -60,6 +70,20 @@ def _load_prompt_text(filename: str) -> str:
 
 def _render_prompt_text(filename: str, **kwargs: str) -> str:
     return _load_prompt_text(filename).format(**kwargs)
+
+
+def _structured_verdict_prompt(
+    prompt: FastChatPairwisePrompt,
+) -> FastChatPairwisePrompt:
+    if _BRACKETED_VERDICT_INSTRUCTION not in prompt.system_prompt:
+        return prompt
+    return replace(
+        prompt,
+        system_prompt=prompt.system_prompt.replace(
+            _BRACKETED_VERDICT_INSTRUCTION,
+            _PLAIN_VERDICT_INSTRUCTION,
+        ),
+    )
 
 
 def _build_system_prompt(
@@ -180,11 +204,12 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    if "[[A]]" in judgment:
+    stripped = judgment.strip()
+    if "[[A]]" in stripped or stripped == "A":
         return "A"
-    if "[[B]]" in judgment:
+    if "[[B]]" in stripped or stripped == "B":
         return "B"
-    if "[[C]]" in judgment:
+    if "[[C]]" in stripped or stripped == "C":
         return "tie"
     return "error"
 
@@ -267,6 +292,7 @@ def _infer_by_prompt_groups(
     items: list[dict[str, Any]],
     use_tqdm: bool,
     swap_answers: bool,
+    constrained_plain_verdict: bool,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -274,6 +300,8 @@ def _infer_by_prompt_groups(
     judgments: list[str] = [""] * len(items)
     for _prompt_name, idxs in grouped_indices.items():
         prompt: FastChatPairwisePrompt = items[idxs[0]]["prompt"]
+        if constrained_plain_verdict:
+            prompt = _structured_verdict_prompt(prompt)
         prompt_template = ChatPromptTemplate.from_messages(
             [("system", prompt.system_prompt), ("user", prompt.user_prompt_template)]
         )
@@ -434,6 +462,7 @@ def judge_mt_bench_pairwise_fastchat(
     swap_mode: str,
     truncate_input_chars: int | None,
     use_tqdm: bool,
+    constrained_plain_verdict: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Pairwise MT-Bench judging compatible with FastChat's `[[A]]/[[B]]/[[C]]` format."""
     assert turns_mode in ("both", "single", "multi")
@@ -456,6 +485,7 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        constrained_plain_verdict=constrained_plain_verdict,
     )
 
     g2_judgments: list[str] | None = None
@@ -465,6 +495,7 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
+            constrained_plain_verdict=constrained_plain_verdict,
         )
 
     annotations: list[dict[str, Any]] = []

@@ -18,6 +18,7 @@ import pandas as pd
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
+from judgearena.instruction_dataset.mt_bench import load_mt_bench_model_answers
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
@@ -27,6 +28,25 @@ from judgearena.utils import cache_function_dataframe, compute_pref_summary, mak
 
 if TYPE_CHECKING:
     from judgearena.config import CliArgs
+
+
+# Use distinct first tokens for constrained decoding. The shared `[[` prefix
+# caused the MT-Bench judge to collapse to `[[A]]` on every comparison.
+_MIN_MT_BENCH_JUDGE_TOKENS = 1024
+
+
+def _align_mt_bench_completions(
+    *, questions_df: pd.DataFrame, completions: pd.DataFrame, model_name: str
+) -> pd.DataFrame:
+    indexed = completions.set_index("instruction_index")
+    missing_ids = questions_df.index.difference(indexed.index)
+    if not missing_ids.empty:
+        missing_ids_preview = ", ".join(str(x) for x in missing_ids[:5])
+        raise ValueError(
+            f"MT-Bench completions for '{model_name}' are missing "
+            f"{len(missing_ids)} question(s). First missing ids: {missing_ids_preview}."
+        )
+    return indexed.loc[questions_df.index]
 
 
 def _generate_mt_bench_completions(
@@ -46,19 +66,33 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            **args.engine_kwargs,
         )
 
-    completions_a = cache_function_dataframe(
-        lambda: _run_generation(args.model_A),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_A}_{args.n_instructions}",
-    ).set_index("instruction_index")
+    def _load_or_generate(model_name: str) -> pd.DataFrame:
+        loaded_answers = load_mt_bench_model_answers(
+            model_name, n_instructions=args.n_instructions
+        )
+        if loaded_answers is not None:
+            print(f"Using pre-generated MT-Bench answers for '{model_name}'.")
+            return _align_mt_bench_completions(
+                questions_df=questions_df,
+                completions=loaded_answers,
+                model_name=model_name,
+            )
+        generated_answers = cache_function_dataframe(
+            lambda: _run_generation(model_name),
+            ignore_cache=ignore_cache,
+            cache_name=f"{cache_prefix}_{model_name}_{args.n_instructions}",
+        )
+        return _align_mt_bench_completions(
+            questions_df=questions_df,
+            completions=generated_answers,
+            model_name=model_name,
+        )
 
-    completions_b = cache_function_dataframe(
-        lambda: _run_generation(args.model_B),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_B}_{args.n_instructions}",
-    ).set_index("instruction_index")
+    completions_a = _load_or_generate(args.model_A)
+    completions_b = _load_or_generate(args.model_B)
     return completions_a, completions_b
 
 
@@ -97,6 +131,7 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
+    constrained_plain_verdict: bool,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
@@ -111,6 +146,7 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=args.use_tqdm,
+            constrained_plain_verdict=constrained_plain_verdict,
         )
     )
 
@@ -140,6 +176,19 @@ def _run_mt_bench_fastchat(
 
 def run_mt_bench(args: CliArgs, ignore_cache: bool):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
+    if args.swap_mode != "both":
+        print(
+            "MT-Bench requires swap_mode='both' to match FastChat and correct "
+            f"for position bias; overriding requested swap_mode='{args.swap_mode}'."
+        )
+        args.swap_mode = "both"
+    if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
+        print(
+            "MT-Bench judge prompts require room for explanation plus verdict; "
+            f"overriding max_out_tokens_judge from {args.max_out_tokens_judge} "
+            f"to {_MIN_MT_BENCH_JUDGE_TOKENS}."
+        )
+        args.max_out_tokens_judge = _MIN_MT_BENCH_JUDGE_TOKENS
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
     print(
         f"Generating multi-turn completions for MT-Bench with {args.model_A} and {args.model_B}."
@@ -149,12 +198,16 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         questions_df=questions_df,
         ignore_cache=ignore_cache,
     )
+    judge_model_kwargs = dict(args.engine_kwargs)
+    judge_model_kwargs["disable_thinking"] = True
+
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         temperature=0.0,
         max_model_len=args.max_model_len,
         chat_template=args.chat_template,
+        **judge_model_kwargs,
     )
     return _run_mt_bench_fastchat(
         args=args,
@@ -162,4 +215,5 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
+        constrained_plain_verdict=False,
     )
