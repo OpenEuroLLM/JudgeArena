@@ -1,0 +1,15 @@
+<|The Start of Reference Answer|>
+
+### User:
+{question_1}
+
+### Reference answer:
+{ref_answer_1}
+
+### User:
+{question_2}
+
+### Reference answer:
+{ref_answer_2}
+
+<|The End of Reference Answer|>
