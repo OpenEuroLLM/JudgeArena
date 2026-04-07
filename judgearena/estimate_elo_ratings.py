@@ -16,10 +16,16 @@ from judgearena.utils import cache_function_dataframe, compute_pref_summary, mak
 
 @dataclass
 class CliEloArgs(BaseCliArgs):
-    """CLI arguments for the ELO rating estimation entrypoint."""
+    """CLI arguments for the ELO rating estimation entrypoint.
 
-    arena: str = ""
-    model: str = ""
+    Note: inheriting from a dataclass (BaseCliArgs) forces every field here to
+    have a default value, even for fields like ``arena`` and ``model`` that
+    logically should be required.  If this becomes too messy we may want to
+    move away from dataclass inheritance.
+    """
+
+    arena: str | None = None
+    model: str | None = None
     n_instructions_per_language: int | None = None
     languages: list[str] | None = None
     n_bootstraps: int = 20

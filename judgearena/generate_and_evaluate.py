@@ -69,9 +69,9 @@ def try_load_dataset_completions(
 class CliArgs(BaseCliArgs):
     """CLI arguments for the generate-and-evaluate entrypoint."""
 
-    dataset: str = ""
-    model_A: str = ""
-    model_B: str = ""
+    dataset: str | None = None
+    model_A: str | None = None
+    model_B: str | None = None
     use_tqdm: bool = False
 
     @classmethod
