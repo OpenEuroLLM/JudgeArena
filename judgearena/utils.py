@@ -82,6 +82,20 @@ def truncate(s: str, max_len: int | None = None) -> str:
     return s
 
 
+def safe_text(value: object, truncate_chars: int | None) -> str:
+    """Coerce *value* to a string and optionally truncate.
+
+    Returns the empty string for ``None`` and NaN-like values so callers
+    don't have to guard against missing data.
+    """
+    if value is None:
+        return ""
+    is_missing = pd.isna(value)
+    if isinstance(is_missing, bool) and is_missing:
+        return ""
+    return truncate(str(value), max_len=truncate_chars)
+
+
 def do_inference(chat_model, inputs, use_tqdm: bool = False):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
@@ -428,6 +442,10 @@ def download_all():
         local_dir=data_root / "contexts",
         force_download=False,
     )
+
+    from judgearena.instruction_dataset.mt_bench import download_mt_bench
+
+    download_mt_bench()
 
 
 class Timeblock:

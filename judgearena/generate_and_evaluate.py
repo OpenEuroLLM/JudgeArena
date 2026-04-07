@@ -22,6 +22,8 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
+from judgearena.mt_bench.mt_bench_utils import run_mt_bench
+from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     data_root,
@@ -72,9 +74,9 @@ def try_load_dataset_completions(
 class CliArgs(BaseCliArgs):
     """CLI arguments for the generate-and-evaluate entrypoint."""
 
-    dataset: str = ""
-    model_A: str = ""
-    model_B: str = ""
+    dataset: str | None = None
+    model_A: str | None = None
+    model_B: str | None = None
     use_tqdm: bool = False
 
     @classmethod
@@ -170,6 +172,9 @@ def main(args: CliArgs):
     # if not args.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
+
+    if args.dataset == "mt-bench":
+        return run_mt_bench(args, ignore_cache)
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in args.dataset
