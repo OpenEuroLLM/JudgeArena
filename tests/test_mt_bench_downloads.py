@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
+import judgearena.instruction_dataset.fluency as fluency_mod
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils.io as utils_io
@@ -62,7 +63,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     def _contexts_snapshot_stub(**_kwargs):
         calls["contexts"] += 1
 
-    monkeypatch.setattr(utils_io, "snapshot_download", _contexts_snapshot_stub)
+    monkeypatch.setattr(fluency_mod, "snapshot_download", _contexts_snapshot_stub)
     monkeypatch.setattr(
         mt_bench,
         "download_mt_bench",

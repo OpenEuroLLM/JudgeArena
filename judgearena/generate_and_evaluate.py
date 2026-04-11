@@ -19,6 +19,8 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.fluency import is_fluency_task as task_is_fluency
+from judgearena.instruction_dataset.fluency import load_fluency_contexts
 from judgearena.instruction_dataset.m_arenahard import (
     M_ARENA_HARD_BASELINES,
     split_m_arena_hard_dataset,
@@ -215,11 +217,6 @@ def _build_generation_kwargs(
     return generation_kwargs
 
 
-def load_contexts(dataset: str) -> pd.Series:
-    path = data_root / "contexts" / dataset
-    return pd.read_csv(path).loc[:, "instruction"]
-
-
 def main(cfg: "RunConfig"):
     """
     1) take as input:
@@ -259,12 +256,11 @@ def main(cfg: "RunConfig"):
         )
 
     # Currrently, we run context evaluation
-    is_fluency_task = "fluency" in cfg.task
+    is_fluency_task = task_is_fluency(cfg.task)
     if is_fluency_task:
-        # if cfg.task = "fluency-french", we map to "french-contexts.csv"
-        # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
-        lang = cfg.task.split("-")[-1]
-        instructions = load_contexts(f"{lang}-contexts.csv")
+        # if cfg.task = "fluency-french", we map to the "French" config of
+        # https://huggingface.co/datasets/geoalgo/multilingual-fluency
+        instructions = load_fluency_contexts(data_root, cfg.task)
         instructions_df = pd.DataFrame({"instruction": instructions.values})
         instructions_df.index = instructions.index
     else:

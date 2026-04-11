@@ -256,7 +256,7 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
-| `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+| `fluency-{lang}`             | Fluency evaluation for pretrained models across 44 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep

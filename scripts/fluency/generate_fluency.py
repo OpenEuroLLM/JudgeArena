@@ -5,6 +5,7 @@ from datasets import Dataset
 from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
 
+from judgearena.instruction_dataset.fluency import FLUENCY_HF_REPO, FLUENCY_LANGUAGES
 from judgearena.models import do_inference, make_model
 from judgearena.utils import data_root
 
@@ -13,58 +14,11 @@ def set_langchain_cache():
     set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
 
 
-set_langchain_cache()
-
-dataset_name = "geoalgo/multilingual-fluency"
+dataset_name = FLUENCY_HF_REPO
 model = "OpenRouter/openai/gpt-5-mini"
 n_langs = 44
 n_context_to_generate = 200
-languages = [
-    # sorted by number of speakers by claude
-    "English",
-    "Mandarin Chinese",
-    "Hindi",
-    "Spanish",
-    "French",
-    "Standard Arabic",
-    "Bengali",
-    "Russian",
-    "Portuguese",
-    "Indonesian",
-    "Japanese",
-    "German",
-    "Turkish",
-    "Italian",
-    "Ukrainian",
-    "Polish",
-    "Romanian",
-    "Dutch",
-    "Greek",
-    "Hungarian",
-    "Czech",
-    "Catalan",
-    "Bulgarian",
-    "Swedish",
-    "Danish",
-    "Finnish",
-    "Slovak",
-    "Norwegian",
-    "Croatian",
-    "Georgian",
-    "Lithuanian",
-    "Slovene",
-    "Latvian",
-    "Albanian",
-    "Macedonian",
-    "Estonian",
-    "Basque",
-    "Galician",
-    "Bosnian",
-    "Serbian",
-    "Icelandic",
-    "Maltese",
-    "Irish",
-]
+languages = list(FLUENCY_LANGUAGES)
 
 
 def make_fluency_prompt(lang: str, n_sentences_to_generate: int) -> str:
@@ -147,9 +101,11 @@ def upload_hugging_face(languages: list[str]):
     print("All languages uploaded successfully!")
 
 
-generate_contexts(
-    model=model,
-    languages=languages[:n_langs],
-    n_sentences_to_generate=n_context_to_generate,
-)
-upload_hugging_face(languages=languages[:n_langs])
+if __name__ == "__main__":
+    set_langchain_cache()
+    generate_contexts(
+        model=model,
+        languages=languages[:n_langs],
+        n_sentences_to_generate=n_context_to_generate,
+    )
+    upload_hugging_face(languages=languages[:n_langs])
