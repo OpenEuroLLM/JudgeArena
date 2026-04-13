@@ -10,7 +10,11 @@ def test_build_pair_score_json_schema_covers_valid_range():
     schema = evaluate.build_pair_score_json_schema()
 
     assert schema["type"] == "object"
-    assert set(schema["required"]) == {"score_A", "score_B"}
+    assert set(schema["required"]) == {"reasoning", "score_A", "score_B"}
+    assert schema["properties"]["reasoning"] == {
+        "type": "string",
+        "maxLength": evaluate._PAIR_REASONING_MAX_CHARS,
+    }
     for key in ("score_A", "score_B"):
         assert schema["properties"][key]["type"] == "integer"
         assert schema["properties"][key]["minimum"] == 0
@@ -91,6 +95,68 @@ def test_main_aligns_local_reference_by_instruction_index(tmp_path, monkeypatch)
     assert captured["completions_A"] == ["no answer", "no answer"]
     assert captured["completions_B"] == ["Answer B", "Answer A"]
     assert prefs.tolist() == [1.0, 1.0]
+
+
+def test_main_passes_json_schema_and_thinking_budget_to_vllm_judge(
+    tmp_path, monkeypatch
+):
+    instructions = pd.DataFrame(
+        {"instruction": ["Instruction A"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    completions_df = pd.DataFrame(
+        {"instruction_index": [1], "completion": ["Loaded answer"]}
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_instructions",
+        lambda dataset, n_instructions=None: instructions,
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "try_load_dataset_completions",
+        lambda dataset, model, n_instructions: completions_df,
+    )
+
+    def fake_make_model(*, model, max_tokens, max_model_len, chat_template, **kwargs):
+        captured["make_model"] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "max_model_len": max_model_len,
+            "chat_template": chat_template,
+            "kwargs": kwargs,
+        }
+        return object()
+
+    monkeypatch.setattr(generate_and_evaluate, "make_model", fake_make_model)
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "judge_and_parse_prefs",
+        lambda **kwargs: (
+            [{"judge_completion": '{"reasoning":"ok","score_A":1,"score_B":2}'}],
+            None,
+            pd.Series([1.0]),
+        ),
+    )
+
+    prefs = main_generate_and_eval(
+        CliArgs(
+            dataset="alpaca-eval",
+            model_A="Dummy/model-a",
+            model_B="Dummy/model-b",
+            judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
+            n_instructions=1,
+            result_folder=str(tmp_path / "results"),
+        )
+    )
+
+    assert prefs.tolist() == [1.0]
+    assert captured["make_model"]["kwargs"]["structured_outputs_json"] == (
+        evaluate.build_pair_score_json_schema()
+    )
+    assert captured["make_model"]["kwargs"]["thinking_token_budget"] == 128
 
 
 def test_annotate_battles_warns_when_judge_completions_are_truncated(

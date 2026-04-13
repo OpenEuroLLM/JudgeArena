@@ -178,6 +178,56 @@ def test_parse_fastchat_verdict_accepts_plain_structured_labels():
     assert fastchat_compat._parse_fastchat_verdict("C") == "tie"
 
 
+def test_parse_fastchat_verdict_accepts_json_and_strips_thinking():
+    assert (
+        fastchat_compat._parse_fastchat_verdict(
+            '<think>Need a longer chain.</think>{"reasoning":"done","verdict":"B"}'
+        )
+        == "B"
+    )
+    assert (
+        fastchat_compat._parse_fastchat_verdict(
+            '```json\n{"reasoning":"tie","verdict":"C"}\n```'
+        )
+        == "tie"
+    )
+    assert (
+        fastchat_compat._parse_fastchat_verdict(
+            'unfinished analysis {"reasoning":"cut short","verdict":"A"'
+        )
+        == "A"
+    )
+
+
+def test_conservative_winner_uses_non_error_side_when_only_one_parse_fails():
+    assert fastchat_compat._conservative_winner("model_A", "error") == (
+        "model_A",
+        False,
+    )
+    assert fastchat_compat._conservative_winner("error", "model_B") == (
+        "model_B",
+        False,
+    )
+    assert fastchat_compat._conservative_winner("error", "error") == ("error", False)
+    assert fastchat_compat._conservative_winner("model_A", "model_B") == ("tie", True)
+
+
+def test_build_mt_bench_verdict_json_schema():
+    schema = mt_bench_utils.build_mt_bench_verdict_json_schema()
+
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"reasoning", "verdict"}
+    assert schema["properties"]["reasoning"] == {
+        "type": "string",
+        "maxLength": mt_bench_utils._MT_BENCH_REASONING_MAX_CHARS,
+    }
+    assert schema["properties"]["verdict"] == {
+        "type": "string",
+        "enum": ["A", "B", "C"],
+    }
+    assert schema["additionalProperties"] is False
+
+
 def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     questions_df = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
@@ -259,12 +309,13 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
     assert args.swap_mode == "both"
-    assert args.max_out_tokens_judge == 1024
-    assert captured["make_model"]["max_tokens"] == 1024
+    assert args.max_out_tokens_judge == 2048
+    assert captured["make_model"]["max_tokens"] == 2048
     assert captured["make_model"]["kwargs"] == {
-        "disable_thinking": True,
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
+        "structured_outputs_json": mt_bench_utils.build_mt_bench_verdict_json_schema(),
+        "thinking_token_budget": 192,
     }
     assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
     assert captured["run_mt_bench_fastchat"]["constrained_plain_verdict"] is False

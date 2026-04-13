@@ -30,6 +30,8 @@ from judgearena.utils import (
     read_df,
 )
 
+_DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 128
+
 
 def try_load_dataset_completions(
     dataset: str, model: str, n_instructions: int | None
@@ -408,6 +410,9 @@ def main(args: CliArgs):
     judge_model_kwargs = dict(args.engine_kwargs)
     if not args.provide_explanation and args.judge_model.split("/")[0] == "VLLM":
         judge_model_kwargs["structured_outputs_json"] = build_pair_score_json_schema()
+        judge_model_kwargs.setdefault(
+            "thinking_token_budget", _DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+        )
 
     judge_chat_model = make_model(
         model=args.judge_model,

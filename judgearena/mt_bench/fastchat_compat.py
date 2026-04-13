@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -11,7 +12,7 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.utils import do_inference
+from judgearena.utils import do_inference, extract_json_object, strip_thinking_tags
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -61,6 +62,7 @@ _PLAIN_VERDICT_INSTRUCTION = (
     'Output only one final verdict token: "A" if assistant A is better, "B" '
     'if assistant B is better, and "C" for a tie.'
 )
+_PARTIAL_JSON_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(?P<verdict>[ABC])"')
 
 
 def _load_prompt_text(filename: str) -> str:
@@ -204,7 +206,27 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    stripped = judgment.strip()
+    json_payload = extract_json_object(judgment)
+    if json_payload is not None:
+        verdict = json_payload.get("verdict")
+        if isinstance(verdict, str):
+            normalized = verdict.strip().upper()
+            if normalized == "A":
+                return "A"
+            if normalized == "B":
+                return "B"
+            if normalized in {"C", "TIE"}:
+                return "tie"
+
+    partial_json_match = _PARTIAL_JSON_VERDICT_RE.search(judgment)
+    if partial_json_match is not None:
+        if partial_json_match.group("verdict") == "A":
+            return "A"
+        if partial_json_match.group("verdict") == "B":
+            return "B"
+        return "tie"
+
+    stripped = strip_thinking_tags(judgment).strip()
     if "[[A]]" in stripped or stripped == "A":
         return "A"
     if "[[B]]" in stripped or stripped == "B":
@@ -233,8 +255,12 @@ def _conservative_winner(
 
     Declare a winner only if the two orderings agree; otherwise treat as tie.
     """
-    if g1 == "error" or g2 == "error":
+    if g1 == "error" and g2 == "error":
         return "error", False
+    if g1 == "error":
+        return g2, False
+    if g2 == "error":
+        return g1, False
     if g1 == g2:
         return g1, False
     return "tie", True

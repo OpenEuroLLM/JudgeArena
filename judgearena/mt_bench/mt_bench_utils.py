@@ -32,7 +32,24 @@ if TYPE_CHECKING:
 
 # Use distinct first tokens for constrained decoding. The shared `[[` prefix
 # caused the MT-Bench judge to collapse to `[[A]]` on every comparison.
-_MIN_MT_BENCH_JUDGE_TOKENS = 1024
+_MIN_MT_BENCH_JUDGE_TOKENS = 2048
+_DEFAULT_MT_BENCH_JUDGE_THINKING_TOKEN_BUDGET = 192
+_MT_BENCH_REASONING_MAX_CHARS = 384
+
+
+def build_mt_bench_verdict_json_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "reasoning": {
+                "type": "string",
+                "maxLength": _MT_BENCH_REASONING_MAX_CHARS,
+            },
+            "verdict": {"type": "string", "enum": ["A", "B", "C"]},
+        },
+        "required": ["reasoning", "verdict"],
+        "additionalProperties": False,
+    }
 
 
 def _align_mt_bench_completions(
@@ -199,7 +216,10 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         ignore_cache=ignore_cache,
     )
     judge_model_kwargs = dict(args.engine_kwargs)
-    judge_model_kwargs["disable_thinking"] = True
+    judge_model_kwargs["structured_outputs_json"] = build_mt_bench_verdict_json_schema()
+    judge_model_kwargs.setdefault(
+        "thinking_token_budget", _DEFAULT_MT_BENCH_JUDGE_THINKING_TOKEN_BUDGET
+    )
 
     judge_chat_model = make_model(
         model=args.judge_model,

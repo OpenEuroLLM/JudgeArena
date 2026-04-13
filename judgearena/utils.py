@@ -1,9 +1,12 @@
 import asyncio
+import json
 import os
+import re
 import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from huggingface_hub import snapshot_download
@@ -64,6 +67,49 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     if isinstance(is_missing, bool) and is_missing:
         return ""
     return truncate(str(value), max_len=truncate_chars)
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_JSON_CODE_FENCE_RE = re.compile(
+    r"```(?:json)?\s*(?P<payload>\{.*?\})\s*```",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_thinking_tags(text: str | None) -> str:
+    if not isinstance(text, str):
+        return ""
+    return _THINK_BLOCK_RE.sub("", text)
+
+
+def extract_json_object(text: str | None) -> dict[str, Any] | None:
+    """Best-effort JSON object extraction from model output.
+
+    Handles raw JSON, fenced JSON blocks, and outputs that still contain leaked
+    `<think>...</think>` sections ahead of the machine-readable payload.
+    """
+
+    cleaned = strip_thinking_tags(text).strip()
+    if not cleaned:
+        return None
+
+    candidates = [cleaned]
+    fenced_match = _JSON_CODE_FENCE_RE.search(cleaned)
+    if fenced_match is not None:
+        candidates.insert(0, fenced_match.group("payload"))
+
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        for idx, char in enumerate(candidate):
+            if char != "{":
+                continue
+            try:
+                parsed, _end = decoder.raw_decode(candidate[idx:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
 
 
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
@@ -179,15 +225,6 @@ class DummyModel:
         return self.message
 
 
-_DISABLE_THINKING_PREFIX = "{%- set enable_thinking = false %}\n"
-
-
-def _disable_thinking_chat_template(template: str) -> str:
-    if "{%- set enable_thinking = false" in template:
-        return template
-    return _DISABLE_THINKING_PREFIX + template
-
-
 class ChatVLLM:
     """VLLM wrapper that auto-detects whether to use chat() or generate().
 
@@ -211,11 +248,16 @@ class ChatVLLM:
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
+        from vllm.config.reasoning import ReasoningConfig
         from vllm.sampling_params import StructuredOutputsParams
 
         self.model_path = model
         self.max_tokens = max_tokens
         disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
+        thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
+        self._chat_template_kwargs = (
+            {"enable_thinking": False} if disable_thinking else None
+        )
 
         # Cap max_model_len to the model's max_position_embeddings so that
         # vLLM doesn't reject an overly large context window.
@@ -246,6 +288,13 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
+        if thinking_token_budget is not None:
+            vllm_kwargs.setdefault("reasoning_config", ReasoningConfig())
+            if "qwen3" in model.lower():
+                vllm_kwargs.setdefault("reasoning_parser", "qwen3")
+            self._sampling_params_kwargs["thinking_token_budget"] = int(
+                thinking_token_budget
+            )
         structured_outputs_json = vllm_kwargs.pop("structured_outputs_json", None)
         if structured_outputs_json is not None:
             self._sampling_params_kwargs["structured_outputs"] = (
@@ -260,13 +309,14 @@ class ChatVLLM:
         # 2. If tokenizer has one, use it → use chat() (pass None to vLLM)
         # 3. No template found → fall back to generate() for base models
         if chat_template:
-            self.chat_template = (
-                _disable_thinking_chat_template(chat_template)
-                if disable_thinking
-                else chat_template
-            )
+            self.chat_template = chat_template
             self._use_generate = False
-            print(f"ChatVLLM: using explicit chat template for '{model}'")
+            if disable_thinking:
+                print(
+                    f"ChatVLLM: using explicit chat template with thinking disabled for '{model}'"
+                )
+            else:
+                print(f"ChatVLLM: using explicit chat template for '{model}'")
         else:
             tokenizer = self.llm.get_tokenizer()
             if not getattr(tokenizer, "chat_template", None):
@@ -278,12 +328,14 @@ class ChatVLLM:
                 )
                 self.chat_template = None
                 self._use_generate = True
+                if disable_thinking:
+                    warnings.warn(
+                        f"Model '{model}' has no chat template, so disable_thinking "
+                        "cannot be applied when falling back to llm.generate().",
+                        stacklevel=2,
+                    )
             else:
-                self.chat_template = (
-                    _disable_thinking_chat_template(tokenizer.chat_template)
-                    if disable_thinking
-                    else None
-                )
+                self.chat_template = None
                 self._use_generate = False
                 if disable_thinking:
                     print(
@@ -365,6 +417,7 @@ class ChatVLLM:
                 self.sampling_params,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
+                chat_template_kwargs=self._chat_template_kwargs,
             )
         return [out.outputs[0].text for out in outputs]
 

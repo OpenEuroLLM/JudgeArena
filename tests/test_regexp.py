@@ -38,3 +38,20 @@ def test_regexp():
     assert pref == 0.5744425168116589
 
     print(pref)
+
+
+def test_pair_score_prefers_json_scores_over_reasoning_text():
+    raw_text = """
+    <think>I would score assistant A as 2/10 if I stopped early.</think>
+    {
+      "reasoning": "At first glance I might score assistant A as 2, but after comparing both answers carefully, assistant B is better.",
+      "score_A": 0,
+      "score_B": 10
+    }
+    """
+
+    scorer = PairScore()
+    pref = scorer.parse_model_raw(raw_text)
+
+    assert pref is not None
+    assert pref == 0.9525741268224333

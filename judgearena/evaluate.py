@@ -16,6 +16,7 @@ from judgearena.utils import (
     data_root,
     do_inference,
     download_hf,
+    extract_json_object,
     read_df,
     truncate,
 )
@@ -32,6 +33,13 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
+        json_payload = extract_json_object(judge_completion)
+        if json_payload is not None:
+            score_a = self._coerce_score(json_payload.get("score_A"))
+            score_b = self._coerce_score(json_payload.get("score_B"))
+            if score_a is not None and score_b is not None:
+                return float(self.preference_from_scores(score_a, score_b))
+
         # lower case to avoid confusion, e.g. when "a" is used instead of "A"
         score_a = self.get_regexp_match(
             judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
@@ -44,6 +52,19 @@ class PairScore:
         else:
             return float(self.preference_from_scores(score_a, score_b))
 
+    def _coerce_score(self, value: object) -> float | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return float(value)
+        if isinstance(value, float) and value.is_integer():
+            return value
+        if isinstance(value, str):
+            match = re.fullmatch(r"\s*(-?\d+)\s*", value)
+            if match is not None:
+                return float(match.group(1))
+        return None
+
     def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
         if m is None:
@@ -54,6 +75,7 @@ class PairScore:
 
 _PAIR_SCORE_MIN = 0
 _PAIR_SCORE_MAX = 10
+_PAIR_REASONING_MAX_CHARS = 384
 
 
 def build_pair_score_json_schema() -> dict:
@@ -65,10 +87,14 @@ def build_pair_score_json_schema() -> dict:
     return {
         "type": "object",
         "properties": {
+            "reasoning": {
+                "type": "string",
+                "maxLength": _PAIR_REASONING_MAX_CHARS,
+            },
             "score_A": score_field,
             "score_B": score_field,
         },
-        "required": ["score_A", "score_B"],
+        "required": ["reasoning", "score_A", "score_B"],
         "additionalProperties": False,
     }
 
