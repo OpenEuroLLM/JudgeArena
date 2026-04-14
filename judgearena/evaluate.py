@@ -146,13 +146,7 @@ def build_annotation_dataframe(
 
 @dataclass
 class EvaluationResult:
-    """Pure-data container for an evaluation run's outputs.
-
-    Holds the computed summary, preferences, annotation DataFrame, and the
-    run configuration — **no I/O**.  Build one via
-    :func:`build_evaluation_result`, then optionally persist with
-    :func:`save_evaluation_result`.
-    """
+    """Pure-data container for an evaluation run's outputs."""
 
     annotations_df: pd.DataFrame
     prefs: pd.Series
