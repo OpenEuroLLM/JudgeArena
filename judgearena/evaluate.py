@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -107,6 +108,119 @@ def resolve_judge_prompts(
     )
 
 
+# ---------------------------------------------------------------------------
+# Reusable evaluation-result helpers
+# ---------------------------------------------------------------------------
+
+
+def build_annotation_dataframe(
+    annotations: list["JudgeAnnotation"],
+    annotations_reversed: list["JudgeAnnotation"] | None,
+    instruction_indices: list[int],
+    model_A: str,
+    model_B: str,
+    judge_model: str,
+) -> pd.DataFrame:
+    """Build a single DataFrame from forward (and optionally reversed) annotations.
+
+    When *annotations_reversed* is provided (swap_mode="both"), both sets are
+    concatenated with the model columns swapped for the reversed batch.
+    """
+    df = pd.DataFrame(annotations)
+    df["instruction_index"] = instruction_indices
+    df["model_A"] = model_A
+    df["model_B"] = model_B
+    df["judge"] = judge_model
+
+    if annotations_reversed is not None:
+        df_rev = pd.DataFrame(annotations_reversed)
+        df_rev["instruction_index"] = instruction_indices
+        df_rev["model_A"] = model_B
+        df_rev["model_B"] = model_A
+        df_rev["judge"] = judge_model
+        df = pd.concat([df, df_rev])
+
+    return df
+
+
+@dataclass
+class EvaluationResult:
+    """Pure-data container for an evaluation run's outputs."""
+
+    annotations_df: pd.DataFrame
+    prefs: pd.Series
+    summary: dict[str, Any]
+    run_config: dict[str, Any]
+
+    @property
+    def results(self) -> dict[str, Any]:
+        """Merged dict of *run_config* + *summary* + raw preferences list."""
+        return {**self.run_config, **self.summary, "preferences": self.prefs.tolist()}
+
+
+def build_evaluation_result(
+    *,
+    annotations_df: pd.DataFrame,
+    prefs: pd.Series,
+    run_config: dict[str, Any],
+) -> EvaluationResult:
+    """Compute the preference summary and package everything into an
+    :class:`EvaluationResult`.  Pure logic — no disk access."""
+    summary = compute_pref_summary(prefs)
+    return EvaluationResult(
+        annotations_df=annotations_df,
+        prefs=prefs,
+        summary=summary,
+        run_config=run_config,
+    )
+
+
+def save_evaluation_result(
+    evaluation_result: EvaluationResult,
+    *,
+    output_dir: Path,
+    entrypoint: str,
+    judge_system_prompt: str,
+    judge_user_prompt_template: str,
+    input_payloads: dict[str, Any],
+    started_at_utc: datetime,
+    annotations_filename: str = "annotations.csv",
+    results_filename: str = "results.json",
+) -> None:
+    """Write an :class:`EvaluationResult` to disk (CSV + JSON + run metadata).
+
+    Run-metadata writing is best-effort: an ``OSError`` is caught and logged.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    results = evaluation_result.results
+
+    # Save annotations
+    evaluation_result.annotations_df.to_csv(
+        output_dir / annotations_filename, index=False
+    )
+
+    # Save results JSON
+    with open(output_dir / results_filename, "w") as f:
+        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
+
+    # Write reproducibility metadata (best-effort)
+    try:
+        write_run_metadata(
+            output_dir=output_dir,
+            entrypoint=entrypoint,
+            run=evaluation_result.run_config,
+            results=results,
+            input_payloads=input_payloads,
+            judge_system_prompt=judge_system_prompt,
+            judge_user_prompt_template=judge_user_prompt_template,
+            started_at_utc=started_at_utc,
+        )
+    except OSError as e:
+        print(f"Warning: failed to write run metadata: {e}")
+
+
 def evaluate_completions(
     dataset: str = "alpaca-eval",
     judge_chat_model: LLM = None,
@@ -116,19 +230,22 @@ def evaluate_completions(
     use_tqdm: bool = False,
     truncate_input_chars: int | None = 8192,
     provide_explanation: bool = False,
+    swap_mode: str = "fixed",
 ):
-    """
-    :param dataset:
-    :param judge_chat_model:
-    :param method_A: one method to evaluate, can be a method existing in `dataset` or a local path to the completion
-    of a local method. The path should be a dataframe ending with ".csv.zip" or ".parquet", have columns
-    "instruction_index" and "output" and should contains all the instruction of `dataset`.
-    :param method_B: another method to evaluate against `method_A`
-    :param num_annotations: if specified will do at most `num_annotations` annotations
-    :param use_tqdm:
-    :param truncate_input_chars: if specified, truncates the length of completion, useful to save cost and avoid
-    exceeding context limit
-    :return:
+    """Evaluate two completion methods head-to-head with an LLM judge.
+
+    :param dataset: Name of an evaluation dataset (e.g. ``"alpaca-eval"``).
+    :param judge_chat_model: A LangChain chat model used as judge.  When
+        *None*, defaults to ``Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo")``.
+    :param method_A: Model/method name or local path to completions CSV.
+    :param method_B: Another model/method to compare against *method_A*.
+    :param num_annotations: Cap the number of instructions evaluated.
+    :param use_tqdm: Show a progress bar (may not work with all providers).
+    :param truncate_input_chars: Truncate completions to this many characters
+        before sending to the judge.
+    :param provide_explanation: Ask the judge to provide an explanation.
+    :param swap_mode: ``"fixed"`` (default) or ``"both"`` to also evaluate
+        with A/B swapped and average the preferences.
     """
     run_started_at = datetime.now(UTC)
     local_path_tables = data_root / "tables"
@@ -187,40 +304,35 @@ def evaluate_completions(
     unique_string = dataset + "-" + datetime.now().strftime("%Y%m%d_%H%M%S")
     output_folder = data_root / "judge-evals" / unique_string
     print(f"Saving results in {output_folder}")
-    output_folder.mkdir(parents=True, exist_ok=True)
+
     (
         judge_system_prompt,
         judge_user_prompt_template,
     ) = resolve_judge_prompts(provide_explanation=provide_explanation)
 
-    annotations = annotate_battles(
+    annotations, annotations_reversed, prefs = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
         instructions=instructions.tolist(),
         completions_A=completions_A.loc[instructions.index].tolist(),
         completions_B=completions_B.loc[instructions.index].tolist(),
+        swap_mode=swap_mode,
+        provide_explanation=provide_explanation,
         system_prompt=judge_system_prompt,
         user_prompt_template=judge_user_prompt_template,
-        use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
-        provide_explanation=provide_explanation,
+        use_tqdm=use_tqdm,
     )
 
-    # Pairwise judge results
-    score_parser = PairScore()
-    prefs = pd.Series(
-        [
-            score_parser.parse_model_raw(annotation.judge_completion)
-            for annotation in annotations
-        ]
+    annotations_df = build_annotation_dataframe(
+        annotations=annotations,
+        annotations_reversed=annotations_reversed,
+        instruction_indices=instructions.index.tolist(),
+        model_A=method_A,
+        model_B=method_B,
+        judge_model=str(judge_chat_model),
     )
-    results = {**compute_pref_summary(prefs)}
-    pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
 
-    print(f"{method_A} against {method_B}:\n{results}")
-    with open(output_folder / "results.json", "w") as f:
-        json.dump(_to_jsonable(results), f, allow_nan=False)
-
-    run_metadata = {
+    run_config = {
         "dataset": dataset,
         "method_A": method_A,
         "method_B": method_B,
@@ -229,26 +341,31 @@ def evaluate_completions(
         "use_tqdm": use_tqdm,
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
+        "swap_mode": swap_mode,
     }
 
-    try:
-        write_run_metadata(
-            output_dir=output_folder,
-            entrypoint="judgearena.evaluate.evaluate_completions",
-            run=run_metadata,
-            results=results,
-            input_payloads={
-                "instruction_index": instructions.index.tolist(),
-                "instructions": instructions.tolist(),
-                "completions_A": completions_A.loc[instructions.index].tolist(),
-                "completions_B": completions_B.loc[instructions.index].tolist(),
-            },
-            judge_system_prompt=judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
-            started_at_utc=run_started_at,
-        )
-    except OSError as e:
-        print(f"Warning: failed to write run metadata: {e}")
+    eval_result = build_evaluation_result(
+        annotations_df=annotations_df,
+        prefs=prefs,
+        run_config=run_config,
+    )
+
+    save_evaluation_result(
+        eval_result,
+        output_dir=output_folder,
+        entrypoint="judgearena.evaluate.evaluate_completions",
+        judge_system_prompt=judge_system_prompt,
+        judge_user_prompt_template=judge_user_prompt_template,
+        input_payloads={
+            "instruction_index": instructions.index.tolist(),
+            "instructions": instructions.tolist(),
+            "completions_A": completions_A.loc[instructions.index].tolist(),
+            "completions_B": completions_B.loc[instructions.index].tolist(),
+        },
+        started_at_utc=run_started_at,
+    )
+
+    print(f"{method_A} against {method_B}:\n{eval_result.results}")
 
 
 @dataclass
