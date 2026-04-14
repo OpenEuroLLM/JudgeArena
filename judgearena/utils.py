@@ -148,24 +148,14 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
             for attempt in range(max_retries):
-                num_chunks = 4**attempt
-                chunk_size = max(1, len(batch_inputs) // num_chunks)
-                chunks = [
-                    batch_inputs[i : i + chunk_size]
-                    for i in range(0, len(batch_inputs), chunk_size)
-                ]
                 try:
-                    results = []
-                    for chunk in chunks:
-                        results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
-                    return results
+                    return chat_model.batch(inputs=batch_inputs, **invoke_kwargs)
                 except Exception as e:
                     if attempt == max_retries - 1 or not _is_retryable_error(e):
                         raise
                     delay = base_delay * (2**attempt)
-                    next_chunks = 4 ** (attempt + 1)
                     print(
-                        f"Retry because of a server error, {attempt + 1}/{max_retries}: {e}. Waiting {delay}s, then splitting into {next_chunks} chunks..."
+                        f"Retry because of a server error, {attempt + 1}/{max_retries}: {e}. Waiting {delay}s..."
                     )
                     time.sleep(delay)
 

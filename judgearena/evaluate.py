@@ -19,11 +19,22 @@ from judgearena.utils import (
     read_df,
 )
 
+_annotation_cache = None
+
+
+def _get_annotation_cache():
+    global _annotation_cache
+    if _annotation_cache is None:
+        from multilingual_llmjudge.annotation_cache import AnnotationCache
+
+        _annotation_cache = AnnotationCache()
+    return _annotation_cache
+
 
 class PairScore:
     def __init__(self):
         super(PairScore).__init__()
-        self.temperature = 0.3
+        self.temperature = 0.5
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
@@ -43,6 +54,24 @@ class PairScore:
         else:
             return float(self.preference_from_scores(score_a, score_b))
 
+    def parse_p_a_wins(self, judge_completion: str) -> float | None:
+        """Return P(A wins) = σ(temperature × (score_A − score_B)).
+
+        Unlike parse_model_raw (which uses softmax and returns P(B wins)),
+        this uses the sigmoid and returns P(A wins) directly.
+        Returns None when scores cannot be parsed.
+        """
+        score_a = self.get_regexp_match(
+            judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
+        )
+        score_b = self.get_regexp_match(
+            judge_completion.lower(), r'score.*?b[": *\n]*(-?\d+)'
+        )
+        if score_a is None or score_b is None:
+            return None
+        z = self.temperature * (score_a - score_b)
+        return float(1.0 / (1.0 + np.exp(-z)))
+
     def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
         if m is None:
@@ -54,7 +83,7 @@ class PairScore:
 _COMPLETION_LABEL_SINGLE = "Answer"
 _COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
 _EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
-_SCORE_FENCE = "\n```"
+_SCORE_FENCE = ", only output the score without an explanation of your judgement\n```"
 
 
 def load_judge_system_and_user_prompt(
@@ -156,9 +185,9 @@ def evaluate_completions(
             return df.loc[:, "output"]
         else:
             print(f"Loading {method} from {dataset} dataset.")
-            assert method in df_outputs.columns, (
-                f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
-            )
+            assert (
+                method in df_outputs.columns
+            ), f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
             return df_outputs.loc[:, method].sort_index()
 
     completions_A = get_output(df_outputs=df_outputs, dataset=dataset, method=method_A)
@@ -167,9 +196,9 @@ def evaluate_completions(
         instructions = instructions.head(num_annotations)
         completions_A = completions_A.head(num_annotations)
         completions_B = completions_B.head(num_annotations)
-    assert completions_A.index.tolist() == completions_B.index.tolist(), (
-        f"Index mismatch between methods {method_A} and {method_B}."
-    )
+    assert (
+        completions_A.index.tolist() == completions_B.index.tolist()
+    ), f"Index mismatch between methods {method_A} and {method_B}."
 
     if judge_chat_model is None:
         from langchain_together.llms import Together
@@ -262,6 +291,13 @@ def annotate_battles(
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     provide_explanation: bool = False,
+    ignore_cache: bool = False,
+    cache_only: bool = False,
+    benchmark: str | None = None,
+    instruction_ids: list[str] | None = None,
+    model_as: list[str] | None = None,
+    model_bs: list[str] | None = None,
+    judge_name: str | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -289,9 +325,9 @@ def annotate_battles(
     :param user_prompt_template:
     :param truncate_input_chars: Max characters to truncate completions before sending to judge.
     :param use_tqdm:
+    :param ignore_cache: skip the persistent cache and always run inference.
     :return:
     """
-    # alternatively pass list of tuples
     assert len(instructions) == len(completions_A) == len(completions_B)
 
     system_prompt, user_prompt_template = resolve_judge_prompts(
@@ -324,32 +360,88 @@ def annotate_battles(
             )
         ]
     )
-    print(f"Start LLM judge annotation ({len(inputs)} annotations).")
-    judge_completions = do_inference(
-        chat_model=judge_chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-    )
 
-    annotations = []
-    for judge_input, judge_completion, instruction, completion_A, completion_B in zip(
-        inputs,
-        judge_completions,
-        instructions,
-        completions_A,
-        completions_B,
-        strict=True,
-    ):
-        annotations.append(
-            JudgeAnnotation(
-                judge_input=judge_input,
-                judge_completion=judge_completion,
-                instruction=instruction,
-                completion_A=completion_A,
-                completion_B=completion_B,
-            )
+    # Build structured cache keys when all required fields are available.
+    if judge_name is None:
+        judge_name = getattr(judge_chat_model, "model", None) or getattr(
+            judge_chat_model, "model_name", str(judge_chat_model)
         )
-    return annotations
+
+    ann_keys = None
+    if not ignore_cache and benchmark and instruction_ids and model_as and model_bs:
+        from multilingual_llmjudge.annotation_cache import AnnotationKey
+
+        ann_keys = [
+            AnnotationKey(
+                benchmark=benchmark,
+                instruction_id=instruction_ids[i],
+                model_a=model_as[i],
+                model_b=model_bs[i],
+                judge=judge_name,
+            )
+            for i in range(len(inputs))
+        ]
+
+    # Cache lookup: identify hits and misses.
+    cached_completions: list[str | None] = [None] * len(inputs)
+    miss_indices: list[int] = list(range(len(inputs)))
+    if ann_keys is not None:
+        cached_completions = _get_annotation_cache().batch_get(ann_keys)
+        miss_indices = [i for i, c in enumerate(cached_completions) if c is None]
+
+    n_hits = len(inputs) - len(miss_indices)
+    if n_hits > 0:
+        print(
+            f"Start LLM judge annotation"
+            f" ({len(miss_indices)} to generate, {n_hits} from cache)."
+        )
+    else:
+        print(f"Start LLM judge annotation ({len(inputs)} annotations).")
+
+    # Run inference only on cache misses and persist results.
+    miss_inputs = [inputs[i] for i in miss_indices]
+    miss_completions: list[str] = []
+    if miss_inputs:
+        if cache_only:
+            raise RuntimeError(
+                f"{len(miss_inputs)} annotation(s) not found in cache. "
+                "Run without cache_only=True to generate them."
+            )
+        miss_completions = do_inference(
+            chat_model=judge_chat_model,
+            inputs=miss_inputs,
+            use_tqdm=use_tqdm,
+        )
+        if ann_keys is not None:
+            from multilingual_llmjudge.annotation_cache import AnnotationEntry
+
+            _get_annotation_cache().batch_put(
+                [
+                    AnnotationEntry(
+                        **ann_keys[miss_indices[slot]].__dict__,
+                        judge_input=str(miss_inputs[slot]),
+                        judge_completion=str(miss_completions[slot]),
+                    )
+                    for slot in range(len(miss_indices))
+                ]
+            )
+
+    # Merge hits and misses back into the original order.
+    all_completions: list[str] = list(cached_completions)  # type: ignore[arg-type]
+    for slot, idx in enumerate(miss_indices):
+        all_completions[idx] = miss_completions[slot]
+
+    input_strs = [str(inp) for inp in inputs]
+    return [
+        JudgeAnnotation(
+            judge_input=input_strs[i],
+            judge_completion=all_completions[i],
+            instruction=instructions[i],
+            completion_A=completions_A[i],
+            completion_B=completions_B[i],
+        )
+        for i in range(len(inputs))
+    ]
 
 
 def judge_and_parse_prefs(

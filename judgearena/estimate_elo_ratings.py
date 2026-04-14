@@ -226,6 +226,78 @@ class CliEloArgs:
         )
 
 
+def compute_bradley_terry_soft(
+    df: pd.DataFrame,
+    preference_col: str,
+    scale: float = 400,
+    base: float = 10,
+    init_rating: float = 1000,
+    baseline_model: str | None = None,
+    baseline_rating: float = 1000,
+) -> dict[str, float]:
+    """Soft Bradley-Terry: each battle contributes fractional wins based on
+    the judge's soft preference score (float in [0, 1]).
+
+    preference = 0   → A wins with certainty  (p_A = 1)
+    preference = 0.5 → tie                    (p_A = 0.5)
+    preference = 1   → B wins with certainty  (p_A = 0)
+
+    Fractional wins are accumulated per ordered pair and fed into the same
+    logistic-regression MLE as the hard Bradley-Terry estimator.
+    """
+    all_models = sorted(set(df["model_a"].unique()) | set(df["model_b"].unique()))
+    model_idx = pd.Series(np.arange(len(all_models)), index=all_models)
+
+    # Accumulate fractional wins keyed by (model_a, model_b) order
+    pair_a_wins: dict[tuple, float] = {}
+    pair_b_wins: dict[tuple, float] = {}
+    for _, row in df.iterrows():
+        m_a, m_b = row["model_a"], row["model_b"]
+        p = row[preference_col]
+        if p is None or np.isnan(p):
+            continue
+        key = (m_a, m_b)
+        pair_a_wins[key] = pair_a_wins.get(key, 0.0) + (1.0 - p)
+        pair_b_wins[key] = pair_b_wins.get(key, 0.0) + p
+
+    n = len(all_models)
+    X = np.zeros([n * (n - 1) * 2, n])
+    Y = np.zeros(n * (n - 1) * 2)
+    sample_weights: list[float] = []
+    cur_row = 0
+
+    for m_a in all_models:
+        for m_b in all_models:
+            if m_a == m_b:
+                continue
+            w_ab = pair_a_wins.get((m_a, m_b), 0.0)
+            w_ba = pair_b_wins.get((m_a, m_b), 0.0)
+            if w_ab == 0.0 and w_ba == 0.0:
+                continue
+            X[cur_row, model_idx[m_a]] = +np.log(base)
+            X[cur_row, model_idx[m_b]] = -np.log(base)
+            Y[cur_row] = 1.0
+            sample_weights.append(w_ab)
+
+            X[cur_row + 1, model_idx[m_a]] = np.log(base)
+            X[cur_row + 1, model_idx[m_b]] = -np.log(base)
+            Y[cur_row + 1] = 0.0
+            sample_weights.append(w_ba)
+            cur_row += 2
+
+    X = X[:cur_row]
+    Y = Y[:cur_row]
+
+    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
+    lr.fit(X, Y, sample_weight=sample_weights)
+    elo_scores = scale * lr.coef_[0] + init_rating
+
+    if baseline_model is not None and baseline_model in model_idx.index:
+        elo_scores += baseline_rating - elo_scores[model_idx[baseline_model]]
+
+    return dict(pd.Series(elo_scores, index=model_idx.index))
+
+
 def compute_bradley_terry(
     df: pd.DataFrame,
     winner_col: str,
