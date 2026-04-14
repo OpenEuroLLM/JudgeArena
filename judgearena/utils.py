@@ -13,11 +13,6 @@ from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 
-from judgearena.instruction_dataset.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
-
 
 def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
@@ -449,6 +444,11 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 
 def download_all():
+    from judgearena.instruction_dataset.arena_hard import (
+        download_arena_hard,
+        is_arena_hard_dataset,
+    )
+
     print(f"Downloading all dataset in {data_root}")
     local_path_tables = data_root / "tables"
     for dataset in [

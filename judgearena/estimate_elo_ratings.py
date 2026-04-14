@@ -31,6 +31,7 @@ class CliEloArgs(BaseCliArgs):
     n_bootstraps: int = 20
     seed: int = 0
     baseline_model: str | None = None
+    soft_elo: bool = False
 
     @classmethod
     def parse_args(cls):
@@ -83,6 +84,12 @@ class CliEloArgs(BaseCliArgs):
             help="Model name to anchor at 1000 ELO. All other ratings are expressed relative to this model. "
             "Must be one of the models present in the arena battles. If not set, ratings are not anchored.",
         )
+        parser.add_argument(
+            "--soft-elo",
+            action="store_true",
+            help="Use continuous judge preferences as soft labels for BT fitting "
+            "instead of discretising to hard win/loss/tie.",
+        )
         add_common_arguments(parser)
         args = parser.parse_args()
 
@@ -94,6 +101,7 @@ class CliEloArgs(BaseCliArgs):
             n_bootstraps=args.n_bootstraps,
             seed=args.seed,
             baseline_model=args.baseline_model,
+            soft_elo=args.soft_elo,
             judge_model=args.judge_model,
             n_instructions=args.n_instructions,
             provide_explanation=args.provide_explanation,
@@ -219,6 +227,87 @@ def compute_bradley_terry(
         elo_scores += baseline_rating - elo_scores[models[baseline_model]]
 
     return dict(pd.Series(elo_scores, index=models.index))
+
+
+def compute_soft_bradley_terry(
+    df: pd.DataFrame,
+    pref_col: str = "pref",
+    scale: float = 400,
+    base: float = 10,
+    init_rating: float = 1000,
+    baseline_model: str | None = None,
+    baseline_rating: float = 1000,
+) -> dict[str, float]:
+    """Compute Bradley-Terry ratings from continuous (soft) preferences.
+
+    Each row in *df* is a single battle with columns ``model_a``, ``model_b``,
+    and *pref_col* ∈ [0, 1] where 0 → A wins, 1 → B wins, 0.5 → tie.
+
+    The soft cross-entropy for a single battle is decomposed into two
+    weighted hard-label rows so that sklearn ``LogisticRegression`` can be
+    reused:
+
+        row 1: Y=1, weight = 1 - pref   (evidence for A winning)
+        row 2: Y=0, weight = pref        (evidence for B winning)
+    """
+    df = df.dropna(subset=[pref_col]).copy()
+    if df.empty:
+        return {}
+
+    all_models = sorted(set(df["model_a"].unique()) | set(df["model_b"].unique()))
+    models = pd.Series(np.arange(len(all_models)), index=all_models)
+    p = len(models)
+
+    n_battles = len(df)
+    X = np.zeros([2 * n_battles, p])
+    Y = np.zeros(2 * n_battles)
+    sample_weights = np.zeros(2 * n_battles)
+
+    for idx, (_, row) in enumerate(df.iterrows()):
+        m_a = row["model_a"]
+        m_b = row["model_b"]
+        pref = row[pref_col]
+
+        # Row for "A wins" evidence
+        X[2 * idx, models[m_a]] = +np.log(base)
+        X[2 * idx, models[m_b]] = -np.log(base)
+        Y[2 * idx] = 1.0
+        sample_weights[2 * idx] = 1.0 - pref
+
+        # Row for "B wins" evidence
+        X[2 * idx + 1, models[m_a]] = +np.log(base)
+        X[2 * idx + 1, models[m_b]] = -np.log(base)
+        Y[2 * idx + 1] = 0.0
+        sample_weights[2 * idx + 1] = pref
+
+    # Drop rows with zero weight (pure wins have one side = 0)
+    nonzero = sample_weights > 0
+    X = X[nonzero]
+    Y = Y[nonzero]
+    sample_weights = sample_weights[nonzero]
+
+    if len(X) == 0:
+        return {}
+
+    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
+    lr.fit(X, Y, sample_weight=sample_weights)
+    elo_scores = scale * lr.coef_[0] + init_rating
+
+    if baseline_model is not None and baseline_model in models.index:
+        elo_scores += baseline_rating - elo_scores[models[baseline_model]]
+
+    return dict(pd.Series(elo_scores, index=models.index))
+
+
+def _winner_to_pref(winner: str) -> float | None:
+    """Convert a hard winner label to a continuous preference value."""
+    if winner == "model_a":
+        return 0.0
+    elif winner == "model_b":
+        return 1.0
+    elif winner in ("tie", "tie (bothbad)"):
+        return 0.5
+    return None
 
 
 def main(args: CliEloArgs | None = None) -> dict:
@@ -392,7 +481,8 @@ def main(args: CliEloArgs | None = None) -> dict:
 
     print(f"First judge output:\n{df_judge['judge_completion'].iloc[0][:500]}\n")
 
-    # Map preferences back to model-name-level battle results
+    # Map preferences back to model-name-level battle results.
+    # Build both hard labels (winner) and continuous prefs for each battle.
     model_name = args.model
     battle_results = []
     for pref, is_pos_a, opp_model in zip(
@@ -405,13 +495,16 @@ def main(args: CliEloArgs | None = None) -> dict:
         else:
             winner = "model_b"
 
+        # Continuous pref is relative to judge positions (A/B).
+        # Remap so that model_a column in the DataFrame always corresponds
+        # to pref=0 and model_b to pref=1.
         if is_pos_a:
             battle_results.append(
-                {"model_a": model_name, "model_b": opp_model, "winner": winner}
+                {"model_a": model_name, "model_b": opp_model, "winner": winner, "pref": pref}
             )
         else:
             battle_results.append(
-                {"model_a": opp_model, "model_b": model_name, "winner": winner}
+                {"model_a": opp_model, "model_b": model_name, "winner": winner, "pref": 1.0 - pref if pref is not None else None}
             )
 
     # LLM-judge battle results for our model
@@ -436,7 +529,7 @@ def main(args: CliEloArgs | None = None) -> dict:
 
     # Combine LLM-judge battles with human-annotated arena battles,
     # keeping only arena models with at least 500 human battles
-    df_arena = df_arena_all.loc[:, ["model_a", "model_b", "winner"]]
+    df_arena = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
     human_battle_counts = pd.concat(
         [df_arena["model_a"], df_arena["model_b"]]
     ).value_counts()
@@ -445,16 +538,26 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_arena["model_a"].isin(well_represented)
         & df_arena["model_b"].isin(well_represented)
     ]
+    # Add pref column to arena battles (hard labels → 0.0 / 1.0 / 0.5)
+    df_arena["pref"] = df_arena["winner"].map(_winner_to_pref)
+
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+
+    # Compute human-only BT ratings as ground-truth reference
+    human_elo = compute_bradley_terry(
+        df_arena, winner_col="winner", baseline_model=args.baseline_model
+    )
 
     # Bootstrap Bradley-Terry ELO ratings
     n_bootstraps = args.n_bootstraps
+    use_soft = args.soft_elo
 
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
-    print(f"\n=== ELO Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ===")
+    method_label = "Soft-ELO" if use_soft else "ELO"
+    print(f"\n=== {method_label} Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ===")
     print(
-        f"Estimating ELO Ratings with {n_llm} LLM-judges for model {model_name} "
+        f"Estimating {method_label} Ratings with {n_llm} LLM-judges for model {model_name} "
         f"and {n_human} human annotations for other models. Number of battles is indicated in parenthesis and "
         f"confidence intervals are reported by computing ELO on {n_bootstraps} samples of instructions."
     )
@@ -470,9 +573,14 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_sample = df_results.sample(
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
-        ratings = compute_bradley_terry(
-            df_sample, winner_col="winner", baseline_model=args.baseline_model
-        )
+        if use_soft:
+            ratings = compute_soft_bradley_terry(
+                df_sample, pref_col="pref", baseline_model=args.baseline_model
+            )
+        else:
+            ratings = compute_bradley_terry(
+                df_sample, winner_col="winner", baseline_model=args.baseline_model
+            )
         bootstrap_ratings.append(ratings)
 
     if bootstrap_ratings:
@@ -488,13 +596,29 @@ def main(args: CliEloArgs | None = None) -> dict:
             suffix = " <-----" if m == model_name else ""
             count = battle_counts.get(m, 0)
             print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")
+
+        # MAE vs human-only ELO for overlapping arena models
+        overlap = [m for m in all_model_names if m in human_elo and m != model_name]
+        if overlap:
+            abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
+            mae = np.mean(abs_errors)
+            print(
+                f"\n  MAE vs Human-ELO ({len(overlap)} arena models): {mae:.1f}"
+            )
+        else:
+            mae = np.nan
+            print("\n  No overlapping arena models to compute MAE.")
     else:
         print("  Not enough data to compute ELO ratings.")
+        mae = np.nan
 
     return {
         **summary,
         "bootstrap_ratings": bootstrap_ratings,
+        "human_elo": human_elo,
+        "mae_vs_human": mae,
         "model_name": model_name,
+        "method": method_label,
     }
 
 
