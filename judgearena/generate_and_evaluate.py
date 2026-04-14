@@ -16,6 +16,10 @@ from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engin
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
@@ -42,7 +46,10 @@ def try_load_dataset_completions(
     or ``None`` when no pre-existing completions are found.
     """
     local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
+    if is_arena_hard_dataset(dataset):
+        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+    else:
+        download_hf(name=dataset, local_path=local_path_tables)
     output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
     if not output_path.exists():
         return None
@@ -53,7 +60,7 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    print(f"Found pre-existing completions for '{model}' in {dataset} dataset.")
+    print(f"Found pre-existing completions for '{model}' in dataset '{dataset}'.")
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)
@@ -81,7 +88,8 @@ class CliArgs(BaseCliArgs):
         )
         parser.add_argument(
             "--dataset",
-            help="The dataset to use. For instance `alpaca-eval`, `arena-hard`, `m-arena-hard-EU` for instruction "
+            help="The dataset to use. For instance `alpaca-eval`, `arena-hard-v2.0`, "
+            "`arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
             "tuning cases or `french-contexts`, `spanish-contexts` for base models.",
         )
         parser.add_argument(

@@ -10,6 +10,10 @@ from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.instruction_dataset import load_instructions
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -128,7 +132,10 @@ def evaluate_completions(
     """
     run_started_at = datetime.now(UTC)
     local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
+    if is_arena_hard_dataset(dataset):
+        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+    else:
+        download_hf(name=dataset, local_path=local_path_tables)
 
     instructions = load_instructions(
         dataset=dataset,
@@ -246,10 +253,11 @@ def evaluate_completions(
 
 @dataclass
 class JudgeAnnotation:
-    judge_completion: str
-    instruction: str
-    completion_A: str
-    completion_B: str
+    instruction: str  # instruction from the user
+    completion_A: str  # completion of the first model
+    completion_B: str  # completion of the second model
+    judge_completion: str  # output of the judge
+    judge_input: str | None = None  # input that was passed to the judge
 
 
 def annotate_battles(
@@ -324,11 +332,17 @@ def annotate_battles(
     )
 
     annotations = []
-    for judge_completion, instruction, completion_A, completion_B in zip(
-        judge_completions, instructions, completions_A, completions_B, strict=True
+    for judge_input, judge_completion, instruction, completion_A, completion_B in zip(
+        inputs,
+        judge_completions,
+        instructions,
+        completions_A,
+        completions_B,
+        strict=True,
     ):
         annotations.append(
             JudgeAnnotation(
+                judge_input=judge_input,
                 judge_completion=judge_completion,
                 instruction=instruction,
                 completion_A=completion_A,
