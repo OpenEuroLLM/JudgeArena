@@ -6,7 +6,6 @@ and then evaluates them using a judge model.
 import argparse
 import json
 from dataclasses import asdict, dataclass
-from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -28,7 +27,6 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     data_root,
@@ -85,12 +83,6 @@ class CliArgs(BaseCliArgs):
     dataset: str | None = None
     model_A: str | None = None
     model_B: str | None = None
-class CliArgs(BaseCliArgs):
-    """CLI arguments for the generate-and-evaluate entrypoint."""
-
-    dataset: str | None = None
-    model_A: str | None = None
-    model_B: str | None = None
     use_tqdm: bool = False
 
     @classmethod
@@ -127,7 +119,6 @@ class CliArgs(BaseCliArgs):
             model_A=args.model_A,
             model_B=args.model_B,
             use_tqdm=args.use_tqdm,
-            use_tqdm=args.use_tqdm,
             judge_model=args.judge_model,
             n_instructions=args.n_instructions,
             provide_explanation=args.provide_explanation,
@@ -139,7 +130,6 @@ class CliArgs(BaseCliArgs):
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             result_folder=args.result_folder,
-            engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
             engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
         )
 
