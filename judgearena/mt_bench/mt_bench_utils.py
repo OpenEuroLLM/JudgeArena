@@ -18,12 +18,15 @@ import pandas as pd
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
+from judgearena.log import attach_file_handler, get_logger, make_run_log_path
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.generate_and_evaluate import CliArgs
@@ -80,6 +83,8 @@ def _save_mt_bench_results(
     name = _build_mt_bench_result_name(args, suffix=name_suffix)
     res_folder = Path(args.result_folder) / name
     res_folder.mkdir(parents=True, exist_ok=True)
+    if not args.no_log_file:
+        attach_file_handler(make_run_log_path(res_folder))
 
     with open(res_folder / f"args-{name}.json", "w") as f:
         json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
@@ -141,8 +146,10 @@ def _run_mt_bench_fastchat(
 def run_mt_bench(args: CliArgs, ignore_cache: bool):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
-    print(
-        f"Generating multi-turn completions for MT-Bench with {args.model_A} and {args.model_B}."
+    logger.info(
+        "Generating multi-turn completions for MT-Bench with %s and %s.",
+        args.model_A,
+        args.model_B,
     )
     completions_a, completions_b = _generate_mt_bench_completions(
         args=args,
