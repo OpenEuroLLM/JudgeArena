@@ -13,6 +13,11 @@ from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
+
 
 def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
@@ -69,6 +74,28 @@ def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     }
 
 
+def _is_retryable_error(e: Exception) -> bool:
+    """Return True if the exception is a transient server error that should be retried.
+
+    Handles two formats:
+    - String representation contains the HTTP code (most providers)
+    - ValueError raised by langchain-openai with a dict arg: {'message': ..., 'code': 429}
+    """
+    # langchain-openai raises ValueError(response_dict.get("error")) where the
+    # error value is a dict like {'message': '...', 'code': 408}
+    _RETRYABLE_CODES = {408, 429, 502, 503, 504}
+    if isinstance(e, ValueError) and e.args:
+        arg = e.args[0]
+        if isinstance(arg, dict) and arg.get("code") in _RETRYABLE_CODES:
+            return True
+
+    error_str = str(e)
+    return (
+        any(str(code) in error_str for code in _RETRYABLE_CODES)
+        or "rate" in error_str.lower()
+    )
+
+
 def truncate(s: str, max_len: int | None = None) -> str:
     """Truncate a string to *max_len* characters.
 
@@ -114,8 +141,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         pbar.update(1)
                         return result
                     except Exception as e:
-                        is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
-                        if attempt == max_retries - 1 or not is_rate_limit:
+                        if attempt == max_retries - 1 or not _is_retryable_error(e):
                             raise
                         delay = base_delay * (2**attempt)
                         print(
@@ -149,14 +175,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
                     return results
                 except Exception as e:
-                    is_server_error = (
-                        "429" in str(e)
-                        or "500" in str(e)
-                        or "502" in str(e)
-                        or "503" in str(e)
-                        or "rate" in str(e).lower()
-                    )
-                    if attempt == max_retries - 1 or not is_server_error:
+                    if attempt == max_retries - 1 or not _is_retryable_error(e):
                         raise
                     delay = base_delay * (2**attempt)
                     next_chunks = 4 ** (attempt + 1)
@@ -431,9 +450,17 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 def download_all():
     print(f"Downloading all dataset in {data_root}")
-    for dataset in ["alpaca-eval", "arena-hard", "m-arena-hard"]:
-        local_path_tables = data_root / "tables"
-        download_hf(name=dataset, local_path=local_path_tables)
+    local_path_tables = data_root / "tables"
+    for dataset in [
+        "alpaca-eval",
+        "arena-hard-v0.1",
+        "arena-hard-v2.0",
+        "m-arena-hard",
+    ]:
+        if is_arena_hard_dataset(dataset):
+            download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+        else:
+            download_hf(name=dataset, local_path=local_path_tables)
 
     snapshot_download(
         repo_id="geoalgo/multilingual-contexts-to-be-completed",
@@ -478,22 +505,30 @@ def cache_function_dataframe(
     cache_name: str,
     ignore_cache: bool = False,
     cache_path: Path | None = None,
+    parquet: bool = False,
 ) -> pd.DataFrame:
     """
     :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into
-        `{cache_path}/{cache_name}.csv.zip`
+    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
     :param ignore_cache: whether to recompute even if the cache is present
     :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
+    :param parquet: whether to store the data in parquet, if not specified use csv.zip
     :return: result of fun()
     """
     if cache_path is None:
         cache_path = data_root / "cache"
-    cache_file = cache_path / (cache_name + ".csv.zip")
+
+    if parquet:
+        cache_file = cache_path / (cache_name + ".parquet")
+    else:
+        cache_file = cache_path / (cache_name + ".csv.zip")
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     if cache_file.exists() and not ignore_cache:
         print(f"Loading cache {cache_file}")
-        return pd.read_csv(cache_file)
+        if parquet:
+            return pd.read_parquet(cache_file)
+        else:
+            return pd.read_csv(cache_file)
     else:
         print(
             f"Cache {cache_file} not found or ignore_cache set to True, regenerating the file"
@@ -501,57 +536,29 @@ def cache_function_dataframe(
         with Timeblock("Evaluate function."):
             df = fun()
             assert isinstance(df, pd.DataFrame)
-            df.to_csv(cache_file, index=False)
-            return pd.read_csv(cache_file)
+            if parquet:
+                # object cols cannot be saved easily in parquet; numpy arrays must be
+                # deep-converted to plain Python so str() produces ast.literal_eval-safe
+                # repr (no "array([...])" syntax, which breaks literal_eval)
+                import numpy as np
 
+                def _to_python(x):
+                    """Recursively convert numpy arrays/scalars to Python lists/dicts."""
+                    if isinstance(x, np.ndarray):
+                        return [_to_python(i) for i in x]
+                    if isinstance(x, dict):
+                        return {k: _to_python(v) for k, v in x.items()}
+                    if isinstance(x, list):
+                        return [_to_python(i) for i in x]
+                    return x
 
-def compute_cohen_kappa(y1: list[str], y2: list[str]) -> float:
-    """
-    Compute Cohen's kappa coefficient for inter-rater agreement.
-
-    Args:
-        y1: List of labels from first rater
-        y2: List of labels from second rater
-
-    Returns:
-        Cohen's kappa coefficient (float between -1 and 1)
-    """
-    if len(y1) != len(y2):
-        raise ValueError("Both lists must have the same length")
-
-    if len(y1) == 0:
-        raise ValueError("Lists cannot be empty")
-
-    # Get all unique categories
-    categories = sorted(set(y1) | set(y2))
-    n = len(y1)
-
-    # Build confusion matrix
-    matrix = {}
-    for cat1 in categories:
-        matrix[cat1] = {cat2: 0 for cat2 in categories}
-
-    for label1, label2 in zip(y1, y2, strict=True):
-        matrix[label1][label2] += 1
-
-    # Compute observed agreement (p_o)
-    observed_agreement = sum(matrix[cat][cat] for cat in categories) / n
-
-    # Compute expected agreement (p_e)
-    expected_agreement = 0
-    for cat in categories:
-        # Marginal probabilities
-        p1 = sum(matrix[cat][c] for c in categories) / n  # rater 1
-        p2 = sum(matrix[c][cat] for c in categories) / n  # rater 2
-        expected_agreement += p1 * p2
-
-    # Compute Cohen's kappa
-    if expected_agreement == 1:
-        return 1.0 if observed_agreement == 1 else 0.0
-
-    kappa = (observed_agreement - expected_agreement) / (1 - expected_agreement)
-
-    return kappa
+                for col in df.select_dtypes(include="object").columns:
+                    df[col] = df[col].apply(_to_python).astype(str)
+                df.to_parquet(cache_file, index=False)
+                return pd.read_parquet(cache_file)
+            else:
+                df.to_csv(cache_file, index=False)
+                return pd.read_csv(cache_file)
 
 
 if __name__ == "__main__":

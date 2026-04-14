@@ -49,7 +49,14 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "dataset", ["alpaca-eval", "fluency-french", "m-arena-hard-EU"]
+    "dataset",
+    [
+        "alpaca-eval",
+        "arena-hard-v2.0",
+        "arena-hard-v0.1",
+        "fluency-french",
+        "m-arena-hard-EU",
+    ],
 )
 def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):
     prefs = main_generate_and_eval(
