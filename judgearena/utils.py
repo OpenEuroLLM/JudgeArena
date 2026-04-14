@@ -54,23 +54,6 @@ def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
         return pd.read_parquet(filename, **pandas_kwargs)
 
 
-def truncate(s: str, max_len: int | None = None) -> str:
-    if not isinstance(s, str):
-        return ""
-    if max_len is not None:
-        return s[:max_len]
-    return s
-
-
-def safe_text(value: object, truncate_chars: int | None) -> str:
-    if value is None:
-        return ""
-    is_missing = pd.isna(value)
-    if isinstance(is_missing, bool) and is_missing:
-        return ""
-    return truncate(str(value), max_len=truncate_chars)
-
-
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B)."""
     prefs = pd.Series(prefs, dtype="float64")
@@ -111,6 +94,33 @@ def _is_retryable_error(e: Exception) -> bool:
         any(str(code) in error_str for code in _RETRYABLE_CODES)
         or "rate" in error_str.lower()
     )
+
+
+def truncate(s: str, max_len: int | None = None) -> str:
+    """Truncate a string to *max_len* characters.
+
+    Non-string inputs (e.g. ``None`` or ``float('nan')``) are coerced to the
+    empty string so that callers don't have to guard against missing data.
+    """
+    if not isinstance(s, str):
+        return ""
+    if max_len is not None:
+        return s[:max_len]
+    return s
+
+
+def safe_text(value: object, truncate_chars: int | None) -> str:
+    """Coerce *value* to a string and optionally truncate.
+
+    Returns the empty string for ``None`` and NaN-like values so callers
+    don't have to guard against missing data.
+    """
+    if value is None:
+        return ""
+    is_missing = pd.isna(value)
+    if isinstance(is_missing, bool) and is_missing:
+        return ""
+    return truncate(str(value), max_len=truncate_chars)
 
 
 def do_inference(chat_model, inputs, use_tqdm: bool = False):

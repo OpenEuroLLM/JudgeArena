@@ -21,6 +21,7 @@ from judgearena.utils import (
     do_inference,
     download_hf,
     read_df,
+    truncate,
 )
 
 
@@ -310,14 +311,6 @@ def annotate_battles(
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", user_prompt_template)]
     )
-
-    def truncate(s: str, max_len: int | None = None):
-        if not isinstance(s, str):
-            return ""
-        if max_len is not None:
-            return s[:max_len]
-        else:
-            return s
 
     inputs = prompt_template.batch(
         [
