@@ -79,34 +79,39 @@ class PairScore:
 
 _PAIR_SCORE_MIN = 0
 _PAIR_SCORE_MAX = 10
-_PAIR_REASONING_MAX_CHARS = 384
+_PAIR_EXPLANATION_MAX_CHARS = 384
 
 
-def build_pair_score_json_schema() -> dict:
+def build_pair_score_json_schema(*, include_explanation: bool = False) -> dict:
     score_field = {
         "type": "integer",
         "minimum": _PAIR_SCORE_MIN,
         "maximum": _PAIR_SCORE_MAX,
     }
+    properties: dict[str, object] = {
+        "score_A": score_field,
+        "score_B": score_field,
+    }
+    required = ["score_A", "score_B"]
+    if include_explanation:
+        properties = {
+            "explanation": {
+                "type": "string",
+                "maxLength": _PAIR_EXPLANATION_MAX_CHARS,
+            },
+            **properties,
+        }
+        required = ["explanation", *required]
     return {
         "type": "object",
-        "properties": {
-            "reasoning": {
-                "type": "string",
-                "maxLength": _PAIR_REASONING_MAX_CHARS,
-            },
-            "score_A": score_field,
-            "score_B": score_field,
-        },
-        "required": ["reasoning", "score_A", "score_B"],
+        "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
 
 _COMPLETION_LABEL_SINGLE = "Answer"
 _COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
-_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
-_SCORE_FENCE = "\n```"
 
 
 def load_judge_system_and_user_prompt(
@@ -124,11 +129,6 @@ def load_judge_system_and_user_prompt(
         "{completion_label}",
         _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
     )
-    user_prompt_template = user_prompt_template.replace(
-        "{explanation_suffix}",
-        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
-    )
-
     return system_prompt, user_prompt_template
 
 

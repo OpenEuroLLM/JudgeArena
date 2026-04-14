@@ -24,30 +24,43 @@ from judgearena.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.repro import _to_jsonable
-from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+from judgearena.utils import (
+    DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET,
+    cache_function_dataframe,
+    compute_pref_summary,
+    make_model,
+)
 
 if TYPE_CHECKING:
     from judgearena.generate_and_evaluate import CliArgs
 
 
-# Use distinct first tokens for constrained decoding. The shared `[[` prefix
-# caused the MT-Bench judge to collapse to `[[A]]` on every comparison.
+# MT-Bench judge prompts need headroom for budgeted thinking and the final JSON.
 _MIN_MT_BENCH_JUDGE_TOKENS = 2048
-_DEFAULT_MT_BENCH_JUDGE_THINKING_TOKEN_BUDGET = 192
-_MT_BENCH_REASONING_MAX_CHARS = 384
+_MT_BENCH_EXPLANATION_MAX_CHARS = 384
 
 
-def build_mt_bench_verdict_json_schema() -> dict:
+def build_mt_bench_verdict_json_schema(
+    *, include_explanation: bool = False
+) -> dict[str, object]:
+    """Return the MT-Bench judge schema for verdict-only or verdict+explanation."""
+    properties: dict[str, object] = {
+        "verdict": {"type": "string", "enum": ["A", "B", "C"]},
+    }
+    required = ["verdict"]
+    if include_explanation:
+        properties = {
+            "explanation": {
+                "type": "string",
+                "maxLength": _MT_BENCH_EXPLANATION_MAX_CHARS,
+            },
+            **properties,
+        }
+        required = ["explanation", *required]
     return {
         "type": "object",
-        "properties": {
-            "reasoning": {
-                "type": "string",
-                "maxLength": _MT_BENCH_REASONING_MAX_CHARS,
-            },
-            "verdict": {"type": "string", "enum": ["A", "B", "C"]},
-        },
-        "required": ["reasoning", "verdict"],
+        "properties": properties,
+        "required": required,
         "additionalProperties": False,
     }
 
@@ -55,6 +68,7 @@ def build_mt_bench_verdict_json_schema() -> dict:
 def _align_mt_bench_completions(
     *, questions_df: pd.DataFrame, completions: pd.DataFrame, model_name: str
 ) -> pd.DataFrame:
+    """Align cached or generated MT-Bench completions to the question order."""
     indexed = completions.set_index("instruction_index")
     missing_ids = questions_df.index.difference(indexed.index)
     if not missing_ids.empty:
@@ -71,6 +85,7 @@ def _generate_mt_bench_completions(
     questions_df: pd.DataFrame,
     ignore_cache: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load baseline MT-Bench answers or generate fresh multi-turn outputs."""
     cache_prefix = "mt-bench"
 
     def _run_generation(model_name: str) -> pd.DataFrame:
@@ -114,6 +129,7 @@ def _generate_mt_bench_completions(
 
 
 def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
+    """Build a filesystem-safe MT-Bench result artifact prefix."""
     name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
     name += f"-{args.swap_mode}"
     if suffix:
@@ -128,6 +144,7 @@ def _save_mt_bench_results(
     annotations_df: pd.DataFrame,
     name_suffix: str | None = None,
 ) -> None:
+    """Persist MT-Bench arguments, annotations, and aggregate results."""
     name = _build_mt_bench_result_name(args, suffix=name_suffix)
     res_folder = Path(args.result_folder) / name
     res_folder.mkdir(parents=True, exist_ok=True)
@@ -148,8 +165,8 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    constrained_plain_verdict: bool,
 ) -> pd.Series:
+    """Run FastChat-style MT-Bench judging and save the resulting artifacts."""
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
             judge_chat_model=judge_chat_model,
@@ -163,7 +180,7 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=args.use_tqdm,
-            constrained_plain_verdict=constrained_plain_verdict,
+            provide_explanation=args.provide_explanation,
         )
     )
 
@@ -201,7 +218,8 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         args.swap_mode = "both"
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
         print(
-            "MT-Bench judge prompts require room for explanation plus verdict; "
+            "MT-Bench judge prompts require room for budgeted thinking and the "
+            "final JSON verdict; "
             f"overriding max_out_tokens_judge from {args.max_out_tokens_judge} "
             f"to {_MIN_MT_BENCH_JUDGE_TOKENS}."
         )
@@ -216,9 +234,11 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         ignore_cache=ignore_cache,
     )
     judge_model_kwargs = dict(args.engine_kwargs)
-    judge_model_kwargs["structured_outputs_json"] = build_mt_bench_verdict_json_schema()
+    judge_model_kwargs["structured_outputs_json"] = build_mt_bench_verdict_json_schema(
+        include_explanation=args.provide_explanation
+    )
     judge_model_kwargs.setdefault(
-        "thinking_token_budget", _DEFAULT_MT_BENCH_JUDGE_THINKING_TOKEN_BUDGET
+        "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
     )
 
     judge_chat_model = make_model(
@@ -235,5 +255,4 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
-        constrained_plain_verdict=False,
     )

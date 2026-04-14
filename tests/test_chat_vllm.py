@@ -17,7 +17,8 @@ def _install_fake_vllm(monkeypatch):
             self.kwargs = kwargs
 
     class FakeReasoningConfig:
-        pass
+        def __init__(self, **kwargs):
+            captured["reasoning_config_kwargs"] = kwargs
 
     class FakeLLM:
         def __init__(self, *, model, trust_remote_code, **kwargs):
@@ -74,6 +75,10 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
 
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert captured["structured_kwargs"]["json"]["type"] == "object"
+    assert captured["reasoning_config_kwargs"] == {
+        "reasoning_start_str": utils.VLLM_QWEN_REASONING_START_STR,
+        "reasoning_end_str": utils.VLLM_QWEN_REASONING_END_STR,
+    }
     llm_kwargs = captured["llm_init"]["kwargs"]
     assert llm_kwargs["reasoning_parser"] == "qwen3"
     assert isinstance(llm_kwargs["reasoning_config"], fake_reasoning_config)

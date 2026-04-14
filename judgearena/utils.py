@@ -31,6 +31,12 @@ def _data_root_path() -> Path:
 
 data_root = _data_root_path()
 
+DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
+VLLM_QWEN_REASONING_START_STR = "<think>"
+VLLM_QWEN_REASONING_END_STR = (
+    "I have to give the solution based on the thinking directly now.</think>"
+)
+
 
 def set_langchain_cache():
     set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
@@ -40,7 +46,7 @@ def download_hf(name: str, local_path: Path):
     local_path.mkdir(exist_ok=True, parents=True)
     # downloads the model from huggingface into `local_path` folder
     snapshot_download(
-        repo_id="geoalgo/llmjudge",
+        repo_id="judge-arena/judge-arena-dataset",
         repo_type="dataset",
         allow_patterns=f"*{name}*",
         local_dir=local_path,
@@ -134,6 +140,7 @@ _JSON_CODE_FENCE_RE = re.compile(
 
 
 def strip_thinking_tags(text: str | None) -> str:
+    """Remove full `<think>...</think>` blocks from raw model output."""
     if not isinstance(text, str):
         return ""
     return _THINK_BLOCK_RE.sub("", text)
@@ -143,7 +150,8 @@ def extract_json_object(text: str | None) -> dict[str, Any] | None:
     """Best-effort JSON object extraction from model output.
 
     Handles raw JSON, fenced JSON blocks, and outputs that still contain leaked
-    `<think>...</think>` sections ahead of the machine-readable payload.
+    reasoning text such as `<think>...</think>{...}` ahead of the
+    machine-readable payload.
     """
 
     cleaned = strip_thinking_tags(text).strip()
@@ -318,9 +326,17 @@ class ChatVLLM:
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
         if thinking_token_budget is not None:
-            vllm_kwargs.setdefault("reasoning_config", ReasoningConfig())
             if "qwen3" in model.lower():
+                vllm_kwargs.setdefault(
+                    "reasoning_config",
+                    ReasoningConfig(
+                        reasoning_start_str=VLLM_QWEN_REASONING_START_STR,
+                        reasoning_end_str=VLLM_QWEN_REASONING_END_STR,
+                    ),
+                )
                 vllm_kwargs.setdefault("reasoning_parser", "qwen3")
+            else:
+                vllm_kwargs.setdefault("reasoning_config", ReasoningConfig())
             self._sampling_params_kwargs["thinking_token_budget"] = int(
                 thinking_token_budget
             )

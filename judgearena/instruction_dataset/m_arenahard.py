@@ -3,8 +3,6 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.utils import data_root
-
 
 def load_m_arenahard(local_path, language: str | None = None):
     snapshot_download(
@@ -54,4 +52,6 @@ def load_m_arenahard(local_path, language: str | None = None):
 
 
 if __name__ == "__main__":
+    from judgearena.utils import data_root
+
     load_m_arenahard(local_path=data_root, language="EU")

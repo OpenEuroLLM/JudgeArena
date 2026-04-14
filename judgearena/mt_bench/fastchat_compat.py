@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,10 +40,22 @@ PairwiseWinner = Literal["model_A", "model_B", "tie", "error"]
 @dataclass(frozen=True)
 class FastChatPairwisePrompt:
     name: str
-    system_prompt: str
+    user_subject: str
+    task_description: str
+    begin_instruction: str
     user_prompt_template: str
     multi_turn: bool
     ref_based: bool
+    focus_line: str = ""
+
+    def render_system_prompt(self, *, provide_explanation: bool) -> str:
+        return _build_system_prompt(
+            user_subject=self.user_subject,
+            task_description=self.task_description,
+            begin_instruction=self.begin_instruction,
+            focus_line=self.focus_line,
+            provide_explanation=provide_explanation,
+        )
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "mt_bench"
@@ -53,15 +65,6 @@ _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
 _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 
-_BRACKETED_VERDICT_INSTRUCTION = (
-    "After providing your explanation, output your final verdict by strictly "
-    'following this format: "[[A]]" if assistant A is better, "[[B]]" if '
-    'assistant B is better, and "[[C]]" for a tie.'
-)
-_PLAIN_VERDICT_INSTRUCTION = (
-    'Output only one final verdict token: "A" if assistant A is better, "B" '
-    'if assistant B is better, and "C" for a tie.'
-)
 _PARTIAL_JSON_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(?P<verdict>[ABC])"')
 
 
@@ -74,18 +77,12 @@ def _render_prompt_text(filename: str, **kwargs: str) -> str:
     return _load_prompt_text(filename).format(**kwargs)
 
 
-def _structured_verdict_prompt(
-    prompt: FastChatPairwisePrompt,
-) -> FastChatPairwisePrompt:
-    if _BRACKETED_VERDICT_INSTRUCTION not in prompt.system_prompt:
-        return prompt
-    return replace(
-        prompt,
-        system_prompt=prompt.system_prompt.replace(
-            _BRACKETED_VERDICT_INSTRUCTION,
-            _PLAIN_VERDICT_INSTRUCTION,
-        ),
-    )
+def _begin_instruction_for_mode(
+    begin_instruction: str, *, provide_explanation: bool
+) -> str:
+    if provide_explanation:
+        return begin_instruction
+    return re.sub(r"\s+and provide a short explanation$", "", begin_instruction)
 
 
 def _build_system_prompt(
@@ -94,14 +91,28 @@ def _build_system_prompt(
     task_description: str,
     begin_instruction: str,
     focus_line: str = "",
+    provide_explanation: bool,
 ) -> str:
     focus_segment = f"{focus_line} " if focus_line else ""
+    output_format_instruction = (
+        'Output your response as valid JSON with exactly two keys: "explanation" '
+        'for a concise rationale under 300 characters and "verdict" with exactly '
+        'one of "A", "B", or "C", where "A" means assistant A is better, "B" '
+        'means assistant B is better, and "C" means a tie.'
+        if provide_explanation
+        else 'Output your response as valid JSON with exactly one key: "verdict" '
+        'with exactly one of "A", "B", or "C", where "A" means assistant A is '
+        'better, "B" means assistant B is better, and "C" means a tie.'
+    )
     return _render_prompt_text(
         _SYSTEM_BASE_FILE,
         user_subject=user_subject,
         task_description=task_description,
         focus_line=focus_segment,
-        begin_instruction=begin_instruction,
+        begin_instruction=_begin_instruction_for_mode(
+            begin_instruction, provide_explanation=provide_explanation
+        ),
+        output_format_instruction=output_format_instruction,
     )
 
 
@@ -128,18 +139,16 @@ def _load_pairwise_prompt(
 ) -> FastChatPairwisePrompt:
     return FastChatPairwisePrompt(
         name=name,
+        user_subject=system_user_subject,
+        task_description=system_task_description,
+        begin_instruction=system_begin_instruction,
         multi_turn=multi_turn,
         ref_based=ref_based,
-        system_prompt=_build_system_prompt(
-            user_subject=system_user_subject,
-            task_description=system_task_description,
-            begin_instruction=system_begin_instruction,
-            focus_line=system_focus_line,
-        ),
         user_prompt_template=_build_user_prompt_template(
             multi_turn=multi_turn,
             ref_based=ref_based,
         ),
+        focus_line=system_focus_line,
     )
 
 
@@ -255,12 +264,8 @@ def _conservative_winner(
 
     Declare a winner only if the two orderings agree; otherwise treat as tie.
     """
-    if g1 == "error" and g2 == "error":
+    if g1 == "error" or g2 == "error":
         return "error", False
-    if g1 == "error":
-        return g2, False
-    if g2 == "error":
-        return g1, False
     if g1 == g2:
         return g1, False
     return "tie", True
@@ -318,7 +323,7 @@ def _infer_by_prompt_groups(
     items: list[dict[str, Any]],
     use_tqdm: bool,
     swap_answers: bool,
-    constrained_plain_verdict: bool,
+    provide_explanation: bool,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -326,10 +331,11 @@ def _infer_by_prompt_groups(
     judgments: list[str] = [""] * len(items)
     for _prompt_name, idxs in grouped_indices.items():
         prompt: FastChatPairwisePrompt = items[idxs[0]]["prompt"]
-        if constrained_plain_verdict:
-            prompt = _structured_verdict_prompt(prompt)
+        system_prompt = prompt.render_system_prompt(
+            provide_explanation=provide_explanation
+        )
         prompt_template = ChatPromptTemplate.from_messages(
-            [("system", prompt.system_prompt), ("user", prompt.user_prompt_template)]
+            [("system", system_prompt), ("user", prompt.user_prompt_template)]
         )
 
         batch_kwargs = []
@@ -421,12 +427,14 @@ def _resolve_fastchat_item_result(
     judge_model: str,
     model_a: str,
     model_b: str,
+    provide_explanation: bool,
 ) -> tuple[dict[str, Any], dict[str, object], float, bool]:
     prompt: FastChatPairwisePrompt = item["prompt"]
     kwargs = item["prompt_kwargs"]
     g1_user_prompt = prompt.user_prompt_template.format(**kwargs)
     g1_verdict = _parse_fastchat_verdict(g1_raw)
     g1_winner = _map_verdict_to_winner(g1_verdict, swapped=False)
+    system_prompt = prompt.render_system_prompt(provide_explanation=provide_explanation)
 
     final_winner = g1_winner
     inconsistent = False
@@ -438,7 +446,7 @@ def _resolve_fastchat_item_result(
         "model_B": model_b,
         "judge": judge_model,
         "prompt_name": prompt.name,
-        "system_prompt": prompt.system_prompt,
+        "system_prompt": system_prompt,
         "g1_user_prompt": g1_user_prompt,
         "g1_judgment": g1_raw,
         "g1_verdict": g1_verdict,
@@ -488,9 +496,9 @@ def judge_mt_bench_pairwise_fastchat(
     swap_mode: str,
     truncate_input_chars: int | None,
     use_tqdm: bool,
-    constrained_plain_verdict: bool = False,
+    provide_explanation: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
-    """Pairwise MT-Bench judging compatible with FastChat's `[[A]]/[[B]]/[[C]]` format."""
+    """Run FastChat-style MT-Bench pairwise judging with JSON verdict outputs."""
     assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
 
@@ -511,7 +519,7 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
-        constrained_plain_verdict=constrained_plain_verdict,
+        provide_explanation=provide_explanation,
     )
 
     g2_judgments: list[str] | None = None
@@ -521,7 +529,7 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
-            constrained_plain_verdict=constrained_plain_verdict,
+            provide_explanation=provide_explanation,
         )
 
     annotations: list[dict[str, Any]] = []
@@ -539,6 +547,7 @@ def judge_mt_bench_pairwise_fastchat(
                 judge_model=judge_model,
                 model_a=model_a,
                 model_b=model_b,
+                provide_explanation=provide_explanation,
             )
         )
         if inconsistent:

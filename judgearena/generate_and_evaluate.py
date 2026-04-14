@@ -27,6 +27,7 @@ from judgearena.instruction_dataset.arena_hard import (
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
+    DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
@@ -34,8 +35,6 @@ from judgearena.utils import (
     make_model,
     read_df,
 )
-
-_DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 128
 
 
 def try_load_dataset_completions(
@@ -298,10 +297,12 @@ def main(args: CliArgs):
     print(f"Evaluating completions with judge {args.judge_model}.")
 
     judge_model_kwargs = dict(args.engine_kwargs)
-    if not args.provide_explanation and args.judge_model.split("/")[0] == "VLLM":
-        judge_model_kwargs["structured_outputs_json"] = build_pair_score_json_schema()
+    if args.judge_model.split("/")[0] == "VLLM":
+        judge_model_kwargs["structured_outputs_json"] = build_pair_score_json_schema(
+            include_explanation=args.provide_explanation
+        )
         judge_model_kwargs.setdefault(
-            "thinking_token_budget", _DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
         )
 
     judge_chat_model = make_model(

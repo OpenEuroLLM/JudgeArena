@@ -193,45 +193,66 @@ def test_parse_fastchat_verdict_accepts_plain_structured_labels():
 def test_parse_fastchat_verdict_accepts_json_and_strips_thinking():
     assert (
         fastchat_compat._parse_fastchat_verdict(
-            '<think>Need a longer chain.</think>{"reasoning":"done","verdict":"B"}'
+            '<think>Need a longer chain.</think>{"explanation":"done","verdict":"B"}'
         )
         == "B"
     )
     assert (
         fastchat_compat._parse_fastchat_verdict(
-            '```json\n{"reasoning":"tie","verdict":"C"}\n```'
+            '```json\n{"explanation":"tie","verdict":"C"}\n```'
         )
         == "tie"
     )
     assert (
         fastchat_compat._parse_fastchat_verdict(
-            'unfinished analysis {"reasoning":"cut short","verdict":"A"'
+            'unfinished analysis {"explanation":"cut short","verdict":"A"'
         )
         == "A"
     )
 
 
-def test_conservative_winner_uses_non_error_side_when_only_one_parse_fails():
+def test_pair_v2_system_prompt_omits_explanation_when_disabled():
+    rendered = fastchat_compat._PAIR_V2.render_system_prompt(provide_explanation=False)
+
+    assert "provide a short explanation" not in rendered
+    assert 'exactly one key: "verdict"' in rendered
+
+
+def test_conservative_winner_marks_one_sided_parse_failures_as_error():
     assert fastchat_compat._conservative_winner("model_A", "error") == (
-        "model_A",
+        "error",
         False,
     )
     assert fastchat_compat._conservative_winner("error", "model_B") == (
-        "model_B",
+        "error",
         False,
     )
     assert fastchat_compat._conservative_winner("error", "error") == ("error", False)
     assert fastchat_compat._conservative_winner("model_A", "model_B") == ("tie", True)
 
 
-def test_build_mt_bench_verdict_json_schema():
+def test_build_mt_bench_verdict_json_schema_without_explanation():
     schema = mt_bench_utils.build_mt_bench_verdict_json_schema()
 
     assert schema["type"] == "object"
-    assert set(schema["required"]) == {"reasoning", "verdict"}
-    assert schema["properties"]["reasoning"] == {
+    assert set(schema["required"]) == {"verdict"}
+    assert schema["properties"] == {
+        "verdict": {
+            "type": "string",
+            "enum": ["A", "B", "C"],
+        }
+    }
+    assert schema["additionalProperties"] is False
+
+
+def test_build_mt_bench_verdict_json_schema_with_explanation():
+    schema = mt_bench_utils.build_mt_bench_verdict_json_schema(include_explanation=True)
+
+    assert schema["type"] == "object"
+    assert set(schema["required"]) == {"explanation", "verdict"}
+    assert schema["properties"]["explanation"] == {
         "type": "string",
-        "maxLength": mt_bench_utils._MT_BENCH_REASONING_MAX_CHARS,
+        "maxLength": mt_bench_utils._MT_BENCH_EXPLANATION_MAX_CHARS,
     }
     assert schema["properties"]["verdict"] == {
         "type": "string",
@@ -327,7 +348,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
         "structured_outputs_json": mt_bench_utils.build_mt_bench_verdict_json_schema(),
-        "thinking_token_budget": 192,
+        "thinking_token_budget": 512,
     }
     assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
-    assert captured["run_mt_bench_fastchat"]["constrained_plain_verdict"] is False
+    assert "constrained_plain_verdict" not in captured["run_mt_bench_fastchat"]

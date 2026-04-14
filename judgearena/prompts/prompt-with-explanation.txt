@@ -1,21 +1,24 @@
 <|User Prompt|>
 {user_prompt}
 
-<|The Start of Assistant A's Answer|>
+<|The Start of Assistant A's {completion_label}|>
 {completion_A}
-<|The End of Assistant A's Answer|>
+<|The End of Assistant A's {completion_label}|>
 
-<|The Start of Assistant B's Answer|>
+<|The Start of Assistant B's {completion_label}|>
 {completion_B}
-<|The End of Assistant B's Answer|>
+<|The End of Assistant B's {completion_label}|>
 
 # Your output
 
 ## Format description
-Your output should follow this format:
+Your output should be valid JSON with exactly these keys:
 ```
-score_A: <a number between 0 and 10 to indicate the quality of Assistant A's answer>
-score_B: <a number between 0 and 10 to indicate the quality of Assistant B's answer>
+{{
+  "explanation": "<one concise sentence explaining your judgment, under 300 characters>",
+  "score_A": <a number between 0 and 10 to indicate the quality of Assistant A's answer>,
+  "score_B": <a number between 0 and 10 to indicate the quality of Assistant B's answer>
+}}
 ```
 
-## Your output, do not repeat the input above, first starts with an explanation of your judgement
+## Your output, do not repeat the input above

@@ -4,8 +4,6 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.instruction_dataset.m_arenahard import load_m_arenahard
-from judgearena.utils import data_root, download_hf, read_df
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
@@ -15,6 +13,9 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         df_instructions = load_mt_bench()
 
     elif "m-arena-hard" in dataset:
+        from judgearena.instruction_dataset.m_arenahard import load_m_arenahard
+        from judgearena.utils import data_root
+
         if dataset == "m-arena-hard":
             language = None
         else:
@@ -62,6 +63,8 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         )
 
     else:
+        from judgearena.utils import data_root, download_hf, read_df
+
         assert dataset in [
             "alpaca-eval",
             "arena-hard-v0.1",
