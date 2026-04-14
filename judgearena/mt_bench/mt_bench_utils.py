@@ -27,7 +27,7 @@ from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 if TYPE_CHECKING:
-    from judgearena.config import CliArgs
+    from judgearena.generate_and_evaluate import CliArgs
 
 
 # Use distinct first tokens for constrained decoding. The shared `[[` prefix

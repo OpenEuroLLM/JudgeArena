@@ -4,14 +4,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from judgearena.utils import (
     do_inference,
     make_model,
+    truncate,
 )
-
-
-def truncate(s: str, max_len: int | None = None):
-    if max_len is not None:
-        return s[:max_len]
-    else:
-        return s
 
 
 def generate_instructions(
