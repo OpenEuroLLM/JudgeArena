@@ -82,6 +82,25 @@ The evaluation scripts expose four different length controls with different role
 - `--max_out_tokens_judge`: generation token budget for the judge completion (reasoning + score output).
 - `--max_model_len`: optional vLLM context-window limit (prompt + generated tokens), applied to vLLM models; this should be greater than or equal to the two `max_out_tokens_*` values.
 
+### OpenRouter Reference Pricing For Local Runs
+
+JudgeArena can estimate an `openrouter_reference_cost_usd` for local runs by combining:
+
+- locally counted prompt and completion tokens
+- OpenRouter's public model pricing from `GET /api/v1/models`
+
+This is a reference price, not actual billed spend from either OpenRouter or your cluster.
+
+Reference pricing is only applied when the local model has an exact OpenRouter match using one of:
+
+- the OpenRouter model `id`
+- the OpenRouter `canonical_slug`
+- the model `hugging_face_id`
+
+If no exact match exists, JudgeArena still records token totals but leaves the reference price unset.
+
+The aggregated pricing summary is printed to stdout and stored in `run-metadata.v1.json` under `pricing_reference`.
+
 ### Engine-Specific Configuration (`--engine_kwargs`)
 
 Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).
@@ -272,6 +291,14 @@ python -c "from judgearena.utils import download_all; download_all()"  # Downloa
 Datasets are stored in:
 - `$JUDGEARENA_DATA` if set; otherwise `$OPENJURY_DATA` if set (legacy)
 - `~/judgearena-data/` if neither variable is set
+
+If compute nodes do not have internet access, refresh the cached OpenRouter price book on the login node before launching jobs:
+
+```bash
+uv run python -m judgearena.openrouter_reference_pricing --refresh
+```
+
+The benchmark launcher in `slurmpilot_scripts/launch_benchmark_eval.py` also attempts to warm this cache automatically. The cache is stored under `$JUDGEARENA_DATA/reference_pricing/openrouter_models.json` unless `JUDGEARENA_OPENROUTER_PRICE_CACHE` overrides it.
 
 ## 🛠️ Development
 

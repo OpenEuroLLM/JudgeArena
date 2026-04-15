@@ -12,7 +12,8 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.utils import do_inference, extract_json_object, strip_thinking_tags
+from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
+from judgearena.utils import do_inference, strip_thinking_tags
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -65,8 +66,6 @@ _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
 _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 
-_PARTIAL_JSON_VERDICT_RE = re.compile(r'"verdict"\s*:\s*"(?P<verdict>[ABC])"')
-
 
 def _load_prompt_text(filename: str) -> str:
     path = _PROMPTS_DIR / filename
@@ -95,14 +94,13 @@ def _build_system_prompt(
 ) -> str:
     focus_segment = f"{focus_line} " if focus_line else ""
     output_format_instruction = (
-        'Output your response as valid JSON with exactly two keys: "explanation" '
-        'for a concise rationale under 300 characters and "verdict" with exactly '
-        'one of "A", "B", or "C", where "A" means assistant A is better, "B" '
-        'means assistant B is better, and "C" means a tie.'
+        "After providing your explanation, output your final verdict by strictly "
+        'following this format: "[[A]]" if assistant A is better, "[[B]]" if '
+        'assistant B is better, and "[[C]]" for a tie.'
         if provide_explanation
-        else 'Output your response as valid JSON with exactly one key: "verdict" '
-        'with exactly one of "A", "B", or "C", where "A" means assistant A is '
-        'better, "B" means assistant B is better, and "C" means a tie.'
+        else "Output your final verdict by strictly following this format: "
+        '"[[A]]" if assistant A is better, "[[B]]" if assistant B is better, '
+        'and "[[C]]" for a tie.'
     )
     return _render_prompt_text(
         _SYSTEM_BASE_FILE,
@@ -215,32 +213,12 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    json_payload = extract_json_object(judgment)
-    if json_payload is not None:
-        verdict = json_payload.get("verdict")
-        if isinstance(verdict, str):
-            normalized = verdict.strip().upper()
-            if normalized == "A":
-                return "A"
-            if normalized == "B":
-                return "B"
-            if normalized in {"C", "TIE"}:
-                return "tie"
-
-    partial_json_match = _PARTIAL_JSON_VERDICT_RE.search(judgment)
-    if partial_json_match is not None:
-        if partial_json_match.group("verdict") == "A":
-            return "A"
-        if partial_json_match.group("verdict") == "B":
-            return "B"
-        return "tie"
-
     stripped = strip_thinking_tags(judgment).strip()
-    if "[[A]]" in stripped or stripped == "A":
+    if "[[A]]" in stripped:
         return "A"
-    if "[[B]]" in stripped or stripped == "B":
+    if "[[B]]" in stripped:
         return "B"
-    if "[[C]]" in stripped or stripped == "C":
+    if "[[C]]" in stripped:
         return "tie"
     return "error"
 
@@ -324,6 +302,9 @@ def _infer_by_prompt_groups(
     use_tqdm: bool,
     swap_answers: bool,
     provide_explanation: bool,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -350,6 +331,9 @@ def _infer_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=usage_model_spec,
         )
         for i, out in zip(idxs, outs, strict=True):
             judgments[i] = str(out)
@@ -497,8 +481,10 @@ def judge_mt_bench_pairwise_fastchat(
     truncate_input_chars: int | None,
     use_tqdm: bool,
     provide_explanation: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
-    """Run FastChat-style MT-Bench pairwise judging with JSON verdict outputs."""
+    """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
     assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
 
@@ -520,6 +506,9 @@ def judge_mt_bench_pairwise_fastchat(
         use_tqdm=use_tqdm,
         swap_answers=False,
         provide_explanation=provide_explanation,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=judge_model,
     )
 
     g2_judgments: list[str] | None = None
@@ -530,6 +519,9 @@ def judge_mt_bench_pairwise_fastchat(
             use_tqdm=use_tqdm,
             swap_answers=True,
             provide_explanation=provide_explanation,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=judge_model,
         )
 
     annotations: list[dict[str, Any]] = []

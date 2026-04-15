@@ -14,14 +14,20 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.openrouter_reference_pricing import (
+    OpenRouterReferencePricingTracker,
+    build_openrouter_reference_pricing_summary,
+    format_openrouter_reference_pricing_summary,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
     data_root,
     do_inference,
     download_hf,
-    extract_json_object,
+    infer_model_spec_from_instance,
     read_df,
+    strip_thinking_tags,
     truncate,
 )
 
@@ -37,13 +43,7 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        json_payload = extract_json_object(judge_completion)
-        if json_payload is not None:
-            score_a = self._coerce_score(json_payload.get("score_A"))
-            score_b = self._coerce_score(json_payload.get("score_B"))
-            if score_a is not None and score_b is not None:
-                return float(self.preference_from_scores(score_a, score_b))
-
+        judge_completion = strip_thinking_tags(judge_completion)
         # lower case to avoid confusion, e.g. when "a" is used instead of "A"
         score_a = self.get_regexp_match(
             judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
@@ -52,22 +52,17 @@ class PairScore:
             judge_completion.lower(), r'score.*?b[": *\n]*(-?\d+)'
         )
         if score_a is None or score_b is None:
-            return None
+            verdict_match = re.search(r"\[\[\s*([ABCabc])\s*\]\]", judge_completion)
+            if verdict_match is None:
+                return None
+            bracketed_verdict = verdict_match.group(1).lower()
+            return {
+                "a": 0.0,
+                "b": 1.0,
+                "c": 0.5,
+            }[bracketed_verdict]
         else:
             return float(self.preference_from_scores(score_a, score_b))
-
-    def _coerce_score(self, value: object) -> float | None:
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return float(value)
-        if isinstance(value, float) and value.is_integer():
-            return value
-        if isinstance(value, str):
-            match = re.fullmatch(r"\s*(-?\d+)\s*", value)
-            if match is not None:
-                return float(match.group(1))
-        return None
 
     def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
@@ -77,41 +72,10 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
-_PAIR_SCORE_MIN = 0
-_PAIR_SCORE_MAX = 10
-_PAIR_EXPLANATION_MAX_CHARS = 384
-
-
-def build_pair_score_json_schema(*, include_explanation: bool = False) -> dict:
-    score_field = {
-        "type": "integer",
-        "minimum": _PAIR_SCORE_MIN,
-        "maximum": _PAIR_SCORE_MAX,
-    }
-    properties: dict[str, object] = {
-        "score_A": score_field,
-        "score_B": score_field,
-    }
-    required = ["score_A", "score_B"]
-    if include_explanation:
-        properties = {
-            "explanation": {
-                "type": "string",
-                "maxLength": _PAIR_EXPLANATION_MAX_CHARS,
-            },
-            **properties,
-        }
-        required = ["explanation", *required]
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-
-
 _COMPLETION_LABEL_SINGLE = "Answer"
 _COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
+_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
+_SCORE_FENCE = "\n```"
 
 
 def load_judge_system_and_user_prompt(
@@ -128,6 +92,10 @@ def load_judge_system_and_user_prompt(
     user_prompt_template = user_prompt_template.replace(
         "{completion_label}",
         _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
+    )
+    user_prompt_template = user_prompt_template.replace(
+        "{explanation_suffix}",
+        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
     )
     return system_prompt, user_prompt_template
 
@@ -230,6 +198,8 @@ def evaluate_completions(
         from langchain_together.llms import Together
 
         judge_chat_model = Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo")
+    judge_model_spec = infer_model_spec_from_instance(judge_chat_model)
+    usage_tracker = OpenRouterReferencePricingTracker()
 
     unique_string = dataset + "-" + datetime.now().strftime("%Y%m%d_%H%M%S")
     output_folder = data_root / "judge-evals" / unique_string
@@ -250,6 +220,9 @@ def evaluate_completions(
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
+        usage_tracker=usage_tracker,
+        usage_phase="judge",
+        usage_model_spec=judge_model_spec,
     )
 
     # Pairwise judge results
@@ -266,6 +239,13 @@ def evaluate_completions(
     print(f"{method_A} against {method_B}:\n{results}")
     with open(output_folder / "results.json", "w") as f:
         json.dump(_to_jsonable(results), f, allow_nan=False)
+    pricing_reference = None
+    if judge_model_spec is not None:
+        pricing_reference = build_openrouter_reference_pricing_summary(
+            tracker=usage_tracker,
+            phase_model_specs={"judge": judge_model_spec},
+        )
+        print(format_openrouter_reference_pricing_summary(pricing_reference))
 
     run_metadata = {
         "dataset": dataset,
@@ -293,6 +273,7 @@ def evaluate_completions(
             judge_system_prompt=judge_system_prompt,
             judge_user_prompt_template=judge_user_prompt_template,
             started_at_utc=run_started_at,
+            pricing_reference=pricing_reference,
         )
     except OSError as e:
         print(f"Warning: failed to write run metadata: {e}")
@@ -317,6 +298,9 @@ def annotate_battles(
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     provide_explanation: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -387,6 +371,9 @@ def annotate_battles(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=usage_model_spec,
     )
 
     annotations = []
@@ -421,6 +408,9 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -446,6 +436,9 @@ def judge_and_parse_prefs(
         user_prompt_template=user_prompt_template,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=usage_model_spec,
     )
 
     annotations_reversed = None
@@ -460,6 +453,9 @@ def judge_and_parse_prefs(
             user_prompt_template=user_prompt_template,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=usage_model_spec,
         )
 
     def _none_to_nan(x):

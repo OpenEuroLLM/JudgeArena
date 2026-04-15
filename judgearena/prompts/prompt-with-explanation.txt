@@ -12,13 +12,10 @@
 # Your output
 
 ## Format description
-Your output should be valid JSON with exactly these keys:
+Your output should follow this format:
 ```
-{{
-  "explanation": "<one concise sentence explaining your judgment, under 300 characters>",
-  "score_A": <a number between 0 and 10 to indicate the quality of Assistant A's answer>,
-  "score_B": <a number between 0 and 10 to indicate the quality of Assistant B's answer>
-}}
+score_A: <a number between 0 and 10 to indicate the quality of Assistant A's answer>
+score_B: <a number between 0 and 10 to indicate the quality of Assistant B's answer>
 ```
 
-## Your output, do not repeat the input above
+## Your output, do not repeat the input above, first starts with an explanation of your judgement

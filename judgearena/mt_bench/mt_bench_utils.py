@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,7 +23,12 @@ from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
-from judgearena.repro import _to_jsonable
+from judgearena.openrouter_reference_pricing import (
+    OpenRouterReferencePricingTracker,
+    build_openrouter_reference_pricing_summary,
+    format_openrouter_reference_pricing_summary,
+)
+from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET,
     cache_function_dataframe,
@@ -35,34 +40,10 @@ if TYPE_CHECKING:
     from judgearena.generate_and_evaluate import CliArgs
 
 
-# MT-Bench judge prompts need headroom for budgeted thinking and the final JSON.
-_MIN_MT_BENCH_JUDGE_TOKENS = 2048
-_MT_BENCH_EXPLANATION_MAX_CHARS = 384
-
-
-def build_mt_bench_verdict_json_schema(
-    *, include_explanation: bool = False
-) -> dict[str, object]:
-    """Return the MT-Bench judge schema for verdict-only or verdict+explanation."""
-    properties: dict[str, object] = {
-        "verdict": {"type": "string", "enum": ["A", "B", "C"]},
-    }
-    required = ["verdict"]
-    if include_explanation:
-        properties = {
-            "explanation": {
-                "type": "string",
-                "maxLength": _MT_BENCH_EXPLANATION_MAX_CHARS,
-            },
-            **properties,
-        }
-        required = ["explanation", *required]
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
+# Original MT-Bench prompts include a visible explanation before the final verdict,
+# and Qwen can spend thousands of visible tokens after reasoning ends on turn 2.
+_MIN_MT_BENCH_JUDGE_TOKENS = 24576
+_MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN = 28672
 
 
 def _align_mt_bench_completions(
@@ -84,11 +65,12 @@ def _generate_mt_bench_completions(
     args: CliArgs,
     questions_df: pd.DataFrame,
     ignore_cache: bool,
+    usage_tracker: OpenRouterReferencePricingTracker,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load baseline MT-Bench answers or generate fresh multi-turn outputs."""
     cache_prefix = "mt-bench"
 
-    def _run_generation(model_name: str) -> pd.DataFrame:
+    def _run_generation(model_name: str, usage_phase: str) -> pd.DataFrame:
         return generate_multiturn(
             questions=questions_df,
             model=model_name,
@@ -98,10 +80,12 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
             **args.engine_kwargs,
         )
 
-    def _load_or_generate(model_name: str) -> pd.DataFrame:
+    def _load_or_generate(model_name: str, usage_phase: str) -> pd.DataFrame:
         loaded_answers = load_mt_bench_model_answers(
             model_name, n_instructions=args.n_instructions
         )
@@ -113,7 +97,7 @@ def _generate_mt_bench_completions(
                 model_name=model_name,
             )
         generated_answers = cache_function_dataframe(
-            lambda: _run_generation(model_name),
+            lambda: _run_generation(model_name, usage_phase),
             ignore_cache=ignore_cache,
             cache_name=f"{cache_prefix}_{model_name}_{args.n_instructions}",
         )
@@ -123,8 +107,8 @@ def _generate_mt_bench_completions(
             model_name=model_name,
         )
 
-    completions_a = _load_or_generate(args.model_A)
-    completions_b = _load_or_generate(args.model_B)
+    completions_a = _load_or_generate(args.model_A, "generation_model_A")
+    completions_b = _load_or_generate(args.model_B, "generation_model_B")
     return completions_a, completions_b
 
 
@@ -142,6 +126,9 @@ def _save_mt_bench_results(
     args: CliArgs,
     results: dict[str, object],
     annotations_df: pd.DataFrame,
+    questions_df: pd.DataFrame,
+    pricing_reference: dict[str, object] | None,
+    started_at_utc: datetime,
     name_suffix: str | None = None,
 ) -> None:
     """Persist MT-Bench arguments, annotations, and aggregate results."""
@@ -157,6 +144,20 @@ def _save_mt_bench_results(
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
+    write_run_metadata(
+        output_dir=res_folder,
+        entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
+        run=asdict(args),
+        results=results,
+        input_payloads={
+            "instruction_index": questions_df.index.tolist(),
+            "turn_1": questions_df["turn_1"].tolist(),
+            "turn_2": questions_df["turn_2"].tolist(),
+        },
+        started_at_utc=started_at_utc,
+        pricing_reference=pricing_reference,
+    )
+
 
 def _run_mt_bench_fastchat(
     *,
@@ -165,6 +166,9 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
+    provide_explanation: bool,
+    usage_tracker: OpenRouterReferencePricingTracker,
+    started_at_utc: datetime,
 ) -> pd.Series:
     """Run FastChat-style MT-Bench judging and save the resulting artifacts."""
     prefs, annotations, combined_metadata, num_inconsistent = (
@@ -180,7 +184,9 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=args.use_tqdm,
-            provide_explanation=args.provide_explanation,
+            provide_explanation=provide_explanation,
+            usage_tracker=usage_tracker,
+            usage_phase="judge",
         )
     )
 
@@ -199,10 +205,22 @@ def _run_mt_bench_fastchat(
         "user": os.getenv("USER", ""),
     }
     print_results(results)
+    pricing_reference = build_openrouter_reference_pricing_summary(
+        tracker=usage_tracker,
+        phase_model_specs={
+            "generation_model_A": args.model_A,
+            "generation_model_B": args.model_B,
+            "judge": args.judge_model,
+        },
+    )
+    print(format_openrouter_reference_pricing_summary(pricing_reference))
     _save_mt_bench_results(
         args=args,
         results=results,
         annotations_df=pd.DataFrame(annotations),
+        questions_df=questions_df,
+        pricing_reference=pricing_reference,
+        started_at_utc=started_at_utc,
         name_suffix="mtbench",
     )
     return prefs
@@ -210,6 +228,13 @@ def _run_mt_bench_fastchat(
 
 def run_mt_bench(args: CliArgs, ignore_cache: bool):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
+    run_started_at = datetime.now(UTC)
+    usage_tracker = OpenRouterReferencePricingTracker()
+    if not args.provide_explanation:
+        print(
+            "MT-Bench ignores provide_explanation=False and keeps the original "
+            "FastChat-style explanation-plus-verdict prompt."
+        )
     if args.swap_mode != "both":
         print(
             "MT-Bench requires swap_mode='both' to match FastChat and correct "
@@ -218,8 +243,8 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         args.swap_mode = "both"
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
         print(
-            "MT-Bench judge prompts require room for budgeted thinking and the "
-            "final JSON verdict; "
+            "MT-Bench judge prompts require room for budgeted thinking, the "
+            "original explanation, and the final verdict; "
             f"overriding max_out_tokens_judge from {args.max_out_tokens_judge} "
             f"to {_MIN_MT_BENCH_JUDGE_TOKENS}."
         )
@@ -232,11 +257,20 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         args=args,
         questions_df=questions_df,
         ignore_cache=ignore_cache,
+        usage_tracker=usage_tracker,
     )
+    if (
+        args.max_model_len is not None
+        and args.max_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
+    ):
+        print(
+            "MT-Bench judge prompts require a larger total context window for "
+            "prompt plus completion; "
+            f"overriding max_model_len from {args.max_model_len} "
+            f"to {_MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN} for the judge."
+        )
+        args.max_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     judge_model_kwargs = dict(args.engine_kwargs)
-    judge_model_kwargs["structured_outputs_json"] = build_mt_bench_verdict_json_schema(
-        include_explanation=args.provide_explanation
-    )
     judge_model_kwargs.setdefault(
         "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
     )
@@ -255,4 +289,7 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
+        provide_explanation=True,
+        usage_tracker=usage_tracker,
+        started_at_utc=run_started_at,
     )

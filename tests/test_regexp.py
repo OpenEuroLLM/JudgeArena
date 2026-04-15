@@ -40,14 +40,16 @@ def test_regexp():
     print(pref)
 
 
-def test_pair_score_prefers_json_scores_over_reasoning_text():
+def test_pair_score_ignores_scores_inside_thinking_tags():
     raw_text = """
-    <think>I would score assistant A as 2/10 if I stopped early.</think>
-    {
-      "explanation": "At first glance I might score assistant A as 2, but after comparing both answers carefully, assistant B is better.",
-      "score_A": 0,
-      "score_B": 10
-    }
+    <think>
+    Early draft:
+    score_A: 2
+    score_B: 1
+    </think>
+    Explanation: Assistant B is clearly better overall.
+    score_A: 0
+    score_B: 10
     """
 
     scorer = PairScore()
@@ -55,3 +57,26 @@ def test_pair_score_prefers_json_scores_over_reasoning_text():
 
     assert pref is not None
     assert pref == 0.9525741268224333
+
+
+def test_pair_score_falls_back_to_bracketed_verdicts():
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw("Explanation: ok\n[[A]]") == 0.0
+    assert scorer.parse_model_raw("Explanation: ok\n[[B]]") == 1.0
+    assert scorer.parse_model_raw("Explanation: ok\n[[C]]") == 0.5
+
+
+def test_pair_score_ignores_thinking_tags_before_bracketed_verdict():
+    raw_text = """
+    <think>
+    score_A: 0
+    score_B: 10
+    </think>
+    Concise verdict only.
+    [[B]]
+    """
+
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw(raw_text) == 1.0

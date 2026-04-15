@@ -15,6 +15,8 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
+    usage_tracker=None,
+    usage_phase: str | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
     chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
@@ -41,6 +43,9 @@ def generate_instructions(
         chat_model=chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=model,
     )
     df_outputs = pd.DataFrame(
         data={
@@ -69,6 +74,8 @@ def _infer_grouped_by_temperature(
     inputs: list,
     temperatures: list[float],
     use_tqdm: bool,
+    usage_tracker=None,
+    usage_phase: str | None = None,
 ) -> list[str]:
     outputs: list[str] = [""] * len(inputs)
     groups: dict[float, list[int]] = {}
@@ -91,6 +98,9 @@ def _infer_grouped_by_temperature(
             chat_model=group_model,
             inputs=group_inputs,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=model_spec,
         )
         for i, out in zip(idxs, group_outs, strict=True):
             outputs[i] = out
@@ -105,6 +115,8 @@ def generate_multiturn(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
+    usage_tracker=None,
+    usage_phase: str | None = None,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -148,12 +160,17 @@ def generate_multiturn(
             inputs=turn1_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
         )
     else:
         completions_turn_1 = do_inference(
             chat_model=chat_model,
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=model,
         )
 
     turn2_inputs = []
@@ -195,12 +212,17 @@ def generate_multiturn(
             inputs=turn2_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
         )
     else:
         completions_turn_2 = do_inference(
             chat_model=chat_model,
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=model,
         )
 
     return pd.DataFrame(
@@ -218,20 +240,26 @@ def generate_base(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 32768,
     use_tqdm: bool = False,
+    usage_tracker=None,
+    usage_phase: str | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    model_spec = model
+    model = make_model(model_spec, max_tokens=max_tokens, **engine_kwargs)
 
     inputs = [
         truncate(instruction, max_len=truncate_input_chars)
         for instruction in instructions
     ]
 
-    completions = model.batch(
+    completions = do_inference(
+        chat_model=model,
         inputs=inputs,
-        max_tokens=max_tokens,
+        use_tqdm=use_tqdm,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=model_spec,
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
 
     df_outputs = pd.DataFrame(
         data={

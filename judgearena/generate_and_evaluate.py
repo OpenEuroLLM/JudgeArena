@@ -13,11 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
-from judgearena.evaluate import (
-    build_pair_score_json_schema,
-    judge_and_parse_prefs,
-    resolve_judge_prompts,
-)
+from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -25,6 +21,11 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
+from judgearena.openrouter_reference_pricing import (
+    OpenRouterReferencePricingTracker,
+    build_openrouter_reference_pricing_summary,
+    format_openrouter_reference_pricing_summary,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET,
@@ -196,6 +197,7 @@ def main(args: CliArgs):
     """
 
     run_started_at = datetime.now(UTC)
+    usage_tracker = OpenRouterReferencePricingTracker()
     print(
         f"Using dataset {args.dataset} and evaluating models {args.model_A} and {args.model_B}."
     )
@@ -264,6 +266,8 @@ def main(args: CliArgs):
                 instructions=instructions,
                 model=args.model_A,
                 use_tqdm=args.use_tqdm,
+                usage_tracker=usage_tracker,
+                usage_phase="generation_model_A",
             ),
             ignore_cache=ignore_cache,
             cache_name=f"{args.dataset}_{args.model_A}_{args.n_instructions}",
@@ -283,6 +287,8 @@ def main(args: CliArgs):
                 instructions=instructions,
                 model=args.model_B,
                 use_tqdm=args.use_tqdm,
+                usage_tracker=usage_tracker,
+                usage_phase="generation_model_B",
             ),
             ignore_cache=ignore_cache,
             cache_name=f"{args.dataset}_{args.model_B}_{args.n_instructions}",
@@ -298,9 +304,6 @@ def main(args: CliArgs):
 
     judge_model_kwargs = dict(args.engine_kwargs)
     if args.judge_model.split("/")[0] == "VLLM":
-        judge_model_kwargs["structured_outputs_json"] = build_pair_score_json_schema(
-            include_explanation=args.provide_explanation
-        )
         judge_model_kwargs.setdefault(
             "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
         )
@@ -353,6 +356,9 @@ def main(args: CliArgs):
         user_prompt_template=judge_user_prompt_template,
         truncate_input_chars=args.truncate_all_input_chars,
         use_tqdm=args.use_tqdm,
+        usage_tracker=usage_tracker,
+        usage_phase="judge",
+        usage_model_spec=args.judge_model,
     )
 
     df = pd.DataFrame(annotations)
@@ -386,6 +392,15 @@ def main(args: CliArgs):
     }
     print(f"{args.model_A} vs {args.model_B} judged by {args.judge_model}")
     print_results(results)
+    pricing_reference = build_openrouter_reference_pricing_summary(
+        tracker=usage_tracker,
+        phase_model_specs={
+            "generation_model_A": args.model_A,
+            "generation_model_B": args.model_B,
+            "judge": args.judge_model,
+        },
+    )
+    print(format_openrouter_reference_pricing_summary(pricing_reference))
 
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
@@ -410,6 +425,7 @@ def main(args: CliArgs):
             judge_system_prompt=effective_judge_system_prompt,
             judge_user_prompt_template=judge_user_prompt_template,
             started_at_utc=run_started_at,
+            pricing_reference=pricing_reference,
         )
     except OSError as e:
         print(f"Warning: failed to write run metadata: {e}")

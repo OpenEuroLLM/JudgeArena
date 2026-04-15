@@ -1,12 +1,10 @@
 import asyncio
-import json
 import os
 import re
 import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 from huggingface_hub import snapshot_download
@@ -20,6 +18,7 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 
 
 def _data_root_path() -> Path:
@@ -133,10 +132,6 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
 
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-_JSON_CODE_FENCE_RE = re.compile(
-    r"```(?:json)?\s*(?P<payload>\{.*?\})\s*```",
-    re.IGNORECASE | re.DOTALL,
-)
 
 
 def strip_thinking_tags(text: str | None) -> str:
@@ -146,38 +141,14 @@ def strip_thinking_tags(text: str | None) -> str:
     return _THINK_BLOCK_RE.sub("", text)
 
 
-def extract_json_object(text: str | None) -> dict[str, Any] | None:
-    """Best-effort JSON object extraction from model output.
-
-    Handles raw JSON, fenced JSON blocks, and outputs that still contain leaked
-    reasoning text such as `<think>...</think>{...}` ahead of the
-    machine-readable payload.
-    """
-
-    cleaned = strip_thinking_tags(text).strip()
-    if not cleaned:
-        return None
-
-    candidates = [cleaned]
-    fenced_match = _JSON_CODE_FENCE_RE.search(cleaned)
-    if fenced_match is not None:
-        candidates.insert(0, fenced_match.group("payload"))
-
-    decoder = json.JSONDecoder()
-    for candidate in candidates:
-        for idx, char in enumerate(candidate):
-            if char != "{":
-                continue
-            try:
-                parsed, _end = decoder.raw_decode(candidate[idx:])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-    return None
-
-
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
+):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -244,6 +215,24 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
     res = [x.content if hasattr(x, "content") else x for x in res]
+    if (
+        usage_tracker is not None
+        and usage_phase is not None
+        and usage_model_spec is not None
+    ):
+        try:
+            usage_tracker.record_batch_from_model(
+                phase=usage_phase,
+                model_spec=usage_model_spec,
+                chat_model=chat_model,
+                inputs=list(inputs),
+                outputs=res,
+            )
+        except Exception as e:
+            print(
+                f"Warning: failed to record token usage for phase "
+                f"'{usage_phase}' ({usage_model_spec}): {e}"
+            )
     return res
 
 
@@ -286,7 +275,6 @@ class ChatVLLM:
     ):
         from vllm import LLM, SamplingParams
         from vllm.config.reasoning import ReasoningConfig
-        from vllm.sampling_params import StructuredOutputsParams
 
         self.model_path = model
         self.max_tokens = max_tokens
@@ -340,14 +328,10 @@ class ChatVLLM:
             self._sampling_params_kwargs["thinking_token_budget"] = int(
                 thinking_token_budget
             )
-        structured_outputs_json = vllm_kwargs.pop("structured_outputs_json", None)
-        if structured_outputs_json is not None:
-            self._sampling_params_kwargs["structured_outputs"] = (
-                StructuredOutputsParams(json=structured_outputs_json)
-            )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
+        self.tokenizer = self.llm.get_tokenizer()
 
         # Resolve chat template:
         # 1. Explicit override always wins → use chat() with that template
@@ -363,8 +347,7 @@ class ChatVLLM:
             else:
                 print(f"ChatVLLM: using explicit chat template for '{model}'")
         else:
-            tokenizer = self.llm.get_tokenizer()
-            if not getattr(tokenizer, "chat_template", None):
+            if not getattr(self.tokenizer, "chat_template", None):
                 warnings.warn(
                     f"Model '{model}' tokenizer does not define a chat template. "
                     f"Falling back to llm.generate() (no chat formatting). "
@@ -466,6 +449,39 @@ class ChatVLLM:
             )
         return [out.outputs[0].text for out in outputs]
 
+    def _count_chat_prompt_tokens(self, messages: list[dict]) -> int:
+        tokenizer_kwargs: dict[str, object] = {
+            "tokenize": True,
+            "add_generation_prompt": True,
+        }
+        if self.chat_template is not None:
+            tokenizer_kwargs["chat_template"] = self.chat_template
+        if self._chat_template_kwargs is not None:
+            tokenizer_kwargs["chat_template_kwargs"] = self._chat_template_kwargs
+        try:
+            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
+        except TypeError:
+            tokenizer_kwargs.pop("chat_template_kwargs", None)
+            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
+        return len(token_ids)
+
+    def count_prompt_tokens_batch(self, inputs: list) -> list[int]:
+        counts: list[int] = []
+        for input_item in inputs:
+            if self._use_generate:
+                counts.append(len(self.tokenizer.encode(self._to_raw_text(input_item))))
+            else:
+                counts.append(
+                    self._count_chat_prompt_tokens(self._to_messages(input_item))
+                )
+        return counts
+
+    def count_completion_tokens_batch(self, outputs: list[str]) -> list[int]:
+        return [
+            len(self.tokenizer.encode(output, add_special_tokens=False))
+            for output in outputs
+        ]
+
     def invoke(self, input_item, **invoke_kwargs) -> str:
         """Process a single input."""
         results = self.batch([input_item], **invoke_kwargs)
@@ -551,6 +567,18 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         )
         return model_cls_dict[model_provider](**engine_kwargs)
+
+
+def infer_model_spec_from_instance(model: object) -> str | None:
+    if isinstance(model, DummyModel):
+        return model.name
+    model_path = getattr(model, "model_path", None)
+    if isinstance(model_path, str):
+        return f"VLLM/{model_path}"
+    model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
+    if isinstance(model_name, str):
+        return f"{model.__class__.__name__}/{model_name}"
+    return None
 
 
 def download_all():

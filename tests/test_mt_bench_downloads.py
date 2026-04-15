@@ -128,6 +128,8 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         max_model_len,
         chat_template,
         temperature_config,
+        usage_tracker,
+        usage_phase,
         **engine_kwargs,
     ):
         generated_models.append(model)
@@ -173,6 +175,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         args=args,
         questions_df=questions_df,
         ignore_cache=False,
+        usage_tracker=object(),
     )
 
     assert generated_models == ["VLLM/example/model-a"]
@@ -184,38 +187,30 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
 
 
-def test_parse_fastchat_verdict_accepts_plain_structured_labels():
-    assert fastchat_compat._parse_fastchat_verdict("A") == "A"
-    assert fastchat_compat._parse_fastchat_verdict("B") == "B"
-    assert fastchat_compat._parse_fastchat_verdict("C") == "tie"
-
-
-def test_parse_fastchat_verdict_accepts_json_and_strips_thinking():
+def test_parse_fastchat_verdict_accepts_bracketed_verdicts_after_thinking():
     assert (
         fastchat_compat._parse_fastchat_verdict(
-            '<think>Need a longer chain.</think>{"explanation":"done","verdict":"B"}'
-        )
-        == "B"
-    )
-    assert (
-        fastchat_compat._parse_fastchat_verdict(
-            '```json\n{"explanation":"tie","verdict":"C"}\n```'
-        )
-        == "tie"
-    )
-    assert (
-        fastchat_compat._parse_fastchat_verdict(
-            'unfinished analysis {"explanation":"cut short","verdict":"A"'
+            "<think>Need a longer chain.</think>[[A]]"
         )
         == "A"
     )
+    assert fastchat_compat._parse_fastchat_verdict("[[B]]") == "B"
+    assert fastchat_compat._parse_fastchat_verdict("[[C]]") == "tie"
 
 
-def test_pair_v2_system_prompt_omits_explanation_when_disabled():
-    rendered = fastchat_compat._PAIR_V2.render_system_prompt(provide_explanation=False)
+def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
+    assert fastchat_compat._parse_fastchat_verdict("A") == "error"
+    assert fastchat_compat._parse_fastchat_verdict('{"verdict":"B"}') == "error"
 
-    assert "provide a short explanation" not in rendered
-    assert 'exactly one key: "verdict"' in rendered
+
+def test_pair_v2_system_prompt_matches_original_fastchat_contract():
+    rendered = fastchat_compat._PAIR_V2.render_system_prompt(provide_explanation=True)
+
+    assert "provide a short explanation" in rendered
+    assert "valid JSON" not in rendered
+    assert '"[[A]]"' in rendered
+    assert '"[[B]]"' in rendered
+    assert '"[[C]]"' in rendered
 
 
 def test_conservative_winner_marks_one_sided_parse_failures_as_error():
@@ -229,36 +224,6 @@ def test_conservative_winner_marks_one_sided_parse_failures_as_error():
     )
     assert fastchat_compat._conservative_winner("error", "error") == ("error", False)
     assert fastchat_compat._conservative_winner("model_A", "model_B") == ("tie", True)
-
-
-def test_build_mt_bench_verdict_json_schema_without_explanation():
-    schema = mt_bench_utils.build_mt_bench_verdict_json_schema()
-
-    assert schema["type"] == "object"
-    assert set(schema["required"]) == {"verdict"}
-    assert schema["properties"] == {
-        "verdict": {
-            "type": "string",
-            "enum": ["A", "B", "C"],
-        }
-    }
-    assert schema["additionalProperties"] is False
-
-
-def test_build_mt_bench_verdict_json_schema_with_explanation():
-    schema = mt_bench_utils.build_mt_bench_verdict_json_schema(include_explanation=True)
-
-    assert schema["type"] == "object"
-    assert set(schema["required"]) == {"explanation", "verdict"}
-    assert schema["properties"]["explanation"] == {
-        "type": "string",
-        "maxLength": mt_bench_utils._MT_BENCH_EXPLANATION_MAX_CHARS,
-    }
-    assert schema["properties"]["verdict"] == {
-        "type": "string",
-        "enum": ["A", "B", "C"],
-    }
-    assert schema["additionalProperties"] is False
 
 
 def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
@@ -276,7 +241,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache: (
+        lambda args, questions_df, ignore_cache, usage_tracker: (
             pd.DataFrame(
                 {
                     "completion_turn_1": ["A1"],
@@ -342,13 +307,14 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
     assert args.swap_mode == "both"
-    assert args.max_out_tokens_judge == 2048
-    assert captured["make_model"]["max_tokens"] == 2048
+    assert args.max_out_tokens_judge == 24576
+    assert args.max_model_len == 28672
+    assert captured["make_model"]["max_tokens"] == 24576
+    assert captured["make_model"]["max_model_len"] == 28672
     assert captured["make_model"]["kwargs"] == {
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
-        "structured_outputs_json": mt_bench_utils.build_mt_bench_verdict_json_schema(),
         "thinking_token_budget": 512,
     }
     assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
-    assert "constrained_plain_verdict" not in captured["run_mt_bench_fastchat"]
+    assert captured["run_mt_bench_fastchat"]["provide_explanation"] is True

@@ -231,6 +231,7 @@ def write_run_metadata(
     judge_system_prompt: str | None = None,
     judge_user_prompt_template: str | None = None,
     started_at_utc: datetime | None = None,
+    pricing_reference: dict[str, Any] | None = None,
     metadata_filename: str = METADATA_FILENAME,
 ) -> Path:
     """Write run metadata JSON and return the output path."""
@@ -282,6 +283,8 @@ def write_run_metadata(
     judge_user_prompt_template_hash = _hash_string_sha256(judge_user_prompt_template)
     if judge_user_prompt_template_hash:
         metadata["judge_user_prompt_template_sha256"] = judge_user_prompt_template_hash
+    if pricing_reference is not None:
+        metadata["pricing_reference"] = _to_jsonable(pricing_reference)
 
     metadata["artifacts"] = _collect_artifacts(
         output_path, metadata_filename=metadata_filename

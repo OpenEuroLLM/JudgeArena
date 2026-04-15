@@ -6,32 +6,25 @@ from judgearena.generate_and_evaluate import CliArgs
 from judgearena.generate_and_evaluate import main as main_generate_and_eval
 
 
-def test_build_pair_score_json_schema_covers_valid_range_without_explanation():
-    schema = evaluate.build_pair_score_json_schema()
+def test_load_judge_prompt_without_explanation_uses_freeform_scores():
+    _system_prompt, user_prompt = evaluate.load_judge_system_and_user_prompt(
+        provide_explanation=False
+    )
 
-    assert schema["type"] == "object"
-    assert set(schema["required"]) == {"score_A", "score_B"}
-    for key in ("score_A", "score_B"):
-        assert schema["properties"][key]["type"] == "integer"
-        assert schema["properties"][key]["minimum"] == 0
-        assert schema["properties"][key]["maximum"] == 10
-    assert schema["additionalProperties"] is False
+    assert "valid JSON" not in user_prompt
+    assert "score_A:" in user_prompt
+    assert "score_B:" in user_prompt
 
 
-def test_build_pair_score_json_schema_covers_valid_range_with_explanation():
-    schema = evaluate.build_pair_score_json_schema(include_explanation=True)
+def test_load_judge_prompt_with_explanation_uses_freeform_scores():
+    _system_prompt, user_prompt = evaluate.load_judge_system_and_user_prompt(
+        provide_explanation=True
+    )
 
-    assert schema["type"] == "object"
-    assert set(schema["required"]) == {"explanation", "score_A", "score_B"}
-    assert schema["properties"]["explanation"] == {
-        "type": "string",
-        "maxLength": evaluate._PAIR_EXPLANATION_MAX_CHARS,
-    }
-    for key in ("score_A", "score_B"):
-        assert schema["properties"][key]["type"] == "integer"
-        assert schema["properties"][key]["minimum"] == 0
-        assert schema["properties"][key]["maximum"] == 10
-    assert schema["additionalProperties"] is False
+    assert "valid JSON" not in user_prompt
+    assert "first starts with an explanation of your judgement" in user_prompt
+    assert "score_A:" in user_prompt
+    assert "score_B:" in user_prompt
 
 
 def test_main_aligns_local_reference_by_instruction_index(tmp_path, monkeypatch):
@@ -76,6 +69,9 @@ def test_main_aligns_local_reference_by_instruction_index(tmp_path, monkeypatch)
         user_prompt_template,
         truncate_input_chars,
         use_tqdm,
+        usage_tracker,
+        usage_phase,
+        usage_model_spec,
     ):
         captured["instructions"] = instructions
         captured["completions_A"] = completions_A
@@ -109,9 +105,7 @@ def test_main_aligns_local_reference_by_instruction_index(tmp_path, monkeypatch)
     assert prefs.tolist() == [1.0, 1.0]
 
 
-def test_main_passes_json_schema_and_thinking_budget_to_vllm_judge(
-    tmp_path, monkeypatch
-):
+def test_main_passes_thinking_budget_to_vllm_judge(tmp_path, monkeypatch):
     instructions = pd.DataFrame(
         {"instruction": ["Instruction A"]},
         index=pd.Index([1], name="instruction_index"),
@@ -147,7 +141,7 @@ def test_main_passes_json_schema_and_thinking_budget_to_vllm_judge(
         generate_and_evaluate,
         "judge_and_parse_prefs",
         lambda **kwargs: (
-            [{"judge_completion": '{"score_A":1,"score_B":2}'}],
+            [{"judge_completion": "score_A: 1\nscore_B: 2"}],
             None,
             pd.Series([1.0]),
         ),
@@ -165,13 +159,11 @@ def test_main_passes_json_schema_and_thinking_budget_to_vllm_judge(
     )
 
     assert prefs.tolist() == [1.0]
-    assert captured["make_model"]["kwargs"]["structured_outputs_json"] == (
-        evaluate.build_pair_score_json_schema()
-    )
+    assert "structured_outputs_json" not in captured["make_model"]["kwargs"]
     assert captured["make_model"]["kwargs"]["thinking_token_budget"] == 512
 
 
-def test_main_passes_explanation_schema_to_vllm_judge_when_requested(
+def test_main_passes_thinking_budget_to_vllm_judge_when_explanation_requested(
     tmp_path, monkeypatch
 ):
     instructions = pd.DataFrame(
@@ -203,7 +195,7 @@ def test_main_passes_explanation_schema_to_vllm_judge_when_requested(
         generate_and_evaluate,
         "judge_and_parse_prefs",
         lambda **kwargs: (
-            [{"judge_completion": '{"explanation":"ok","score_A":1,"score_B":2}'}],
+            [{"judge_completion": "Explanation: ok\nscore_A: 1\nscore_B: 2"}],
             None,
             pd.Series([1.0]),
         ),
@@ -222,9 +214,7 @@ def test_main_passes_explanation_schema_to_vllm_judge_when_requested(
     )
 
     assert prefs.tolist() == [1.0]
-    assert captured["make_model"]["structured_outputs_json"] == (
-        evaluate.build_pair_score_json_schema(include_explanation=True)
-    )
+    assert "structured_outputs_json" not in captured["make_model"]
     assert captured["make_model"]["thinking_token_budget"] == 512
 
 
@@ -233,7 +223,15 @@ def test_annotate_battles_warns_when_judge_completions_are_truncated(
 ):
     captured = {}
 
-    def fake_do_inference(*, chat_model, inputs, use_tqdm):
+    def fake_do_inference(
+        *,
+        chat_model,
+        inputs,
+        use_tqdm,
+        usage_tracker,
+        usage_phase,
+        usage_model_spec,
+    ):
         captured["judge_prompt"] = inputs[0].to_messages()[1].content
         return ["score_A: 0\nscore_B: 10"]
 
@@ -255,5 +253,7 @@ def test_annotate_battles_warns_when_judge_completions_are_truncated(
     assert "Ans" in captured["judge_prompt"]
     assert "Answer A" not in captured["judge_prompt"]
     assert "Answer B" not in captured["judge_prompt"]
+    assert "valid JSON" not in captured["judge_prompt"]
+    assert "score_A:" in captured["judge_prompt"]
     assert annotations[0].completion_A == "Answer A"
     assert annotations[0].completion_B == "Answer B"
