@@ -279,6 +279,9 @@ class JudgeAnnotation:
     completion_B: str  # completion of the second model
     judge_completion: str  # output of the judge
     judge_input: str | None = None  # input that was passed to the judge
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
 
 
 def annotate_battles(
@@ -384,10 +387,18 @@ def annotate_battles(
 
     # Cache lookup: identify hits and misses.
     cached_completions: list[str | None] = [None] * len(inputs)
+    cached_token_counts: list[tuple[int, int, int]] = [(0, 0, 0)] * len(inputs)
     miss_indices: list[int] = list(range(len(inputs)))
     if ann_keys is not None:
         cached_completions = _get_annotation_cache().batch_get(ann_keys)
         miss_indices = [i for i, c in enumerate(cached_completions) if c is None]
+        hit_indices = [i for i, c in enumerate(cached_completions) if c is not None]
+        if hit_indices:
+            hit_tokens = _get_annotation_cache().batch_get_token_counts(
+                [ann_keys[i] for i in hit_indices]
+            )
+            for i, tokens in zip(hit_indices, hit_tokens):
+                cached_token_counts[i] = tokens
 
     n_hits = len(inputs) - len(miss_indices)
     if n_hits > 0:
@@ -401,35 +412,66 @@ def annotate_battles(
     # Run inference only on cache misses and persist results.
     miss_inputs = [inputs[i] for i in miss_indices]
     miss_completions: list[str] = []
+    miss_token_counts: list[tuple[int, int, int]] = []
     if miss_inputs:
         if cache_only:
             raise RuntimeError(
                 f"{len(miss_inputs)} annotation(s) not found in cache. "
                 "Run without cache_only=True to generate them."
             )
-        miss_completions = do_inference(
+        miss_responses = do_inference(
             chat_model=judge_chat_model,
             inputs=miss_inputs,
             use_tqdm=use_tqdm,
+            return_raw=True,
         )
+        miss_completions = [
+            r.content if hasattr(r, "content") else str(r) for r in miss_responses
+        ]
+
+        def _reasoning(r) -> str:
+            if hasattr(r, "additional_kwargs"):
+                return r.additional_kwargs.get("reasoning_content", "")
+            return ""
+
+        def _token_counts(r) -> tuple[int, int, int]:
+            """Return (input_tokens, output_tokens, reasoning_tokens)."""
+            meta = getattr(r, "response_metadata", {}) or {}
+            usage = meta.get("token_usage") or meta.get("usage") or {}
+            input_tokens = usage.get("prompt_tokens", 0)
+            output_tokens = usage.get("completion_tokens", 0)
+            # Thinking models (e.g. Qwen3, DeepSeek-R1) report reasoning tokens
+            # either at the top level of usage or nested under completion_tokens_details.
+            reasoning_tokens = usage.get("reasoning_tokens", 0) or (
+                usage.get("completion_tokens_details") or {}
+            ).get("reasoning_tokens", 0)
+            return input_tokens, output_tokens, reasoning_tokens
+
+        miss_token_counts = [_token_counts(r) for r in miss_responses]
+
         if ann_keys is not None:
             from multilingual_llmjudge.annotation_cache import AnnotationEntry
-
-            _get_annotation_cache().batch_put(
-                [
-                    AnnotationEntry(
-                        **ann_keys[miss_indices[slot]].__dict__,
-                        judge_input=str(miss_inputs[slot]),
-                        judge_completion=str(miss_completions[slot]),
-                    )
-                    for slot in range(len(miss_indices))
-                ]
-            )
+            entries = []
+            for slot in range(len(miss_indices)):
+                r = miss_responses[slot]
+                it, ot, rt = miss_token_counts[slot]
+                entries.append(AnnotationEntry(
+                    **ann_keys[miss_indices[slot]].__dict__,
+                    judge_input=str(miss_inputs[slot]),
+                    judge_completion=miss_completions[slot],
+                    reasoning_content=_reasoning(r),
+                    input_tokens=it,
+                    output_tokens=ot,
+                    reasoning_tokens=rt,
+                ))
+            _get_annotation_cache().batch_put(entries)
 
     # Merge hits and misses back into the original order.
     all_completions: list[str] = list(cached_completions)  # type: ignore[arg-type]
+    all_token_counts: list[tuple[int, int, int]] = list(cached_token_counts)
     for slot, idx in enumerate(miss_indices):
         all_completions[idx] = miss_completions[slot]
+        all_token_counts[idx] = miss_token_counts[slot] if miss_token_counts else (0, 0, 0)
 
     input_strs = [str(inp) for inp in inputs]
     return [
@@ -439,6 +481,9 @@ def annotate_battles(
             instruction=instructions[i],
             completion_A=completions_A[i],
             completion_B=completions_B[i],
+            input_tokens=all_token_counts[i][0],
+            output_tokens=all_token_counts[i][1],
+            reasoning_tokens=all_token_counts[i][2],
         )
         for i in range(len(inputs))
     ]

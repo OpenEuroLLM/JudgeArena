@@ -108,7 +108,7 @@ def _is_retryable_error(e: Exception) -> bool:
     )
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def do_inference(chat_model, inputs, use_tqdm: bool = False, return_raw: bool = False):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -164,6 +164,8 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
+    if return_raw:
+        return res
     res = [x.content if hasattr(x, "content") else x for x in res]
     return res
 
@@ -417,9 +419,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         except ImportError as e:
             print(str(e))
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
-        assert model_provider in model_cls_dict, (
-            f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
-        )
+        assert (
+            model_provider in model_cls_dict
+        ), f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         return model_cls_dict[model_provider](**engine_kwargs)
 
 
