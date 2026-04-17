@@ -204,7 +204,7 @@ def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
 
 
 def test_pair_v2_system_prompt_matches_original_fastchat_contract():
-    rendered = fastchat_compat._PAIR_V2.render_system_prompt(provide_explanation=True)
+    rendered = fastchat_compat._PAIR_V2.system_prompt
 
     assert "provide a short explanation" in rendered
     assert "valid JSON" not in rendered
@@ -317,4 +317,4 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         "thinking_token_budget": 512,
     }
     assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
-    assert captured["run_mt_bench_fastchat"]["provide_explanation"] is True
+    assert "provide_explanation" not in captured["run_mt_bench_fastchat"]

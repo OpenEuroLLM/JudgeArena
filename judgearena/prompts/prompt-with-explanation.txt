@@ -1,13 +1,13 @@
 <|User Prompt|>
 {user_prompt}
 
-<|The Start of Assistant A's {completion_label}|>
+<|The Start of Assistant A's Answer|>
 {completion_A}
-<|The End of Assistant A's {completion_label}|>
+<|The End of Assistant A's Answer|>
 
-<|The Start of Assistant B's {completion_label}|>
+<|The Start of Assistant B's Answer|>
 {completion_B}
-<|The End of Assistant B's {completion_label}|>
+<|The End of Assistant B's Answer|>
 
 # Your output
 

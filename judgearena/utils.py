@@ -4,6 +4,7 @@ import re
 import time
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -35,6 +36,129 @@ VLLM_QWEN_REASONING_START_STR = "<think>"
 VLLM_QWEN_REASONING_END_STR = (
     "I have to give the solution based on the thinking directly now.</think>"
 )
+
+
+@dataclass(frozen=True)
+class ReasoningModelDefaults:
+    reasoning_parser: str
+    reasoning_config_kwargs: dict[str, str] | None = None
+    enabled_chat_template_kwargs: dict[str, object] | None = None
+    disabled_chat_template_kwargs: dict[str, object] | None = None
+
+
+_REASONING_MODEL_DEFAULTS: tuple[
+    tuple[tuple[str, ...], ReasoningModelDefaults], ...
+] = (
+    (
+        ("qwen3",),
+        ReasoningModelDefaults(
+            reasoning_parser="qwen3",
+            reasoning_config_kwargs={
+                "reasoning_start_str": VLLM_QWEN_REASONING_START_STR,
+                "reasoning_end_str": VLLM_QWEN_REASONING_END_STR,
+            },
+            disabled_chat_template_kwargs={"enable_thinking": False},
+        ),
+    ),
+    (("qwq-32b",), ReasoningModelDefaults(reasoning_parser="deepseek_r1")),
+    (
+        ("deepseek-r1", "r1-distill"),
+        ReasoningModelDefaults(reasoning_parser="deepseek_r1"),
+    ),
+    (
+        ("deepseek-v3.1",),
+        ReasoningModelDefaults(
+            reasoning_parser="deepseek_v3",
+            enabled_chat_template_kwargs={"thinking": True},
+            disabled_chat_template_kwargs={"thinking": False},
+        ),
+    ),
+    (
+        ("ernie-4.5", "ernie4.5"),
+        ReasoningModelDefaults(reasoning_parser="ernie45"),
+    ),
+    (("glm-4.5", "glm4.5"), ReasoningModelDefaults(reasoning_parser="glm45")),
+    (
+        ("holo2",),
+        ReasoningModelDefaults(
+            reasoning_parser="holo2",
+            disabled_chat_template_kwargs={"thinking": False},
+        ),
+    ),
+    (
+        ("hunyuan-a13b",),
+        ReasoningModelDefaults(reasoning_parser="hunyuan_a13b"),
+    ),
+    (
+        ("granite-3.2",),
+        ReasoningModelDefaults(
+            reasoning_parser="granite",
+            enabled_chat_template_kwargs={"thinking": True},
+            disabled_chat_template_kwargs={"thinking": False},
+        ),
+    ),
+    (
+        ("minimax-m2",),
+        ReasoningModelDefaults(reasoning_parser="minimax_m2_append_think"),
+    ),
+)
+
+
+def get_reasoning_model_defaults(model_name: str) -> ReasoningModelDefaults | None:
+    """Return JudgeArena's explicit reasoning defaults for known model families."""
+    normalized = model_name.lower()
+    for markers, defaults in _REASONING_MODEL_DEFAULTS:
+        if any(marker in normalized for marker in markers):
+            return defaults
+    return None
+
+
+def should_default_thinking_token_budget(
+    model_name: str, vllm_kwargs: dict[str, object]
+) -> bool:
+    """Return True when JudgeArena should auto-apply a thinking-token budget."""
+    return (
+        get_reasoning_model_defaults(model_name) is not None
+        or "reasoning_parser" in vllm_kwargs
+        or "reasoning_config" in vllm_kwargs
+    )
+
+
+def _resolve_chat_template_kwargs(
+    *,
+    explicit_chat_template_kwargs: dict[str, object] | None,
+    reasoning_defaults: ReasoningModelDefaults | None,
+    enable_reasoning: bool,
+    disable_thinking: bool,
+) -> dict[str, object] | None:
+    chat_template_kwargs = dict(explicit_chat_template_kwargs or {})
+    explicit_keys = set(chat_template_kwargs)
+
+    if enable_reasoning and not disable_thinking and reasoning_defaults is not None:
+        for key, value in (
+            reasoning_defaults.enabled_chat_template_kwargs or {}
+        ).items():
+            chat_template_kwargs.setdefault(key, value)
+
+    if disable_thinking:
+        disabled_defaults = (
+            reasoning_defaults.disabled_chat_template_kwargs
+            if reasoning_defaults is not None
+            else {"enable_thinking": False}
+        )
+        for key, value in disabled_defaults.items():
+            if key not in explicit_keys:
+                chat_template_kwargs[key] = value
+
+    return chat_template_kwargs or None
+
+
+def _attach_provider_metadata(model_instance: object, provider_name: str) -> object:
+    try:
+        model_instance._judgearena_provider = provider_name
+    except Exception:
+        pass
+    return model_instance
 
 
 def set_langchain_cache():
@@ -280,8 +404,19 @@ class ChatVLLM:
         self.max_tokens = max_tokens
         disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
         thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
-        self._chat_template_kwargs = (
-            {"enable_thinking": False} if disable_thinking else None
+        explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
+        reasoning_defaults = get_reasoning_model_defaults(model)
+        explicit_reasoning_settings = (
+            "reasoning_parser" in vllm_kwargs or "reasoning_config" in vllm_kwargs
+        )
+        enable_reasoning = (
+            explicit_reasoning_settings or thinking_token_budget is not None
+        )
+        self._chat_template_kwargs = _resolve_chat_template_kwargs(
+            explicit_chat_template_kwargs=explicit_chat_template_kwargs,
+            reasoning_defaults=reasoning_defaults,
+            enable_reasoning=enable_reasoning,
+            disable_thinking=disable_thinking,
         )
 
         # Cap max_model_len to the model's max_position_embeddings so that
@@ -314,20 +449,28 @@ class ChatVLLM:
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
         if thinking_token_budget is not None:
-            if "qwen3" in model.lower():
-                vllm_kwargs.setdefault(
-                    "reasoning_config",
-                    ReasoningConfig(
-                        reasoning_start_str=VLLM_QWEN_REASONING_START_STR,
-                        reasoning_end_str=VLLM_QWEN_REASONING_END_STR,
-                    ),
+            if reasoning_defaults is None and not explicit_reasoning_settings:
+                warnings.warn(
+                    f"Model '{model}' is not in JudgeArena's supported reasoning-family map. "
+                    "Ignoring thinking_token_budget unless reasoning_parser or "
+                    "reasoning_config is provided explicitly.",
+                    stacklevel=2,
                 )
-                vllm_kwargs.setdefault("reasoning_parser", "qwen3")
             else:
-                vllm_kwargs.setdefault("reasoning_config", ReasoningConfig())
-            self._sampling_params_kwargs["thinking_token_budget"] = int(
-                thinking_token_budget
-            )
+                if reasoning_defaults is not None:
+                    vllm_kwargs.setdefault(
+                        "reasoning_parser", reasoning_defaults.reasoning_parser
+                    )
+                    if reasoning_defaults.reasoning_config_kwargs is not None:
+                        vllm_kwargs.setdefault(
+                            "reasoning_config",
+                            ReasoningConfig(
+                                **reasoning_defaults.reasoning_config_kwargs
+                            ),
+                        )
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
@@ -340,12 +483,7 @@ class ChatVLLM:
         if chat_template:
             self.chat_template = chat_template
             self._use_generate = False
-            if disable_thinking:
-                print(
-                    f"ChatVLLM: using explicit chat template with thinking disabled for '{model}'"
-                )
-            else:
-                print(f"ChatVLLM: using explicit chat template for '{model}'")
+            print(f"ChatVLLM: using explicit chat template for '{model}'")
         else:
             if not getattr(self.tokenizer, "chat_template", None):
                 warnings.warn(
@@ -365,12 +503,7 @@ class ChatVLLM:
             else:
                 self.chat_template = None
                 self._use_generate = False
-                if disable_thinking:
-                    print(
-                        f"ChatVLLM: using tokenizer chat template with thinking disabled for '{model}'"
-                    )
-                else:
-                    print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
+                print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
 
     def set_temperature(self, temperature: float) -> None:
         from vllm import SamplingParams
@@ -517,7 +650,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     model_provider = model.split("/")[0]
 
     if model_provider == "Dummy":
-        return DummyModel(model)
+        return _attach_provider_metadata(DummyModel(model), model_provider)
 
     model_name = "/".join(model.split("/")[1:])
     print(f"Loading {model_provider}(model={model_name})")
@@ -527,18 +660,24 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
 
-        return ChatVLLM(
-            model=model_name,
-            **engine_kwargs,
+        return _attach_provider_metadata(
+            ChatVLLM(
+                model=model_name,
+                **engine_kwargs,
+            ),
+            model_provider,
         )
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
-        return ChatOpenAI(
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            base_url="https://openrouter.ai/api/v1",
-            model=model_name,
-            **engine_kwargs,
+        return _attach_provider_metadata(
+            ChatOpenAI(
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                base_url="https://openrouter.ai/api/v1",
+                model=model_name,
+                **engine_kwargs,
+            ),
+            model_provider,
         )
     else:
         model_classes = [
@@ -566,17 +705,24 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         assert model_provider in model_cls_dict, (
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         )
-        return model_cls_dict[model_provider](**engine_kwargs)
+        return _attach_provider_metadata(
+            model_cls_dict[model_provider](**engine_kwargs), model_provider
+        )
 
 
 def infer_model_spec_from_instance(model: object) -> str | None:
     if isinstance(model, DummyModel):
         return model.name
+    provider_name = getattr(model, "_judgearena_provider", None)
     model_path = getattr(model, "model_path", None)
     if isinstance(model_path, str):
-        return f"VLLM/{model_path}"
+        if isinstance(provider_name, str):
+            return f"{provider_name}/{model_path}"
+        return model_path
     model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
     if isinstance(model_name, str):
+        if isinstance(provider_name, str):
+            return f"{provider_name}/{model_name}"
         return f"{model.__class__.__name__}/{model_name}"
     return None
 

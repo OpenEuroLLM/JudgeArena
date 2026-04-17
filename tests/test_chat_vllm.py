@@ -1,6 +1,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 import judgearena.utils as utils
 
 
@@ -83,3 +85,45 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
     assert captured["chat_call"]["kwargs"]["chat_template_kwargs"] == {
         "enable_thinking": False
     }
+
+
+def test_chat_vllm_enables_family_specific_chat_template_kwargs(monkeypatch):
+    captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
+    chat_model = utils.ChatVLLM(
+        model="deepseek-ai/DeepSeek-V3.1",
+        max_tokens=16,
+        thinking_token_budget=32,
+        gpu_memory_utilization=0.7,
+    )
+
+    outputs = chat_model.batch(["hello"])
+
+    assert outputs == ["ok"]
+    assert captured["sampling_kwargs"]["thinking_token_budget"] == 32
+    assert captured["llm_init"]["kwargs"]["reasoning_parser"] == "deepseek_v3"
+    assert captured["chat_call"]["kwargs"]["chat_template_kwargs"] == {"thinking": True}
+
+
+def test_chat_vllm_ignores_thinking_budget_for_unknown_family(monkeypatch):
+    captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
+
+    with pytest.warns(UserWarning, match="supported reasoning-family map"):
+        utils.ChatVLLM(
+            model="meta-llama/Llama-3.3-70B-Instruct",
+            max_tokens=32,
+            thinking_token_budget=64,
+            gpu_memory_utilization=0.7,
+        )
+
+    assert "thinking_token_budget" not in captured["sampling_kwargs"]
+    assert "reasoning_parser" not in captured["llm_init"]["kwargs"]
+    assert "reasoning_config" not in captured["llm_init"]["kwargs"]
+
+
+def test_infer_model_spec_uses_attached_provider_name():
+    model = SimpleNamespace(
+        _judgearena_provider="LlamaCpp",
+        model_path="./models/model.gguf",
+    )
+
+    assert utils.infer_model_spec_from_instance(model) == "LlamaCpp/./models/model.gguf"

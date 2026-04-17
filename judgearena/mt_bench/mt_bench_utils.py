@@ -34,6 +34,7 @@ from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
     make_model,
+    should_default_thinking_token_budget,
 )
 
 if TYPE_CHECKING:
@@ -166,7 +167,6 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    provide_explanation: bool,
     usage_tracker: OpenRouterReferencePricingTracker,
     started_at_utc: datetime,
 ) -> pd.Series:
@@ -184,7 +184,6 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=args.use_tqdm,
-            provide_explanation=provide_explanation,
             usage_tracker=usage_tracker,
             usage_phase="judge",
         )
@@ -271,9 +270,17 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         )
         args.max_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     judge_model_kwargs = dict(args.engine_kwargs)
-    judge_model_kwargs.setdefault(
-        "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
-    )
+    if args.judge_model.split("/")[0] == "VLLM":
+        judge_model_name = "/".join(args.judge_model.split("/")[1:])
+        if (
+            "thinking_token_budget" not in judge_model_kwargs
+            and should_default_thinking_token_budget(
+                judge_model_name, judge_model_kwargs
+            )
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
 
     judge_chat_model = make_model(
         model=args.judge_model,
@@ -289,7 +296,6 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
-        provide_explanation=True,
         usage_tracker=usage_tracker,
         started_at_utc=run_started_at,
     )

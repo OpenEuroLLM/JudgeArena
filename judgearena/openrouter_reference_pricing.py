@@ -1,3 +1,14 @@
+"""Reference pricing utilities for local JudgeArena runs.
+
+This module counts local prompt/completion tokens and, when an exact
+OpenRouter model match exists, attaches a comparable public-price estimate.
+Refresh the cached catalog on a machine with internet access via
+`uv run python -m judgearena.openrouter_reference_pricing --refresh`.
+By default the cache lives under
+`$JUDGEARENA_DATA/reference_pricing/openrouter_models.json`, unless
+`JUDGEARENA_OPENROUTER_PRICE_CACHE` overrides it.
+"""
+
 from __future__ import annotations
 
 import argparse

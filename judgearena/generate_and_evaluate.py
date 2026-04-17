@@ -35,46 +35,23 @@ from judgearena.utils import (
     download_hf,
     make_model,
     read_df,
+    should_default_thinking_token_budget,
 )
 
 
 def try_load_dataset_completions(
     dataset: str, model: str, n_instructions: int | None
 ) -> pd.DataFrame | None:
-    """Try loading pre-existing completions from the dataset or a local file.
+    """Try loading pre-existing completions from the dataset.
 
     Some datasets (e.g. alpaca-eval) ship with completions for well-known
     models such as ``gpt4_1106_preview``.  When ``model`` matches a column in
     ``model_outputs/{dataset}.csv.zip``, those completions are returned
     directly so that no model instantiation / generation is needed.
 
-    ``model`` may also be a local dataframe path. Local files must contain
-    ``instruction_index`` and ``output`` columns.
-
     Returns a DataFrame with columns ``completion`` and ``instruction_index``,
     or ``None`` when no pre-existing completions are found.
     """
-    local_path = Path(model)
-    if local_path.exists():
-        print(f"Loading completions from local path '{local_path}'.")
-        df_outputs = read_df(local_path)
-        required_columns = {"instruction_index", "output"}
-        missing_columns = required_columns.difference(df_outputs.columns)
-        if missing_columns:
-            missing_columns_list = ", ".join(sorted(missing_columns))
-            raise ValueError(
-                f"Local completion file '{local_path}' is missing required columns: "
-                f"{missing_columns_list}."
-            )
-
-        df_outputs = df_outputs.loc[:, ["instruction_index", "output"]].rename(
-            columns={"output": "completion"}
-        )
-        df_outputs.loc[:, "completion"] = df_outputs.loc[:, "completion"].fillna("")
-        if n_instructions is not None:
-            df_outputs = df_outputs.head(n_instructions)
-        return df_outputs
-
     local_path_tables = data_root / "tables"
     if is_arena_hard_dataset(dataset):
         download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
@@ -304,9 +281,16 @@ def main(args: CliArgs):
 
     judge_model_kwargs = dict(args.engine_kwargs)
     if args.judge_model.split("/")[0] == "VLLM":
-        judge_model_kwargs.setdefault(
-            "thinking_token_budget", DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
-        )
+        judge_model_name = "/".join(args.judge_model.split("/")[1:])
+        if (
+            "thinking_token_budget" not in judge_model_kwargs
+            and should_default_thinking_token_budget(
+                judge_model_name, judge_model_kwargs
+            )
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
 
     judge_chat_model = make_model(
         model=args.judge_model,
