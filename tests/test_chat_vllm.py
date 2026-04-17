@@ -87,27 +87,51 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
     }
 
 
-def test_chat_vllm_enables_family_specific_chat_template_kwargs(monkeypatch):
+def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():
+    assert utils.build_default_judge_model_kwargs(
+        "VLLM/Qwen/Qwen3.5-27B-FP8",
+        {"gpu_memory_utilization": 0.7},
+    ) == {
+        "gpu_memory_utilization": 0.7,
+        "thinking_token_budget": 512,
+    }
+    assert utils.build_default_judge_model_kwargs(
+        "VLLM/meta-llama/Llama-3.3-70B-Instruct",
+        {"gpu_memory_utilization": 0.7},
+    ) == {"gpu_memory_utilization": 0.7}
+    assert (
+        utils.build_default_judge_model_kwargs(
+            "OpenRouter/qwen/qwen3-32b",
+            {},
+        )
+        == {}
+    )
+
+
+def test_chat_vllm_preserves_explicit_reasoning_settings_for_non_qwen(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
-    chat_model = utils.ChatVLLM(
-        model="deepseek-ai/DeepSeek-V3.1",
+    explicit_reasoning_config = object()
+
+    utils.ChatVLLM(
+        model="meta-llama/Llama-3.3-70B-Instruct",
         max_tokens=16,
         thinking_token_budget=32,
+        reasoning_parser="custom-parser",
+        reasoning_config=explicit_reasoning_config,
         gpu_memory_utilization=0.7,
     )
 
-    outputs = chat_model.batch(["hello"])
-
-    assert outputs == ["ok"]
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 32
-    assert captured["llm_init"]["kwargs"]["reasoning_parser"] == "deepseek_v3"
-    assert captured["chat_call"]["kwargs"]["chat_template_kwargs"] == {"thinking": True}
+    assert captured["llm_init"]["kwargs"]["reasoning_parser"] == "custom-parser"
+    assert (
+        captured["llm_init"]["kwargs"]["reasoning_config"] is explicit_reasoning_config
+    )
 
 
 def test_chat_vllm_ignores_thinking_budget_for_unknown_family(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
-    with pytest.warns(UserWarning, match="supported reasoning-family map"):
+    with pytest.warns(UserWarning, match="built-in Qwen reasoning defaults"):
         utils.ChatVLLM(
             model="meta-llama/Llama-3.3-70B-Instruct",
             max_tokens=32,
@@ -120,10 +144,19 @@ def test_chat_vllm_ignores_thinking_budget_for_unknown_family(monkeypatch):
     assert "reasoning_config" not in captured["llm_init"]["kwargs"]
 
 
-def test_infer_model_spec_uses_attached_provider_name():
-    model = SimpleNamespace(
-        _judgearena_provider="LlamaCpp",
-        model_path="./models/model.gguf",
-    )
+def test_infer_model_spec_uses_type_based_vllm_fallback():
+    model = object.__new__(utils.ChatVLLM)
+    model.model_path = "Qwen/Qwen3.5-27B-FP8"
+
+    assert utils.infer_model_spec_from_instance(model) == "VLLM/Qwen/Qwen3.5-27B-FP8"
+
+
+def test_infer_model_spec_uses_type_based_llamacpp_fallback(monkeypatch):
+    class FakeLlamaCpp:
+        def __init__(self, model_path: str):
+            self.model_path = model_path
+
+    monkeypatch.setattr(utils, "LlamaCpp", FakeLlamaCpp)
+    model = FakeLlamaCpp("./models/model.gguf")
 
     assert utils.infer_model_spec_from_instance(model) == "LlamaCpp/./models/model.gguf"

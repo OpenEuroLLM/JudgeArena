@@ -28,14 +28,13 @@ from judgearena.openrouter_reference_pricing import (
 )
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
-    DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET,
+    build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
     make_model,
     read_df,
-    should_default_thinking_token_budget,
 )
 
 
@@ -279,18 +278,9 @@ def main(args: CliArgs):
     print(completions_B.values[0])
     print(f"Evaluating completions with judge {args.judge_model}.")
 
-    judge_model_kwargs = dict(args.engine_kwargs)
-    if args.judge_model.split("/")[0] == "VLLM":
-        judge_model_name = "/".join(args.judge_model.split("/")[1:])
-        if (
-            "thinking_token_budget" not in judge_model_kwargs
-            and should_default_thinking_token_budget(
-                judge_model_name, judge_model_kwargs
-            )
-        ):
-            judge_model_kwargs["thinking_token_budget"] = (
-                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
-            )
+    judge_model_kwargs = build_default_judge_model_kwargs(
+        args.judge_model, args.engine_kwargs
+    )
 
     judge_chat_model = make_model(
         model=args.judge_model,

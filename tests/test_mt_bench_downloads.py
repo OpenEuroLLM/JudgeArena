@@ -211,6 +211,9 @@ def test_pair_v2_system_prompt_matches_original_fastchat_contract():
     assert '"[[A]]"' in rendered
     assert '"[[B]]"' in rendered
     assert '"[[C]]"' in rendered
+    assert rendered.endswith(
+        'After providing your explanation, output your final verdict by strictly following this format: "[[A]]" if assistant A is better, "[[B]]" if assistant B is better, and "[[C]]" for a tie.\n'
+    )
 
 
 def test_conservative_winner_marks_one_sided_parse_failures_as_error():

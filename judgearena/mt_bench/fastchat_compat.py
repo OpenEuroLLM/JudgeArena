@@ -77,11 +77,6 @@ def _build_system_prompt(
         task_description=task_description,
         focus_line=focus_segment,
         begin_instruction=begin_instruction,
-        output_format_instruction=(
-            "After providing your explanation, output your final verdict by strictly following this format: "
-            '"[[A]]" if assistant A is better, "[[B]]" if assistant B is better, '
-            'and "[[C]]" for a tie.'
-        ),
     )
 
 

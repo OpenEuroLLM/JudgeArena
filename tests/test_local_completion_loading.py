@@ -193,6 +193,64 @@ def test_main_does_not_pass_thinking_budget_to_non_reasoning_vllm_judge(
     assert "thinking_token_budget" not in captured["make_model"]
 
 
+def test_main_preserves_explicit_reasoning_engine_kwargs_for_non_qwen_vllm_judge(
+    tmp_path, monkeypatch
+):
+    instructions = pd.DataFrame(
+        {"instruction": ["Instruction A"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    completions_df = pd.DataFrame(
+        {"instruction_index": [1], "completion": ["Loaded answer"]}
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_instructions",
+        lambda dataset, n_instructions=None: instructions,
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "try_load_dataset_completions",
+        lambda dataset, model, n_instructions: completions_df,
+    )
+
+    def fake_make_model(*, model, max_tokens, max_model_len, chat_template, **kwargs):
+        captured["make_model"] = kwargs
+        return object()
+
+    monkeypatch.setattr(generate_and_evaluate, "make_model", fake_make_model)
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "judge_and_parse_prefs",
+        lambda **kwargs: (
+            [{"judge_completion": "score_A: 1\nscore_B: 2"}],
+            None,
+            pd.Series([1.0]),
+        ),
+    )
+
+    prefs = main_generate_and_eval(
+        CliArgs(
+            dataset="alpaca-eval",
+            model_A="Dummy/model-a",
+            model_B="Dummy/model-b",
+            judge_model="VLLM/meta-llama/Llama-3.3-70B-Instruct",
+            n_instructions=1,
+            result_folder=str(tmp_path / "results"),
+            engine_kwargs={
+                "reasoning_parser": "custom-parser",
+                "thinking_token_budget": 2048,
+            },
+        )
+    )
+
+    assert prefs.tolist() == [1.0]
+    assert captured["make_model"]["reasoning_parser"] == "custom-parser"
+    assert captured["make_model"]["thinking_token_budget"] == 2048
+
+
 def test_annotate_battles_warns_when_judge_completions_are_truncated(
     monkeypatch, capsys
 ):
