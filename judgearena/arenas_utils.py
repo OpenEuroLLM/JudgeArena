@@ -18,14 +18,53 @@ def _extract_instruction_text(turn: dict) -> str:
     return " ".join(block["text"] for block in content if block.get("type") == "text")
 
 
-KNOWN_ARENAS = ["LMArena-100k", "LMArena-140k", "ComparIA"]
+KNOWN_ARENAS = ["LMArena-55k", "LMArena-100k", "LMArena-140k", "ComparIA"]
 
 
 def _load_arena_dataframe(
     arena: str, comparia_revision: str | None = None
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
-    if "LMArena" in arena:
+    if arena == "LMArena-55k":
+        path = snapshot_download(
+            repo_id="lmarena-ai/arena-human-preference-55k",
+            repo_type="dataset",
+            allow_patterns="*.csv",
+            force_download=False,
+        )
+        df = pd.read_csv(Path(path) / "train.csv")
+
+        def _winner_55k(row) -> str | None:
+            if row["winner_tie"]:
+                return "tie"
+            if row["winner_model_a"]:
+                return "model_a"
+            if row["winner_model_b"]:
+                return "model_b"
+            return None
+
+        df["winner"] = df.apply(_winner_55k, axis=1)
+        df = df[df["winner"].notna()].copy()
+
+        df["conversation_a"] = df.apply(
+            lambda r: [
+                {"role": "user", "content": str(r["prompt"])},
+                {"role": "assistant", "content": str(r["response_a"])},
+            ],
+            axis=1,
+        )
+        df["conversation_b"] = df.apply(
+            lambda r: [
+                {"role": "user", "content": str(r["prompt"])},
+                {"role": "assistant", "content": str(r["response_b"])},
+            ],
+            axis=1,
+        )
+        df["question_id"] = df["id"]
+        df["tstamp"] = 0
+        df["benchmark"] = "LMArena-55k"
+
+    elif "LMArena" in arena:
         size = arena.split("-")[1]  # "100k" or "140k"
         path = snapshot_download(
             repo_id=f"lmarena-ai/arena-human-preference-{size}",
@@ -139,7 +178,7 @@ def load_arena_dataframe(
     if arena is None:
         arenas = KNOWN_ARENAS
     elif arena == "LMArena":
-        arenas = ["LMArena-100k", "LMArena-140k"]
+        arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
         return _load_arena_dataframe(arena, comparia_revision)
     return pd.concat(
