@@ -501,7 +501,7 @@ class ChatVLLM:
                         stacklevel=2,
                     )
             else:
-                self.chat_template = None
+                self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False
                 print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
 
