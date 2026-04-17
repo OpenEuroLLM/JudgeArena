@@ -4,15 +4,20 @@ and then evaluates them using a judge model.
 """
 
 import argparse
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 
 import pandas as pd
 
-from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
+from judgearena.cli_common import (
+    BaseCliArgs,
+    add_common_arguments,
+    parse_engine_kwargs,
+    parse_optional_bool,
+)
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -20,6 +25,7 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.openrouter_reference_pricing import (
     OpenRouterReferencePricingTracker,
@@ -28,11 +34,13 @@ from judgearena.openrouter_reference_pricing import (
 )
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
+    LimitEventTracker,
     build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
+    is_qwen_reasoning_model,
     make_model,
     read_df,
 )
@@ -110,7 +118,10 @@ class CliArgs(BaseCliArgs):
         )
         parser.add_argument(
             "--use_tqdm",
-            action="store_true",
+            nargs="?",
+            const=True,
+            default=False,
+            type=parse_optional_bool,
             help="If specified, use tqdm, does not work with all model providers, vLLM in particular.",
         )
         add_common_arguments(parser)
@@ -126,6 +137,9 @@ class CliArgs(BaseCliArgs):
             provide_explanation=args.provide_explanation,
             swap_mode=args.swap_mode,
             ignore_cache=args.ignore_cache,
+            judge_prompt_preset=args.judge_prompt_preset,
+            battle_thinking_token_budget=args.battle_thinking_token_budget,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
             truncate_all_input_chars=args.truncate_all_input_chars,
             max_out_tokens_models=args.max_out_tokens_models,
             max_out_tokens_judge=args.max_out_tokens_judge,
@@ -139,6 +153,53 @@ class CliArgs(BaseCliArgs):
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
+
+
+def _build_generation_model_kwargs(
+    *, args: CliArgs, model_spec: str
+) -> dict[str, object]:
+    generation_model_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_qwen_reasoning_model(model_name)
+    ):
+        generation_model_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_model_kwargs
+
+
+def _build_judge_model_kwargs(
+    *, args: CliArgs, limit_event_tracker: LimitEventTracker | None
+) -> dict[str, object]:
+    judge_model_kwargs = build_default_judge_model_kwargs(
+        args.judge_model, args.engine_kwargs
+    )
+    if limit_event_tracker is not None:
+        judge_model_kwargs["limit_event_tracker"] = limit_event_tracker
+        judge_model_kwargs["limit_event_stage"] = "judge_model_init"
+        judge_model_kwargs["limit_event_model_spec"] = args.judge_model
+    return judge_model_kwargs
+
+
+def _generation_cache_name(args: CliArgs, *, model_spec: str) -> str:
+    generation_config = {
+        "truncate_all_input_chars": args.truncate_all_input_chars,
+        "max_out_tokens_models": args.max_out_tokens_models,
+        "max_model_len": args.max_model_len,
+        "chat_template": args.chat_template,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "engine_kwargs": _build_generation_model_kwargs(
+            args=args, model_spec=model_spec
+        ),
+    }
+    generation_config_hash = hashlib.sha256(
+        json.dumps(generation_config, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"{args.dataset}_{model_spec}_{args.n_instructions}_{generation_config_hash}"
 
 
 def print_results(results):
@@ -174,6 +235,7 @@ def main(args: CliArgs):
 
     run_started_at = datetime.now(UTC)
     usage_tracker = OpenRouterReferencePricingTracker()
+    limit_event_tracker = LimitEventTracker()
     print(
         f"Using dataset {args.dataset} and evaluating models {args.model_A} and {args.model_B}."
     )
@@ -207,69 +269,59 @@ def main(args: CliArgs):
         f"{args.model_B} (or loading them directly if present)"
     )
 
-    # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    gen_fun = (
-        partial(
-            generate_base,
+    generation_function = generate_base if is_fluency_task else generate_instructions
+
+    def _run_generation(model_spec: str, usage_phase: str) -> pd.DataFrame:
+        return generation_function(
+            instructions=instructions,
+            model=model_spec,
             truncate_input_chars=args.truncate_all_input_chars,
             max_tokens=args.max_out_tokens_models,
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            limit_event_tracker=limit_event_tracker,
+            **_build_generation_model_kwargs(args=args, model_spec=model_spec),
         )
-        if is_fluency_task
-        else partial(
-            generate_instructions,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-    )
+
+    def _align_completion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        return df.set_index("instruction_index").loc[instructions.index].reset_index()
+
     dataset_completions_A = try_load_dataset_completions(
         args.dataset, args.model_A, n_instructions
     )
     if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[
-            instructions.index, "completion"
-        ]
+        completions_A_df = _align_completion_dataframe(dataset_completions_A)
     else:
-        completions_A = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_A,
-                use_tqdm=args.use_tqdm,
-                usage_tracker=usage_tracker,
-                usage_phase="generation_model_A",
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.dataset}_{args.model_A}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_A = completions_A.loc[:, "completion"]
+        completions_A_df = _align_completion_dataframe(
+            cache_function_dataframe(
+                lambda: _run_generation(args.model_A, "generation_model_A"),
+                ignore_cache=ignore_cache,
+                cache_name=_generation_cache_name(args, model_spec=args.model_A),
+            )
+        )
+    completions_A = completions_A_df.set_index("instruction_index").loc[
+        instructions.index, "completion"
+    ]
 
     dataset_completions_B = try_load_dataset_completions(
         args.dataset, args.model_B, n_instructions
     )
     if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[
-            instructions.index, "completion"
-        ]
+        completions_B_df = _align_completion_dataframe(dataset_completions_B)
     else:
-        completions_B = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_B,
-                use_tqdm=args.use_tqdm,
-                usage_tracker=usage_tracker,
-                usage_phase="generation_model_B",
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.dataset}_{args.model_B}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_B = completions_B.loc[:, "completion"]
+        completions_B_df = _align_completion_dataframe(
+            cache_function_dataframe(
+                lambda: _run_generation(args.model_B, "generation_model_B"),
+                ignore_cache=ignore_cache,
+                cache_name=_generation_cache_name(args, model_spec=args.model_B),
+            )
+        )
+    completions_B = completions_B_df.set_index("instruction_index").loc[
+        instructions.index, "completion"
+    ]
     print(f"\nFirst instruction/context: {instructions.values[0]}")
 
     print(f"\nFirst completion of {args.model_A}")
@@ -278,16 +330,12 @@ def main(args: CliArgs):
     print(completions_B.values[0])
     print(f"Evaluating completions with judge {args.judge_model}.")
 
-    judge_model_kwargs = build_default_judge_model_kwargs(
-        args.judge_model, args.engine_kwargs
-    )
-
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_model_len,
         chat_template=args.chat_template,
-        **judge_model_kwargs,
+        **_build_judge_model_kwargs(args=args, limit_event_tracker=limit_event_tracker),
     )
 
     name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
@@ -311,11 +359,9 @@ def main(args: CliArgs):
     else:
         # the default system prompt of annotate is to compare instruction tuned models.
         system_prompt = None
-    (
-        effective_judge_system_prompt,
-        judge_user_prompt_template,
-    ) = resolve_judge_prompts(
+    resolved_prompt = resolve_judge_prompts(
         provide_explanation=args.provide_explanation,
+        prompt_preset=args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET,
         system_prompt=system_prompt,
     )
 
@@ -324,15 +370,20 @@ def main(args: CliArgs):
         instructions=instructions.head(n_instructions).tolist(),
         completions_A=completions_A.head(n_instructions).tolist(),
         completions_B=completions_B.head(n_instructions).tolist(),
+        case_ids=instructions.head(n_instructions).index.tolist(),
         swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
-        system_prompt=effective_judge_system_prompt,
-        user_prompt_template=judge_user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
+        parser_mode=resolved_prompt.parser_mode,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
         truncate_input_chars=args.truncate_all_input_chars,
         use_tqdm=args.use_tqdm,
         usage_tracker=usage_tracker,
         usage_phase="judge",
         usage_model_spec=args.judge_model,
+        limit_event_tracker=limit_event_tracker,
     )
 
     df = pd.DataFrame(annotations)
@@ -361,7 +412,11 @@ def main(args: CliArgs):
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
+        "judge_prompt_preset": resolved_prompt.preset_name,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **summary,
+        "limit_events": limit_event_tracker.build_summary(),
         "preferences": prefs.tolist(),
     }
     print(f"{args.model_A} vs {args.model_B} judged by {args.judge_model}")
@@ -396,8 +451,8 @@ def main(args: CliArgs):
                 "completions_A": eval_completions_A,
                 "completions_B": eval_completions_B,
             },
-            judge_system_prompt=effective_judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
             pricing_reference=pricing_reference,
         )

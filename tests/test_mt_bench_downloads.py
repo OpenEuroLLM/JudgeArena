@@ -6,6 +6,7 @@ import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.fastchat_compat as fastchat_compat
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
+from judgearena.judge_prompt_presets import SKYWORK_JUDGE_PROMPT_PRESET
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -130,6 +131,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         temperature_config,
         usage_tracker,
         usage_phase,
+        limit_event_tracker,
         **engine_kwargs,
     ):
         generated_models.append(model)
@@ -168,6 +170,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         use_tqdm=False,
         max_model_len=16384,
         chat_template=None,
+        battle_thinking_token_budget=None,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
@@ -176,6 +179,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         questions_df=questions_df,
         ignore_cache=False,
         usage_tracker=object(),
+        limit_event_tracker=None,
     )
 
     assert generated_models == ["VLLM/example/model-a"]
@@ -244,7 +248,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, usage_tracker: (
+        lambda args, questions_df, ignore_cache, usage_tracker, limit_event_tracker: (
             pd.DataFrame(
                 {
                     "completion_turn_1": ["A1"],
@@ -304,6 +308,9 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         chat_template=None,
         provide_explanation=False,
         swap_mode="fixed",
+        judge_prompt_preset="default",
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=False,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
@@ -318,6 +325,93 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
         "thinking_token_budget": 512,
+        "limit_event_stage": "judge_model_init",
+        "limit_event_model_spec": "VLLM/Qwen/Qwen3.5-27B-FP8",
+        "limit_event_tracker": captured["make_model"]["kwargs"]["limit_event_tracker"],
     }
     assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
-    assert "provide_explanation" not in captured["run_mt_bench_fastchat"]
+    assert captured["run_mt_bench_fastchat"]["prompt_preset"] == "default"
+    assert (
+        captured["run_mt_bench_fastchat"]["args"].strip_thinking_before_judging is False
+    )
+
+
+def test_select_prompt_supports_optional_skywork_mt_bench_preset():
+    prompt = fastchat_compat._select_prompt(
+        "writing",
+        multi_turn=False,
+        prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
+    )
+
+    assert prompt.name == "skywork-pair-v2"
+    assert prompt.ref_based is False
+
+
+def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda args, questions_df, ignore_cache, usage_tracker, limit_event_tracker: (
+            pd.DataFrame(
+                {
+                    "completion_turn_1": ["A1"],
+                    "completion_turn_2": ["A2"],
+                },
+                index=questions_df.index,
+            ),
+            pd.DataFrame(
+                {
+                    "completion_turn_1": ["B1"],
+                    "completion_turn_2": ["B2"],
+                },
+                index=questions_df.index,
+            ),
+        ),
+    )
+    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_run_mt_bench_fastchat(**kwargs):
+        captured["kwargs"] = kwargs
+        return pd.Series([0.0], dtype=float)
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        fake_run_mt_bench_fastchat,
+    )
+
+    args = SimpleNamespace(
+        dataset="mt-bench",
+        model_A="VLLM/example/model-a",
+        model_B="gpt-4",
+        judge_model="VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
+        n_instructions=1,
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        max_out_tokens_judge=256,
+        use_tqdm=False,
+        max_model_len=16384,
+        chat_template=None,
+        provide_explanation=False,
+        swap_mode="both",
+        judge_prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
+        battle_thinking_token_budget=512,
+        strip_thinking_before_judging=True,
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
+    )
+
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
+    assert captured["kwargs"]["args"].strip_thinking_before_judging is True

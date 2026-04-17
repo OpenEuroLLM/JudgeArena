@@ -11,6 +11,8 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
+from judgearena.judge_prompt_presets import JUDGE_PROMPT_PRESETS
+
 
 @dataclass
 class BaseCliArgs:
@@ -22,6 +24,9 @@ class BaseCliArgs:
     provide_explanation: bool = False
     swap_mode: str = "fixed"
     ignore_cache: bool = False
+    judge_prompt_preset: str = "default"
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
     truncate_all_input_chars: int = 8192
     max_out_tokens_models: int = 32768
     max_out_tokens_judge: int = 32768
@@ -35,6 +40,17 @@ class BaseCliArgs:
         assert self.swap_mode in supported_modes, (
             f"Only {supported_modes} modes are supported but got {self.swap_mode}."
         )
+
+
+def parse_optional_bool(raw: str | None) -> bool:
+    if raw is None:
+        return True
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got '{raw}'.")
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -58,7 +74,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--provide_explanation",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help=(
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
@@ -79,8 +98,43 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--ignore_cache",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help="If specified, ignore cache of previous completions.",
+    )
+    parser.add_argument(
+        "--judge_prompt_preset",
+        type=str,
+        choices=JUDGE_PROMPT_PRESETS,
+        default="default",
+        help=(
+            "Judge prompt preset to use. 'default' preserves the existing score-first "
+            "JudgeArena prompts, while 'skywork' enables an optional Skywork-style "
+            "verdict-first preset."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
+        ),
     )
     parser.add_argument(
         "--result_folder",

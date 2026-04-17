@@ -54,7 +54,7 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
 
     utils.ChatVLLM(
         model="Qwen/Qwen3.5-27B-FP8",
-        max_tokens=32,
+        max_tokens=128,
         thinking_token_budget=64,
         gpu_memory_utilization=0.7,
     )
@@ -68,6 +68,19 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
     llm_kwargs = captured["llm_init"]["kwargs"]
     assert llm_kwargs["reasoning_parser"] == "qwen3"
     assert isinstance(llm_kwargs["reasoning_config"], fake_reasoning_config)
+
+
+def test_chat_vllm_clamps_thinking_budget_to_total_max_tokens(monkeypatch):
+    captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
+
+    utils.ChatVLLM(
+        model="Qwen/Qwen3.5-27B-FP8",
+        max_tokens=32,
+        thinking_token_budget=64,
+        gpu_memory_utilization=0.7,
+    )
+
+    assert captured["sampling_kwargs"]["thinking_token_budget"] == 32
 
 
 def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch):
@@ -121,7 +134,7 @@ def test_chat_vllm_preserves_explicit_reasoning_settings_for_non_qwen(monkeypatc
         gpu_memory_utilization=0.7,
     )
 
-    assert captured["sampling_kwargs"]["thinking_token_budget"] == 32
+    assert captured["sampling_kwargs"]["thinking_token_budget"] == 16
     assert captured["llm_init"]["kwargs"]["reasoning_parser"] == "custom-parser"
     assert (
         captured["llm_init"]["kwargs"]["reasoning_config"] is explicit_reasoning_config
