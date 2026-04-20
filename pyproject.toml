@@ -61,6 +61,7 @@ exclude = ["slurmpilot_scripts*"]
 
 [dependency-groups]
 dev = [
+    "llmcompressor>=0.4.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
     "ruff>=0.11.0",
