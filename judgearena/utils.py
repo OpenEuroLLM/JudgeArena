@@ -34,10 +34,11 @@ def _data_root_path() -> Path:
 data_root = _data_root_path()
 
 DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
-VLLM_QWEN_REASONING_START_STR = "<think>"
-VLLM_QWEN_REASONING_END_STR = (
+VLLM_REASONING_START_STR = "<think>"
+VLLM_REASONING_END_STR = (
     "I have to give the solution based on the thinking directly now.</think>"
 )
+_THINKING_MODEL_SUBSTRINGS = ("qwen3", "smollm3")
 
 
 def _split_model_spec(model_spec: str) -> tuple[str, str]:
@@ -47,24 +48,49 @@ def _split_model_spec(model_spec: str) -> tuple[str, str]:
     return provider, model_name
 
 
-def is_qwen_reasoning_model(model_name: str) -> bool:
-    return "qwen3" in model_name.lower()
+def is_thinking_model(model_name: str) -> bool:
+    """Return True for reasoning models that emit `<think>...</think>` traces.
+
+    Covers the Qwen3 family (e.g. `Qwen/Qwen3.5-9B`) and SmolLM3 (e.g.
+    `HuggingFaceTB/SmolLM3-3B`); both share the same `<think>`/`</think>` tag
+    convention so vLLM's budget enforcement and our tag-stripping apply
+    uniformly. Matching is case-insensitive to tolerate mixed-case HF repo
+    ids like `HuggingFaceTB/SmolLM3-3B`.
+    """
+    lowered = model_name.lower()
+    return any(token in lowered for token in _THINKING_MODEL_SUBSTRINGS)
 
 
 def build_default_judge_model_kwargs(
-    judge_model: str, engine_kwargs: dict[str, object]
+    judge_model: str,
+    engine_kwargs: dict[str, object],
+    *,
+    judge_engine_kwargs_override: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Copy judge engine kwargs and add supported built-in defaults."""
+    """Copy judge engine kwargs and add supported built-in defaults.
+
+    ``judge_engine_kwargs_override`` is layered on top of ``engine_kwargs``
+    so callers can pin judge-only tweaks (e.g. a higher tensor-parallel size
+    for a 70B judge) without poisoning the battle-model engine config, which
+    must often stay on TP=1 to dodge compile-time deadlocks on hybrid models
+    such as Qwen3.5.
+    """
     judge_model_kwargs = dict(engine_kwargs)
+    if judge_engine_kwargs_override:
+        judge_model_kwargs.update(judge_engine_kwargs_override)
     provider, model_name = _split_model_spec(judge_model)
-    if (
-        provider == "VLLM"
-        and "thinking_token_budget" not in judge_model_kwargs
-        and is_qwen_reasoning_model(model_name)
-    ):
-        judge_model_kwargs["thinking_token_budget"] = (
-            DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
-        )
+    if provider == "VLLM":
+        if "thinking_token_budget" not in judge_model_kwargs and is_thinking_model(
+            model_name
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
+        # FP8 weights leave little KV headroom on consumer-class GPUs; default
+        # to FP8 KV cache so judges like Skywork-70B-FP8 fit comfortably on
+        # 2x L40S at 32k context. Explicit caller overrides still win.
+        if "kv_cache_dtype" not in judge_model_kwargs and "fp8" in model_name.lower():
+            judge_model_kwargs["kv_cache_dtype"] = "fp8"
     return judge_model_kwargs
 
 
@@ -327,11 +353,31 @@ def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
     if closing_idx != -1 and "<think>" not in lowered[:closing_idx]:
         return text[closing_idx + len(closing_tag) :].lstrip(), True
 
-    qwen_end_idx = text.find(VLLM_QWEN_REASONING_END_STR)
-    if qwen_end_idx != -1:
-        return text[qwen_end_idx + len(VLLM_QWEN_REASONING_END_STR) :].lstrip(), True
+    forced_end_idx = text.find(VLLM_REASONING_END_STR)
+    if forced_end_idx != -1:
+        return (
+            text[forced_end_idx + len(VLLM_REASONING_END_STR) :].lstrip(),
+            True,
+        )
 
     return text, False
+
+
+def _extract_ai_message_metadata(result: object) -> dict[str, Any]:
+    """Extract finish_reason/stop_reason from a LangChain AIMessage result.
+
+    LangChain chat models (ChatOpenAI for OpenRouter, Anthropic, etc.) return
+    AIMessage objects with a ``response_metadata`` dict. We propagate the
+    subset that downstream code consumes (finish_reason is critical: it gates
+    truncation detection in _record_generation_output_limit_events).
+    """
+    response_metadata = getattr(result, "response_metadata", None) or {}
+    finish_reason = response_metadata.get("finish_reason")
+    stop_reason = response_metadata.get("stop_reason")
+    if finish_reason is None and isinstance(result, dict):
+        finish_reason = result.get("finish_reason")
+        stop_reason = result.get("stop_reason", stop_reason)
+    return {"finish_reason": finish_reason, "stop_reason": stop_reason}
 
 
 def do_inference(
@@ -380,7 +426,7 @@ def do_inference(
                 )
             )
         if return_metadata:
-            metadata = [{} for _ in res]
+            metadata = [_extract_ai_message_metadata(r) for r in res]
     else:
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
@@ -407,7 +453,9 @@ def do_inference(
                             chunk_results = chat_model.batch(
                                 inputs=chunk, **invoke_kwargs
                             )
-                            chunk_metadata = [{} for _ in chunk_results]
+                            chunk_metadata = [
+                                _extract_ai_message_metadata(r) for r in chunk_results
+                            ]
                         results.extend(chunk_results)
                         results_metadata.extend(chunk_metadata)
                     return results, results_metadata
@@ -548,6 +596,8 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
+        self._thinking_budget_marker: str | None = None
+        self._thinking_budget_value: int | None = None
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
@@ -555,23 +605,32 @@ class ChatVLLM:
                 self._sampling_params_kwargs["thinking_token_budget"] = int(
                     thinking_token_budget
                 )
-            elif is_qwen_reasoning_model(model):
+                self._thinking_budget_marker = VLLM_REASONING_END_STR
+                self._thinking_budget_value = int(thinking_token_budget)
+            elif is_thinking_model(model):
                 vllm_kwargs.setdefault(
                     "reasoning_config",
                     ReasoningConfig(
-                        reasoning_start_str=VLLM_QWEN_REASONING_START_STR,
-                        reasoning_end_str=VLLM_QWEN_REASONING_END_STR,
+                        reasoning_start_str=VLLM_REASONING_START_STR,
+                        reasoning_end_str=VLLM_REASONING_END_STR,
                     ),
                 )
+                # The `qwen3` reasoning_parser only runs inside vLLM's
+                # OpenAI-compatible server for `reasoning_content` extraction.
+                # For offline batch inference via LLM.chat() it is inert, so
+                # it is safe to reuse for any `<think>`/`</think>` model
+                # (Qwen3 + SmolLM3).
                 vllm_kwargs.setdefault("reasoning_parser", "qwen3")
                 self._sampling_params_kwargs["thinking_token_budget"] = int(
                     thinking_token_budget
                 )
+                self._thinking_budget_marker = VLLM_REASONING_END_STR
+                self._thinking_budget_value = int(thinking_token_budget)
             else:
                 warnings.warn(
-                    f"Model '{model}' is not in JudgeArena's built-in Qwen reasoning defaults. "
-                    "Ignoring thinking_token_budget unless reasoning_parser or "
-                    "reasoning_config is provided explicitly.",
+                    f"Model '{model}' is not in JudgeArena's built-in thinking-model "
+                    "defaults (Qwen3/SmolLM3). Ignoring thinking_token_budget unless "
+                    "reasoning_parser or reasoning_config is provided explicitly.",
                     stacklevel=2,
                 )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
@@ -691,15 +750,24 @@ class ChatVLLM:
         outputs = self._run_raw_batch(inputs)
         texts: list[str] = []
         metadata: list[dict[str, Any]] = []
+        marker = self._thinking_budget_marker
         for out in outputs:
             first_output = out.outputs[0]
-            texts.append(first_output.text)
-            metadata.append(
-                {
-                    "finish_reason": getattr(first_output, "finish_reason", None),
-                    "stop_reason": getattr(first_output, "stop_reason", None),
-                }
-            )
+            text = first_output.text
+            texts.append(text)
+            row: dict[str, Any] = {
+                "finish_reason": getattr(first_output, "finish_reason", None),
+                "stop_reason": getattr(first_output, "stop_reason", None),
+            }
+            if marker is not None:
+                # vLLM emits the forced reasoning-end marker verbatim when the
+                # per-request thinking-token budget is exhausted; the marker is
+                # absent otherwise. Detecting it here gives
+                # `_record_generation_output_limit_events` a deterministic
+                # signal to log a `generation_thinking_token_budget` event.
+                row["thinking_budget_exhausted"] = marker in text
+                row["thinking_token_budget"] = self._thinking_budget_value
+            metadata.append(row)
         return texts, metadata
 
     def batch(self, inputs: list, **invoke_kwargs) -> list[str]:

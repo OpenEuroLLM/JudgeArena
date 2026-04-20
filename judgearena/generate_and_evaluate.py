@@ -40,7 +40,7 @@ from judgearena.utils import (
     compute_pref_summary,
     data_root,
     download_hf,
-    is_qwen_reasoning_model,
+    is_thinking_model,
     make_model,
     read_df,
 )
@@ -141,12 +141,15 @@ class CliArgs(BaseCliArgs):
             battle_thinking_token_budget=args.battle_thinking_token_budget,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
             truncate_all_input_chars=args.truncate_all_input_chars,
+            truncate_judge_input_chars=args.truncate_judge_input_chars,
             max_out_tokens_models=args.max_out_tokens_models,
             max_out_tokens_judge=args.max_out_tokens_judge,
             max_model_len=args.max_model_len,
+            max_judge_model_len=args.max_judge_model_len,
             chat_template=args.chat_template,
             result_folder=args.result_folder,
             engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+            judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
         )
 
 
@@ -163,7 +166,7 @@ def _build_generation_model_kwargs(
     if (
         args.battle_thinking_token_budget is not None
         and provider == "VLLM"
-        and is_qwen_reasoning_model(model_name)
+        and is_thinking_model(model_name)
     ):
         generation_model_kwargs["thinking_token_budget"] = min(
             int(args.battle_thinking_token_budget),
@@ -176,7 +179,9 @@ def _build_judge_model_kwargs(
     *, args: CliArgs, limit_event_tracker: LimitEventTracker | None
 ) -> dict[str, object]:
     judge_model_kwargs = build_default_judge_model_kwargs(
-        args.judge_model, args.engine_kwargs
+        args.judge_model,
+        args.engine_kwargs,
+        judge_engine_kwargs_override=args.judge_engine_kwargs,
     )
     if limit_event_tracker is not None:
         judge_model_kwargs["limit_event_tracker"] = limit_event_tracker
@@ -333,7 +338,7 @@ def main(args: CliArgs):
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
+        max_model_len=args.effective_judge_max_model_len(),
         chat_template=args.chat_template,
         **_build_judge_model_kwargs(args=args, limit_event_tracker=limit_event_tracker),
     )
@@ -378,7 +383,7 @@ def main(args: CliArgs):
         strip_thinking_before_judging=args.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
-        truncate_input_chars=args.truncate_all_input_chars,
+        truncate_input_chars=args.effective_judge_truncation(),
         use_tqdm=args.use_tqdm,
         usage_tracker=usage_tracker,
         usage_phase="judge",

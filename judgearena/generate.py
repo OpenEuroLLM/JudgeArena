@@ -21,10 +21,13 @@ def _record_generation_output_limit_events(
 ) -> list[bool]:
     hit_token_limit: list[bool] = []
     for case_id, metadata_row in zip(case_ids, metadata, strict=True):
-        finish_reason = str((metadata_row or {}).get("finish_reason") or "").lower()
+        row = metadata_row or {}
+        finish_reason = str(row.get("finish_reason") or "").lower()
         reached_limit = finish_reason == "length"
         hit_token_limit.append(reached_limit)
-        if reached_limit and limit_event_tracker is not None:
+        if limit_event_tracker is None:
+            continue
+        if reached_limit:
             limit_event_tracker.record(
                 "generation_output_token_limit",
                 stage="generation_output",
@@ -32,6 +35,15 @@ def _record_generation_output_limit_events(
                 case_id=case_id,
                 model_spec=model_spec,
                 note=finish_reason,
+            )
+        if row.get("thinking_budget_exhausted"):
+            limit_event_tracker.record(
+                "generation_thinking_token_budget",
+                stage="generation_output",
+                field=field,
+                case_id=case_id,
+                model_spec=model_spec,
+                note=str(row.get("thinking_token_budget")),
             )
     return hit_token_limit
 

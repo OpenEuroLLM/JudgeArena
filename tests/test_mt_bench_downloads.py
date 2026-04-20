@@ -6,7 +6,29 @@ import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.fastchat_compat as fastchat_compat
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
+from judgearena.cli_common import BaseCliArgs
 from judgearena.judge_prompt_presets import SKYWORK_JUDGE_PROMPT_PRESET
+
+
+def _mt_bench_args(
+    *,
+    dataset: str,
+    model_A: str,
+    model_B: str,
+    use_tqdm: bool = False,
+    **base_overrides,
+) -> BaseCliArgs:
+    """Construct a ``BaseCliArgs`` with MT-Bench CLI-style extras attached.
+
+    Using the real dataclass here ensures tests exercise the production
+    ``effective_judge_*`` fallback helpers instead of a duplicate shim.
+    """
+    args = BaseCliArgs(**base_overrides)
+    args.dataset = dataset
+    args.model_A = model_A
+    args.model_B = model_B
+    args.use_tqdm = use_tqdm
+    return args
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -294,7 +316,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         fake_run_mt_bench_fastchat,
     )
 
-    args = SimpleNamespace(
+    args = _mt_bench_args(
         dataset="mt-bench",
         model_A="VLLM/example/model-a",
         model_B="gpt-4",
@@ -303,7 +325,6 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         truncate_all_input_chars=8192,
         max_out_tokens_models=1024,
         max_out_tokens_judge=256,
-        use_tqdm=False,
         max_model_len=16384,
         chat_template=None,
         provide_explanation=False,
@@ -318,13 +339,17 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
 
     assert args.swap_mode == "both"
     assert args.max_out_tokens_judge == 24576
-    assert args.max_model_len == 28672
+    assert args.max_model_len == 16384
+    assert args.max_judge_model_len == 28672
+    assert args.effective_judge_max_model_len() == 28672
+    assert args.effective_judge_truncation() == 8192
     assert captured["make_model"]["max_tokens"] == 24576
     assert captured["make_model"]["max_model_len"] == 28672
     assert captured["make_model"]["kwargs"] == {
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
         "thinking_token_budget": 512,
+        "kv_cache_dtype": "fp8",
         "limit_event_stage": "judge_model_init",
         "limit_event_model_spec": "VLLM/Qwen/Qwen3.5-27B-FP8",
         "limit_event_tracker": captured["make_model"]["kwargs"]["limit_event_tracker"],
@@ -391,17 +416,18 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
         fake_run_mt_bench_fastchat,
     )
 
-    args = SimpleNamespace(
+    args = _mt_bench_args(
         dataset="mt-bench",
         model_A="VLLM/example/model-a",
         model_B="gpt-4",
         judge_model="VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
         n_instructions=1,
         truncate_all_input_chars=8192,
+        truncate_judge_input_chars=80000,
         max_out_tokens_models=1024,
         max_out_tokens_judge=256,
-        use_tqdm=False,
         max_model_len=16384,
+        max_judge_model_len=65536,
         chat_template=None,
         provide_explanation=False,
         swap_mode="both",
@@ -415,3 +441,7 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
 
     assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
     assert captured["kwargs"]["args"].strip_thinking_before_judging is True
+    assert args.effective_judge_max_model_len() == 65536
+    assert args.effective_judge_truncation() == 80000
+    assert captured["kwargs"]["args"].effective_judge_truncation() == 80000
+    assert captured["kwargs"]["args"].effective_judge_max_model_len() == 65536

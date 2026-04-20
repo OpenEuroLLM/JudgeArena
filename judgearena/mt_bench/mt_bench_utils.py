@@ -36,7 +36,7 @@ from judgearena.utils import (
     build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
-    is_qwen_reasoning_model,
+    is_thinking_model,
     make_model,
 )
 
@@ -58,7 +58,7 @@ def _build_mt_bench_generation_kwargs(
     if (
         args.battle_thinking_token_budget is not None
         and provider == "VLLM"
-        and is_qwen_reasoning_model(model_name)
+        and is_thinking_model(model_name)
     ):
         generation_model_kwargs["thinking_token_budget"] = min(
             int(args.battle_thinking_token_budget),
@@ -71,7 +71,9 @@ def _build_mt_bench_judge_model_kwargs(
     *, args: CliArgs, limit_event_tracker: LimitEventTracker | None
 ) -> dict[str, object]:
     judge_model_kwargs = build_default_judge_model_kwargs(
-        args.judge_model, args.engine_kwargs
+        args.judge_model,
+        args.engine_kwargs,
+        judge_engine_kwargs_override=args.judge_engine_kwargs,
     )
     if limit_event_tracker is not None:
         judge_model_kwargs["limit_event_tracker"] = limit_event_tracker
@@ -235,7 +237,7 @@ def _run_mt_bench_fastchat(
             model_b=args.model_B,
             turns_mode="both",
             swap_mode=args.swap_mode,
-            truncate_input_chars=args.truncate_all_input_chars,
+            truncate_input_chars=args.effective_judge_truncation(),
             use_tqdm=args.use_tqdm,
             prompt_preset=prompt_preset,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
@@ -323,22 +325,24 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         usage_tracker=usage_tracker,
         limit_event_tracker=limit_event_tracker,
     )
+    effective_judge_max_model_len = args.effective_judge_max_model_len()
     if (
-        args.max_model_len is not None
-        and args.max_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
+        effective_judge_max_model_len is not None
+        and effective_judge_max_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     ):
         print(
             "MT-Bench judge prompts require a larger total context window for "
             "prompt plus completion; "
-            f"overriding max_model_len from {args.max_model_len} "
-            f"to {_MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN} for the judge."
+            f"overriding judge max_model_len from {effective_judge_max_model_len} "
+            f"to {_MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN}."
         )
-        args.max_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
+        args.max_judge_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
+        effective_judge_max_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         temperature=0.0,
-        max_model_len=args.max_model_len,
+        max_model_len=effective_judge_max_model_len,
         chat_template=args.chat_template,
         **_build_mt_bench_judge_model_kwargs(
             args=args, limit_event_tracker=limit_event_tracker
