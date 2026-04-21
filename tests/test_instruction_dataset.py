@@ -45,6 +45,20 @@ def test_arena_hard_baselines_mapping_matches_upstream():
     }
 
 
+def test_mt_bench_native_baseline_is_flat_string():
+    from judgearena.instruction_dataset.mt_bench import (
+        MT_BENCH_BASELINES,
+        is_mt_bench_dataset,
+        mt_bench_native_baseline,
+    )
+
+    assert is_mt_bench_dataset("mt-bench") is True
+    assert is_mt_bench_dataset("alpaca-eval") is False
+    assert mt_bench_native_baseline("mt-bench") == "gpt-4"
+    assert mt_bench_native_baseline("alpaca-eval") is None
+    assert MT_BENCH_BASELINES == {"mt-bench": "gpt-4"}
+
+
 def test_normalize_official_arena_hard_v01_drops_no_category():
     raw_df = pd.DataFrame(
         {

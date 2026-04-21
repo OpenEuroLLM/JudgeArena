@@ -15,6 +15,23 @@ FASTCHAT_GPT4_REFERENCE_URL = (
     "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
 )
 
+# Mirrors ``ARENA_HARD_BASELINES`` / ``M_ARENA_HARD_BASELINES``: dataset name ->
+# dataset-native pairwise baseline. MT-Bench ships only one variant today, and
+# ``gpt-4`` is the stronger-reference choice (FastChat's own ``pairwise-baseline``
+# default is ``gpt-3.5-turbo``; we deliberately diverge here).
+MT_BENCH_BASELINES: dict[str, str] = {
+    "mt-bench": "gpt-4",
+}
+
+
+def is_mt_bench_dataset(dataset: str) -> bool:
+    return dataset in MT_BENCH_BASELINES
+
+
+def mt_bench_native_baseline(dataset: str) -> str | None:
+    """Baseline for a dataset name, or ``None`` if it isn't mt-bench."""
+    return MT_BENCH_BASELINES.get(dataset)
+
 
 def _normalize_question_id(question_id: object) -> object:
     try:

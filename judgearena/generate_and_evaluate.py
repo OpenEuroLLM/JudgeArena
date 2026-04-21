@@ -120,7 +120,8 @@ class CliArgs(BaseCliArgs):
             help=(
                 "Name of the baseline LLM for a generation. Optional for Arena-Hard "
                 "datasets (which ship a dataset-native default per category; see "
-                "`ARENA_HARD_BASELINES`). Required for every other dataset."
+                "`ARENA_HARD_BASELINES`) and MT-Bench (see `MT_BENCH_BASELINES`, "
+                "defaults to `gpt-4`). Required for every other dataset."
             ),
         )
         parser.add_argument(

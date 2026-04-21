@@ -17,6 +17,10 @@ from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 
+from judgearena.chat_models import (
+    OpenRouterGeminiSafetyTolerantChatOpenAI,
+    is_openrouter_gemini_model,
+)
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -866,8 +870,16 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         )
 
     if model_provider == "OpenRouter":
-        # Special case we need to override API url and key
-        return ChatOpenAI(
+        # Gemini's core policy filter rejects a small fraction of prompts with
+        # a hard PROHIBITED_CONTENT error that safety_settings cannot override;
+        # the subclass converts those into stub refusals so batch generation
+        # (e.g. benchmark baselines) completes instead of crashing.
+        chat_model_cls = (
+            OpenRouterGeminiSafetyTolerantChatOpenAI
+            if is_openrouter_gemini_model(model)
+            else ChatOpenAI
+        )
+        return chat_model_cls(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,

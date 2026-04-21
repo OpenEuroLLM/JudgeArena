@@ -338,7 +338,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
 
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
-    assert args.swap_mode == "both"
+    assert args.swap_mode == "fixed"
     assert args.max_out_tokens_judge == 24576
     assert args.max_model_len == 16384
     assert args.max_judge_model_len == 28672
@@ -355,7 +355,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         "limit_event_model_spec": "VLLM/Qwen/Qwen3.5-27B-FP8",
         "limit_event_tracker": captured["make_model"]["kwargs"]["limit_event_tracker"],
     }
-    assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "both"
+    assert captured["run_mt_bench_fastchat"]["args"].swap_mode == "fixed"
     assert captured["run_mt_bench_fastchat"]["prompt_preset"] == "default"
     assert (
         captured["run_mt_bench_fastchat"]["args"].strip_thinking_before_judging is False

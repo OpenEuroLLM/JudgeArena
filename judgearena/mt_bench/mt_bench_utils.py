@@ -19,7 +19,10 @@ import pandas as pd
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
-from judgearena.instruction_dataset.mt_bench import load_mt_bench_model_answers
+from judgearena.instruction_dataset.mt_bench import (
+    load_mt_bench_model_answers,
+    mt_bench_native_baseline,
+)
 from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
@@ -300,12 +303,13 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
             "MT-Bench ignores provide_explanation=False and keeps the original "
             "FastChat-style explanation-plus-verdict prompt."
         )
-    if args.swap_mode != "both":
-        print(
-            "MT-Bench requires swap_mode='both' to match FastChat and correct "
-            f"for position bias; overriding requested swap_mode='{args.swap_mode}'."
+    if args.model_B is None:
+        args.model_B = mt_bench_native_baseline(args.dataset)
+    if args.model_B is None:
+        raise ValueError(
+            f"--model_B is required for dataset '{args.dataset}'; "
+            "no dataset-native baseline registered."
         )
-        args.swap_mode = "both"
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
         print(
             "MT-Bench judge prompts require room for budgeted thinking, the "
