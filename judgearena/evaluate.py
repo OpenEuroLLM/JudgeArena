@@ -150,8 +150,9 @@ def evaluate_completions(
         dataset=dataset,
     ).loc[:, "instruction"]
 
-    # A bit ugly, only loads if local path exist as we do not have a local path of completion for cases such as
-    # m-arena-hard.
+    # Only loads if the per-dataset local path exists; some datasets (e.g.
+    # language slices of m-arena-hard for which no baseline has been written
+    # yet) may not ship a local completions file.
     dataset_output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
     if dataset_output_path.exists():
         df_outputs = read_df(dataset_output_path)

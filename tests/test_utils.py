@@ -109,13 +109,14 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
     utils.download_all()
 
     tables_dir = tmp_path / "tables"
-    assert calls[:4] == [
+    assert calls[:5] == [
         ("hf", "alpaca-eval", tables_dir),
         ("arena", "arena-hard-v0.1", tables_dir),
         ("arena", "arena-hard-v2.0", tables_dir),
-        ("hf", "m-arena-hard", tables_dir),
+        ("hf", "m-arena-hard-v0.1", tables_dir),
+        ("hf", "m-arena-hard-v2.0", tables_dir),
     ]
-    assert calls[4] == (
+    assert calls[5] == (
         "snapshot",
         "geoalgo/multilingual-contexts-to-be-completed",
         tmp_path / "contexts",

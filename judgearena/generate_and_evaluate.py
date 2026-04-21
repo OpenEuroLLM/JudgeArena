@@ -105,8 +105,9 @@ class CliArgs(BaseCliArgs):
         parser.add_argument(
             "--dataset",
             help="The dataset to use. For instance `alpaca-eval`, `arena-hard-v2.0`, "
-            "`arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
-            "tuning cases or `french-contexts`, `spanish-contexts` for base models.",
+            "`arena-hard-v0.1`, `m-arena-hard-v0.1-EU`, `m-arena-hard-v2.0-uk` for "
+            "instruction tuning cases or `french-contexts`, `spanish-contexts` for "
+            "base models.",
         )
         parser.add_argument(
             "--model_A",

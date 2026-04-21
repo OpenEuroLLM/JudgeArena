@@ -55,7 +55,8 @@ def mock_external_data_and_cache(monkeypatch):
         "arena-hard-v2.0",
         "arena-hard-v0.1",
         "fluency-french",
-        "m-arena-hard-EU",
+        "m-arena-hard-v0.1-EU",
+        "m-arena-hard-v2.0-EU",
     ],
 )
 def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):

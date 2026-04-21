@@ -918,14 +918,17 @@ def infer_model_spec_from_instance(model: object) -> str | None:
 
 
 def download_all():
+    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
+
     print(f"Downloading all dataset in {data_root}")
     local_path_tables = data_root / "tables"
-    for dataset in [
+    datasets = [
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
-        "m-arena-hard",
-    ]:
+        *M_ARENA_HARD_BASELINES.keys(),
+    ]
+    for dataset in datasets:
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
         else:

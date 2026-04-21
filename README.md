@@ -193,15 +193,24 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Datasets
 
-| Dataset               | Description                                                                                    |
-|-----------------------|------------------------------------------------------------------------------------------------|
-| `alpaca-eval`         | General instruction-following benchmark                                                        |
-| `arena-hard-v2.0`     | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                             |
-| `arena-hard-v0.1`     | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                      |
-| `m-arena-hard`        | Translated version of Arena-Hard in 23 languages                                               |
-| `m-arena-hard-{lang}` | Language-specific variants (e.g., `ar`, `cs`, `de`)                                            |
-| `m-arena-hard-EU`     | All EU languages combined                                                                      |
-| `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+| Dataset                     | Description                                                                                                    |
+|-----------------------------|----------------------------------------------------------------------------------------------------------------|
+| `alpaca-eval`               | General instruction-following benchmark                                                                        |
+| `arena-hard-v2.0`           | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                              |
+| `arena-hard-v0.1`           | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                       |
+| `m-arena-hard-v0.1`         | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                   |
+| `m-arena-hard-v0.1-{lang}`  | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                        |
+| `m-arena-hard-v0.1-EU`      | All EU v0.1 languages combined                                                                                 |
+| `m-arena-hard-v2.0`         | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages                          |
+| `m-arena-hard-v2.0-{lang}`  | Language-specific v2.0 slice                                                                                   |
+| `m-arena-hard-v2.0-EU`      | All EU v2.0 languages combined                                                                                 |
+| `fluency-{lang}`            | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`)                 |
+
+For m-Arena-Hard, we use baseline completions based on the benchmark release:
+- `m-arena-hard-v0.1`: Aya Expanse 8B (`CohereLabs/aya-expanse-8b`), ingested
+  from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
+  [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
+- `m-arena-hard-v2.0`: We generate our own completions with Gemini 2.5 Flash (`google/gemini-2.5-flash`).
 
 For Arena-Hard, JudgeArena mirrors the baseline assignment upstream uses in `lmarena-ai/arena-hard-auto`:
 - `arena-hard-v0.1`: flat baseline `gpt-4-0314` for all 500 prompts.
