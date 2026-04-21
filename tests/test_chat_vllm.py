@@ -186,6 +186,10 @@ def test_build_default_judge_model_kwargs_overlays_judge_override():
         judge_engine_kwargs_override={"tensor_parallel_size": 4},
     )
     assert overridden["tensor_parallel_size"] == 4
+    # FP8 weights + FP8 KV cache are a name-driven invariant; the TP override
+    # must not silently drop `kv_cache_dtype=fp8` because we run the Skywork
+    # 70B FP8 judge on TP=2 and TP=4 interchangeably depending on the cell.
+    assert overridden["kv_cache_dtype"] == "fp8"
 
     empty_override = utils.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",

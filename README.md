@@ -203,9 +203,11 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 | `m-arena-hard-EU`     | All EU languages combined                                                                      |
 | `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
-For Arena-Hard, JudgeArena resolves baseline metadata by dataset version:
-- `arena-hard-v0.1`: `gpt-4-0314`
-- `arena-hard-v2.0`: `o3-mini-2025-01-31` (standard prompts)
+For Arena-Hard, JudgeArena mirrors the baseline assignment upstream uses in `lmarena-ai/arena-hard-auto`:
+- `arena-hard-v0.1`: flat baseline `gpt-4-0314` for all 500 prompts.
+- `arena-hard-v2.0`: per-question baseline routed by `category`:
+  - `o3-mini-2025-01-31` for `hard_prompt`, `coding`, and `math` (500 prompts).
+  - `gemini-2.0-flash-001` for `creative_writing` (250 prompts).
 
 ## 📈 Estimating ELO Ratings
 
