@@ -451,6 +451,7 @@ def main(args: CliArgs):
         chat_template=args.chat_template,
         **_build_judge_model_kwargs(args=args, limit_event_tracker=limit_event_tracker),
     )
+    judge_tokenizer = getattr(judge_chat_model, "tokenizer", None)
 
     name = (
         f"{args.dataset}-{args.model_A}-{baseline_plan.display_name}-{args.judge_model}"
@@ -499,6 +500,9 @@ def main(args: CliArgs):
         usage_phase="judge",
         usage_model_spec=args.judge_model,
         limit_event_tracker=limit_event_tracker,
+        judge_tokenizer=judge_tokenizer,
+        max_judge_model_len=args.effective_judge_max_model_len(),
+        max_out_tokens_judge=args.max_out_tokens_judge,
     )
 
     eval_instruction_index = instructions.head(n_instructions).index.tolist()

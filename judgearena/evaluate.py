@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -37,6 +38,13 @@ from judgearena.utils import (
     strip_thinking_tags_with_metadata,
     truncate_with_metadata,
 )
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
+_PREFLIGHT_MAX_ITERATIONS = 3
+_PREFLIGHT_RESERVED_TOKENS = 256
+_PREFLIGHT_MIN_COMPLETION_CHARS = 512
 
 
 class PairScore:
@@ -317,6 +325,9 @@ def annotate_battles(
     usage_phase: str | None = None,
     usage_model_spec: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
+    judge_tokenizer: "PreTrainedTokenizerBase | None" = None,
+    max_judge_model_len: int | None = None,
+    max_out_tokens_judge: int | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -344,6 +355,16 @@ def annotate_battles(
     :param user_prompt_template:
     :param truncate_input_chars: Max characters to truncate completions before sending to judge.
     :param use_tqdm:
+    :param judge_tokenizer: Optional HF tokenizer matching the judge model; when
+        supplied together with ``max_judge_model_len`` triggers a preflight
+        tokenize-and-retry pass that shrinks per-completion character caps until
+        the rendered prompt fits the judge context window. Converts the hard
+        ``VLLMValidationError`` class into a soft ``judge_input_token_truncation``
+        limit event.
+    :param max_judge_model_len: Judge-side ``max_model_len``; required for the
+        preflight pass to be active.
+    :param max_out_tokens_judge: Judge-side output budget subtracted from
+        ``max_judge_model_len`` to derive the per-request prompt budget.
     :return:
     """
     # alternatively pass list of tuples
@@ -446,6 +467,19 @@ def annotate_battles(
         )
     inputs = prompt_template.batch(input_payloads)
 
+    if judge_tokenizer is not None and max_judge_model_len:
+        inputs = _preflight_shrink_to_judge_budget(
+            prompt_template=prompt_template,
+            inputs=inputs,
+            input_payloads=input_payloads,
+            annotation_input_metadata=annotation_input_metadata,
+            case_ids=case_ids,
+            judge_tokenizer=judge_tokenizer,
+            max_judge_model_len=max_judge_model_len,
+            max_out_tokens_judge=max_out_tokens_judge,
+            limit_event_tracker=limit_event_tracker,
+        )
+
     print(f"Start LLM judge annotation ({len(inputs)} annotations).")
     judge_completions = do_inference(
         chat_model=judge_chat_model,
@@ -505,6 +539,9 @@ def judge_and_parse_prefs(
     usage_phase: str | None = None,
     usage_model_spec: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
+    judge_tokenizer: "PreTrainedTokenizerBase | None" = None,
+    max_judge_model_len: int | None = None,
+    max_out_tokens_judge: int | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -537,6 +574,9 @@ def judge_and_parse_prefs(
         usage_phase=usage_phase,
         usage_model_spec=usage_model_spec,
         limit_event_tracker=limit_event_tracker,
+        judge_tokenizer=judge_tokenizer,
+        max_judge_model_len=max_judge_model_len,
+        max_out_tokens_judge=max_out_tokens_judge,
     )
 
     annotations_reversed = None
@@ -558,6 +598,9 @@ def judge_and_parse_prefs(
             usage_phase=usage_phase,
             usage_model_spec=usage_model_spec,
             limit_event_tracker=limit_event_tracker,
+            judge_tokenizer=judge_tokenizer,
+            max_judge_model_len=max_judge_model_len,
+            max_out_tokens_judge=max_out_tokens_judge,
         )
 
     def _none_to_nan(x):
@@ -579,3 +622,161 @@ def judge_and_parse_prefs(
         prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
 
     return annotations, annotations_reversed, prefs
+
+
+_LC_ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
+
+
+def _count_chat_tokens(prompt_value: Any, tokenizer: Any) -> int:
+    """Count tokens the way vLLM's ``llm.chat()`` tokenizes after applying the
+    tokenizer's chat template. Falls back to raw-string encoding for tokenizers
+    without a chat template or if template application raises."""
+    if hasattr(prompt_value, "to_messages"):
+        messages = [
+            {
+                "role": _LC_ROLE_MAP.get(msg.type, msg.type),
+                "content": msg.content,
+            }
+            for msg in prompt_value.to_messages()
+        ]
+        try:
+            return len(tokenizer.apply_chat_template(messages, tokenize=True))
+        except Exception:
+            pass
+    if hasattr(prompt_value, "to_string"):
+        text = prompt_value.to_string()
+    else:
+        text = str(prompt_value)
+    return len(tokenizer.encode(text))
+
+
+def _find_token_overflows(
+    inputs: list[Any], tokenizer: Any, safe_budget: int
+) -> list[tuple[int, int]]:
+    """Return ``(index, token_count)`` for inputs whose tokenized length exceeds
+    ``safe_budget``."""
+    overflows: list[tuple[int, int]] = []
+    for idx, item in enumerate(inputs):
+        token_count = _count_chat_tokens(item, tokenizer)
+        if token_count > safe_budget:
+            overflows.append((idx, token_count))
+    return overflows
+
+
+def _chars_per_token(text: str, tokenizer: Any) -> float:
+    """Return a conservative char-to-token ratio for ``text``, floored at 1.0.
+
+    Short/empty inputs yield a low ratio, which under-truncates rather than
+    overflowing - the safe direction for the preflight shrink loop.
+    """
+    text = text if isinstance(text, str) else ""
+    if not text:
+        return 1.0
+    token_count = max(1, len(tokenizer.encode(text)))
+    return max(1.0, len(text) / token_count)
+
+
+def _render_with_empty_completions(
+    prompt_template: ChatPromptTemplate, user_prompt: str
+) -> Any:
+    """Render the prompt template with empty completions so the fixed template
+    + user-prompt overhead can be measured per case. ``ChatPromptTemplate``
+    uses ``str.format()`` on each message, so empty strings substitute cleanly
+    for both completion slots."""
+    return prompt_template.invoke(
+        {
+            "user_prompt": user_prompt,
+            "completion_A": "",
+            "completion_B": "",
+        }
+    )
+
+
+def _preflight_shrink_to_judge_budget(
+    *,
+    prompt_template: ChatPromptTemplate,
+    inputs: list[Any],
+    input_payloads: list[dict[str, str]],
+    annotation_input_metadata: list[dict[str, object]],
+    case_ids: list[object],
+    judge_tokenizer: Any,
+    max_judge_model_len: int,
+    max_out_tokens_judge: int | None,
+    limit_event_tracker: LimitEventTracker | None,
+) -> list[Any]:
+    """Bounded shrink-and-re-render loop that converts judge-context overflows
+    into soft ``judge_input_token_truncation`` limit events instead of a hard
+    ``VLLMValidationError`` at request time.
+
+    The per-completion budget subtracts the case-specific template + user-prompt
+    overhead so that one iteration typically suffices; the 3-iteration bound is
+    a genuine safety net for the rare pathological case where the char-to-token
+    ratio shifts after truncation (e.g. dropping multi-byte glyphs).
+    """
+    safe_budget = (
+        max_judge_model_len - (max_out_tokens_judge or 0) - _PREFLIGHT_RESERVED_TOKENS
+    )
+    for _ in range(_PREFLIGHT_MAX_ITERATIONS):
+        overflows = _find_token_overflows(inputs, judge_tokenizer, safe_budget)
+        if not overflows:
+            return inputs
+        for idx, _token_count in overflows:
+            payload = input_payloads[idx]
+            fixed_tokens = _count_chat_tokens(
+                _render_with_empty_completions(prompt_template, payload["user_prompt"]),
+                judge_tokenizer,
+            )
+            per_completion_budget = max(256, (safe_budget - fixed_tokens) // 2)
+            ratio_A = _chars_per_token(payload["completion_A"], judge_tokenizer)
+            ratio_B = _chars_per_token(payload["completion_B"], judge_tokenizer)
+            new_cap_A = max(
+                _PREFLIGHT_MIN_COMPLETION_CHARS,
+                int(per_completion_budget * ratio_A * 0.9),
+            )
+            new_cap_B = max(
+                _PREFLIGHT_MIN_COMPLETION_CHARS,
+                int(per_completion_budget * ratio_B * 0.9),
+            )
+            payload["completion_A"], shrunk_A = truncate_with_metadata(
+                payload["completion_A"],
+                max_len=new_cap_A,
+                tracker=limit_event_tracker,
+                kind="judge_input_token_truncation",
+                stage="judge_input",
+                field="completion_A",
+                case_id=case_ids[idx],
+            )
+            payload["completion_B"], shrunk_B = truncate_with_metadata(
+                payload["completion_B"],
+                max_len=new_cap_B,
+                tracker=limit_event_tracker,
+                kind="judge_input_token_truncation",
+                stage="judge_input",
+                field="completion_B",
+                case_id=case_ids[idx],
+            )
+            metadata_row = annotation_input_metadata[idx]
+            metadata_row["completion_A_for_judge"] = payload["completion_A"]
+            metadata_row["completion_B_for_judge"] = payload["completion_B"]
+            if shrunk_A:
+                metadata_row["completion_A_truncated_for_judge"] = True
+            if shrunk_B:
+                metadata_row["completion_B_truncated_for_judge"] = True
+        inputs = prompt_template.batch(input_payloads)
+
+    final_overflows = _find_token_overflows(inputs, judge_tokenizer, safe_budget)
+    for idx, token_count in final_overflows:
+        if limit_event_tracker is not None:
+            limit_event_tracker.record(
+                "judge_input_token_truncation_failed",
+                stage="judge_input",
+                case_id=case_ids[idx],
+                original_length=token_count,
+                final_length=safe_budget,
+                note=(
+                    f"{_PREFLIGHT_MAX_ITERATIONS} shrink iterations did not "
+                    f"bring tokens under {safe_budget}; falling through to "
+                    "vLLM validation."
+                ),
+            )
+    return inputs
