@@ -55,7 +55,8 @@ def mock_external_data_and_cache(monkeypatch):
         "arena-hard-v2.0",
         "arena-hard-v0.1",
         "fluency-french",
-        "m-arena-hard-EU",
+        "m-arena-hard-v0.1-EU",
+        "m-arena-hard-v2.0-EU",
     ],
 )
 def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):
@@ -96,3 +97,25 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
 
     avg_pref = sum(prefs) / len(prefs)
     assert avg_pref == 0.5
+
+
+def test_cli_args_parse_optional_boolean_flags(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "generate_and_evaluate.py",
+            "--dataset=alpaca-eval",
+            "--model_A=Dummy/A",
+            "--model_B=Dummy/B",
+            "--judge_model=Dummy/Judge",
+            "--use_tqdm=True",
+            "--ignore_cache=True",
+            "--strip_thinking_before_judging=False",
+        ],
+    )
+
+    args = CliArgs.parse_args()
+
+    assert args.use_tqdm is True
+    assert args.ignore_cache is True
+    assert args.strip_thinking_before_judging is False

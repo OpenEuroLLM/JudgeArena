@@ -11,6 +11,8 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
+from judgearena.judge_prompt_presets import JUDGE_PROMPT_PRESETS
+
 
 @dataclass
 class BaseCliArgs:
@@ -22,19 +24,56 @@ class BaseCliArgs:
     provide_explanation: bool = False
     swap_mode: str = "fixed"
     ignore_cache: bool = False
+    judge_prompt_preset: str = "default"
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
     truncate_all_input_chars: int = 8192
+    truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
     max_out_tokens_judge: int = 32768
     max_model_len: int | None = None
+    max_judge_model_len: int | None = None
     chat_template: str | None = None
     result_folder: str = "results"
     engine_kwargs: dict = field(default_factory=dict)
+    judge_engine_kwargs: dict = field(default_factory=dict)
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
         assert self.swap_mode in supported_modes, (
             f"Only {supported_modes} modes are supported but got {self.swap_mode}."
         )
+
+    def effective_judge_truncation(self) -> int:
+        """Character cap applied to judge-side inputs (completions, reference, etc.).
+
+        Falls back to the generation-side ``truncate_all_input_chars`` when a
+        dedicated judge cap is not configured.
+        """
+        if self.truncate_judge_input_chars is not None:
+            return int(self.truncate_judge_input_chars)
+        return int(self.truncate_all_input_chars)
+
+    def effective_judge_max_model_len(self) -> int | None:
+        """Total context window for the judge vLLM instance.
+
+        Falls back to the generation-side ``max_model_len`` when a dedicated
+        judge context window is not configured.
+        """
+        if self.max_judge_model_len is not None:
+            return int(self.max_judge_model_len)
+        return self.max_model_len
+
+
+def parse_optional_bool(raw: str | None) -> bool:
+    if raw is None:
+        return True
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got '{raw}'.")
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -58,7 +97,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--provide_explanation",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help=(
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
@@ -79,8 +121,43 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--ignore_cache",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help="If specified, ignore cache of previous completions.",
+    )
+    parser.add_argument(
+        "--judge_prompt_preset",
+        type=str,
+        choices=JUDGE_PROMPT_PRESETS,
+        default="default",
+        help=(
+            "Judge prompt preset to use. 'default' preserves the existing score-first "
+            "JudgeArena prompts, while 'skywork' enables an optional Skywork-style "
+            "verdict-first preset."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
+        ),
     )
     parser.add_argument(
         "--result_folder",
@@ -98,9 +175,23 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
         default=8192,
         help=(
-            "Character-level truncation applied before tokenization: truncates "
-            "each instruction before model A/B generation and truncates each "
-            "completion before judge evaluation."
+            "Character-level truncation applied to generation-side inputs: "
+            "truncates each instruction before model A/B generation. When "
+            "--truncate_judge_input_chars is not set, this value also caps the "
+            "judge-side inputs (completions, reference, etc.)."
+        ),
+    )
+    parser.add_argument(
+        "--truncate_judge_input_chars",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Character cap applied to judge-side inputs (completions, "
+            "reference, instruction) before judge evaluation. Falls back to "
+            "--truncate_all_input_chars when not specified. Set much higher "
+            "than the generation cap to avoid cutting model completions before "
+            "they reach the judge."
         ),
     )
     parser.add_argument(
@@ -129,10 +220,24 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
         default=None,
         help=(
-            "Optional total context window for VLLM models (prompt + generation). "
-            "This is independent from --max_out_tokens_models/--max_out_tokens_judge, "
-            "which only cap generated tokens. This is useful on smaller GPUs to "
-            "avoid OOM."
+            "Optional total context window for the battle-generation VLLM "
+            "instances (prompt + generation). Independent from "
+            "--max_out_tokens_models/--max_out_tokens_judge, which only cap "
+            "generated tokens. When --max_judge_model_len is not set, this "
+            "value also sizes the judge instance."
+        ),
+    )
+    parser.add_argument(
+        "--max_judge_model_len",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional total context window for the judge VLLM instance. Falls "
+            "back to --max_model_len when not specified. Set higher than the "
+            "battle model_len when the judge needs to see longer prompts "
+            "(e.g. long completions from both A and B) than the battle "
+            "generator can fit."
         ),
     )
     parser.add_argument(
@@ -155,6 +260,19 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "JSON dict of engine-specific kwargs forwarded to the underlying "
             "engine. Example for vLLM: "
             '\'{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}\'.'
+        ),
+    )
+    parser.add_argument(
+        "--judge_engine_kwargs",
+        type=str,
+        required=False,
+        default="{}",
+        help=(
+            "Optional JSON dict of engine-specific kwargs that override "
+            "``--engine_kwargs`` only for the judge model. Useful when the "
+            "judge needs a different tensor-parallel or quantization config "
+            "than the battle models, e.g. a 70B judge on TP=2 while the "
+            "battle models run on TP=1 to dodge compile-time deadlocks."
         ),
     )
 

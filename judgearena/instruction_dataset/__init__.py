@@ -4,8 +4,10 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.instruction_dataset.m_arenahard import load_m_arenahard
-from judgearena.utils import data_root, download_hf, read_df
+from judgearena.instruction_dataset.m_arenahard import (
+    load_m_arenahard,
+    split_m_arena_hard_dataset,
+)
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
@@ -14,42 +16,16 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
 
         df_instructions = load_mt_bench()
 
-    elif "m-arena-hard" in dataset:
-        if dataset == "m-arena-hard":
-            language = None
-        else:
-            # read the suffix part "m-arena-hard-EU" -> "EU"
-            language = dataset.split("-")[-1]
-            assert language in [
-                None,
-                "ar",
-                "cs",
-                "de",
-                "el",
-                "en",
-                "es",
-                "fa",
-                "fr",
-                "he",
-                "hi",
-                "id",
-                "it",
-                "ja",
-                "ko",
-                "nl",
-                "pl",
-                "pt",
-                "ro",
-                "ru",
-                "tr",
-                "uk",
-                "vi",
-                "zh",
-                "EU",
-            ]
-        print(f"Loading m-arena-hard with language specification set to {language}")
-        df_instructions = load_m_arenahard(local_path=data_root, language=language)
+    elif (parsed := split_m_arena_hard_dataset(dataset)) is not None:
+        from judgearena.utils import data_root
 
+        version_key, lang_or_subset = parsed
+        print(
+            f"Loading {version_key} with language specification set to {lang_or_subset}"
+        )
+        df_instructions = load_m_arenahard(
+            local_path=data_root, version=version_key, language=lang_or_subset
+        )
         # sort by question_id, then language so that we get multiple languages if we truncate
         df_instructions.sort_values(["question_id", "lang"], inplace=True)
         df_instructions.rename(
@@ -62,6 +38,8 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         )
 
     else:
+        from judgearena.utils import data_root, download_hf, read_df
+
         assert dataset in [
             "alpaca-eval",
             "arena-hard-v0.1",

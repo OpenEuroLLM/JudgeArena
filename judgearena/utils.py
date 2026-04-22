@@ -1,9 +1,13 @@
 import asyncio
 import os
+import re
 import time
 import warnings
+from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from huggingface_hub import snapshot_download
@@ -13,10 +17,15 @@ from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 
+from judgearena.chat_models import (
+    OpenRouterGeminiSafetyTolerantChatOpenAI,
+    is_openrouter_gemini_model,
+)
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 
 
 def _data_root_path() -> Path:
@@ -28,6 +37,153 @@ def _data_root_path() -> Path:
 
 data_root = _data_root_path()
 
+DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
+VLLM_REASONING_START_STR = "<think>"
+VLLM_REASONING_END_STR = (
+    "I have to give the solution based on the thinking directly now.</think>"
+)
+_THINKING_MODEL_SUBSTRINGS = ("qwen3", "smollm3")
+
+
+def _split_model_spec(model_spec: str) -> tuple[str, str]:
+    provider, sep, model_name = model_spec.partition("/")
+    if not sep:
+        return model_spec, ""
+    return provider, model_name
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """Return True for reasoning models that emit `<think>...</think>` traces.
+
+    Covers the Qwen3 family (e.g. `Qwen/Qwen3.5-9B`) and SmolLM3 (e.g.
+    `HuggingFaceTB/SmolLM3-3B`); both share the same `<think>`/`</think>` tag
+    convention so vLLM's budget enforcement and our tag-stripping apply
+    uniformly. Matching is case-insensitive to tolerate mixed-case HF repo
+    ids like `HuggingFaceTB/SmolLM3-3B`.
+    """
+    lowered = model_name.lower()
+    return any(token in lowered for token in _THINKING_MODEL_SUBSTRINGS)
+
+
+def build_default_judge_model_kwargs(
+    judge_model: str,
+    engine_kwargs: dict[str, object],
+    *,
+    judge_engine_kwargs_override: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Copy judge engine kwargs and add supported built-in defaults.
+
+    ``judge_engine_kwargs_override`` is layered on top of ``engine_kwargs``
+    so callers can pin judge-only tweaks (e.g. a higher tensor-parallel size
+    for a 70B judge) without poisoning the battle-model engine config, which
+    must often stay on TP=1 to dodge compile-time deadlocks on hybrid models
+    such as Qwen3.5.
+    """
+    judge_model_kwargs = dict(engine_kwargs)
+    if judge_engine_kwargs_override:
+        judge_model_kwargs.update(judge_engine_kwargs_override)
+    provider, model_name = _split_model_spec(judge_model)
+    if provider == "VLLM":
+        if "thinking_token_budget" not in judge_model_kwargs and is_thinking_model(
+            model_name
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
+        # FP8 weights leave little KV headroom on consumer-class GPUs; default
+        # to FP8 KV cache so judges like Skywork-70B-FP8 fit comfortably on
+        # 2x L40S at 32k context. Explicit caller overrides still win.
+        if "kv_cache_dtype" not in judge_model_kwargs and "fp8" in model_name.lower():
+            judge_model_kwargs["kv_cache_dtype"] = "fp8"
+    return judge_model_kwargs
+
+
+def _resolve_chat_template_kwargs(
+    *,
+    explicit_chat_template_kwargs: dict[str, object] | None,
+    disable_thinking: bool,
+) -> dict[str, object] | None:
+    chat_template_kwargs = dict(explicit_chat_template_kwargs or {})
+    if disable_thinking and "enable_thinking" not in chat_template_kwargs:
+        chat_template_kwargs["enable_thinking"] = False
+
+    return chat_template_kwargs or None
+
+
+@dataclass(frozen=True)
+class LimitEvent:
+    kind: str
+    stage: str
+    field: str | None = None
+    case_id: str | None = None
+    model_spec: str | None = None
+    original_length: int | None = None
+    final_length: int | None = None
+    note: str | None = None
+
+
+class LimitEventTracker:
+    def __init__(self) -> None:
+        self.events: list[LimitEvent] = []
+
+    def record(
+        self,
+        kind: str,
+        *,
+        stage: str,
+        field: str | None = None,
+        case_id: object | None = None,
+        model_spec: str | None = None,
+        original_length: int | None = None,
+        final_length: int | None = None,
+        note: str | None = None,
+    ) -> None:
+        self.events.append(
+            LimitEvent(
+                kind=kind,
+                stage=stage,
+                field=field,
+                case_id=None if case_id is None else str(case_id),
+                model_spec=model_spec,
+                original_length=original_length,
+                final_length=final_length,
+                note=note,
+            )
+        )
+
+    def build_summary(self) -> dict[str, Any]:
+        counts_by_kind: Counter[str] = Counter()
+        counts_by_stage: Counter[str] = Counter()
+        counts_by_kind_and_field: dict[str, Counter[str]] = {}
+        affected_cases_total: set[str] = set()
+        affected_cases_by_kind: dict[str, set[str]] = {}
+
+        for event in self.events:
+            counts_by_kind[event.kind] += 1
+            counts_by_stage[event.stage] += 1
+            field_key = event.field or "_all"
+            counts_by_kind_and_field.setdefault(event.kind, Counter())[field_key] += 1
+            if event.case_id is None:
+                continue
+            case_key = f"{event.stage}:{event.case_id}"
+            affected_cases_total.add(case_key)
+            affected_cases_by_kind.setdefault(event.kind, set()).add(case_key)
+
+        return {
+            "total_events": len(self.events),
+            "counts_by_kind": dict(sorted(counts_by_kind.items())),
+            "counts_by_stage": dict(sorted(counts_by_stage.items())),
+            "counts_by_kind_and_field": {
+                kind: dict(sorted(counter.items()))
+                for kind, counter in sorted(counts_by_kind_and_field.items())
+            },
+            "affected_cases_total": len(affected_cases_total),
+            "affected_cases_by_kind": {
+                kind: len(case_ids)
+                for kind, case_ids in sorted(affected_cases_by_kind.items())
+            },
+        }
+
 
 def set_langchain_cache():
     set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
@@ -37,7 +193,7 @@ def download_hf(name: str, local_path: Path):
     local_path.mkdir(exist_ok=True, parents=True)
     # downloads the model from huggingface into `local_path` folder
     snapshot_download(
-        repo_id="geoalgo/llmjudge",
+        repo_id="judge-arena/judge-arena-dataset",
         repo_type="dataset",
         allow_patterns=f"*{name}*",
         local_dir=local_path,
@@ -109,6 +265,33 @@ def truncate(s: str, max_len: int | None = None) -> str:
     return s
 
 
+def truncate_with_metadata(
+    s: str | None,
+    max_len: int | None = None,
+    *,
+    tracker: LimitEventTracker | None = None,
+    kind: str | None = None,
+    stage: str | None = None,
+    field: str | None = None,
+    case_id: object | None = None,
+    model_spec: str | None = None,
+) -> tuple[str, bool]:
+    original = s if isinstance(s, str) else ""
+    truncated = truncate(original, max_len=max_len)
+    was_truncated = truncated != original
+    if was_truncated and tracker is not None and kind is not None and stage is not None:
+        tracker.record(
+            kind,
+            stage=stage,
+            field=field,
+            case_id=case_id,
+            model_spec=model_spec,
+            original_length=len(original),
+            final_length=len(truncated),
+        )
+    return truncated, was_truncated
+
+
 def safe_text(value: object, truncate_chars: int | None) -> str:
     """Coerce *value* to a string and optionally truncate.
 
@@ -123,13 +306,100 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     return truncate(str(value), max_len=truncate_chars)
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def safe_text_with_metadata(
+    value: object,
+    truncate_chars: int | None,
+    *,
+    tracker: LimitEventTracker | None = None,
+    kind: str | None = None,
+    stage: str | None = None,
+    field: str | None = None,
+    case_id: object | None = None,
+    model_spec: str | None = None,
+) -> tuple[str, bool]:
+    if value is None:
+        return "", False
+    is_missing = pd.isna(value)
+    if isinstance(is_missing, bool) and is_missing:
+        return "", False
+    return truncate_with_metadata(
+        str(value),
+        max_len=truncate_chars,
+        tracker=tracker,
+        kind=kind,
+        stage=stage,
+        field=field,
+        case_id=case_id,
+        model_spec=model_spec,
+    )
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+
+def strip_thinking_tags(text: str | None) -> str:
+    """Remove full `<think>...</think>` blocks from raw model output."""
+    return strip_thinking_tags_with_metadata(text)[0]
+
+
+def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
+    """Remove visible reasoning spans from raw model output."""
+    if not isinstance(text, str):
+        return "", False
+
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    if cleaned != text:
+        return cleaned.lstrip(), True
+
+    lowered = text.lower()
+    closing_tag = "</think>"
+    closing_idx = lowered.find(closing_tag)
+    if closing_idx != -1 and "<think>" not in lowered[:closing_idx]:
+        return text[closing_idx + len(closing_tag) :].lstrip(), True
+
+    forced_end_idx = text.find(VLLM_REASONING_END_STR)
+    if forced_end_idx != -1:
+        return (
+            text[forced_end_idx + len(VLLM_REASONING_END_STR) :].lstrip(),
+            True,
+        )
+
+    return text, False
+
+
+def _extract_ai_message_metadata(result: object) -> dict[str, Any]:
+    """Extract finish_reason/stop_reason from a LangChain AIMessage result.
+
+    LangChain chat models (ChatOpenAI for OpenRouter, Anthropic, etc.) return
+    AIMessage objects with a ``response_metadata`` dict. We propagate the
+    subset that downstream code consumes (finish_reason is critical: it gates
+    truncation detection in _record_generation_output_limit_events).
+    """
+    response_metadata = getattr(result, "response_metadata", None) or {}
+    finish_reason = response_metadata.get("finish_reason")
+    stop_reason = response_metadata.get("stop_reason")
+    if finish_reason is None and isinstance(result, dict):
+        finish_reason = result.get("finish_reason")
+        stop_reason = result.get("stop_reason", stop_reason)
+    return {"finish_reason": finish_reason, "stop_reason": stop_reason}
+
+
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
+    return_metadata: bool = False,
+):
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
         # "stop": ["```"],
         # "max_tokens": 100,
     }
+    metadata: list[dict[str, Any]] | None = None
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
@@ -159,6 +429,8 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                     chat_model=chat_model, inputs=inputs, pbar=pbar
                 )
             )
+        if return_metadata:
+            metadata = [_extract_ai_message_metadata(r) for r in res]
     else:
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
@@ -171,9 +443,26 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                 ]
                 try:
                     results = []
+                    results_metadata = []
                     for chunk in chunks:
-                        results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
-                    return results
+                        if return_metadata and hasattr(
+                            chat_model, "batch_with_metadata"
+                        ):
+                            chunk_results, chunk_metadata = (
+                                chat_model.batch_with_metadata(
+                                    inputs=chunk, **invoke_kwargs
+                                )
+                            )
+                        else:
+                            chunk_results = chat_model.batch(
+                                inputs=chunk, **invoke_kwargs
+                            )
+                            chunk_metadata = [
+                                _extract_ai_message_metadata(r) for r in chunk_results
+                            ]
+                        results.extend(chunk_results)
+                        results_metadata.extend(chunk_metadata)
+                    return results, results_metadata
                 except Exception as e:
                     if attempt == max_retries - 1 or not _is_retryable_error(e):
                         raise
@@ -184,12 +473,32 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                     )
                     time.sleep(delay)
 
-        res = batch_with_retry(inputs)
+        res, metadata = batch_with_retry(inputs)
 
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
     res = [x.content if hasattr(x, "content") else x for x in res]
+    if (
+        usage_tracker is not None
+        and usage_phase is not None
+        and usage_model_spec is not None
+    ):
+        try:
+            usage_tracker.record_batch_from_model(
+                phase=usage_phase,
+                model_spec=usage_model_spec,
+                chat_model=chat_model,
+                inputs=list(inputs),
+                outputs=res,
+            )
+        except Exception as e:
+            print(
+                f"Warning: failed to record token usage for phase "
+                f"'{usage_phase}' ({usage_model_spec}): {e}"
+            )
+    if return_metadata:
+        return res, (metadata or [{} for _ in res])
     return res
 
 
@@ -231,9 +540,27 @@ class ChatVLLM:
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
+        from vllm.config.reasoning import ReasoningConfig
 
         self.model_path = model
         self.max_tokens = max_tokens
+        limit_event_tracker: LimitEventTracker | None = vllm_kwargs.pop(
+            "limit_event_tracker", None
+        )
+        limit_event_stage = str(vllm_kwargs.pop("limit_event_stage", "model_init"))
+        limit_event_model_spec = str(
+            vllm_kwargs.pop("limit_event_model_spec", f"VLLM/{model}")
+        )
+        disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
+        thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
+        explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
+        explicit_reasoning_settings = (
+            "reasoning_parser" in vllm_kwargs or "reasoning_config" in vllm_kwargs
+        )
+        self._chat_template_kwargs = _resolve_chat_template_kwargs(
+            explicit_chat_template_kwargs=explicit_chat_template_kwargs,
+            disable_thinking=disable_thinking,
+        )
 
         # Cap max_model_len to the model's max_position_embeddings so that
         # vLLM doesn't reject an overly large context window.
@@ -245,6 +572,15 @@ class ChatVLLM:
                 config = AutoConfig.from_pretrained(model, trust_remote_code=True)
                 model_max_pos = getattr(config, "max_position_embeddings", None)
                 if model_max_pos is not None and max_model_len > model_max_pos:
+                    if limit_event_tracker is not None:
+                        limit_event_tracker.record(
+                            "max_model_len_clamped",
+                            stage=limit_event_stage,
+                            field="max_model_len",
+                            model_spec=limit_event_model_spec,
+                            original_length=int(max_model_len),
+                            final_length=int(model_max_pos),
+                        )
                     warnings.warn(
                         f"Capping max_model_len from {max_model_len} to "
                         f"{model_max_pos} (max_position_embeddings) for '{model}'.",
@@ -259,13 +595,52 @@ class ChatVLLM:
                     RuntimeWarning,
                     stacklevel=2,
                 )
+        self._sampling_params_kwargs = {
+            "max_tokens": max_tokens,
+            "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
+            "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
+        }
+        self._thinking_budget_marker: str | None = None
+        self._thinking_budget_value: int | None = None
+        if thinking_token_budget is not None:
+            if max_tokens is not None:
+                thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
+            if explicit_reasoning_settings:
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+                self._thinking_budget_marker = VLLM_REASONING_END_STR
+                self._thinking_budget_value = int(thinking_token_budget)
+            elif is_thinking_model(model):
+                vllm_kwargs.setdefault(
+                    "reasoning_config",
+                    ReasoningConfig(
+                        reasoning_start_str=VLLM_REASONING_START_STR,
+                        reasoning_end_str=VLLM_REASONING_END_STR,
+                    ),
+                )
+                # The `qwen3` reasoning_parser only runs inside vLLM's
+                # OpenAI-compatible server for `reasoning_content` extraction.
+                # For offline batch inference via LLM.chat() it is inert, so
+                # it is safe to reuse for any `<think>`/`</think>` model
+                # (Qwen3 + SmolLM3).
+                vllm_kwargs.setdefault("reasoning_parser", "qwen3")
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+                self._thinking_budget_marker = VLLM_REASONING_END_STR
+                self._thinking_budget_value = int(thinking_token_budget)
+            else:
+                warnings.warn(
+                    f"Model '{model}' is not in JudgeArena's built-in thinking-model "
+                    "defaults (Qwen3/SmolLM3). Ignoring thinking_token_budget unless "
+                    "reasoning_parser or reasoning_config is provided explicitly.",
+                    stacklevel=2,
+                )
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
-        self.sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
-        )
+        self.tokenizer = self.llm.get_tokenizer()
 
         # Resolve chat template:
         # 1. Explicit override always wins → use chat() with that template
@@ -276,8 +651,7 @@ class ChatVLLM:
             self._use_generate = False
             print(f"ChatVLLM: using explicit chat template for '{model}'")
         else:
-            tokenizer = self.llm.get_tokenizer()
-            if not getattr(tokenizer, "chat_template", None):
+            if not getattr(self.tokenizer, "chat_template", None):
                 warnings.warn(
                     f"Model '{model}' tokenizer does not define a chat template. "
                     f"Falling back to llm.generate() (no chat formatting). "
@@ -286,10 +660,22 @@ class ChatVLLM:
                 )
                 self.chat_template = None
                 self._use_generate = True
+                if disable_thinking:
+                    warnings.warn(
+                        f"Model '{model}' has no chat template, so disable_thinking "
+                        "cannot be applied when falling back to llm.generate().",
+                        stacklevel=2,
+                    )
             else:
                 self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False
                 print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
+
+    def set_temperature(self, temperature: float) -> None:
+        from vllm import SamplingParams
+
+        self._sampling_params_kwargs["temperature"] = float(temperature)
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
     def _to_messages(self, input_item) -> list[dict]:
         """Convert LangChain prompt input to OpenAI-style messages."""
@@ -342,7 +728,7 @@ class ChatVLLM:
             return "\n".join(msg["content"] for msg in input_item)
         raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
 
-    def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
+    def _run_raw_batch(self, inputs: list):
         """Process a batch of inputs using vllm.LLM.chat() or llm.generate().
 
         Uses ``llm.chat()`` when a chat template is available (instruct models),
@@ -358,8 +744,72 @@ class ChatVLLM:
                 self.sampling_params,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
+                chat_template_kwargs=self._chat_template_kwargs,
             )
-        return [out.outputs[0].text for out in outputs]
+        return outputs
+
+    def batch_with_metadata(
+        self, inputs: list, **invoke_kwargs
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        outputs = self._run_raw_batch(inputs)
+        texts: list[str] = []
+        metadata: list[dict[str, Any]] = []
+        marker = self._thinking_budget_marker
+        for out in outputs:
+            first_output = out.outputs[0]
+            text = first_output.text
+            texts.append(text)
+            row: dict[str, Any] = {
+                "finish_reason": getattr(first_output, "finish_reason", None),
+                "stop_reason": getattr(first_output, "stop_reason", None),
+            }
+            if marker is not None:
+                # vLLM emits the forced reasoning-end marker verbatim when the
+                # per-request thinking-token budget is exhausted; the marker is
+                # absent otherwise. Detecting it here gives
+                # `_record_generation_output_limit_events` a deterministic
+                # signal to log a `generation_thinking_token_budget` event.
+                row["thinking_budget_exhausted"] = marker in text
+                row["thinking_token_budget"] = self._thinking_budget_value
+            metadata.append(row)
+        return texts, metadata
+
+    def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
+        texts, _metadata = self.batch_with_metadata(inputs, **invoke_kwargs)
+        return texts
+
+    def _count_chat_prompt_tokens(self, messages: list[dict]) -> int:
+        tokenizer_kwargs: dict[str, object] = {
+            "tokenize": True,
+            "add_generation_prompt": True,
+        }
+        if self.chat_template is not None:
+            tokenizer_kwargs["chat_template"] = self.chat_template
+        if self._chat_template_kwargs is not None:
+            tokenizer_kwargs["chat_template_kwargs"] = self._chat_template_kwargs
+        try:
+            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
+        except TypeError:
+            tokenizer_kwargs.pop("chat_template_kwargs", None)
+            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
+        return len(token_ids)
+
+    def count_prompt_tokens_batch(self, inputs: list) -> list[int]:
+        counts: list[int] = []
+        for input_item in inputs:
+            if self._use_generate:
+                counts.append(len(self.tokenizer.encode(self._to_raw_text(input_item))))
+            else:
+                counts.append(
+                    self._count_chat_prompt_tokens(self._to_messages(input_item))
+                )
+        return counts
+
+    def count_completion_tokens_batch(self, outputs: list[str]) -> list[int]:
+        return [
+            len(self.tokenizer.encode(output, add_special_tokens=False))
+            for output in outputs
+        ]
 
     def invoke(self, input_item, **invoke_kwargs) -> str:
         """Process a single input."""
@@ -389,22 +839,30 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     # NOTE: this is a shallow copy since we are not modifying any
     # mutable objects in the dictionary.
     engine_kwargs = engine_kwargs.copy()
+    limit_event_tracker = engine_kwargs.pop("limit_event_tracker", None)
+    limit_event_stage = engine_kwargs.pop("limit_event_stage", None)
+    limit_event_model_spec = engine_kwargs.pop("limit_event_model_spec", None)
 
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
 
-    model_provider = model.split("/")[0]
+    model_provider, model_name = _split_model_spec(model)
 
     if model_provider == "Dummy":
         return DummyModel(model)
 
-    model_name = "/".join(model.split("/")[1:])
     print(f"Loading {model_provider}(model={model_name})")
 
     # Use our custom ChatVLLM wrapper which properly applies chat templates
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
+        if limit_event_tracker is not None:
+            engine_kwargs["limit_event_tracker"] = limit_event_tracker
+        if limit_event_stage is not None:
+            engine_kwargs["limit_event_stage"] = limit_event_stage
+        if limit_event_model_spec is not None:
+            engine_kwargs["limit_event_model_spec"] = limit_event_model_spec
 
         return ChatVLLM(
             model=model_name,
@@ -412,8 +870,16 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         )
 
     if model_provider == "OpenRouter":
-        # Special case we need to override API url and key
-        return ChatOpenAI(
+        # Gemini's core policy filter rejects a small fraction of prompts with
+        # a hard PROHIBITED_CONTENT error that safety_settings cannot override;
+        # the subclass converts those into stub refusals so batch generation
+        # (e.g. benchmark baselines) completes instead of crashing.
+        chat_model_cls = (
+            OpenRouterGeminiSafetyTolerantChatOpenAI
+            if is_openrouter_gemini_model(model)
+            else ChatOpenAI
+        )
+        return chat_model_cls(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,
@@ -448,15 +914,33 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         return model_cls_dict[model_provider](**engine_kwargs)
 
 
+def infer_model_spec_from_instance(model: object) -> str | None:
+    if isinstance(model, DummyModel):
+        return model.name
+    if isinstance(model, ChatVLLM):
+        return f"VLLM/{model.model_path}"
+    if isinstance(model, LlamaCpp):
+        model_path = getattr(model, "model_path", None)
+        if isinstance(model_path, str):
+            return f"LlamaCpp/{model_path}"
+    model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
+    if isinstance(model_name, str):
+        return f"{model.__class__.__name__}/{model_name}"
+    return None
+
+
 def download_all():
+    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
+
     print(f"Downloading all dataset in {data_root}")
     local_path_tables = data_root / "tables"
-    for dataset in [
+    datasets = [
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
-        "m-arena-hard",
-    ]:
+        *M_ARENA_HARD_BASELINES.keys(),
+    ]
+    for dataset in datasets:
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
         else:

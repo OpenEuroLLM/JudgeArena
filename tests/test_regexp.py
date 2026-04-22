@@ -1,4 +1,5 @@
 from judgearena.evaluate import PairScore
+from judgearena.utils import strip_thinking_tags
 
 
 def test_pair_score():
@@ -38,3 +39,72 @@ def test_regexp():
     assert pref == 0.5744425168116589
 
     print(pref)
+
+
+def test_pair_score_ignores_scores_inside_thinking_tags():
+    raw_text = """
+    <think>
+    Early draft:
+    score_A: 2
+    score_B: 1
+    </think>
+    Explanation: Assistant B is clearly better overall.
+    score_A: 0
+    score_B: 10
+    """
+
+    scorer = PairScore()
+    pref = scorer.parse_model_raw(raw_text)
+
+    assert pref is not None
+    assert pref == 0.9525741268224333
+
+
+def test_pair_score_score_mode_does_not_parse_bracketed_verdicts():
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw("Explanation: ok\n[[A]]") is None
+    assert scorer.parse_model_raw("Explanation: ok\n[[B]]") is None
+    assert scorer.parse_model_raw("Explanation: ok\n[[C]]") is None
+
+
+def test_pair_score_score_mode_ignores_bracketed_verdict_after_thinking():
+    raw_text = """
+    <think>
+    score_A: 0
+    score_B: 10
+    </think>
+    Concise verdict only.
+    [[B]]
+    """
+
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw(raw_text) is None
+
+
+def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
+    raw_text = (
+        "Reasoning that started implicitly and kept going.\n"
+        "Still reasoning.\n"
+        "</think>\n"
+        "Final answer."
+    )
+
+    assert strip_thinking_tags(raw_text) == "Final answer."
+
+
+def test_pair_score_verdict_mode_uses_bracketed_verdicts():
+    raw_text = "score_A: 10\nscore_B: 0\n[[B]]"
+
+    scorer = PairScore(parser_mode="verdict")
+
+    assert scorer.parse_model_raw(raw_text) == 1.0
+
+
+def test_pair_score_verdict_mode_does_not_parse_score_only_outputs():
+    raw_text = "score_A: 10\nscore_B: 0"
+
+    scorer = PairScore(parser_mode="verdict")
+
+    assert scorer.parse_model_raw(raw_text) is None

@@ -100,12 +100,15 @@ class CliEloArgs(BaseCliArgs):
             swap_mode=args.swap_mode,
             ignore_cache=args.ignore_cache,
             truncate_all_input_chars=args.truncate_all_input_chars,
+            truncate_judge_input_chars=args.truncate_judge_input_chars,
             max_out_tokens_models=args.max_out_tokens_models,
             max_out_tokens_judge=args.max_out_tokens_judge,
             max_model_len=args.max_model_len,
+            max_judge_model_len=args.max_judge_model_len,
             chat_template=args.chat_template,
             result_folder=args.result_folder,
             engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+            judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
         )
 
 
@@ -343,8 +346,9 @@ def main(args: CliEloArgs | None = None) -> dict:
     ]
 
     judge_extra_kwargs = {}
-    if args.max_model_len is not None:
-        judge_extra_kwargs["max_model_len"] = args.max_model_len
+    effective_judge_max_model_len = args.effective_judge_max_model_len()
+    if effective_judge_max_model_len is not None:
+        judge_extra_kwargs["max_model_len"] = effective_judge_max_model_len
     if args.chat_template is not None:
         judge_extra_kwargs["chat_template"] = args.chat_template
 
@@ -361,7 +365,7 @@ def main(args: CliEloArgs | None = None) -> dict:
             completions_B=completions_B,
             swap_mode=args.swap_mode,
             provide_explanation=args.provide_explanation,
-            truncate_input_chars=args.truncate_all_input_chars,
+            truncate_input_chars=args.effective_judge_truncation(),
             use_tqdm=use_tqdm,
         )
         return pd.DataFrame(
