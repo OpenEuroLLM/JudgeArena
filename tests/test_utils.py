@@ -1,4 +1,5 @@
 import judgearena.utils as utils
+from judgearena.utils import make_model
 
 
 def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
@@ -39,3 +40,27 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
         "geoalgo/multilingual-contexts-to-be-completed",
         tmp_path / "contexts",
     )
+
+
+def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
+    """vLLM-engine-only kwargs must not leak into ChatOpenAI.model_kwargs.
+
+    Regression guard for #20: unknown kwargs forwarded to ``ChatOpenAI`` land
+    in ``model_kwargs`` and are then sent to ``chat.completions.create``,
+    which rejects them with ``TypeError: unexpected keyword argument
+    'max_model_len'``.
+    """
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+
+    model = make_model(
+        "OpenRouter/google/gemma-3-4b-it",
+        max_tokens=16,
+        max_model_len=4096,
+        chat_template="<ct>",
+        temperature=0.5,
+    )
+
+    assert "max_model_len" not in model.model_kwargs
+    assert "chat_template" not in model.model_kwargs
+    assert model.max_tokens == 16
+    assert model.temperature == 0.5
