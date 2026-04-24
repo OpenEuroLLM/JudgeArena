@@ -1,9 +1,8 @@
 """
-This script generates completions for a given dataset and model,
+This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import argparse
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -12,12 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from judgearena.cli_common import (
-    BaseCliArgs,
-    add_common_arguments,
-    parse_engine_kwargs,
-    resolve_verbosity,
-)
+from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -27,7 +21,6 @@ from judgearena.instruction_dataset.arena_hard import (
 )
 from judgearena.log import (
     attach_file_handler,
-    configure_logging,
     get_logger,
     make_run_log_path,
 )
@@ -91,61 +84,10 @@ def try_load_dataset_completions(
 class CliArgs(BaseCliArgs):
     """CLI arguments for the generate-and-evaluate entrypoint."""
 
-    dataset: str | None = None
+    task: str | None = None
     model_A: str | None = None
     model_B: str | None = None
     use_tqdm: bool = False
-
-    @classmethod
-    def parse_args(cls):
-        parser = argparse.ArgumentParser(
-            prog="Generate completion and evaluate with a judge",
-        )
-        parser.add_argument(
-            "--dataset",
-            help="The dataset to use. For instance `alpaca-eval`, `arena-hard-v2.0`, "
-            "`arena-hard-v0.1`, `m-arena-hard-EU` for instruction "
-            "tuning cases or `french-contexts`, `spanish-contexts` for base models.",
-        )
-        parser.add_argument(
-            "--model_A",
-            required=True,
-            help="Name of the LLM to use for a generation, must be a valid choice for `generation_provider`",
-        )
-        parser.add_argument(
-            "--model_B",
-            required=True,
-            help="Name of the LLM to use for a generation, must be a valid choice for `generation_provider`",
-        )
-        parser.add_argument(
-            "--use_tqdm",
-            action="store_true",
-            help="If specified, use tqdm, does not work with all model providers, vLLM in particular.",
-        )
-        add_common_arguments(parser)
-        args = parser.parse_args()
-
-        return cls(
-            dataset=args.dataset,
-            model_A=args.model_A,
-            model_B=args.model_B,
-            use_tqdm=args.use_tqdm,
-            judge_model=args.judge_model,
-            n_instructions=args.n_instructions,
-            provide_explanation=args.provide_explanation,
-            swap_mode=args.swap_mode,
-            ignore_cache=args.ignore_cache,
-            truncate_all_input_chars=args.truncate_all_input_chars,
-            max_out_tokens_models=args.max_out_tokens_models,
-            max_out_tokens_judge=args.max_out_tokens_judge,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            result_folder=args.result_folder,
-            engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
-            verbosity=resolve_verbosity(args),
-            log_file=args.log_file,
-            no_log_file=args.no_log_file,
-        )
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -158,7 +100,7 @@ def print_results(results):
 
     print("\n" + "=" * 60)
     print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Dataset: {results['dataset']}")
+    print(f"📊 Task: {results['task']}")
     print(
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
@@ -175,7 +117,7 @@ def print_results(results):
 def main(args: CliArgs):
     """
     1) take as input:
-     * dataset, make sure instruct-completion works
+     * task (dataset), make sure instruct-completion works
      * model to generate output from
      * llm used for judge
      * number of annotations
@@ -188,7 +130,7 @@ def main(args: CliArgs):
 
     # Build the result folder early so the file handler captures the entire run.
     # Include a timestamp so each run gets its own unique directory.
-    name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
+    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
     name += f"-{args.swap_mode}"
     name = name.replace("/", "_")
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
@@ -198,8 +140,8 @@ def main(args: CliArgs):
         attach_file_handler(make_run_log_path(res_folder))
 
     logger.info(
-        "Using dataset %s and evaluating models %s and %s.",
-        args.dataset,
+        "Using task %s and evaluating models %s and %s.",
+        args.task,
         args.model_A,
         args.model_B,
     )
@@ -209,7 +151,7 @@ def main(args: CliArgs):
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
 
-    if args.dataset == "mt-bench":
+    if args.task == "mt-bench":
         return run_mt_bench(
             args,
             ignore_cache,
@@ -218,15 +160,15 @@ def main(args: CliArgs):
         )
 
     # Currrently, we run context evaluation
-    is_fluency_task = "fluency" in args.dataset
+    is_fluency_task = "fluency" in args.task
     if is_fluency_task:
-        # if args.dataset = "fluency-french", we map to "french-contexts.csv"
+        # if args.task = "fluency-french", we map to "french-contexts.csv"
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
-        lang = args.dataset.split("-")[-1]
+        lang = args.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
     else:
         instructions = load_instructions(
-            dataset=args.dataset, n_instructions=args.n_instructions
+            dataset=args.task, n_instructions=args.n_instructions
         ).loc[:, "instruction"]
 
     n_instructions = args.n_instructions if args.n_instructions else len(instructions)
@@ -234,9 +176,9 @@ def main(args: CliArgs):
         instructions = instructions[:n_instructions]
 
     logger.info(
-        "Generating completions for dataset %s with model %s and %s "
+        "Generating completions for task %s with model %s and %s "
         "(or loading them directly if present)",
-        args.dataset,
+        args.task,
         args.model_A,
         args.model_B,
     )
@@ -264,7 +206,7 @@ def main(args: CliArgs):
         )
     )
     dataset_completions_A = try_load_dataset_completions(
-        args.dataset, args.model_A, n_instructions
+        args.task, args.model_A, n_instructions
     )
     if dataset_completions_A is not None:
         completions_A = dataset_completions_A.set_index("instruction_index").loc[
@@ -278,12 +220,12 @@ def main(args: CliArgs):
                 use_tqdm=args.use_tqdm,
             ),
             ignore_cache=ignore_cache,
-            cache_name=f"{args.dataset}_{args.model_A}_{args.n_instructions}",
+            cache_name=f"{args.task}_{args.model_A}_{args.n_instructions}",
         ).set_index("instruction_index")
         completions_A = completions_A.loc[:, "completion"]
 
     dataset_completions_B = try_load_dataset_completions(
-        args.dataset, args.model_B, n_instructions
+        args.task, args.model_B, n_instructions
     )
     if dataset_completions_B is not None:
         completions_B = dataset_completions_B.set_index("instruction_index").loc[
@@ -297,7 +239,7 @@ def main(args: CliArgs):
                 use_tqdm=args.use_tqdm,
             ),
             ignore_cache=ignore_cache,
-            cache_name=f"{args.dataset}_{args.model_B}_{args.n_instructions}",
+            cache_name=f"{args.task}_{args.model_B}_{args.n_instructions}",
         ).set_index("instruction_index")
         completions_B = completions_B.loc[:, "completion"]
     logger.debug("First instruction/context: %s", instructions.values[0])
@@ -370,7 +312,7 @@ def main(args: CliArgs):
     summary = compute_pref_summary(prefs)
 
     results = {
-        "dataset": args.dataset,
+        "task": args.task,
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
@@ -408,14 +350,3 @@ def main(args: CliArgs):
         logger.warning("Failed to write run metadata: %s", e)
 
     return prefs
-
-
-def cli():
-    args = CliArgs.parse_args()
-    configure_logging(args.verbosity, log_file=args.log_file)
-    logger.debug("Running with CLI args: %s", args.__dict__)
-    main(args)
-
-
-if __name__ == "__main__":
-    cli()

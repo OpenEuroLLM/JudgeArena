@@ -408,6 +408,13 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     model_provider = model.split("/")[0]
 
+    # vLLM-engine-only kwargs must not leak to remote-API providers
+    # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
+    # kwargs via model_kwargs into chat.completions.create, which rejects them.
+    if model_provider != "VLLM":
+        engine_kwargs.pop("max_model_len", None)
+        engine_kwargs.pop("chat_template", None)
+
     if model_provider == "Dummy":
         return DummyModel(model)
 
