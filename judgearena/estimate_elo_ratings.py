@@ -1,4 +1,3 @@
-import argparse
 import hashlib
 from dataclasses import dataclass
 from functools import partial
@@ -8,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
-from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
+from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
@@ -31,82 +30,6 @@ class CliEloArgs(BaseCliArgs):
     n_bootstraps: int = 20
     seed: int = 0
     baseline_model: str | None = None
-
-    @classmethod
-    def parse_args(cls):
-        parser = argparse.ArgumentParser(
-            prog="Estimate ELO rating for a model on an Arena (LMArena-100k, LMArena-140k, or ComparIA) with LLM judges",
-        )
-        parser.add_argument(
-            "--arena",
-            help="The arena to use. Battles are sampled from this Arena. If not passed use concatenation from all Arena. "
-            "Passing LMArena leads to loading the union of `LMArena-100k` and `LMArena-140k`",
-            choices=["LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"],
-            required=False,
-        )
-        parser.add_argument(
-            "--model",
-            required=True,
-            help="Name of the LLM to use for a generation, must be a valid choice for `generation_provider`",
-        )
-        parser.add_argument(
-            "--languages",
-            nargs="+",
-            default=None,
-            help='List of language codes to evaluate, e.g. "en fr de" (default: all languages)',
-        )
-        parser.add_argument(
-            "--n_instructions_per_language",
-            type=int,
-            required=False,
-            help="Maximum number of instructions to keep per language.",
-        )
-        parser.add_argument(
-            "--n_bootstraps",
-            type=int,
-            required=False,
-            default=20,
-            help="Number of bootstrap samples for ELO confidence intervals. Default is 20.",
-        )
-        parser.add_argument(
-            "--seed",
-            type=int,
-            required=False,
-            default=0,
-            help="Random seed for reproducibility. Default is 0.",
-        )
-        parser.add_argument(
-            "--baseline_model",
-            type=str,
-            required=False,
-            default=None,
-            help="Model name to anchor at 1000 ELO. All other ratings are expressed relative to this model. "
-            "Must be one of the models present in the arena battles. If not set, ratings are not anchored.",
-        )
-        add_common_arguments(parser)
-        args = parser.parse_args()
-
-        return cls(
-            arena=args.arena,
-            model=args.model,
-            n_instructions_per_language=args.n_instructions_per_language,
-            languages=args.languages,
-            n_bootstraps=args.n_bootstraps,
-            seed=args.seed,
-            baseline_model=args.baseline_model,
-            judge_model=args.judge_model,
-            n_instructions=args.n_instructions,
-            provide_explanation=args.provide_explanation,
-            swap_mode=args.swap_mode,
-            ignore_cache=args.ignore_cache,
-            truncate_all_input_chars=args.truncate_all_input_chars,
-            max_out_tokens_models=args.max_out_tokens_models,
-            max_out_tokens_judge=args.max_out_tokens_judge,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            result_folder=args.result_folder,
-            engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
-        )
 
 
 def compute_bradley_terry(
@@ -221,10 +144,7 @@ def compute_bradley_terry(
     return dict(pd.Series(elo_scores, index=models.index))
 
 
-def main(args: CliEloArgs | None = None) -> dict:
-    if args is None:
-        args = CliEloArgs.parse_args()
-
+def main(args: CliEloArgs) -> dict:
     rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
@@ -496,11 +416,3 @@ def main(args: CliEloArgs | None = None) -> dict:
         "bootstrap_ratings": bootstrap_ratings,
         "model_name": model_name,
     }
-
-
-def cli():
-    main()
-
-
-if __name__ == "__main__":
-    cli()

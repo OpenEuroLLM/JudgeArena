@@ -63,7 +63,7 @@ def _generate_mt_bench_completions(
 
 
 def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
-    name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
+    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
     name += f"-{args.swap_mode}"
     if suffix:
         name += f"-{suffix}"
@@ -116,7 +116,7 @@ def _run_mt_bench_fastchat(
 
     stats = compute_pref_summary(prefs)
     results = {
-        "dataset": args.dataset,
+        "task": args.task,
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,

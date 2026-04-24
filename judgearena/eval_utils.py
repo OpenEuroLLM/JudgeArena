@@ -14,7 +14,7 @@ def print_results(results):
     """Print battle results in a readable format."""
     print("\n" + "=" * 60)
     print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Dataset: {results['dataset']}")
+    print(f"📊 Task: {results['task']}")
     print(
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
