@@ -22,7 +22,7 @@ Compared to other libraries, here is a breakdown of features:
 | **Arena-Hard-Auto** | ❌  | ❌  | ✅  | ❌  | ❌                         | ❌                                            |
 | **Lighteval** | ✅  | ❌  | ❌  | ❌  | ❌                         | ❌                                       |
 | **Evalchemy** | ✅  | ✅  | ❌  | ❌  | ❌                         | ❌                                           |
-| **JudgeArena** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
+| **JudgeArena** | ✅  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
 
 The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue
 or send a PR, we will be happy to update the information.
