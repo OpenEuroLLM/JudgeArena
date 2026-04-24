@@ -203,7 +203,12 @@ def main(args: CliArgs):
     ignore_cache = args.ignore_cache
 
     if args.dataset == "mt-bench":
-        return run_mt_bench(args, ignore_cache)
+        return run_mt_bench(
+            args,
+            ignore_cache,
+            res_folder=res_folder,
+            result_name=name,
+        )
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in args.dataset

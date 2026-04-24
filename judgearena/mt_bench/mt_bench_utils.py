@@ -18,7 +18,7 @@ import pandas as pd
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
-from judgearena.log import attach_file_handler, get_logger, make_run_log_path
+from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
@@ -76,28 +76,25 @@ def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str
 def _save_mt_bench_results(
     *,
     args: CliArgs,
+    res_folder: Path,
+    result_name: str,
     results: dict[str, object],
     annotations_df: pd.DataFrame,
-    name_suffix: str | None = None,
 ) -> None:
-    name = _build_mt_bench_result_name(args, suffix=name_suffix)
-    res_folder = Path(args.result_folder) / name
-    res_folder.mkdir(parents=True, exist_ok=True)
-    if not args.no_log_file:
-        attach_file_handler(make_run_log_path(res_folder))
-
-    with open(res_folder / f"args-{name}.json", "w") as f:
+    with open(res_folder / f"args-{result_name}.json", "w") as f:
         json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
 
-    annotations_df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
+    annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
-    with open(res_folder / f"results-{name}.json", "w") as f:
+    with open(res_folder / f"results-{result_name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
 
 def _run_mt_bench_fastchat(
     *,
     args: CliArgs,
+    res_folder: Path,
+    result_name: str,
     questions_df: pd.DataFrame,
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
@@ -136,14 +133,21 @@ def _run_mt_bench_fastchat(
     print_results(results)
     _save_mt_bench_results(
         args=args,
+        res_folder=res_folder,
+        result_name=result_name,
         results=results,
         annotations_df=pd.DataFrame(annotations),
-        name_suffix="mtbench",
     )
     return prefs
 
 
-def run_mt_bench(args: CliArgs, ignore_cache: bool):
+def run_mt_bench(
+    args: CliArgs,
+    ignore_cache: bool,
+    *,
+    res_folder: Path,
+    result_name: str,
+):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
     logger.info(
@@ -165,6 +169,8 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
     )
     return _run_mt_bench_fastchat(
         args=args,
+        res_folder=res_folder,
+        result_name=result_name,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,

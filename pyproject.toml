@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.generate_and_evaluate:cli"
-judgearena-elo = "judgearena.estimate_elo_ratings:main"
+judgearena-elo = "judgearena.estimate_elo_ratings:cli"
 
 [project]
 name = "judgearena"

@@ -28,6 +28,10 @@ _CONSOLE_DATEFMT = "%H:%M:%S"
 _FILE_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
+def _resolve_log_path(log_file: str | Path) -> Path:
+    return Path(log_file).expanduser().resolve()
+
+
 def get_logger(name: str | None = None) -> logging.Logger:
     """Return a logger under the ``judgearena`` namespace.
 
@@ -122,7 +126,23 @@ def attach_file_handler(
     Returns the handler so the caller can remove it if needed.
     """
     root = logging.getLogger(_ROOT_LOGGER_NAME)
-    fh = logging.FileHandler(log_file)
+    resolved_log_file = _resolve_log_path(log_file)
+
+    for handler in root.handlers:
+        if not isinstance(handler, logging.FileHandler):
+            continue
+        handler_path = getattr(handler, "baseFilename", None)
+        if handler_path is None:
+            continue
+        if Path(handler_path).resolve() == resolved_log_file:
+            handler.setLevel(level)
+            handler.setFormatter(
+                logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
+            )
+            return handler
+
+    resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(resolved_log_file)
     fh.setLevel(level)
     fh.setFormatter(
         logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)

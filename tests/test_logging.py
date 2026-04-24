@@ -9,6 +9,7 @@ import pytest
 
 from judgearena.log import (
     _ROOT_LOGGER_NAME,
+    attach_file_handler,
     configure_logging,
     get_logger,
     make_run_log_path,
@@ -98,6 +99,27 @@ def test_file_handler_captures_debug_even_when_console_is_info(tmp_path):
 
     text = log_file.read_text()
     assert "only in file" in text
+
+
+def test_attach_file_handler_is_idempotent_for_same_path(tmp_path):
+    log_file = tmp_path / "run.log"
+
+    first = attach_file_handler(log_file)
+    second = attach_file_handler(log_file)
+
+    root = logging.getLogger(_ROOT_LOGGER_NAME)
+    file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+
+    assert first is second
+    assert len(file_handlers) == 1
+
+
+def test_attach_file_handler_creates_parent_directory(tmp_path):
+    log_file = tmp_path / "nested" / "logs" / "run.log"
+
+    attach_file_handler(log_file)
+
+    assert log_file.parent.exists()
 
 
 # ---------- resolve_verbosity ----------
