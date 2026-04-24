@@ -19,6 +19,11 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.log import (
+    attach_file_handler,
+    get_logger,
+    make_run_log_path,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
@@ -29,6 +34,8 @@ from judgearena.utils import (
     make_model,
     read_df,
 )
+
+logger = get_logger(__name__)
 
 
 def try_load_dataset_completions(
@@ -59,7 +66,9 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    print(f"Found pre-existing completions for '{model}' in dataset '{dataset}'.")
+    logger.info(
+        "Found pre-existing completions for '%s' in dataset '%s'.", model, dataset
+    )
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)
@@ -118,8 +127,23 @@ def main(args: CliArgs):
     """
 
     run_started_at = datetime.now(UTC)
-    print(
-        f"Using task {args.task} and evaluating models {args.model_A} and {args.model_B}."
+
+    # Build the result folder early so the file handler captures the entire run.
+    # Include a timestamp so each run gets its own unique directory.
+    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
+    name += f"-{args.swap_mode}"
+    name = name.replace("/", "_")
+    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+    res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
+    res_folder.mkdir(parents=True, exist_ok=True)
+    if not args.no_log_file:
+        attach_file_handler(make_run_log_path(res_folder))
+
+    logger.info(
+        "Using task %s and evaluating models %s and %s.",
+        args.task,
+        args.model_A,
+        args.model_B,
     )
 
     # Not working with vllm, not detecting model changes and serving the same cache for two different models...
@@ -128,7 +152,12 @@ def main(args: CliArgs):
     ignore_cache = args.ignore_cache
 
     if args.task == "mt-bench":
-        return run_mt_bench(args, ignore_cache)
+        return run_mt_bench(
+            args,
+            ignore_cache,
+            res_folder=res_folder,
+            result_name=name,
+        )
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in args.task
@@ -146,9 +175,12 @@ def main(args: CliArgs):
     if args.n_instructions is not None:
         instructions = instructions[:n_instructions]
 
-    print(
-        f"Generating completions for task {args.task} with model {args.model_A} and "
-        f"{args.model_B} (or loading them directly if present)"
+    logger.info(
+        "Generating completions for task %s with model %s and %s "
+        "(or loading them directly if present)",
+        args.task,
+        args.model_A,
+        args.model_B,
     )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
@@ -210,13 +242,10 @@ def main(args: CliArgs):
             cache_name=f"{args.task}_{args.model_B}_{args.n_instructions}",
         ).set_index("instruction_index")
         completions_B = completions_B.loc[:, "completion"]
-    print(f"\nFirst instruction/context: {instructions.values[0]}")
-
-    print(f"\nFirst completion of {args.model_A}")
-    print(completions_A.values[0])
-    print(f"\nFirst completion of {args.model_B}")
-    print(completions_B.values[0])
-    print(f"Evaluating completions with judge {args.judge_model}.")
+    logger.debug("First instruction/context: %s", instructions.values[0])
+    logger.debug("First completion of %s:\n%s", args.model_A, completions_A.values[0])
+    logger.debug("First completion of %s:\n%s", args.model_B, completions_B.values[0])
+    logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judge_chat_model = make_model(
         model=args.judge_model,
@@ -226,18 +255,11 @@ def main(args: CliArgs):
         **args.engine_kwargs,
     )
 
-    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
-    name += f"-{args.swap_mode}"
-    name = name.replace("/", "_")
-
-    res_folder = Path(args.result_folder) / name
-    res_folder.mkdir(parents=True, exist_ok=True)
-
     # save argument for results analysis
     with open(res_folder / f"args-{name}.json", "w") as f:
         json.dump(asdict(args), f, indent=2)
 
-    print(f"Saving results to {res_folder}")
+    logger.info("Saving results to %s", res_folder)
     if is_fluency_task:
         system_prompt = """You are a highly efficient assistant, who evaluates and selects the best large language \
         model based on the quality of completion of a sentence. You will see a sentence to be completed and two \
@@ -297,7 +319,7 @@ def main(args: CliArgs):
         **summary,
         "preferences": prefs.tolist(),
     }
-    print(f"{args.model_A} vs {args.model_B} judged by {args.judge_model}")
+    logger.info("%s vs %s judged by %s", args.model_A, args.model_B, args.judge_model)
     print_results(results)
 
     with open(res_folder / f"results-{name}.json", "w") as f:
@@ -325,6 +347,6 @@ def main(args: CliArgs):
             started_at_utc=run_started_at,
         )
     except OSError as e:
-        print(f"Warning: failed to write run metadata: {e}")
+        logger.warning("Failed to write run metadata: %s", e)
 
     return prefs

@@ -5,6 +5,10 @@ import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
 
+from judgearena.log import get_logger
+
+logger = get_logger(__name__)
+
 
 def _extract_instruction_text(turn: dict) -> str:
     """Extract plain instruction text from a conversation first turn.
@@ -157,8 +161,11 @@ def _load_arena_dataframe(
     df = df.loc[df.turns == 1]
     n_dropped = n_before - len(df)
     if n_dropped > 0:
-        print(
-            f"[{arena}] Dropped {n_dropped}/{n_before} multi-turn battles (keeping single-turn only)."
+        logger.info(
+            "[%s] Dropped %d/%d multi-turn battles (keeping single-turn only).",
+            arena,
+            n_dropped,
+            n_before,
         )
 
     return df
@@ -189,13 +196,17 @@ def load_arena_dataframe(
 
 def main():
     for arena in KNOWN_ARENAS:
-        print(f"Loading {arena}")
+        logger.info("Loading %s", arena)
         df = _load_arena_dataframe(arena)
         n_battles = len(df)
         n_models = len(set(df["model_a"]) | set(df["model_b"]))
         n_languages = df["lang"].nunique()
-        print(
-            f"{arena}: {n_battles} battles, {n_models} models, {n_languages} languages"
+        logger.info(
+            "%s: %d battles, %d models, %d languages",
+            arena,
+            n_battles,
+            n_models,
+            n_languages,
         )
 
 

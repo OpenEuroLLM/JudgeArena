@@ -10,11 +10,18 @@ from __future__ import annotations
 import argparse
 import warnings
 
-from judgearena.cli_common import add_common_arguments, parse_engine_kwargs
+from judgearena.cli_common import (
+    add_common_arguments,
+    parse_engine_kwargs,
+    resolve_verbosity,
+)
 from judgearena.estimate_elo_ratings import CliEloArgs
 from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import CliArgs
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
+from judgearena.log import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 ELO_TASK_PREFIX = "elo-"
 
@@ -196,6 +203,9 @@ def _build_elo_args(
         chat_template=args.chat_template,
         result_folder=args.result_folder,
         engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+        verbosity=resolve_verbosity(args),
+        log_file=args.log_file,
+        no_log_file=args.no_log_file,
     )
 
 
@@ -221,12 +231,16 @@ def _build_generate_and_evaluate_args(
         chat_template=args.chat_template,
         result_folder=args.result_folder,
         engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+        verbosity=resolve_verbosity(args),
+        log_file=args.log_file,
+        no_log_file=args.no_log_file,
     )
 
 
 def cli(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
     model_a = _resolve_model_a(args)
     if task.startswith(ELO_TASK_PREFIX):
@@ -235,11 +249,11 @@ def cli(argv: list[str] | None = None) -> None:
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
         elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
-        print(f"Running with CLI args: {elo_args.__dict__}")
+        logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:
         ge_args = _build_generate_and_evaluate_args(args, task=task, model_a=model_a)
-        print(f"Running with CLI args: {ge_args.__dict__}")
+        logger.debug("Running with CLI args: %s", ge_args.__dict__)
         main_generate_and_evaluate(ge_args)
 
 
