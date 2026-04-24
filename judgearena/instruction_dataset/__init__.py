@@ -50,7 +50,9 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
                 "zh",
                 "EU",
             ]
-        logger.info("Loading m-arena-hard with language specification set to %s", language)
+        logger.info(
+            "Loading m-arena-hard with language specification set to %s", language
+        )
         df_instructions = load_m_arenahard(local_path=data_root, language=language)
 
         # sort by question_id, then language so that we get multiple languages if we truncate

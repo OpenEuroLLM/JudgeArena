@@ -136,17 +136,13 @@ def attach_file_handler(
             continue
         if Path(handler_path).resolve() == resolved_log_file:
             handler.setLevel(level)
-            handler.setFormatter(
-                logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
-            )
+            handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT))
             return handler
 
     resolved_log_file.parent.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(resolved_log_file)
     fh.setLevel(level)
-    fh.setFormatter(
-        logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
-    )
+    fh.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT))
     root.addHandler(fh)
     return fh
 

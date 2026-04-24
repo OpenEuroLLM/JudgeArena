@@ -376,7 +376,9 @@ def judge_and_parse_prefs(
                already combined for swap_mode="both"
     """
     if swap_mode == "both":
-        logger.info("Correction for judge bias towards a certain model position is set.")
+        logger.info(
+            "Correction for judge bias towards a certain model position is set."
+        )
         logger.info(
             "Evaluating completions with models reversed with judge %s.",
             judge_chat_model,

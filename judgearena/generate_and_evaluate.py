@@ -25,7 +25,12 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.log import attach_file_handler, configure_logging, get_logger, make_run_log_path
+from judgearena.log import (
+    attach_file_handler,
+    configure_logging,
+    get_logger,
+    make_run_log_path,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
@@ -68,7 +73,9 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    logger.info("Found pre-existing completions for '%s' in dataset '%s'.", model, dataset)
+    logger.info(
+        "Found pre-existing completions for '%s' in dataset '%s'.", model, dataset
+    )
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)

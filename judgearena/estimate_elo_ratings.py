@@ -404,7 +404,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     opponent_models = df_judge["opponent_model"].tolist()
     prefs = df_judge["pref"].tolist()
 
-    logger.debug("First judge output:\n%s", df_judge['judge_completion'].iloc[0][:500])
+    logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results
     model_name = args.model

@@ -150,7 +150,10 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         delay = base_delay * (2**attempt)
                         logger.warning(
                             "Retry because of a server error, %d/%d: %s. Waiting %ss...",
-                            attempt + 1, max_retries, e, delay,
+                            attempt + 1,
+                            max_retries,
+                            e,
+                            delay,
                         )
                         await asyncio.sleep(delay)
 
@@ -186,7 +189,11 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                     next_chunks = 4 ** (attempt + 1)
                     logger.warning(
                         "Retry because of a server error, %d/%d: %s. Waiting %ss, then splitting into %d chunks...",
-                        attempt + 1, max_retries, e, delay, next_chunks,
+                        attempt + 1,
+                        max_retries,
+                        e,
+                        delay,
+                        next_chunks,
                     )
                     time.sleep(delay)
 

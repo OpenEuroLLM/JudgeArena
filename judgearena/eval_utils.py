@@ -127,7 +127,9 @@ def _make_judge_annotation(
     combined_metadata = list(metadata)
 
     if swap_mode == "both":
-        logger.info("Correction for judge bias towards a certain model position is set.")
+        logger.info(
+            "Correction for judge bias towards a certain model position is set."
+        )
         logger.info("Evaluating completions with models reversed.")
         annotations_reversed = annotate_battles(
             judge_chat_model=judge_chat_model,

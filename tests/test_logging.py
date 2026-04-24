@@ -69,7 +69,8 @@ def test_configure_logging_no_duplicate_handlers():
     configure_logging(1)
     root = logging.getLogger(_ROOT_LOGGER_NAME)
     console_handlers = [
-        h for h in root.handlers
+        h
+        for h in root.handlers
         if isinstance(h, logging.StreamHandler)
         and not isinstance(h, logging.FileHandler)
     ]
