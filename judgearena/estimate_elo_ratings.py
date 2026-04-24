@@ -9,7 +9,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
-from judgearena.evaluate import judge_and_parse_prefs
+from judgearena.evaluate import judge_and_parse_prefs, calibrate_temperature, PairScore
 from judgearena.generate import generate_instructions
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
@@ -32,6 +32,8 @@ class CliEloArgs(BaseCliArgs):
     seed: int = 0
     baseline_model: str | None = None
     soft_elo: bool = False
+    calibrate_temperature: bool = False
+    calibration_size: int | None = None
 
     @classmethod
     def parse_args(cls):
@@ -90,6 +92,19 @@ class CliEloArgs(BaseCliArgs):
             help="Use continuous judge preferences as soft labels for BT fitting "
             "instead of discretising to hard win/loss/tie.",
         )
+        parser.add_argument(
+            "--calibrate-temperature",
+            action="store_true",
+            help="Calibrate the PairScore temperature T against available human-annotated "
+            "arena battles before running soft-ELO.  Requires --soft-elo.",
+        )
+        parser.add_argument(
+            "--calibration-size",
+            type=int,
+            default=None,
+            help="Number of human arena battles to sample for temperature calibration. "
+            "Defaults to all available battles. Requires --calibrate-temperature.",
+        )
         add_common_arguments(parser)
         args = parser.parse_args()
 
@@ -102,6 +117,8 @@ class CliEloArgs(BaseCliArgs):
             seed=args.seed,
             baseline_model=args.baseline_model,
             soft_elo=args.soft_elo,
+            calibrate_temperature=args.calibrate_temperature,
+            calibration_size=args.calibration_size,
             judge_model=args.judge_model,
             n_instructions=args.n_instructions,
             provide_explanation=args.provide_explanation,
@@ -548,7 +565,144 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_arena, winner_col="winner", baseline_model=args.baseline_model
     )
 
-    # Bootstrap Bradley-Terry ELO ratings
+    # --- Temperature calibration (optional) ---
+    # Run the judge on a random subset of human arena battles that already
+    # have ground-truth winner labels so we can fit T* via MLE.
+    calibrated_temperature: float | None = None
+    if args.calibrate_temperature:
+        if not args.soft_elo:
+            print(
+                "Warning: --calibrate-temperature has no effect without --soft-elo; skipping."
+            )
+        else:
+            print("\n=== Calibrating PairScore temperature against human annotations ===")
+            # Sample calibration battles from the already-loaded arena battles.
+            # Use the same judge to score them so scores and labels are comparable.
+            _cal_n = (
+                min(args.calibration_size, len(df_arena))
+                if args.calibration_size is not None
+                else len(df_arena)
+            )
+            cal_battles = df_arena.sample(
+                n=_cal_n, random_state=int(rng.integers(0, 2**31))
+            ).reset_index(drop=True)
+
+            cal_instructions = [
+                _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][0])
+                for i in cal_battles.index
+            ]
+            cal_completions_a = [
+                _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][1])
+                for i in cal_battles.index
+            ]
+            cal_completions_b = [
+                _extract_instruction_text(df_arena_all.loc[i, "conversation_b"][1])
+                for i in cal_battles.index
+            ]
+
+            judge_chat_model_cal = make_model(
+                model=args.judge_model,
+                max_tokens=args.max_out_tokens_judge,
+                **judge_extra_kwargs,
+            )
+            cal_annotations, _, cal_prefs = judge_and_parse_prefs(
+                judge_chat_model=judge_chat_model_cal,
+                instructions=cal_instructions,
+                completions_A=cal_completions_a,
+                completions_B=cal_completions_b,
+                swap_mode=args.swap_mode,
+                truncate_input_chars=args.truncate_all_input_chars,
+            )
+
+            # Build (delta_s, y) pairs from calibration battles.
+            # delta_s = score_A - score_B (raw, using default T=1 to extract scores)
+            raw_parser = PairScore(temperature=1.0)
+            delta_s_cal = []
+            y_cal = []
+            for ann, human_winner in zip(
+                cal_annotations, cal_battles["winner"].tolist(), strict=True
+            ):
+                sa = raw_parser.get_regexp_match(
+                    ann.judge_completion.lower(), r'score.*?a[":\s*\n]*(-?\d+)'
+                )
+                sb = raw_parser.get_regexp_match(
+                    ann.judge_completion.lower(), r'score.*?b[":\s*\n]*(-?\d+)'
+                )
+                if sa is None or sb is None:
+                    continue
+                human_pref = _winner_to_pref(human_winner)
+                if human_pref is None or human_pref == 0.5:
+                    continue  # skip ties and missing
+                delta_s_cal.append(sa - sb)
+                y_cal.append(1.0 - human_pref)  # pref=0 → A wins → y=1
+
+            if len(delta_s_cal) < 10:
+                print(
+                    f"  Only {len(delta_s_cal)} valid calibration pairs (need ≥10); "
+                    "keeping default temperature."
+                )
+            else:
+                calibrated_temperature = calibrate_temperature(
+                    np.array(delta_s_cal), np.array(y_cal)
+                )
+                print(
+                    f"  Calibration pairs: {len(delta_s_cal)}"
+                    f"  T* = {calibrated_temperature:.4f}  (default was 0.3)"
+                )
+
+    # Build the score parser used for the main evaluation run.
+    score_parser = PairScore(
+        temperature=calibrated_temperature if calibrated_temperature is not None else 0.3
+    )
+
+    # If we calibrated the temperature, the prefs stored in df_judge were
+    # computed with the default T=0.3.  Re-parse them with the new parser so
+    # the soft-ELO bootstrap uses calibrated preferences.
+    if calibrated_temperature is not None:
+        new_prefs_ab = pd.Series(
+            [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
+        )
+        prefs = new_prefs_ab.tolist()
+
+        def _none_to_nan(x):
+            return float("nan") if x is None else x
+
+        if args.swap_mode == "both":
+            # df_judge contains AB and BA annotations interleaved; the original
+            # run_judge() already combined them — we just need to re-parse the
+            # stored completions in the same order.
+            n_half = len(df_judge) // 2
+            prefs_ab = new_prefs_ab[:n_half].apply(_none_to_nan)
+            prefs_ba = new_prefs_ab[n_half:].apply(_none_to_nan).reset_index(drop=True)
+            prefs = pd.concat([prefs_ab, 1 - prefs_ba]).reset_index(drop=True).tolist()
+
+        # Rebuild battle_results with calibrated prefs
+        battle_results = []
+        for pref, is_pos_a, opp_model in zip(
+            prefs, our_model_is_position_a, opponent_models, strict=True
+        ):
+            if pref is None or (isinstance(pref, float) and np.isnan(pref)) or pref == 0.5:
+                winner = "tie"
+            elif pref < 0.5:
+                winner = "model_a"
+            else:
+                winner = "model_b"
+            if is_pos_a:
+                battle_results.append(
+                    {"model_a": model_name, "model_b": opp_model, "winner": winner, "pref": pref}
+                )
+            else:
+                battle_results.append(
+                    {
+                        "model_a": opp_model,
+                        "model_b": model_name,
+                        "winner": winner,
+                        "pref": 1.0 - pref if (pref is not None and not (isinstance(pref, float) and np.isnan(pref))) else None,
+                    }
+                )
+        df_llm_judge = pd.DataFrame(battle_results)
+        df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+
     n_bootstraps = args.n_bootstraps
     use_soft = args.soft_elo
 
@@ -619,6 +773,7 @@ def main(args: CliEloArgs | None = None) -> dict:
         "mae_vs_human": mae,
         "model_name": model_name,
         "method": method_label,
+        "calibrated_temperature": calibrated_temperature,
     }
 
 
