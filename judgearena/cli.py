@@ -203,9 +203,7 @@ def _build_generate_and_evaluate_args(
     args: argparse.Namespace, task: str, model_a: str | None
 ) -> CliArgs:
     if model_a is None or args.model_B is None:
-        raise SystemExit(
-            f"--model_A and --model_B are required for task {task!r}."
-        )
+        raise SystemExit(f"--model_A and --model_B are required for task {task!r}.")
     return CliArgs(
         task=task,
         model_A=model_a,
@@ -236,9 +234,7 @@ def cli(argv: list[str] | None = None) -> None:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(
-            args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a
-        )
+        elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
         print(f"Running with CLI args: {elo_args.__dict__}")
         main_elo(elo_args)
     else:
