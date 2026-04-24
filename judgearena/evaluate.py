@@ -14,6 +14,7 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.log import get_logger
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -23,6 +24,8 @@ from judgearena.utils import (
     read_df,
     truncate,
 )
+
+logger = get_logger(__name__)
 
 
 class PairScore:
@@ -157,13 +160,13 @@ def evaluate_completions(
 
     def get_output(df_outputs: pd.DataFrame, dataset: str, method: str):
         if Path(method).exists():
-            print(f"Path {method} exists, loads local model completions.")
+            logger.info("Path %s exists, loading local model completions.", method)
             df = read_df(Path(method)).set_index("instruction_index").sort_index()
-            print(f"Loaded {len(df)} completions.")
+            logger.info("Loaded %d completions.", len(df))
             df.loc[:, "output"] = df.loc[:, "output"].fillna("")
             return df.loc[:, "output"]
         else:
-            print(f"Loading {method} from {dataset} dataset.")
+            logger.info("Loading %s from %s dataset.", method, dataset)
             assert method in df_outputs.columns, (
                 f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
             )
@@ -186,7 +189,7 @@ def evaluate_completions(
 
     unique_string = dataset + "-" + datetime.now().strftime("%Y%m%d_%H%M%S")
     output_folder = data_root / "judge-evals" / unique_string
-    print(f"Saving results in {output_folder}")
+    logger.info("Saving results in %s", output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
     (
         judge_system_prompt,
@@ -216,7 +219,7 @@ def evaluate_completions(
     results = {**compute_pref_summary(prefs)}
     pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
 
-    print(f"{method_A} against {method_B}:\n{results}")
+    logger.info("%s against %s:\n%s", method_A, method_B, results)
     with open(output_folder / "results.json", "w") as f:
         json.dump(_to_jsonable(results), f, allow_nan=False)
 
@@ -248,7 +251,7 @@ def evaluate_completions(
             started_at_utc=run_started_at,
         )
     except OSError as e:
-        print(f"Warning: failed to write run metadata: {e}")
+        logger.warning("Failed to write run metadata: %s", e)
 
 
 @dataclass
@@ -324,7 +327,7 @@ def annotate_battles(
             )
         ]
     )
-    print(f"Start LLM judge annotation ({len(inputs)} annotations).")
+    logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     judge_completions = do_inference(
         chat_model=judge_chat_model,
         inputs=inputs,
@@ -373,9 +376,12 @@ def judge_and_parse_prefs(
                already combined for swap_mode="both"
     """
     if swap_mode == "both":
-        print("Correction for judge bias towards a certain model position is set.")
-        print(
-            f"Evaluating completions with models reversed with judge {judge_chat_model}."
+        logger.info(
+            "Correction for judge bias towards a certain model position is set."
+        )
+        logger.info(
+            "Evaluating completions with models reversed with judge %s.",
+            judge_chat_model,
         )
 
     annotations = annotate_battles(

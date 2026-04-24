@@ -12,11 +12,15 @@ from langchain_community.llms import LlamaCpp
 from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.log import get_logger
+
+logger = get_logger(__name__)
 
 
 def _data_root_path() -> Path:
@@ -144,8 +148,12 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         if attempt == max_retries - 1 or not _is_retryable_error(e):
                             raise
                         delay = base_delay * (2**attempt)
-                        print(
-                            f"Retry because of a server error, {attempt + 1}/{max_retries}: {e}. Waiting {delay}s..."
+                        logger.warning(
+                            "Retry because of a server error, %d/%d: %s. Waiting %ss...",
+                            attempt + 1,
+                            max_retries,
+                            e,
+                            delay,
                         )
                         await asyncio.sleep(delay)
 
@@ -153,7 +161,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
             results = await asyncio.gather(*[process_single(inp) for inp in inputs])
             return results
 
-        with tqdm(total=len(inputs)) as pbar:
+        with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
             res = asyncio.run(
                 process_with_real_progress(
                     chat_model=chat_model, inputs=inputs, pbar=pbar
@@ -179,8 +187,13 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         raise
                     delay = base_delay * (2**attempt)
                     next_chunks = 4 ** (attempt + 1)
-                    print(
-                        f"Retry because of a server error, {attempt + 1}/{max_retries}: {e}. Waiting {delay}s, then splitting into {next_chunks} chunks..."
+                    logger.warning(
+                        "Retry because of a server error, %d/%d: %s. Waiting %ss, then splitting into %d chunks...",
+                        attempt + 1,
+                        max_retries,
+                        e,
+                        delay,
+                        next_chunks,
                     )
                     time.sleep(delay)
 
@@ -274,7 +287,7 @@ class ChatVLLM:
         if chat_template:
             self.chat_template = chat_template
             self._use_generate = False
-            print(f"ChatVLLM: using explicit chat template for '{model}'")
+            logger.info("ChatVLLM: using explicit chat template for '%s'", model)
         else:
             tokenizer = self.llm.get_tokenizer()
             if not getattr(tokenizer, "chat_template", None):
@@ -289,7 +302,7 @@ class ChatVLLM:
             else:
                 self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False
-                print(f"ChatVLLM: using tokenizer's chat template for '{model}'")
+                logger.info("ChatVLLM: using tokenizer's chat template for '%s'", model)
 
     def _to_messages(self, input_item) -> list[dict]:
         """Convert LangChain prompt input to OpenAI-style messages."""
@@ -399,7 +412,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         return DummyModel(model)
 
     model_name = "/".join(model.split("/")[1:])
-    print(f"Loading {model_provider}(model={model_name})")
+    logger.info("Loading %s(model=%s)", model_provider, model_name)
 
     # Use our custom ChatVLLM wrapper which properly applies chat templates
     if model_provider == "VLLM":
@@ -434,13 +447,13 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
             model_classes.append(Together)
         except ImportError as e:
-            print(str(e))
+            logger.debug("Optional provider not available: %s", e)
         try:
             from langchain_openai.llms import OpenAI
 
             model_classes.append(OpenAI)
         except ImportError as e:
-            print(str(e))
+            logger.debug("Optional provider not available: %s", e)
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
         assert model_provider in model_cls_dict, (
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
@@ -449,7 +462,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 
 def download_all():
-    print(f"Downloading all dataset in {data_root}")
+    logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
     for dataset in [
         "alpaca-eval",
@@ -492,7 +505,7 @@ class Timeblock:
         self.end = time.time()
         self.duration = self.end - self.start
         if self.verbose:
-            print(self)
+            logger.info("%s", self)
 
     def __str__(self):
         name = self.name if self.name else "block"
@@ -524,14 +537,15 @@ def cache_function_dataframe(
         cache_file = cache_path / (cache_name + ".csv.zip")
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     if cache_file.exists() and not ignore_cache:
-        print(f"Loading cache {cache_file}")
+        logger.info("Loading cache %s", cache_file)
         if parquet:
             return pd.read_parquet(cache_file)
         else:
             return pd.read_csv(cache_file)
     else:
-        print(
-            f"Cache {cache_file} not found or ignore_cache set to True, regenerating the file"
+        logger.info(
+            "Cache %s not found or ignore_cache set to True, regenerating the file",
+            cache_file,
         )
         with Timeblock("Evaluate function."):
             df = fun()
