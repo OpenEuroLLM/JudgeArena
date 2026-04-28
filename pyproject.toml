@@ -61,11 +61,27 @@ exclude = ["slurmpilot_scripts*"]
 
 [dependency-groups]
 dev = [
-    "llmcompressor>=0.4.0",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
     "ruff>=0.11.0",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
+]
+# `llmcompressor` pins older `compressed-tensors` / `transformers` that clash
+# with the `vllm` extra (vLLM 0.19.1 pulls `compressed-tensors==0.15.0.1` and
+# `transformers>=5.5.1` for Gemma-4). Keep it available under its own group so
+# quantization workflows can still install it, but mark it mutually exclusive
+# with the `vllm` extra via `[tool.uv] conflicts` so the universal lock can
+# still resolve both sides.
+quantize = [
+    "llmcompressor>=0.4.0",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "vllm" },
+        { group = "quantize" },
+    ],
 ]
 
 [tool.ruff]
@@ -82,7 +98,14 @@ quote-style = "double"
 indent-style = "space"
 
 [project.optional-dependencies]
-# vLLM on PyPI pins transformers<5; optional extra matches that so `uv lock` can resolve.
-# JudgeArena relies on v0.19+ for Qwen3.5 thinking_token_budget support and FP8 fixes.
-vllm = ["vllm>=0.19.0,<1.0.0", "transformers>=4.56.0,<5.0.0"]
+# vLLM 0.19.1 is the pinned judge/battle runtime on this branch. Its own
+# Requires-Dist is `transformers!=5.0.*,...,!=5.5.0,>=4.56.0`, so the
+# only sub-range >=5.x that vLLM 0.19.1 accepts is >=5.5.1 — hence the
+# lower bound here. Qwen3.5 loading works under either 4.56.x or 5.5.x
+# because vLLM ships its own `qwen3_5` config shim and model impl and
+# registers them into `AutoConfig` at runtime.
+vllm = [
+    "vllm>=0.19.1,<1.0.0",
+    "transformers>=5.5.1,<6.0.0",
+]
 llamacpp = ["llama-cpp-python>=0.3.0"]
