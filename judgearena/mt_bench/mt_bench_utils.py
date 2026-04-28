@@ -24,6 +24,7 @@ from judgearena.instruction_dataset.mt_bench import (
     mt_bench_native_baseline,
 )
 from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
+from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
@@ -42,6 +43,8 @@ from judgearena.utils import (
     is_thinking_model,
     make_model,
 )
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.generate_and_evaluate import CliArgs
@@ -171,7 +174,7 @@ def _generate_mt_bench_completions(
 
 def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
     """Build a filesystem-safe MT-Bench result artifact prefix."""
-    name = f"{args.dataset}-{args.model_A}-{args.model_B}-{args.judge_model}"
+    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
     name += f"-{args.swap_mode}"
     if suffix:
         name += f"-{suffix}"
@@ -181,6 +184,8 @@ def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str
 def _save_mt_bench_results(
     *,
     args: CliArgs,
+    res_folder: Path,
+    result_name: str,
     results: dict[str, object],
     annotations_df: pd.DataFrame,
     questions_df: pd.DataFrame,
@@ -196,9 +201,9 @@ def _save_mt_bench_results(
     with open(res_folder / f"args-{name}.json", "w") as f:
         json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
 
-    annotations_df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
+    annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
-    with open(res_folder / f"results-{name}.json", "w") as f:
+    with open(res_folder / f"results-{result_name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
     write_run_metadata(
@@ -219,6 +224,8 @@ def _save_mt_bench_results(
 def _run_mt_bench_fastchat(
     *,
     args: CliArgs,
+    res_folder: Path,
+    result_name: str,
     questions_df: pd.DataFrame,
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
@@ -252,7 +259,7 @@ def _run_mt_bench_fastchat(
 
     stats = compute_pref_summary(prefs)
     results = {
-        "dataset": args.dataset,
+        "task": args.task,
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
@@ -282,6 +289,8 @@ def _run_mt_bench_fastchat(
     print(format_openrouter_reference_pricing_summary(pricing_reference))
     _save_mt_bench_results(
         args=args,
+        res_folder=res_folder,
+        result_name=result_name,
         results=results,
         annotations_df=pd.DataFrame(annotations),
         questions_df=questions_df,
@@ -292,26 +301,32 @@ def _run_mt_bench_fastchat(
     return prefs
 
 
-def run_mt_bench(args: CliArgs, ignore_cache: bool):
+def run_mt_bench(
+    args: CliArgs,
+    ignore_cache: bool,
+    *,
+    res_folder: Path,
+    result_name: str,
+):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
     run_started_at = datetime.now(UTC)
     usage_tracker = OpenRouterReferencePricingTracker()
     limit_event_tracker = LimitEventTracker()
     prompt_preset = args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET
     if prompt_preset == DEFAULT_JUDGE_PROMPT_PRESET and not args.provide_explanation:
-        print(
+        logger.info(
             "MT-Bench ignores provide_explanation=False and keeps the original "
             "FastChat-style explanation-plus-verdict prompt."
         )
     if args.model_B is None:
-        args.model_B = mt_bench_native_baseline(args.dataset)
+        args.model_B = mt_bench_native_baseline(args.task)
     if args.model_B is None:
         raise ValueError(
-            f"--model_B is required for dataset '{args.dataset}'; "
+            f"--model_B is required for dataset '{args.task}'; "
             "no dataset-native baseline registered."
         )
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
-        print(
+        logger.info(
             "MT-Bench judge prompts require room for budgeted thinking, the "
             "original explanation, and the final verdict; "
             f"overriding max_out_tokens_judge from {args.max_out_tokens_judge} "
@@ -319,8 +334,10 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         )
         args.max_out_tokens_judge = _MIN_MT_BENCH_JUDGE_TOKENS
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
-    print(
-        f"Generating multi-turn completions for MT-Bench with {args.model_A} and {args.model_B}."
+    logger.info(
+        "Generating multi-turn completions for MT-Bench with %s and %s.",
+        args.model_A,
+        args.model_B,
     )
     completions_a, completions_b = _generate_mt_bench_completions(
         args=args,
@@ -334,7 +351,7 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
         effective_judge_max_model_len is not None
         and effective_judge_max_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     ):
-        print(
+        logger.info(
             "MT-Bench judge prompts require a larger total context window for "
             "prompt plus completion; "
             f"overriding judge max_model_len from {effective_judge_max_model_len} "
@@ -354,6 +371,8 @@ def run_mt_bench(args: CliArgs, ignore_cache: bool):
     )
     return _run_mt_bench_fastchat(
         args=args,
+        res_folder=res_folder,
+        result_name=result_name,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,

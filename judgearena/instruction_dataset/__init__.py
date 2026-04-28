@@ -8,6 +8,10 @@ from judgearena.instruction_dataset.m_arenahard import (
     load_m_arenahard,
     split_m_arena_hard_dataset,
 )
+from judgearena.log import get_logger
+from judgearena.utils import data_root, download_hf, read_df
+
+logger = get_logger(__name__)
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
@@ -17,11 +21,11 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         df_instructions = load_mt_bench()
 
     elif (parsed := split_m_arena_hard_dataset(dataset)) is not None:
-        from judgearena.utils import data_root
-
         version_key, lang_or_subset = parsed
-        print(
-            f"Loading {version_key} with language specification set to {lang_or_subset}"
+        logger.info(
+            "Loading %s with language specification set to %s",
+            version_key,
+            lang_or_subset,
         )
         df_instructions = load_m_arenahard(
             local_path=data_root, version=version_key, language=lang_or_subset
@@ -38,8 +42,6 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         )
 
     else:
-        from judgearena.utils import data_root, download_hf, read_df
-
         assert dataset in [
             "alpaca-eval",
             "arena-hard-v0.1",
@@ -53,7 +55,7 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         df_instructions = read_df(local_path_tables / "instructions" / f"{dataset}.csv")
 
     df_instructions = df_instructions.set_index("instruction_index").sort_index()
-    print(f"Loaded {len(df_instructions)} instructions for {dataset}.")
+    logger.info("Loaded %d instructions for %s.", len(df_instructions), dataset)
     if n_instructions is None:
         n_instructions = len(df_instructions)
     return df_instructions.head(n_instructions)

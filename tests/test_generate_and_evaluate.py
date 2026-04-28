@@ -49,7 +49,7 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "dataset",
+    "task",
     [
         "alpaca-eval",
         "arena-hard-v2.0",
@@ -59,10 +59,10 @@ def mock_external_data_and_cache(monkeypatch):
         "m-arena-hard-v2.0-EU",
     ],
 )
-def test_generate_and_evaluate_context_completion(dataset: str, tmp_path):
+def test_generate_and_evaluate_context_completion(task: str, tmp_path):
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset=dataset,
+            task=task,
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",
@@ -85,7 +85,7 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
     """
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset="alpaca-eval",
+            task="alpaca-eval",
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",

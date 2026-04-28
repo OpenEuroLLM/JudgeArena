@@ -22,7 +22,7 @@ Compared to other libraries, here is a breakdown of features:
 | **Arena-Hard-Auto** | ❌  | ❌  | ✅  | ❌  | ❌                         | ❌                                            |
 | **Lighteval** | ✅  | ❌  | ❌  | ❌  | ❌                         | ❌                                       |
 | **Evalchemy** | ✅  | ✅  | ❌  | ❌  | ❌                         | ❌                                           |
-| **JudgeArena** | 🔜  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
+| **JudgeArena** | ✅  | ✅  | ✅  | ✅  | ✅                         | ✅                                          |
 
 The table has been done on Oct 2025, in case some libraries implemented missing features, please open an issue
 or send a PR, we will be happy to update the information.
@@ -44,8 +44,8 @@ uv sync --extra llamacpp   # Optional: install LlamaCpp support
 Compare two models head-to-head:
 
 ```bash
-python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+judgearena \
+  --task alpaca-eval \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
@@ -53,7 +53,7 @@ python judgearena/generate_and_evaluate.py \
 ```
 
 **What happens here?**
-- Use completions available for `gpt4_1106_preview` in Alpaca-Eval dataset
+- Use completions available for `gpt4_1106_preview` in Alpaca-Eval task
 - Generates completions for `model_B` if not already cached on `vLLM`
 - Compares two models using `deepseek-chat-v3.1` which the cheapest option available on `OpenRouter`
 
@@ -62,7 +62,7 @@ It will then display the results of the battles:
 ```bash
 ============================================================
                   🏆 MODEL BATTLE RESULTS 🏆
-📊 Dataset: alpaca-eval
+📊 Task: alpaca-eval
 🤖 Competitors: Model A: gpt4_1106_preview vs Model B: VLLM/utter-project/EuroLLM-9B
 ⚖️ Judge: OpenRouter/deepseek/deepseek-chat-v3.1
 📈 Results Summary:
@@ -90,8 +90,8 @@ JudgeArena lets you forward these options directly to the underlying engine via 
 For instance, to run vLLM with tensor parallelism across multiple GPUs:
 
 ```bash
-python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+judgearena \
+  --task alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge_model VLLM/Qwen/Qwen3.5-27B-FP8 \
@@ -118,8 +118,8 @@ OpenRouter/deepseek/deepseek-chat-v3.1
 For instance, to run everything locally with vLLM:
 
 ```bash
-python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+judgearena \
+  --task alpaca-eval \
   --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
@@ -149,8 +149,8 @@ For absolute paths, this results in a double slash (e.g., `LlamaCpp//home/user/m
 **Mixed example** — local LlamaCpp model with a remote judge:
 
 ```bash
-uv run python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+uv run judgearena \
+  --task alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B OpenRouter/qwen/qwen-2.5-7b-instruct \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
@@ -160,8 +160,8 @@ uv run python judgearena/generate_and_evaluate.py \
 **Fully local example** — no API keys required (useful for verifying your setup):
 
 ```bash
-uv run python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+uv run judgearena \
+  --task alpaca-eval \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --judge_model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
@@ -181,8 +181,8 @@ When using vLLM, JudgeArena automatically picks the right inference method based
 If you need to force a specific chat template (for example, a base model that you know works with ChatML), pass it via `--chat_template`:
 
 ```bash
-python judgearena/generate_and_evaluate.py \
-  --dataset alpaca-eval \
+judgearena \
+  --task alpaca-eval \
   --model_A VLLM/swiss-ai/Apertus-8B-2509 \
   --model_B VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
   --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
@@ -191,60 +191,65 @@ python judgearena/generate_and_evaluate.py \
 
 This override applies to all vLLM models in the run. For remote providers (OpenAI, Together, OpenRouter), the flag is ignored since they handle templates server-side.
 
-## 📊 Supported Datasets
+## 📊 Supported Tasks
 
-| Dataset                     | Description                                                                                                    |
-|-----------------------------|----------------------------------------------------------------------------------------------------------------|
-| `alpaca-eval`               | General instruction-following benchmark                                                                        |
-| `mt-bench`                  | FastChat MT-Bench (80 multi-turn questions) from the `lmsys/mt-bench` HF Space                                 |
-| `arena-hard-v2.0`           | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                              |
-| `arena-hard-v0.1`           | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                       |
-| `m-arena-hard-v0.1`         | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                   |
-| `m-arena-hard-v0.1-{lang}`  | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                        |
-| `m-arena-hard-v0.1-EU`      | All EU v0.1 languages combined                                                                                 |
-| `m-arena-hard-v2.0`         | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages                          |
-| `m-arena-hard-v2.0-{lang}`  | Language-specific v2.0 slice                                                                                   |
-| `m-arena-hard-v2.0-EU`      | All EU v2.0 languages combined                                                                                 |
-| `fluency-{lang}`            | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`)                 |
+Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; ELO tasks (`elo-*`) estimate a single model's ELO rating against human-annotated arena opponents.
+
+### Generate + judge (pairwise)
+
+| Task                         | Description                                                                                    |
+|------------------------------|------------------------------------------------------------------------------------------------|
+| `alpaca-eval`                | General instruction-following benchmark                                                        |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                              |
+| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                       |
+| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                   |
+| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                        |
+| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                 |
+| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages          |
+| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
+| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
+| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
+| `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
 a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
 ship in the `lmsys/mt-bench` HF Space. Override per run with `--model_B`.
 
-For m-Arena-Hard, we use baseline completions based on the benchmark release:
-- `m-arena-hard-v0.1`: Aya Expanse 8B (`CohereLabs/aya-expanse-8b`), ingested
-  from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
-  [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
-- `m-arena-hard-v2.0`: We generate our own completions with Gemini 2.5 Flash (`google/gemini-2.5-flash`).
-
-For Arena-Hard, JudgeArena mirrors the baseline assignment upstream uses in `lmarena-ai/arena-hard-auto`:
-- `arena-hard-v0.1`: flat baseline `gpt-4-0314` for all 500 prompts.
+For Arena-Hard, JudgeArena resolves baseline metadata by task version:
+- `arena-hard-v0.1`: `gpt-4-0314`
 - `arena-hard-v2.0`: per-question baseline routed by `category`:
   - `o3-mini-2025-01-31` for `hard_prompt`, `coding`, and `math` (500 prompts).
   - `gemini-2.0-flash-001` for `creative_writing` (250 prompts).
+
+For m-Arena-Hard, baseline completions are tied to the benchmark release:
+- `m-arena-hard-v0.1`: Aya Expanse 8B (`CohereLabs/aya-expanse-8b`), ingested
+  from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
+  [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
+- `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
+
+### ELO rating
+
+| Task                | Description                                                        |
+|---------------------|--------------------------------------------------------------------|
+| `elo-lmarena-100k`  | Battles sampled from `lmarena-ai/arena-human-preference-100k`      |
+| `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
+| `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
+| `elo-comparia`      | Battles sampled from the ComparIA arena                            |
 
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
 The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
 
+Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model_A` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model_B` is reserved for a future extension).
+
 ### Quick start
 
 ```bash
-judgearena-elo \
-  --arena ComparIA \
-  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
-  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 200
-```
-
-Alternatively, if running directly from the repository without installing:
-
-```bash
-uv run python judgearena/estimate_elo_ratings.py \
-  --arena ComparIA \
-  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+judgearena \
+  --task elo-comparia \
+  --model_A Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
   --n_instructions 200
 ```
@@ -253,9 +258,9 @@ uv run python judgearena/estimate_elo_ratings.py \
 
 | Flag | Default | Description |
 |---|---|---|
-| `--arena` | `ComparIA` | Arena to sample opponents from: `LMArena-100k`, `LMArena-140k`, or `ComparIA` |
-| `--model` | *(required)* | Model under evaluation (same format as `judgearena`) |
-| `--judge_model` | *(required)* | LLM judge (same format as `judgearena`) |
+| `--task elo-<arena>` | *(required)* | Arena to sample opponents from: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
+| `--model_A` | *(required)* | Model under evaluation (same format as pairwise tasks) |
+| `--judge_model` | *(required)* | LLM judge (same format as pairwise tasks) |
 | `--n_instructions` | all | Number of arena battles to use for evaluation |
 | `--n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
 | `--languages` | all | Restrict to specific language codes, e.g. `en fr de` |

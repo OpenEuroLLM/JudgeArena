@@ -1,5 +1,5 @@
 """
-This script generates completions for a given dataset and model,
+This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
@@ -18,6 +18,7 @@ from judgearena.cli_common import (
     add_common_arguments,
     parse_engine_kwargs,
     parse_optional_bool,
+    resolve_verbosity,
 )
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
@@ -28,6 +29,11 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
+from judgearena.log import (
+    attach_file_handler,
+    get_logger,
+    make_run_log_path,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.openrouter_reference_pricing import (
     OpenRouterReferencePricingTracker,
@@ -46,6 +52,8 @@ from judgearena.utils import (
     make_model,
     read_df,
 )
+
+logger = get_logger(__name__)
 
 
 def try_load_dataset_completions(
@@ -76,7 +84,9 @@ def try_load_dataset_completions(
     ).sort_index()
     if model not in df_outputs.columns:
         return None
-    print(f"Found pre-existing completions for '{model}' in dataset '{dataset}'.")
+    logger.info(
+        "Found pre-existing completions for '%s' in dataset '%s'.", model, dataset
+    )
     completions = df_outputs.loc[:, model]
     if n_instructions is not None:
         completions = completions.head(n_instructions)
@@ -92,7 +102,7 @@ def try_load_dataset_completions(
 class CliArgs(BaseCliArgs):
     """CLI arguments for the generate-and-evaluate entrypoint."""
 
-    dataset: str | None = None
+    task: str | None = None
     model_A: str | None = None
     model_B: str | None = None
     use_tqdm: bool = False
@@ -136,7 +146,7 @@ class CliArgs(BaseCliArgs):
         args = parser.parse_args()
 
         return cls(
-            dataset=args.dataset,
+            task=args.dataset,
             model_A=args.model_A,
             model_B=args.model_B,
             use_tqdm=args.use_tqdm,
@@ -158,6 +168,9 @@ class CliArgs(BaseCliArgs):
             result_folder=args.result_folder,
             engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
             judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
+            verbosity=resolve_verbosity(args),
+            log_file=args.log_file,
+            no_log_file=args.no_log_file,
         )
 
 
@@ -216,18 +229,18 @@ def _resolve_baseline_plan(
     """
     if args.model_B is not None:
         return BaselinePlan.flat(args.model_B, index=instructions_df.index)
-    if not is_arena_hard_dataset(args.dataset):
+    if not is_arena_hard_dataset(args.task):
         raise ValueError(
-            f"--model_B is required for dataset '{args.dataset}'; only Arena-Hard "
+            f"--model_B is required for dataset '{args.task}'; only Arena-Hard "
             "datasets ship a dataset-native baseline."
         )
-    native = arena_hard_native_baseline(args.dataset)
+    native = arena_hard_native_baseline(args.task)
     if isinstance(native, str):
         return BaselinePlan.flat(native, index=instructions_df.index)
     if isinstance(native, Mapping):
         if "category" not in instructions_df.columns:
             raise ValueError(
-                f"{args.dataset} requires a 'category' column for per-category "
+                f"{args.task} requires a 'category' column for per-category "
                 "baseline routing; re-run dataset download to regenerate the "
                 "instructions table."
             )
@@ -237,11 +250,11 @@ def _resolve_baseline_plan(
                 instructions_df.loc[per_row.isna(), "category"].unique().tolist()
             )
             raise ValueError(
-                f"Unknown Arena-Hard categories for {args.dataset}: {unknown}. "
+                f"Unknown Arena-Hard categories for {args.task}: {unknown}. "
                 f"Known: {sorted(native.keys())}"
             )
         return BaselinePlan.per_row(per_row)
-    raise ValueError(f"Unsupported baseline shape for dataset '{args.dataset}'.")
+    raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -295,7 +308,7 @@ def _generation_cache_name(args: CliArgs, *, model_spec: str) -> str:
     generation_config_hash = hashlib.sha256(
         json.dumps(generation_config, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:12]
-    return f"{args.dataset}_{model_spec}_{args.n_instructions}_{generation_config_hash}"
+    return f"{args.task}_{model_spec}_{args.n_instructions}_{generation_config_hash}"
 
 
 def print_results(results):
@@ -303,7 +316,7 @@ def print_results(results):
 
     print("\n" + "=" * 60)
     print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Dataset: {results['dataset']}")
+    print(f"📊 Task: {results['task']}")
     print(
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
@@ -320,7 +333,7 @@ def print_results(results):
 def main(args: CliArgs):
     """
     1) take as input:
-     * dataset, make sure instruct-completion works
+     * task (dataset), make sure instruct-completion works
      * model to generate output from
      * llm used for judge
      * number of annotations
@@ -338,21 +351,36 @@ def main(args: CliArgs):
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
 
-    if args.dataset == "mt-bench":
-        return run_mt_bench(args, ignore_cache)
+    if args.task == "mt-bench":
+        name = (
+            f"{args.task}-{args.model_A}-{args.model_B or 'native'}-{args.judge_model}"
+        )
+        name += f"-{args.swap_mode}"
+        name = name.replace("/", "_")
+        run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+        res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
+        res_folder.mkdir(parents=True, exist_ok=True)
+        if not args.no_log_file:
+            attach_file_handler(make_run_log_path(res_folder))
+        return run_mt_bench(
+            args,
+            ignore_cache,
+            res_folder=res_folder,
+            result_name=name,
+        )
 
     # Currrently, we run context evaluation
-    is_fluency_task = "fluency" in args.dataset
+    is_fluency_task = "fluency" in args.task
     if is_fluency_task:
-        # if args.dataset = "fluency-french", we map to "french-contexts.csv"
+        # if args.task = "fluency-french", we map to "french-contexts.csv"
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
-        lang = args.dataset.split("-")[-1]
+        lang = args.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
         instructions_df = pd.DataFrame({"instruction": instructions.values})
         instructions_df.index = instructions.index
     else:
         instructions_df = load_instructions(
-            dataset=args.dataset, n_instructions=args.n_instructions
+            dataset=args.task, n_instructions=args.n_instructions
         )
         instructions = instructions_df["instruction"]
 
@@ -363,14 +391,27 @@ def main(args: CliArgs):
 
     baseline_plan = _resolve_baseline_plan(args=args, instructions_df=instructions_df)
 
-    print(
-        f"Using dataset {args.dataset} and evaluating {args.model_A} vs baseline "
-        f"{baseline_plan.display_name}."
+    name = f"{args.task}-{args.model_A}-{baseline_plan.display_name}-{args.judge_model}"
+    name += f"-{args.swap_mode}"
+    name = name.replace("/", "_")
+    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+    res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
+    res_folder.mkdir(parents=True, exist_ok=True)
+    if not args.no_log_file:
+        attach_file_handler(make_run_log_path(res_folder))
+
+    logger.info(
+        "Using task %s and evaluating %s vs baseline %s.",
+        args.task,
+        args.model_A,
+        baseline_plan.display_name,
     )
-    print(
-        f"Generating completions for dataset {args.dataset} with model {args.model_A} "
-        f"and baseline {baseline_plan.display_name} "
-        "(or loading them directly if present)"
+    logger.info(
+        "Generating completions for task %s with model %s and baseline %s "
+        "(or loading them directly if present)",
+        args.task,
+        args.model_A,
+        baseline_plan.display_name,
     )
 
     generation_function = generate_base if is_fluency_task else generate_instructions
@@ -394,9 +435,7 @@ def main(args: CliArgs):
         return df.set_index("instruction_index").loc[instructions.index].reset_index()
 
     def _load_or_generate_completions(model_spec: str, usage_phase: str) -> pd.Series:
-        preloaded = try_load_dataset_completions(
-            args.dataset, model_spec, n_instructions
-        )
+        preloaded = try_load_dataset_completions(args.task, model_spec, n_instructions)
         if preloaded is not None:
             aligned = _align_completion_dataframe(preloaded)
         else:
@@ -436,13 +475,14 @@ def main(args: CliArgs):
             name="completion",
         )
 
-    print(f"\nFirst instruction/context: {instructions.values[0]}")
-
-    print(f"\nFirst completion of {args.model_A}")
-    print(completions_A.values[0])
-    print(f"\nFirst completion of {baseline_plan.display_name}")
-    print(completions_B.values[0])
-    print(f"Evaluating completions with judge {args.judge_model}.")
+    logger.debug("First instruction/context: %s", instructions.values[0])
+    logger.debug("First completion of %s:\n%s", args.model_A, completions_A.values[0])
+    logger.debug(
+        "First completion of %s:\n%s",
+        baseline_plan.display_name,
+        completions_B.values[0],
+    )
+    logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judge_chat_model = make_model(
         model=args.judge_model,
@@ -453,19 +493,11 @@ def main(args: CliArgs):
     )
     judge_tokenizer = getattr(judge_chat_model, "tokenizer", None)
 
-    name = (
-        f"{args.dataset}-{args.model_A}-{baseline_plan.display_name}-{args.judge_model}"
-    )
-    name += f"-{args.swap_mode}"
-    name = name.replace("/", "_")
-
-    res_folder = Path(args.result_folder) / name
-    res_folder.mkdir(parents=True, exist_ok=True)
-
+    # save argument for results analysis
     with open(res_folder / f"args-{name}.json", "w") as f:
         json.dump(asdict(args), f, indent=2)
 
-    print(f"Saving results to {res_folder}")
+    logger.info("Saving results to %s", res_folder)
     if is_fluency_task:
         system_prompt = """You are a highly efficient assistant, who evaluates and selects the best large language \
         model based on the quality of completion of a sentence. You will see a sentence to be completed and two \
@@ -527,7 +559,7 @@ def main(args: CliArgs):
     summary = compute_pref_summary(prefs)
 
     results = {
-        "dataset": args.dataset,
+        "task": args.task,
         "model_A": args.model_A,
         "model_B": baseline_plan.display_name,
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
@@ -540,8 +572,11 @@ def main(args: CliArgs):
         "limit_events": limit_event_tracker.build_summary(),
         "preferences": prefs.tolist(),
     }
-    print(
-        f"{args.model_A} vs {baseline_plan.display_name} judged by {args.judge_model}"
+    logger.info(
+        "%s vs %s judged by %s",
+        args.model_A,
+        baseline_plan.display_name,
+        args.judge_model,
     )
     print_results(results)
     phase_model_specs: dict[str, str] = {
@@ -585,16 +620,6 @@ def main(args: CliArgs):
             pricing_reference=pricing_reference,
         )
     except OSError as e:
-        print(f"Warning: failed to write run metadata: {e}")
+        logger.warning("Failed to write run metadata: %s", e)
 
     return prefs
-
-
-def cli():
-    args = CliArgs.parse_args()
-    print(f"Running with CLI args: {args.__dict__}")
-    main(args)
-
-
-if __name__ == "__main__":
-    cli()

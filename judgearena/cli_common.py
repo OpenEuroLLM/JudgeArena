@@ -37,6 +37,9 @@ class BaseCliArgs:
     result_folder: str = "results"
     engine_kwargs: dict = field(default_factory=dict)
     judge_engine_kwargs: dict = field(default_factory=dict)
+    verbosity: int = 0
+    log_file: str | None = None
+    no_log_file: bool = False
 
     def __post_init__(self):
         supported_modes = ["fixed", "both"]
@@ -275,6 +278,38 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "battle models run on TP=1 to dodge compile-time deadlocks."
         ),
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase logging verbosity. Use -v for DEBUG output.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="Suppress all output except warnings and errors.",
+    )
+    parser.add_argument(
+        "--log-file",
+        dest="log_file",
+        type=str,
+        default=None,
+        help=(
+            "Write the full DEBUG log to this file in addition to the "
+            "console output. By default a timestamped run-*.log is saved "
+            "automatically in the result folder."
+        ),
+    )
+    parser.add_argument(
+        "--no-log-file",
+        dest="no_log_file",
+        action="store_true",
+        default=False,
+        help="Disable automatic file logging in the result folder.",
+    )
 
 
 def parse_engine_kwargs(raw: str) -> dict:
@@ -286,3 +321,13 @@ def parse_engine_kwargs(raw: str) -> dict:
     except Exception as e:
         raise SystemExit(f"Failed to parse --engine_kwargs: {e}") from e
     return engine_kwargs
+
+
+def resolve_verbosity(args: argparse.Namespace) -> int:
+    """Derive a single verbosity int from ``-v`` / ``-q`` flags.
+
+    Returns ``-1`` for quiet, ``0`` for default (INFO), ``1+`` for verbose.
+    """
+    if getattr(args, "quiet", False):
+        return -1
+    return getattr(args, "verbose", 0)
