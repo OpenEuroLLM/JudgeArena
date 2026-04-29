@@ -14,10 +14,7 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.instruction_dataset.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
+from judgearena.dataset_revisions import hf_revision
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -30,6 +27,9 @@ def _data_root_path() -> Path:
     return Path("~/judgearena-data/").expanduser()
 
 
+# Defined eagerly because the ``judgearena.instruction_dataset`` package
+# resolves ``judgearena.utils.data_root`` from inside its own __init__, so
+# ``data_root`` must be importable as soon as ``utils`` is partially loaded.
 data_root = _data_root_path()
 
 
@@ -40,12 +40,14 @@ def set_langchain_cache():
 def download_hf(name: str, local_path: Path):
     local_path.mkdir(exist_ok=True, parents=True)
     # downloads the model from huggingface into `local_path` folder
+    repo_id = "geoalgo/llmjudge"
     snapshot_download(
-        repo_id="geoalgo/llmjudge",
+        repo_id=repo_id,
         repo_type="dataset",
         allow_patterns=f"*{name}*",
         local_dir=local_path,
         force_download=False,
+        revision=hf_revision(repo_id),
     )
 
 
@@ -482,12 +484,14 @@ def download_all():
         else:
             download_hf(name=dataset, local_path=local_path_tables)
 
+    contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
     snapshot_download(
-        repo_id="geoalgo/multilingual-contexts-to-be-completed",
+        repo_id=contexts_repo,
         repo_type="dataset",
         allow_patterns="*",
         local_dir=data_root / "contexts",
         force_download=False,
+        revision=hf_revision(contexts_repo),
     )
 
     from judgearena.instruction_dataset.mt_bench import download_mt_bench
@@ -581,6 +585,16 @@ def cache_function_dataframe(
                 df.to_csv(cache_file, index=False)
                 return pd.read_csv(cache_file)
 
+
+# Imported at the bottom so that ``data_root``, ``download_hf`` and ``read_df``
+# - all touched by ``judgearena.instruction_dataset.__init__`` - are already
+# defined when the package import chain reaches back into this module.
+# Re-exported for backward compatibility (e.g. tests that monkeypatch
+# ``judgearena.utils.download_arena_hard``).
+from judgearena.instruction_dataset.arena_hard import (  # noqa: E402
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 
 if __name__ == "__main__":
     download_all()

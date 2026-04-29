@@ -3,16 +3,19 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
 from judgearena.utils import data_root
 
 
 def load_m_arenahard(local_path, language: str | None = None):
+    repo_id = "CohereLabs/m-ArenaHard"
     snapshot_download(
-        repo_id="CohereLabs/m-ArenaHard",
+        repo_id=repo_id,
         repo_type="dataset",
         allow_patterns="*",
         local_dir=local_path / "m-ArenaHard",
         force_download=False,
+        revision=hf_revision(repo_id),
     )
 
     df_union = []
