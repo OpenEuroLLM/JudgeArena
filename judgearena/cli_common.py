@@ -19,6 +19,14 @@ class BaseCliArgs:
     judge_model: str
 
     n_instructions: int | None = None
+    # Judge-prompt selection (see ``judgearena.prompts.registry``).
+    # ``judge_prompt_preset`` picks a named preset; the ``_file`` overrides
+    # take a path on disk and win over the preset.  ``provide_explanation``
+    # is kept for backward compatibility and is equivalent to setting the
+    # preset to ``default_with_explanation``.
+    judge_prompt_preset: str | None = None
+    judge_system_prompt_file: str | None = None
+    judge_user_prompt_file: str | None = None
     provide_explanation: bool = False
     swap_mode: str = "fixed"
     ignore_cache: bool = False
@@ -60,9 +68,45 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
     )
     parser.add_argument(
+        "--judge_prompt_preset",
+        type=str,
+        required=False,
+        default=None,
+        help=(
+            "Name of a judge-prompt preset registered in "
+            "``judgearena.prompts.registry`` (e.g. ``default``, "
+            "``default_with_explanation``, ``fluency``, "
+            "``fastchat-pairwise``). When omitted, the per-task default "
+            "is used."
+        ),
+    )
+    parser.add_argument(
+        "--judge_system_prompt_file",
+        type=str,
+        required=False,
+        default=None,
+        help=(
+            "Path to a custom judge system prompt; takes precedence over "
+            "--judge_prompt_preset.  Must be combined with "
+            "--judge_user_prompt_file."
+        ),
+    )
+    parser.add_argument(
+        "--judge_user_prompt_file",
+        type=str,
+        required=False,
+        default=None,
+        help=(
+            "Path to a custom judge user-prompt template; takes precedence "
+            "over --judge_prompt_preset.  Must be combined with "
+            "--judge_system_prompt_file."
+        ),
+    )
+    parser.add_argument(
         "--provide_explanation",
         action="store_true",
         help=(
+            "Equivalent to --judge_prompt_preset default_with_explanation. "
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
             "but enables some result interpretation."

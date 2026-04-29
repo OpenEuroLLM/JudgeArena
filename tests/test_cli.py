@@ -329,3 +329,24 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
     )
     ge_args: CliArgs = capture_mains["args"]
     assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_judge_prompt_preset_flag_is_forwarded(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "alpaca-eval",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+            "--judge_prompt_preset",
+            "default_with_explanation",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.judge_prompt_preset == "default_with_explanation"
+    assert ge_args.judge_system_prompt_file is None
+    assert ge_args.judge_user_prompt_file is None
