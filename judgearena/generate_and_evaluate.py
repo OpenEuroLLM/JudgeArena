@@ -11,7 +11,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from judgearena.cli_common import BaseCliArgs
+from judgearena.cli_common import (
+    BaseCliArgs,
+    GenerationConfig,
+    gen_config_to_invoke_kwargs,
+)
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -183,28 +187,37 @@ def main(args: CliArgs):
         args.model_B,
     )
 
-    # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    gen_fun = (
-        partial(
-            generate_base,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-        if is_fluency_task
-        else partial(
+    # Per-role generation configs (resolved by the CLI dispatcher).  Each
+    # config carries every knob that can affect the generated text -
+    # temperature, top_p, top_k, seed, max_tokens, max_model_len,
+    # chat_template, engine_kwargs - so model A, model B and the judge
+    # can be configured independently.
+    gen_a: GenerationConfig = args.gen_A
+    gen_b: GenerationConfig = args.gen_B
+    gen_judge: GenerationConfig = args.gen_judge
+
+    def _build_gen_fn(gen: GenerationConfig):
+        invoke_kwargs = gen_config_to_invoke_kwargs(gen)
+        # ``max_tokens`` is passed as a dedicated arg below.
+        invoke_kwargs.pop("max_tokens", None)
+        if is_fluency_task:
+            # TODO currently we just support base models for fluency, we
+            # could also support instruction-tuned models.
+            return partial(
+                generate_base,
+                truncate_input_chars=args.truncate_all_input_chars,
+                max_tokens=gen.max_tokens,
+                use_tqdm=args.use_tqdm,
+                **invoke_kwargs,
+            )
+        return partial(
             generate_instructions,
             truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
+            max_tokens=gen.max_tokens,
             use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
+            **invoke_kwargs,
         )
-    )
+
     dataset_completions_A = try_load_dataset_completions(
         args.task, args.model_A, n_instructions
     )
@@ -213,8 +226,9 @@ def main(args: CliArgs):
             :, "completion"
         ]
     else:
+        gen_fn_a = _build_gen_fn(gen_a)
         completions_A = cache_function_dataframe(
-            lambda: gen_fun(
+            lambda: gen_fn_a(
                 instructions=instructions,
                 model=args.model_A,
                 use_tqdm=args.use_tqdm,
@@ -232,8 +246,9 @@ def main(args: CliArgs):
             :, "completion"
         ]
     else:
+        gen_fn_b = _build_gen_fn(gen_b)
         completions_B = cache_function_dataframe(
-            lambda: gen_fun(
+            lambda: gen_fn_b(
                 instructions=instructions,
                 model=args.model_B,
                 use_tqdm=args.use_tqdm,
@@ -249,10 +264,7 @@ def main(args: CliArgs):
 
     judge_chat_model = make_model(
         model=args.judge_model,
-        max_tokens=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
-        chat_template=args.chat_template,
-        **args.engine_kwargs,
+        **gen_config_to_invoke_kwargs(gen_judge),
     )
 
     # save argument for results analysis

@@ -312,7 +312,56 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert elo_args.baseline_model == "gpt-4o"
 
 
-def test_engine_kwargs_parsed_as_json(capture_mains):
+def test_engine_kwargs_fans_out_to_all_roles_as_deprecation(capture_mains):
+    """Deprecated --engine_kwargs fans out to every role's GenerationConfig."""
+    with pytest.warns(DeprecationWarning, match="--engine_kwargs is deprecated"):
+        cli_module.cli(
+            [
+                "--task",
+                "alpaca-eval",
+                "--model_A",
+                "Dummy/A",
+                "--model_B",
+                "Dummy/B",
+                "--judge",
+                "Dummy/J",
+                "--engine_kwargs",
+                '{"tensor_parallel_size": 4}',
+            ]
+        )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.gen_A.engine_kwargs == {"tensor_parallel_size": 4}
+    assert ge_args.gen_B.engine_kwargs == {"tensor_parallel_size": 4}
+    assert ge_args.gen_judge.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_per_role_engine_kwargs_override_legacy_flag(capture_mains):
+    """A per-role --engine_kwargs_A overrides the deprecated fan-out alias."""
+    with pytest.warns(DeprecationWarning):
+        cli_module.cli(
+            [
+                "--task",
+                "alpaca-eval",
+                "--model_A",
+                "Dummy/A",
+                "--model_B",
+                "Dummy/B",
+                "--judge",
+                "Dummy/J",
+                "--engine_kwargs",
+                '{"shared": 1}',
+                "--engine_kwargs_A",
+                '{"only_A": true}',
+            ]
+        )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.gen_A.engine_kwargs == {"only_A": True}
+    assert ge_args.gen_B.engine_kwargs == {"shared": 1}
+    assert ge_args.gen_judge.engine_kwargs == {"shared": 1}
+
+
+def test_per_role_temperature_and_seed_flags(capture_mains):
+    """Per-role sampling flags land on the right GenerationConfig."""
     cli_module.cli(
         [
             "--task",
@@ -323,9 +372,48 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
             "Dummy/B",
             "--judge",
             "Dummy/J",
-            "--engine_kwargs",
-            '{"tensor_parallel_size": 4}',
+            "--temperature_A",
+            "0.0",
+            "--temperature_B",
+            "0.7",
+            "--temperature_judge",
+            "0.0",
+            "--seed_A",
+            "42",
+            "--seed_judge",
+            "13",
         ]
     )
     ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+    assert ge_args.gen_A.temperature == 0.0
+    assert ge_args.gen_B.temperature == 0.7
+    assert ge_args.gen_judge.temperature == 0.0
+    assert ge_args.gen_A.seed == 42
+    assert ge_args.gen_judge.seed == 13
+    assert ge_args.gen_B.seed is None
+
+
+def test_max_out_tokens_models_fans_out_to_a_and_b(capture_mains):
+    """Deprecated --max_out_tokens_models populates A and B but not judge."""
+    with pytest.warns(
+        DeprecationWarning, match="--max_out_tokens_models is deprecated"
+    ):
+        cli_module.cli(
+            [
+                "--task",
+                "alpaca-eval",
+                "--model_A",
+                "Dummy/A",
+                "--model_B",
+                "Dummy/B",
+                "--judge",
+                "Dummy/J",
+                "--max_out_tokens_models",
+                "256",
+            ]
+        )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.gen_A.max_tokens == 256
+    assert ge_args.gen_B.max_tokens == 256
+    # judge keeps the historical default when --max_out_tokens_judge is unset
+    assert ge_args.gen_judge.max_tokens == 32768
