@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -330,8 +331,9 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
 
 class DummyModel:
-    def __init__(self, name: str):
+    def __init__(self, name: str, **init_kwargs):
         self.name = name
+        self.init_kwargs = dict(init_kwargs)
         self.message = "/".join(name.split("/")[1:])
 
     def batch(self, inputs, **invoke_kwargs) -> list[str]:
@@ -401,6 +403,10 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -444,11 +450,18 @@ class ChatVLLM:
                     stacklevel=2,
                 )
 
+        if seed is not None:
+            vllm_kwargs.setdefault("seed", int(seed))
+
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
-            "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
-            "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
+            "temperature": 0.6 if temperature is None else float(temperature),
+            "top_p": 0.95 if top_p is None else float(top_p),
         }
+        if top_k is not None:
+            self._sampling_params_kwargs["top_k"] = int(top_k)
+        if seed is not None:
+            self._sampling_params_kwargs["seed"] = int(seed)
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
@@ -615,6 +628,48 @@ class ChatVLLM:
         )
 
 
+def _route_sampling_params(
+    engine_kwargs: dict,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    seed: int | None = None,
+    supported_fields: set[str] | None = None,
+    top_k_via_model_kwargs: bool = False,
+    provider: str = "",
+) -> dict:
+    """Route the cross-backend sampling params onto a provider's constructor kwargs.
+
+    Only params that are explicitly set (not ``None``) are applied.
+    ``top_k_via_model_kwargs`` tunnels ``top_k`` through ``model_kwargs`` for
+    OpenAI-compatible backends that do not expose it directly. When
+    ``supported_fields`` is provided, a param the target class cannot accept
+    (and cannot be tunneled) is dropped with a warning rather than being passed
+    through and raising at construction time.
+    """
+    for key, value in (
+        ("temperature", temperature),
+        ("top_p", top_p),
+        ("seed", seed),
+        ("top_k", top_k),
+    ):
+        if value is None:
+            continue
+        if key == "top_k" and top_k_via_model_kwargs:
+            engine_kwargs.setdefault("model_kwargs", {})["top_k"] = value
+            continue
+        if supported_fields is not None and key not in supported_fields:
+            logger.warning(
+                "%s backend does not support sampling param %r; dropping it.",
+                provider or "This",
+                key,
+            )
+            continue
+        engine_kwargs[key] = value
+    return engine_kwargs
+
+
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
 
@@ -623,6 +678,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``VLLM/meta-llama/Llama-3.3-70B-Instruct``.
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
+            Common keys honoured across backends: ``temperature``, ``top_p``,
+            ``top_k``, ``seed``. vLLM-only keys (``max_model_len``,
+            ``chat_template``) are stripped before reaching hosted providers.
     """
     # Avoid mutating the original engine_kwargs dictionary
     # NOTE: this is a shallow copy since we are not modifying any
@@ -631,6 +689,11 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
+
+    temperature = engine_kwargs.pop("temperature", None)
+    top_p = engine_kwargs.pop("top_p", None)
+    top_k = engine_kwargs.pop("top_k", None)
+    seed = engine_kwargs.pop("seed", None)
 
     model_provider, model_name = _split_model_spec(model)
 
@@ -654,7 +717,15 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
-        return DummyModel(model)
+        dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+        _route_sampling_params(
+            dummy_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
+        return DummyModel(model, **dummy_kwargs)
 
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
@@ -662,6 +733,13 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
 
         return ChatVLLM(
             model=model_name,
@@ -670,22 +748,28 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
+        openai_kwargs = dict(engine_kwargs)
+        # OpenAI-compatible chat backends expose temperature/top_p/seed directly
+        # but not top_k, which has to be tunneled through model_kwargs.
+        _route_sampling_params(
+            openai_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            top_k_via_model_kwargs=True,
+        )
         return ChatOpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,
-            **engine_kwargs,
+            **openai_kwargs,
         )
     else:
         model_classes = [
             LlamaCpp,
             ChatOpenAI,
         ]
-        if model_provider == "LlamaCpp":
-            engine_kwargs["model_path"] = model_name
-        else:
-            engine_kwargs["model"] = model_name
-
         try:
             from langchain_together.llms import Together
 
@@ -702,7 +786,30 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         assert model_provider in model_cls_dict, (
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         )
-        return model_cls_dict[model_provider](**engine_kwargs)
+        model_cls = model_cls_dict[model_provider]
+        if model_provider == "LlamaCpp":
+            engine_kwargs["model_path"] = model_name
+        else:
+            engine_kwargs["model"] = model_name
+
+        # Route sampling params against the target class's accepted fields:
+        # tunnel top_k via model_kwargs when the class lacks a top_k field,
+        # and drop any param the class cannot accept (e.g. Together has no
+        # ``seed``) instead of raising at construction time.
+        supported_fields = set(getattr(model_cls, "model_fields", {}))
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            supported_fields=supported_fields,
+            top_k_via_model_kwargs=(
+                "top_k" not in supported_fields and "model_kwargs" in supported_fields
+            ),
+            provider=model_provider,
+        )
+        return model_cls(**engine_kwargs)
 
 
 def download_all():
@@ -759,6 +866,18 @@ class Timeblock:
         name = self.name if self.name else "block"
         msg = f"{name} took {self.duration} seconds"
         return msg
+
+
+def generation_cache_token(kwargs: dict[str, object]) -> str:
+    """Short, deterministic token of generation kwargs for cache-key busting.
+
+    Folds the resolved per-role generation kwargs (sampling params, max_tokens,
+    chat_template, ...) into a stable 16-char hash so that changing any of them
+    invalidates cached completions. Hashing keeps the cache name bounded even
+    when a long ``chat_template`` is present.
+    """
+    serialized = "_".join(f"{k}={kwargs[k]!r}" for k in sorted(kwargs))
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
 def cache_function_dataframe(
