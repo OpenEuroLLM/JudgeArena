@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.cli_common import GenerationConfig, gen_config_to_invoke_kwargs
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
@@ -39,26 +40,34 @@ def _generate_mt_bench_completions(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cache_prefix = "mt-bench"
 
-    def _run_generation(model_name: str) -> pd.DataFrame:
+    def _run_generation(model_name: str, gen: GenerationConfig) -> pd.DataFrame:
+        invoke_kwargs = gen_config_to_invoke_kwargs(gen)
+        invoke_kwargs.pop("max_tokens", None)
+        # MT-Bench's category-aware temperatures only kick in when the user
+        # has *not* explicitly pinned a per-role temperature; otherwise the
+        # CLI override should win for reproducibility.
+        if gen.temperature is None:
+            temperature_config = FASTCHAT_TEMPERATURE_CONFIG
+        else:
+            temperature_config = None
         return generate_multiturn(
             questions=questions_df,
             model=model_name,
             truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
+            max_tokens=gen.max_tokens,
             use_tqdm=args.use_tqdm,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            temperature_config=temperature_config,
+            **invoke_kwargs,
         )
 
     completions_a = cache_function_dataframe(
-        lambda: _run_generation(args.model_A),
+        lambda: _run_generation(args.model_A, args.gen_A),
         ignore_cache=ignore_cache,
         cache_name=f"{cache_prefix}_{args.model_A}_{args.n_instructions}",
     ).set_index("instruction_index")
 
     completions_b = cache_function_dataframe(
-        lambda: _run_generation(args.model_B),
+        lambda: _run_generation(args.model_B, args.gen_B),
         ignore_cache=ignore_cache,
         cache_name=f"{cache_prefix}_{args.model_B}_{args.n_instructions}",
     ).set_index("instruction_index")
@@ -160,12 +169,14 @@ def run_mt_bench(
         questions_df=questions_df,
         ignore_cache=ignore_cache,
     )
+    # MT-Bench historically forced judge temperature to 0 so its
+    # category-driven verdicts stay deterministic; we honour any explicit
+    # CLI override but fall back to 0 otherwise.
+    judge_invoke_kwargs = gen_config_to_invoke_kwargs(args.gen_judge)
+    judge_invoke_kwargs.setdefault("temperature", 0.0)
     judge_chat_model = make_model(
         model=args.judge_model,
-        max_tokens=args.max_out_tokens_judge,
-        temperature=0.0,
-        max_model_len=args.max_model_len,
-        chat_template=args.chat_template,
+        **judge_invoke_kwargs,
     )
     return _run_mt_bench_fastchat(
         args=args,

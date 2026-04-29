@@ -127,7 +127,43 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     return truncate(str(value), max_len=truncate_chars)
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def _extract_response_metadata(message) -> dict | None:
+    """Pull provider response metadata (e.g. ``system_fingerprint``) off an AIMessage.
+
+    ChatVLLM and DummyModel return plain strings (no metadata). LangChain
+    chat models return ``AIMessage`` whose ``response_metadata`` attribute
+    contains the upstream provider's bookkeeping; we keep the keys that
+    matter for reproducibility.
+    """
+    response_metadata = getattr(message, "response_metadata", None)
+    if not isinstance(response_metadata, dict) or not response_metadata:
+        return None
+    keys_of_interest = (
+        "system_fingerprint",
+        "model_name",
+        "model",
+        "id",
+        "finish_reason",
+    )
+    captured = {
+        k: response_metadata[k] for k in keys_of_interest if k in response_metadata
+    }
+    return captured or None
+
+
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    out_metadata: list[dict | None] | None = None,
+):
+    """Run a batch of LLM calls, with retries and optional response-metadata capture.
+
+    When ``out_metadata`` is provided, one entry per input is appended;
+    each entry is either a dict of provider fingerprint fields (model,
+    ``system_fingerprint``, etc.) or ``None`` for backends that don't
+    expose any.
+    """
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -199,6 +235,10 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
         res = batch_with_retry(inputs)
 
+    if out_metadata is not None:
+        for raw in res:
+            out_metadata.append(_extract_response_metadata(raw))
+
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
@@ -207,8 +247,17 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
 
 class DummyModel:
-    def __init__(self, name: str):
+    """In-process stub backend used in tests and offline smoke runs.
+
+    The constructor accepts the same keyword arguments that hosted
+    backends do (``temperature``, ``top_p``, ``seed``, ...) and stores
+    them under :attr:`init_kwargs` so tests can assert that the
+    per-role generation configs reach the model layer.
+    """
+
+    def __init__(self, name: str, **init_kwargs):
         self.name = name
+        self.init_kwargs = dict(init_kwargs)
         self.message = "/".join(name.split("/")[1:])
 
     def batch(self, inputs, **invoke_kwargs) -> list[str]:
@@ -241,6 +290,10 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -273,12 +326,24 @@ class ChatVLLM:
                     stacklevel=2,
                 )
 
+        if seed is not None:
+            # vLLM honours the seed argument both at engine-init time (for
+            # tensor parallel determinism) and at sampling time.
+            vllm_kwargs.setdefault("seed", seed)
+
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
-        self.sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
-        )
+        # Keep historical defaults when the caller did not specify a value;
+        # forward explicit values straight through so they are reproducible.
+        self._effective_sampling_kwargs: dict = {
+            "max_tokens": max_tokens,
+            "temperature": 0.6 if temperature is None else float(temperature),
+            "top_p": 0.95 if top_p is None else float(top_p),
+        }
+        if top_k is not None:
+            self._effective_sampling_kwargs["top_k"] = int(top_k)
+        if seed is not None:
+            self._effective_sampling_kwargs["seed"] = int(seed)
+        self.sampling_params = SamplingParams(**self._effective_sampling_kwargs)
 
         # Resolve chat template:
         # 1. Explicit override always wins → use chat() with that template
@@ -388,6 +453,20 @@ class ChatVLLM:
             None, lambda: self.invoke(input_item, **invoke_kwargs)
         )
 
+    def set_temperature(self, temperature: float) -> None:
+        """Mutate the active SamplingParams to use ``temperature``.
+
+        Used by MT-Bench's category-aware temperature switching so we
+        don't have to reload the vLLM engine between categories.
+        """
+        from vllm import SamplingParams
+
+        self._effective_sampling_kwargs["temperature"] = float(temperature)
+        self.sampling_params = SamplingParams(**self._effective_sampling_kwargs)
+
+
+_VLLM_ONLY_KWARGS = ("max_model_len", "chat_template")
+
 
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
@@ -397,6 +476,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``VLLM/meta-llama/Llama-3.3-70B-Instruct``.
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
+            Common keys honoured across backends: ``temperature``, ``top_p``,
+            ``top_k``, ``seed``.  vLLM-only keys (``max_model_len``,
+            ``chat_template``) are stripped before reaching hosted providers.
     """
     # Avoid mutating the original engine_kwargs dictionary
     # NOTE: this is a shallow copy since we are not modifying any
@@ -406,17 +488,34 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
 
+    # Pluck out cross-backend sampling controls so we can route them
+    # through the provider-appropriate constructor argument.
+    temperature = engine_kwargs.pop("temperature", None)
+    top_p = engine_kwargs.pop("top_p", None)
+    top_k = engine_kwargs.pop("top_k", None)
+    seed = engine_kwargs.pop("seed", None)
+
     model_provider = model.split("/")[0]
 
     # vLLM-engine-only kwargs must not leak to remote-API providers
     # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
     # kwargs via model_kwargs into chat.completions.create, which rejects them.
     if model_provider != "VLLM":
-        engine_kwargs.pop("max_model_len", None)
-        engine_kwargs.pop("chat_template", None)
+        for key in _VLLM_ONLY_KWARGS:
+            engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
-        return DummyModel(model)
+        # Forward sampling kwargs so tests can assert they reached the model.
+        dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+        if temperature is not None:
+            dummy_kwargs["temperature"] = temperature
+        if top_p is not None:
+            dummy_kwargs["top_p"] = top_p
+        if top_k is not None:
+            dummy_kwargs["top_k"] = top_k
+        if seed is not None:
+            dummy_kwargs["seed"] = seed
+        return DummyModel(model, **dummy_kwargs)
 
     model_name = "/".join(model.split("/")[1:])
     logger.info("Loading %s(model=%s)", model_provider, model_name)
@@ -425,6 +524,14 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
+        if temperature is not None:
+            engine_kwargs["temperature"] = temperature
+        if top_p is not None:
+            engine_kwargs["top_p"] = top_p
+        if top_k is not None:
+            engine_kwargs["top_k"] = top_k
+        if seed is not None:
+            engine_kwargs["seed"] = seed
 
         return ChatVLLM(
             model=model_name,
@@ -433,11 +540,23 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
+        openai_kwargs = dict(engine_kwargs)
+        if temperature is not None:
+            openai_kwargs["temperature"] = temperature
+        if top_p is not None:
+            openai_kwargs["top_p"] = top_p
+        if seed is not None:
+            openai_kwargs["seed"] = seed
+        # ``top_k`` isn't a first-class OpenAI parameter; tunnel it through
+        # ``model_kwargs`` so providers that recognise it (vLLM/OpenRouter
+        # via Anthropic-compatible models) can still pick it up.
+        if top_k is not None:
+            openai_kwargs.setdefault("model_kwargs", {})["top_k"] = top_k
         return ChatOpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,
-            **engine_kwargs,
+            **openai_kwargs,
         )
     else:
         model_classes = [
@@ -446,8 +565,24 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         ]
         if model_provider == "LlamaCpp":
             engine_kwargs["model_path"] = model_name
+            if temperature is not None:
+                engine_kwargs["temperature"] = temperature
+            if top_p is not None:
+                engine_kwargs["top_p"] = top_p
+            if top_k is not None:
+                engine_kwargs["top_k"] = top_k
+            if seed is not None:
+                engine_kwargs["seed"] = seed
         else:
             engine_kwargs["model"] = model_name
+            if temperature is not None:
+                engine_kwargs["temperature"] = temperature
+            if top_p is not None:
+                engine_kwargs["top_p"] = top_p
+            if seed is not None:
+                engine_kwargs["seed"] = seed
+            if top_k is not None:
+                engine_kwargs.setdefault("model_kwargs", {})["top_k"] = top_k
 
         try:
             from langchain_together.llms import Together

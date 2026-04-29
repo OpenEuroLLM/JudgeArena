@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
-from judgearena.cli_common import BaseCliArgs
+from judgearena.cli_common import BaseCliArgs, gen_config_to_invoke_kwargs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
@@ -188,34 +188,36 @@ def main(args: CliEloArgs) -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", args.model)
 
-    # Only pass extra engine kwargs that are not None
-    extra_kwargs = dict(args.engine_kwargs)
-    if args.max_model_len is not None:
-        extra_kwargs["max_model_len"] = args.max_model_len
-    if args.chat_template is not None:
-        extra_kwargs["chat_template"] = args.chat_template
+    # The ``A`` generation config drives the model under evaluation; the
+    # ``judge`` config drives the LLM judge that scores it.  Both are
+    # resolved from per-role CLI flags by ``cli.resolve_generation_configs``.
+    gen_a = args.gen_A
+    gen_judge = args.gen_judge
+
+    invoke_kwargs_a = gen_config_to_invoke_kwargs(gen_a)
+    invoke_kwargs_a.pop("max_tokens", None)
     use_tqdm = False
     gen_fun = partial(
         generate_instructions,
         truncate_input_chars=args.truncate_all_input_chars,
-        max_tokens=args.max_out_tokens_models,
+        max_tokens=gen_a.max_tokens,
         use_tqdm=use_tqdm,
-        **extra_kwargs,
+        **invoke_kwargs_a,
     )
 
     def replace_slash(s: str) -> str:
         return s.replace("/", "_")
 
     languages_str = "-".join(sorted(args.languages)) if args.languages else "all"
-    extra_kwargs_str = (
-        "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
-        if extra_kwargs
-        else ""
+    extra_kwargs_str = "_".join(
+        f"{k}={v}"
+        for k, v in sorted(gen_config_to_invoke_kwargs(gen_a).items())
+        if k != "max_tokens"
     )
     cache_suffix = (
         f"{args.arena}_{replace_slash(args.model)}_"
         f"{args.n_instructions}_{args.n_instructions_per_language}_"
-        f"{languages_str}_{args.truncate_all_input_chars}_{args.max_out_tokens_models}"
+        f"{languages_str}_{args.truncate_all_input_chars}_{gen_a.max_tokens}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
     if len(cache_suffix) > 100:
@@ -268,17 +270,12 @@ def main(args: CliEloArgs) -> dict:
         for i in range(n)
     ]
 
-    judge_extra_kwargs = {}
-    if args.max_model_len is not None:
-        judge_extra_kwargs["max_model_len"] = args.max_model_len
-    if args.chat_template is not None:
-        judge_extra_kwargs["chat_template"] = args.chat_template
+    judge_invoke_kwargs = gen_config_to_invoke_kwargs(gen_judge)
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
             model=args.judge_model,
-            max_tokens=args.max_out_tokens_judge,
-            **judge_extra_kwargs,
+            **judge_invoke_kwargs,
         )
         annotations, _, prefs = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
