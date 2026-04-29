@@ -172,6 +172,7 @@ class CliArgs(BaseCliArgs):
             swap_mode=args.swap_mode,
             ignore_cache=args.ignore_cache,
             judge_prompt_preset=args.judge_prompt_preset,
+            mt_bench_judge_mode=args.mt_bench_judge_mode,
             battle_thinking_token_budget=args.battle_thinking_token_budget,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
             skip_judging=args.skip_judging,

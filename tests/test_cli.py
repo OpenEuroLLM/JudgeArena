@@ -356,3 +356,39 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
     )
     ge_args: CliArgs = capture_mains["args"]
     assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_mt_bench_defaults_to_default_judge_mode(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "mt-bench",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.mt_bench_judge_mode == "default"
+
+
+def test_mt_bench_forwards_fastchat_original_mode(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "mt-bench",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+            "--mt_bench_judge_mode",
+            "fastchat_original",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.mt_bench_judge_mode == "fastchat_original"

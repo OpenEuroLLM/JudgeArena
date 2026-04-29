@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -14,7 +13,14 @@ from judgearena.judge_prompt_presets import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     SKYWORK_JUDGE_PROMPT_PRESET,
 )
-from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
+from judgearena.mt_bench.common import (
+    MT_BENCH_REFERENCE_CATEGORIES,
+    iter_mt_bench_pairwise_rows,
+)
+from judgearena.mt_bench.prompt_templates import (
+    build_mt_bench_user_prompt_template,
+    render_mt_bench_prompt_text,
+)
 from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 from judgearena.utils import (
     LimitEventTracker,
@@ -35,13 +41,6 @@ FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "arena-hard-200": 0.0,
 }
 
-FASTCHAT_NEED_REF_CATS: set[str] = {
-    "math",
-    "reasoning",
-    "coding",
-    "arena-hard-200",
-}
-
 FastChatVerdict = Literal["A", "B", "tie", "error"]
 PairwiseWinner = Literal["model_A", "model_B", "tie", "error"]
 
@@ -55,21 +54,7 @@ class FastChatPairwisePrompt:
     ref_based: bool
 
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "mt_bench"
 _SYSTEM_BASE_FILE = "system-base.txt"
-_USER_SINGLE_BASE_FILE = "user-single-base.txt"
-_USER_MULTI_BASE_FILE = "user-multi-base.txt"
-_USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
-_USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
-
-
-def _load_prompt_text(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    return path.read_text(encoding="utf-8")
-
-
-def _render_prompt_text(filename: str, **kwargs: str) -> str:
-    return _load_prompt_text(filename).format(**kwargs)
 
 
 def _build_system_prompt(
@@ -80,24 +65,13 @@ def _build_system_prompt(
     focus_line: str = "",
 ) -> str:
     focus_segment = f"{focus_line} " if focus_line else ""
-    return _render_prompt_text(
+    return render_mt_bench_prompt_text(
         _SYSTEM_BASE_FILE,
         user_subject=user_subject,
         task_description=task_description,
         focus_line=focus_segment,
         begin_instruction=begin_instruction,
     )
-
-
-def _build_user_prompt_template(*, multi_turn: bool, ref_based: bool) -> str:
-    base_filename = _USER_MULTI_BASE_FILE if multi_turn else _USER_SINGLE_BASE_FILE
-    reference_block = ""
-    if ref_based:
-        ref_block_filename = (
-            _USER_MULTI_REF_BLOCK_FILE if multi_turn else _USER_SINGLE_REF_BLOCK_FILE
-        )
-        reference_block = _load_prompt_text(ref_block_filename).rstrip("\n") + "\n\n"
-    return _render_prompt_text(base_filename, reference_block=reference_block)
 
 
 def _load_pairwise_prompt(
@@ -120,7 +94,7 @@ def _load_pairwise_prompt(
             begin_instruction=system_begin_instruction,
             focus_line=system_focus_line,
         ),
-        user_prompt_template=_build_user_prompt_template(
+        user_prompt_template=build_mt_bench_user_prompt_template(
             multi_turn=multi_turn,
             ref_based=ref_based,
         ),
@@ -321,7 +295,7 @@ def _select_prompt(
         raise ValueError(
             f"Unsupported MT-Bench prompt preset '{prompt_preset}'. Choose from: {supported}."
         )
-    needs_ref = (category or "") in FASTCHAT_NEED_REF_CATS
+    needs_ref = (category or "") in MT_BENCH_REFERENCE_CATEGORIES
     if needs_ref and multi_turn:
         return prompt_variants["multi_ref"]
     if needs_ref:

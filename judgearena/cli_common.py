@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 
 from judgearena.judge_prompt_presets import JUDGE_PROMPT_PRESETS
 
+MT_BENCH_JUDGE_MODES = ("default", "fastchat_original")
+
 
 @dataclass
 class BaseCliArgs:
@@ -25,6 +27,7 @@ class BaseCliArgs:
     swap_mode: str = "fixed"
     ignore_cache: bool = False
     judge_prompt_preset: str = "default"
+    mt_bench_judge_mode: str = "default"
     battle_thinking_token_budget: int | None = None
     strip_thinking_before_judging: bool = False
     skip_judging: bool = False
@@ -46,6 +49,11 @@ class BaseCliArgs:
         supported_modes = ["fixed", "both"]
         assert self.swap_mode in supported_modes, (
             f"Only {supported_modes} modes are supported but got {self.swap_mode}."
+        )
+        assert self.mt_bench_judge_mode in MT_BENCH_JUDGE_MODES, (
+            "Only "
+            f"{list(MT_BENCH_JUDGE_MODES)} MT-Bench judge modes are supported but "
+            f"got {self.mt_bench_judge_mode!r}."
         )
 
 
@@ -120,6 +128,18 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "Judge prompt preset to use. 'default' preserves the existing score-first "
             "JudgeArena prompts, while 'skywork' enables an optional Skywork-style "
             "verdict-first preset."
+        ),
+    )
+    parser.add_argument(
+        "--mt_bench_judge_mode",
+        type=str,
+        choices=MT_BENCH_JUDGE_MODES,
+        default="default",
+        help=(
+            "MT-Bench-only judging mode. 'default' makes MT-Bench obey "
+            "--judge_prompt_preset like the other benchmarks, while "
+            "'fastchat_original' preserves the original FastChat-style "
+            "prompting and [[A]]/[[B]]/[[C]] verdict parsing."
         ),
     )
     parser.add_argument(

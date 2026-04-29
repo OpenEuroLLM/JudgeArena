@@ -29,6 +29,7 @@ from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
+from judgearena.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.openrouter_reference_pricing import (
     OpenRouterReferencePricingTracker,
     build_openrouter_reference_pricing_summary,
@@ -182,6 +183,23 @@ def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str
     return name.replace("/", "_")
 
 
+def _build_mt_bench_input_payloads(
+    *,
+    questions_df: pd.DataFrame,
+    completions_a: pd.DataFrame,
+    completions_b: pd.DataFrame,
+) -> dict[str, object]:
+    return {
+        "instruction_index": questions_df.index.tolist(),
+        "turn_1": questions_df["turn_1"].tolist(),
+        "turn_2": questions_df["turn_2"].tolist(),
+        "completion_turn_1_A": completions_a["completion_turn_1"].tolist(),
+        "completion_turn_2_A": completions_a["completion_turn_2"].tolist(),
+        "completion_turn_1_B": completions_b["completion_turn_1"].tolist(),
+        "completion_turn_2_B": completions_b["completion_turn_2"].tolist(),
+    }
+
+
 def _save_mt_bench_results(
     *,
     args: CliArgs,
@@ -192,14 +210,14 @@ def _save_mt_bench_results(
     questions_df: pd.DataFrame,
     pricing_reference: dict[str, object] | None,
     started_at_utc: datetime,
-    name_suffix: str | None = None,
+    input_payloads: dict[str, object] | None = None,
+    judge_system_prompt: str | None = None,
+    judge_user_prompt_template: str | None = None,
 ) -> None:
     """Persist MT-Bench arguments, annotations, and aggregate results."""
-    name = _build_mt_bench_result_name(args, suffix=name_suffix)
-    res_folder = Path(args.result_folder) / name
     res_folder.mkdir(parents=True, exist_ok=True)
 
-    with open(res_folder / f"args-{name}.json", "w") as f:
+    with open(res_folder / f"args-{result_name}.json", "w") as f:
         json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
 
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
@@ -212,11 +230,14 @@ def _save_mt_bench_results(
         entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
         run=asdict(args),
         results=results,
-        input_payloads={
+        input_payloads=input_payloads
+        or {
             "instruction_index": questions_df.index.tolist(),
             "turn_1": questions_df["turn_1"].tolist(),
             "turn_2": questions_df["turn_2"].tolist(),
         },
+        judge_system_prompt=judge_system_prompt,
+        judge_user_prompt_template=judge_user_prompt_template,
         started_at_utc=started_at_utc,
         pricing_reference=pricing_reference,
     )
@@ -265,6 +286,7 @@ def _run_mt_bench_fastchat(
         "model_B": args.model_B,
         "judge_model": args.judge_model,
         "judge_prompt_preset": prompt_preset,
+        "mt_bench_judge_mode": args.mt_bench_judge_mode,
         "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
         "num_inconsistent": num_inconsistent,
@@ -297,7 +319,114 @@ def _run_mt_bench_fastchat(
         questions_df=questions_df,
         pricing_reference=pricing_reference,
         started_at_utc=started_at_utc,
-        name_suffix="mtbench",
+        input_payloads=_build_mt_bench_input_payloads(
+            questions_df=questions_df,
+            completions_a=completions_a,
+            completions_b=completions_b,
+        ),
+    )
+    return prefs
+
+
+def _run_mt_bench_preset(
+    *,
+    args: CliArgs,
+    res_folder: Path,
+    result_name: str,
+    questions_df: pd.DataFrame,
+    completions_a: pd.DataFrame,
+    completions_b: pd.DataFrame,
+    judge_chat_model,
+    prompt_preset: str,
+    usage_tracker: OpenRouterReferencePricingTracker,
+    limit_event_tracker: LimitEventTracker | None,
+    started_at_utc: datetime,
+) -> pd.Series:
+    prefs, annotations, combined_metadata, _num_inconsistent = (
+        judge_mt_bench_with_preset(
+            judge_chat_model=judge_chat_model,
+            judge_model=args.judge_model,
+            questions=questions_df,
+            completions_a=completions_a,
+            completions_b=completions_b,
+            model_a=args.model_A,
+            model_b=args.model_B,
+            turns_mode="both",
+            swap_mode=args.swap_mode,
+            truncate_input_chars=args.truncate_judge_input_chars,
+            use_tqdm=args.use_tqdm,
+            prompt_preset=prompt_preset,
+            provide_explanation=args.provide_explanation,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
+            judge_tokenizer=getattr(judge_chat_model, "tokenizer", None),
+            max_judge_model_len=args.max_judge_model_len,
+            max_out_tokens_judge=args.max_out_tokens_judge,
+            usage_tracker=usage_tracker,
+            usage_phase="judge",
+            limit_event_tracker=limit_event_tracker,
+        )
+    )
+
+    stats = compute_pref_summary(prefs)
+    results = {
+        "task": args.task,
+        "model_A": args.model_A,
+        "model_B": args.model_B,
+        "judge_model": args.judge_model,
+        "judge_prompt_preset": prompt_preset,
+        "mt_bench_judge_mode": args.mt_bench_judge_mode,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        **stats,
+        "limit_events": limit_event_tracker.build_summary()
+        if limit_event_tracker is not None
+        else {},
+        "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
+        "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
+        "preferences": prefs.tolist(),
+        "date": str(datetime.now().isoformat()),
+        "user": os.getenv("USER", ""),
+    }
+    print_results(results)
+    pricing_reference = build_openrouter_reference_pricing_summary(
+        tracker=usage_tracker,
+        phase_model_specs={
+            "generation_model_A": args.model_A,
+            "generation_model_B": args.model_B,
+            "judge": args.judge_model,
+        },
+    )
+    print(format_openrouter_reference_pricing_summary(pricing_reference))
+    unique_system_prompts = {
+        row.get("system_prompt")
+        for row in annotations
+        if row.get("system_prompt") is not None
+    }
+    unique_user_templates = {
+        row.get("user_prompt_template")
+        for row in annotations
+        if row.get("user_prompt_template") is not None
+    }
+    _save_mt_bench_results(
+        args=args,
+        res_folder=res_folder,
+        result_name=result_name,
+        results=results,
+        annotations_df=pd.DataFrame(annotations),
+        questions_df=questions_df,
+        pricing_reference=pricing_reference,
+        started_at_utc=started_at_utc,
+        input_payloads=_build_mt_bench_input_payloads(
+            questions_df=questions_df,
+            completions_a=completions_a,
+            completions_b=completions_b,
+        ),
+        judge_system_prompt=next(iter(unique_system_prompts), None)
+        if len(unique_system_prompts) == 1
+        else None,
+        judge_user_prompt_template=next(iter(unique_user_templates), None)
+        if len(unique_user_templates) == 1
+        else None,
     )
     return prefs
 
@@ -309,12 +438,17 @@ def run_mt_bench(
     res_folder: Path | None = None,
     result_name: str | None = None,
 ):
-    """MT-Bench pipeline with FastChat-compatible pairwise judging."""
+    """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
     usage_tracker = OpenRouterReferencePricingTracker()
     limit_event_tracker = LimitEventTracker()
     prompt_preset = args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET
-    if prompt_preset == DEFAULT_JUDGE_PROMPT_PRESET and not args.provide_explanation:
+    fastchat_mode = args.mt_bench_judge_mode == "fastchat_original"
+    if (
+        fastchat_mode
+        and prompt_preset == DEFAULT_JUDGE_PROMPT_PRESET
+        and not args.provide_explanation
+    ):
         logger.info(
             "MT-Bench ignores provide_explanation=False and keeps the original "
             "FastChat-style explanation-plus-verdict prompt."
@@ -331,7 +465,7 @@ def run_mt_bench(
     if res_folder is None:
         res_folder = Path(args.result_folder) / result_name
         res_folder.mkdir(parents=True, exist_ok=True)
-    if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
+    if fastchat_mode and args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
         logger.warning(
             "MT-Bench judge prompts request an explanation before the final "
             "verdict; max_out_tokens_judge=%s may be too small "
@@ -361,6 +495,8 @@ def run_mt_bench(
             "model_A": args.model_A,
             "model_B": args.model_B,
             "judge_model": args.judge_model,
+            "judge_prompt_preset": prompt_preset,
+            "mt_bench_judge_mode": args.mt_bench_judge_mode,
             "n_instructions": args.n_instructions
             if args.n_instructions is not None
             else len(questions_df),
@@ -376,7 +512,7 @@ def run_mt_bench(
             result_name,
         )
         return None
-    if (
+    if fastchat_mode and (
         args.max_judge_model_len is not None
         and args.max_judge_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     ):
@@ -387,17 +523,23 @@ def run_mt_bench(
             args.max_judge_model_len,
             _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN,
         )
-    judge_chat_model = make_model(
-        model=args.judge_model,
-        max_tokens=args.max_out_tokens_judge,
-        temperature=0.0,
-        max_model_len=args.max_judge_model_len,
-        chat_template=args.chat_template,
+    judge_model_kwargs = {
+        "model": args.judge_model,
+        "max_tokens": args.max_out_tokens_judge,
+        "max_model_len": args.max_judge_model_len,
+        "chat_template": args.chat_template,
         **_build_mt_bench_judge_model_kwargs(
-            args=args, limit_event_tracker=limit_event_tracker
+            args=args,
+            limit_event_tracker=limit_event_tracker,
         ),
+    }
+    if fastchat_mode:
+        judge_model_kwargs["temperature"] = 0.0
+    judge_chat_model = make_model(
+        **judge_model_kwargs,
     )
-    return _run_mt_bench_fastchat(
+    runner = _run_mt_bench_fastchat if fastchat_mode else _run_mt_bench_preset
+    return runner(
         args=args,
         res_folder=res_folder,
         result_name=result_name,

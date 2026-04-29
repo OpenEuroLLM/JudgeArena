@@ -7,6 +7,13 @@ import pandas as pd
 
 from judgearena.utils import safe_text_with_metadata
 
+MT_BENCH_REFERENCE_CATEGORIES: set[str] = {
+    "math",
+    "reasoning",
+    "coding",
+    "arena-hard-200",
+}
+
 
 @dataclass(frozen=True)
 class MTBenchPairwiseRow:
