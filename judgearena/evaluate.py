@@ -15,6 +15,10 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.log import get_logger
+from judgearena.prompts.registry import (
+    ResolvedJudgePrompt,
+    resolve_judge_prompt,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -59,54 +63,76 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
-_COMPLETION_LABEL_SINGLE = "Answer"
-_COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
-_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
-_SCORE_FENCE = "\n```"
-
-
 def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
     multi_turn: bool = False,
 ) -> tuple[str, str]:
-    prompts_dir = Path(__file__).parent / "prompts"
-    system_prompt = (prompts_dir / "system-prompt.txt").read_text()
+    """Load the bundled default judge prompts (back-compat shim).
 
-    prompt_filename = (
-        "prompt-with-explanation.txt" if provide_explanation else "prompt.txt"
+    Prefer :func:`judgearena.prompts.registry.resolve_judge_prompt` for new
+    code; this function delegates to the registry but returns the
+    ``(system, user_template)`` tuple expected by older callers.
+    """
+    resolved = resolve_judge_prompt(
+        preset=("default_with_explanation" if provide_explanation else "default"),
+        multi_turn=multi_turn,
     )
-    user_prompt_template = (prompts_dir / prompt_filename).read_text()
-    user_prompt_template = user_prompt_template.replace(
-        "{completion_label}",
-        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
-    )
-    user_prompt_template = user_prompt_template.replace(
-        "{explanation_suffix}",
-        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
-    )
-
-    return system_prompt, user_prompt_template
+    return resolved.system_text, resolved.user_template_text
 
 
 def resolve_judge_prompts(
     *,
-    provide_explanation: bool,
+    provide_explanation: bool = False,
     multi_turn: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
+    task: str | None = None,
+    preset: str | None = None,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> tuple[str, str]:
-    default_system_prompt, default_user_prompt_template = (
-        load_judge_system_and_user_prompt(
-            provide_explanation=provide_explanation, multi_turn=multi_turn
-        )
+    """Resolve the judge ``(system_prompt, user_prompt_template)`` for a run.
+
+    Direct ``system_prompt`` / ``user_prompt_template`` overrides win.
+    Otherwise the registry is consulted with ``task`` / ``preset`` /
+    ``system_file`` / ``user_file``.  Legacy callers that pass nothing
+    end up with the ``default`` preset (or ``default_with_explanation``
+    when ``provide_explanation=True``) for backward compatibility.
+    """
+    if system_prompt is not None and user_prompt_template is not None:
+        return system_prompt, user_prompt_template
+
+    resolved = resolve_judge_prompt(
+        task=task,
+        preset=preset,
+        system_file=system_file,
+        user_file=user_file,
+        multi_turn=multi_turn,
+        provide_explanation=provide_explanation,
     )
     return (
-        system_prompt if system_prompt is not None else default_system_prompt,
+        system_prompt if system_prompt is not None else resolved.system_text,
         (
             user_prompt_template
             if user_prompt_template is not None
-            else default_user_prompt_template
+            else resolved.user_template_text
         ),
+    )
+
+
+def resolve_run_judge_prompt(task: str, cli_args) -> ResolvedJudgePrompt:
+    """Resolve the judge prompt for a run from the CLI args dataclass.
+
+    Accepts a :class:`judgearena.cli_common.BaseCliArgs` instance (or any
+    object exposing the same attributes) and returns the full
+    :class:`ResolvedJudgePrompt`, including hashes/paths for metadata.
+    """
+    return resolve_judge_prompt(
+        task=task,
+        preset=getattr(cli_args, "judge_prompt_preset", None),
+        system_file=getattr(cli_args, "judge_system_prompt_file", None),
+        user_file=getattr(cli_args, "judge_user_prompt_file", None),
+        provide_explanation=getattr(cli_args, "provide_explanation", False),
     )
 
 
