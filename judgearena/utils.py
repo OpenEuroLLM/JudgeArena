@@ -388,6 +388,39 @@ def _extract_ai_message_metadata(result: object) -> dict[str, Any]:
     return {"finish_reason": finish_reason, "stop_reason": stop_reason}
 
 
+def _extract_token_usage(result: object) -> dict[str, int] | None:
+    """Pull API-reported token usage from a LangChain AIMessage-like result.
+
+    Two shapes coexist depending on langchain-openai version:
+    - langchain-core AIMessage.usage_metadata: ``{"input_tokens", "output_tokens", "total_tokens"}``
+    - response_metadata.token_usage (OpenAI-shape): ``{"prompt_tokens", "completion_tokens", "total_tokens"}``
+
+    Returns the first shape that carries non-null counts, or ``None`` if neither
+    is present (e.g. provider that does not surface usage). Used by
+    ``OpenRouterReferencePricingTracker.record_batch_from_usage_metadata`` to
+    capture per-call billing tokens for OpenRouter / ChatOpenAI runs, which
+    cannot be tokenised via ``count_*_batch`` helpers.
+    """
+    usage_metadata = getattr(result, "usage_metadata", None)
+    if isinstance(usage_metadata, dict) and (
+        usage_metadata.get("input_tokens") is not None
+        or usage_metadata.get("output_tokens") is not None
+    ):
+        return dict(usage_metadata)
+    response_metadata = getattr(result, "response_metadata", None) or {}
+    token_usage = (
+        response_metadata.get("token_usage")
+        if isinstance(response_metadata, dict)
+        else None
+    )
+    if isinstance(token_usage, dict) and (
+        token_usage.get("prompt_tokens") is not None
+        or token_usage.get("completion_tokens") is not None
+    ):
+        return dict(token_usage)
+    return None
+
+
 def do_inference(
     chat_model,
     inputs,
@@ -407,7 +440,14 @@ def do_inference(
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
+        # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
+        # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
+        cap_raw = os.environ.get("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
+        cap = int(cap_raw) if cap_raw and int(cap_raw) > 0 else None
+
         async def process_with_real_progress(chat_model, inputs, pbar):
+            sem = asyncio.Semaphore(cap) if cap else None
+
             async def process_single(input_item, max_retries=5, base_delay=1.0):
                 for attempt in range(max_retries):
                     try:
@@ -427,8 +467,14 @@ def do_inference(
                         )
                         await asyncio.sleep(delay)
 
+            async def gated(inp):
+                if sem is None:
+                    return await process_single(inp)
+                async with sem:
+                    return await process_single(inp)
+
             # asyncio.gather preserves order (unlike as_completed)
-            results = await asyncio.gather(*[process_single(inp) for inp in inputs])
+            results = await asyncio.gather(*[gated(inp) for inp in inputs])
             return results
 
         with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
@@ -437,8 +483,9 @@ def do_inference(
                     chat_model=chat_model, inputs=inputs, pbar=pbar
                 )
             )
-        if return_metadata:
-            metadata = [_extract_ai_message_metadata(r) for r in res]
+        # Always materialize metadata; it is cheap and keeps return_metadata
+        # behavior consistent with the batch path.
+        metadata = [_extract_ai_message_metadata(r) for r in res]
     else:
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
@@ -488,6 +535,11 @@ def do_inference(
 
         res, metadata = batch_with_retry(inputs)
 
+    # Pull per-call usage from AIMessage objects BEFORE flattening to .content;
+    # OpenRouter / ChatOpenAI surface API-billed token counts here but lose
+    # them after .content extraction.
+    per_call_usages = [_extract_token_usage(r) for r in res]
+
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
@@ -498,13 +550,19 @@ def do_inference(
         and usage_model_spec is not None
     ):
         try:
-            usage_tracker.record_batch_from_model(
+            recorded = usage_tracker.record_batch_from_usage_metadata(
                 phase=usage_phase,
                 model_spec=usage_model_spec,
-                chat_model=chat_model,
-                inputs=list(inputs),
-                outputs=res,
+                usages=per_call_usages,
             )
+            if not recorded:
+                usage_tracker.record_batch_from_model(
+                    phase=usage_phase,
+                    model_spec=usage_model_spec,
+                    chat_model=chat_model,
+                    inputs=list(inputs),
+                    outputs=res,
+                )
         except Exception as e:
             print(
                 f"Warning: failed to record token usage for phase "
@@ -528,6 +586,52 @@ class DummyModel:
 
     async def ainvoke(self, input, **invoke_kwargs):
         return self.message
+
+
+_VLLM_INIT_RETRY_SIGNATURES = (
+    "cudaErrorDevicesUnavailable",
+    "CUDA-capable device(s) is/are busy or unavailable",
+    "CUDA error: initialization error",
+)
+_VLLM_INIT_MAX_ATTEMPTS = int(os.getenv("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS", "4"))
+_VLLM_INIT_BACKOFF_SECONDS = int(
+    os.getenv("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS", "20")
+)
+
+
+def _init_llm_with_retry(llm_cls, **kwargs):
+    """Instantiate ``vllm.LLM`` with retries on transient GPU-init races.
+
+    On shared Slurm nodes with MaxGRESPerAccount throttling, freshly scheduled
+    jobs can hit ``cudaErrorDevicesUnavailable`` because the previous tenant's
+    driver cleanup has not finished when our process starts. This manifests as
+    an immediate engine-core init failure and is almost always resolved by a
+    15-30 s sleep + retry on the same GPU. We retry up to
+    ``JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS`` times with exponential backoff before
+    giving up, which keeps persistent configuration errors from looping.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _VLLM_INIT_MAX_ATTEMPTS + 1):
+        try:
+            return llm_cls(**kwargs)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            if not any(sig in message for sig in _VLLM_INIT_RETRY_SIGNATURES):
+                raise
+            last_exc = exc
+            if attempt == _VLLM_INIT_MAX_ATTEMPTS:
+                break
+            delay = _VLLM_INIT_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            warnings.warn(
+                f"vLLM init attempt {attempt}/{_VLLM_INIT_MAX_ATTEMPTS} failed "
+                f"with transient GPU-init signature ({message.splitlines()[0]}); "
+                f"sleeping {delay}s before retry.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 class ChatVLLM:
@@ -652,7 +756,9 @@ class ChatVLLM:
                 )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
-        self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
+        self.llm = _init_llm_with_retry(
+            LLM, model=model, trust_remote_code=True, **vllm_kwargs
+        )
         self.tokenizer = self.llm.get_tokenizer()
 
         # Resolve chat template:

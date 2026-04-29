@@ -9,7 +9,6 @@ from judgearena.instruction_dataset.m_arenahard import (
     split_m_arena_hard_dataset,
 )
 from judgearena.log import get_logger
-from judgearena.utils import data_root, download_hf, read_df
 
 logger = get_logger(__name__)
 
@@ -21,6 +20,8 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         df_instructions = load_mt_bench()
 
     elif (parsed := split_m_arena_hard_dataset(dataset)) is not None:
+        from judgearena.utils import data_root
+
         version_key, lang_or_subset = parsed
         logger.info(
             "Loading %s with language specification set to %s",
@@ -47,6 +48,8 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
             "arena-hard-v0.1",
             "arena-hard-v2.0",
         ]
+        from judgearena.utils import data_root, download_hf, read_df
+
         local_path_tables = data_root / "tables"
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)

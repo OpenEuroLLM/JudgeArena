@@ -163,6 +163,48 @@ class OpenRouterReferencePricingTracker:
             )
         return True
 
+    def record_batch_from_usage_metadata(
+        self,
+        *,
+        phase: str,
+        model_spec: str,
+        usages: list[dict[str, Any] | None],
+    ) -> bool:
+        """Record API-reported token usage extracted from LangChain AIMessages.
+
+        Each entry in ``usages`` is either ``None`` (no usage data) or a dict
+        carrying ``input_tokens``/``output_tokens`` (langchain-core shape) or
+        ``prompt_tokens``/``completion_tokens`` (OpenAI-shape). This is the
+        path used for OpenRouter / ChatOpenAI-backed models, which do not
+        expose ``count_*_batch`` helpers but do return per-call usage from
+        the upstream API.
+
+        Returns ``True`` if at least one entry produced a record, else
+        ``False`` so callers can fall back to ``record_batch_from_model``.
+        """
+        recorded = False
+        for usage in usages:
+            if not isinstance(usage, dict):
+                continue
+            prompt = usage.get("input_tokens")
+            if prompt is None:
+                prompt = usage.get("prompt_tokens")
+            completion = usage.get("output_tokens")
+            if completion is None:
+                completion = usage.get("completion_tokens")
+            if prompt is None and completion is None:
+                continue
+            self._records.append(
+                TokenUsageRecord(
+                    phase=phase,
+                    model_spec=model_spec,
+                    prompt_tokens=int(prompt or 0),
+                    completion_tokens=int(completion or 0),
+                )
+            )
+            recorded = True
+        return recorded
+
 
 def _parse_catalog_model(raw_model: dict[str, Any]) -> OpenRouterModelEntry:
     raw_pricing = raw_model.get("pricing") or {}

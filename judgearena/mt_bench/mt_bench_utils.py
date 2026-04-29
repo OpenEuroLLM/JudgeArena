@@ -95,6 +95,7 @@ def _mt_bench_generation_cache_name(args: CliArgs, *, model_name: str) -> str:
         "max_model_len": args.max_model_len,
         "chat_template": args.chat_template,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "strip_thinking_in_turn_1_carryover": args.strip_thinking_in_turn_1_carryover,
         "engine_kwargs": _build_mt_bench_generation_kwargs(
             args=args, model_spec=model_name
         ),
@@ -142,6 +143,9 @@ def _generate_mt_bench_completions(
             usage_tracker=usage_tracker,
             usage_phase=usage_phase,
             limit_event_tracker=limit_event_tracker,
+            strip_thinking_in_turn_1_carryover=(
+                args.strip_thinking_in_turn_1_carryover
+            ),
             **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
         )
 
@@ -305,8 +309,8 @@ def run_mt_bench(
     args: CliArgs,
     ignore_cache: bool,
     *,
-    res_folder: Path,
-    result_name: str,
+    res_folder: Path | None = None,
+    result_name: str | None = None,
 ):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
     run_started_at = datetime.now(UTC)
@@ -325,6 +329,11 @@ def run_mt_bench(
             f"--model_B is required for dataset '{args.task}'; "
             "no dataset-native baseline registered."
         )
+    if result_name is None:
+        result_name = _build_mt_bench_result_name(args, suffix="mtbench")
+    if res_folder is None:
+        res_folder = Path(args.result_folder) / result_name
+        res_folder.mkdir(parents=True, exist_ok=True)
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
         logger.info(
             "MT-Bench judge prompts require room for budgeted thinking, the "
@@ -346,6 +355,30 @@ def run_mt_bench(
         usage_tracker=usage_tracker,
         limit_event_tracker=limit_event_tracker,
     )
+    if args.skip_judging:
+        res_folder.mkdir(parents=True, exist_ok=True)
+        with open(res_folder / f"args-{result_name}.json", "w") as f:
+            json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
+        generation_summary = {
+            "task": args.task,
+            "model_A": args.model_A,
+            "model_B": args.model_B,
+            "judge_model": args.judge_model,
+            "n_instructions": args.n_instructions
+            if args.n_instructions is not None
+            else len(questions_df),
+            "battle_thinking_token_budget": args.battle_thinking_token_budget,
+            "strip_thinking_before_judging": args.strip_thinking_before_judging,
+            "limit_events": limit_event_tracker.build_summary(),
+            "skip_judging": True,
+        }
+        with open(res_folder / f"gen-results-{result_name}.json", "w") as f:
+            json.dump(_to_jsonable(generation_summary), f, indent=2, allow_nan=False)
+        logger.info(
+            "skip_judging=True: wrote gen-results-%s.json and returning before judge model construction.",
+            result_name,
+        )
+        return None
     effective_judge_max_model_len = args.effective_judge_max_model_len()
     if (
         effective_judge_max_model_len is not None

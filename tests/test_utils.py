@@ -1,5 +1,8 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 import judgearena.utils as utils
 from judgearena.utils import make_model
@@ -54,6 +57,79 @@ def test_do_inference_async_path_propagates_finish_reason(monkeypatch):
         {"finish_reason": "stop", "stop_reason": None},
         {"finish_reason": "length", "stop_reason": None},
     ]
+
+
+def _build_inflight_tracking_chat_model(*, hold_seconds: float = 0.05):
+    """Helper: mock chat model whose `ainvoke` records peak concurrent in-flight calls."""
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def fake_ainvoke(input_item, **_kwargs):
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(hold_seconds)
+            return SimpleNamespace(
+                content=f"out-{input_item}",
+                response_metadata={"finish_reason": "stop"},
+            )
+        finally:
+            state["in_flight"] -= 1
+
+    return SimpleNamespace(ainvoke=fake_ainvoke), state
+
+
+def test_do_inference_async_path_respects_concurrency_cap(monkeypatch):
+    """With JUDGEARENA_JUDGE_MAX_CONCURRENCY=4 and 16 inputs, peak in-flight must stay <= 4."""
+    monkeypatch.setenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", "4")
+    chat_model, state = _build_inflight_tracking_chat_model()
+
+    inputs = [f"prompt-{i}" for i in range(16)]
+    results = utils.do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=True,
+    )
+
+    assert len(results) == 16
+    assert state["peak"] <= 4, (
+        f"Concurrency cap violated: peak in-flight={state['peak']}, expected <= 4"
+    )
+    assert state["peak"] >= 1
+
+
+def test_do_inference_async_path_unbounded_when_env_unset(monkeypatch):
+    """Without JUDGEARENA_JUDGE_MAX_CONCURRENCY set, all 16 calls fire concurrently."""
+    monkeypatch.delenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", raising=False)
+    chat_model, state = _build_inflight_tracking_chat_model()
+
+    inputs = [f"prompt-{i}" for i in range(16)]
+    results = utils.do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=True,
+    )
+
+    assert len(results) == 16
+    assert state["peak"] > 4, (
+        f"Expected unbounded concurrency to overshoot the capped variant; got peak={state['peak']}"
+    )
+
+
+def test_do_inference_async_path_zero_cap_is_unbounded(monkeypatch):
+    """JUDGEARENA_JUDGE_MAX_CONCURRENCY=0 falls back to unbounded (defensive default)."""
+    monkeypatch.setenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", "0")
+    chat_model, state = _build_inflight_tracking_chat_model()
+
+    inputs = [f"prompt-{i}" for i in range(16)]
+    results = utils.do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=True,
+    )
+
+    assert len(results) == 16
+    assert state["peak"] > 4
 
 
 def test_do_inference_batch_path_propagates_finish_reason_without_batch_with_metadata():
@@ -146,3 +222,75 @@ def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
     assert "chat_template" not in model.model_kwargs
     assert model.max_tokens == 16
     assert model.temperature == 0.5
+
+
+def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):
+    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+
+    calls: list[dict] = []
+
+    def fake_llm(**kwargs):
+        calls.append(kwargs)
+        if len(calls) < 3:
+            raise RuntimeError(
+                "CUDA error: CUDA-capable device(s) is/are busy or unavailable\n"
+                "Search for 'cudaErrorDevicesUnavailable' ..."
+            )
+        return "llm"
+
+    result = utils._init_llm_with_retry(fake_llm, model="m", trust_remote_code=True)
+    assert result == "llm"
+    assert len(calls) == 3
+
+
+def test_init_llm_with_retry_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+
+    def always_fails(**_kwargs):
+        raise RuntimeError("cudaErrorDevicesUnavailable")
+
+    with pytest.raises(RuntimeError, match="cudaErrorDevicesUnavailable"):
+        utils._init_llm_with_retry(always_fails, model="m")
+
+
+def test_init_llm_with_retry_reraises_non_matching_errors_immediately(monkeypatch):
+    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+
+    call_count = 0
+
+    def fails_once(**_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("bad config")
+
+    with pytest.raises(ValueError, match="bad config"):
+        utils._init_llm_with_retry(fails_once, model="m")
+    assert call_count == 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "CUDA error: unknown error",
+        "NCCL error",
+    ],
+)
+def test_init_llm_with_retry_does_not_retry_broad_runtime_errors(monkeypatch, message):
+    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+
+    call_count = 0
+
+    def fails_once(**_kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError(message)
+
+    with pytest.raises(RuntimeError, match=message):
+        utils._init_llm_with_retry(fails_once, model="m")
+    assert call_count == 1

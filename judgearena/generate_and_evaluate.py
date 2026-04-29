@@ -24,10 +24,15 @@ from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
-    arena_hard_native_baseline,
+    ARENA_HARD_BASELINES,
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.m_arenahard import (
+    M_ARENA_HARD_BASELINES,
+    split_m_arena_hard_dataset,
+)
+from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
 from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.log import (
     attach_file_handler,
@@ -54,6 +59,17 @@ from judgearena.utils import (
 )
 
 logger = get_logger(__name__)
+
+ALPACA_EVAL_BASELINES: dict[str, str] = {
+    "alpaca-eval": "gpt4_1106_preview",
+}
+
+PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
+    **ALPACA_EVAL_BASELINES,
+    **ARENA_HARD_BASELINES,
+    **M_ARENA_HARD_BASELINES,
+    **MT_BENCH_BASELINES,
+}
 
 
 def try_load_dataset_completions(
@@ -158,6 +174,8 @@ class CliArgs(BaseCliArgs):
             judge_prompt_preset=args.judge_prompt_preset,
             battle_thinking_token_budget=args.battle_thinking_token_budget,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
+            strip_thinking_in_turn_1_carryover=args.strip_thinking_in_turn_1_carryover,
+            skip_judging=args.skip_judging,
             truncate_all_input_chars=args.truncate_all_input_chars,
             truncate_judge_input_chars=args.truncate_judge_input_chars,
             max_out_tokens_models=args.max_out_tokens_models,
@@ -229,12 +247,12 @@ def _resolve_baseline_plan(
     """
     if args.model_B is not None:
         return BaselinePlan.flat(args.model_B, index=instructions_df.index)
-    if not is_arena_hard_dataset(args.task):
+    native = native_pairwise_baseline(args.task)
+    if native is None:
         raise ValueError(
-            f"--model_B is required for dataset '{args.task}'; only Arena-Hard "
-            "datasets ship a dataset-native baseline."
+            f"--model_B is required for dataset '{args.task}'; no dataset-native "
+            "baseline is registered."
         )
-    native = arena_hard_native_baseline(args.task)
     if isinstance(native, str):
         return BaselinePlan.flat(native, index=instructions_df.index)
     if isinstance(native, Mapping):
@@ -255,6 +273,17 @@ def _resolve_baseline_plan(
             )
         return BaselinePlan.per_row(per_row)
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
+
+
+def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
+    """Return the dataset-native pairwise baseline, if the task defines one."""
+    if task in PAIRWISE_BASELINES:
+        return PAIRWISE_BASELINES[task]
+    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
+    if parsed_m_arena_hard is not None:
+        version_key, _lang_or_subset = parsed_m_arena_hard
+        return PAIRWISE_BASELINES[version_key]
+    return None
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -482,6 +511,29 @@ def main(args: CliArgs):
         baseline_plan.display_name,
         completions_B.values[0],
     )
+    if args.skip_judging:
+        with open(res_folder / f"args-{name}.json", "w") as f:
+            json.dump(asdict(args), f, indent=2)
+        generation_summary = {
+            "task": args.task,
+            "model_A": args.model_A,
+            "model_B": baseline_plan.display_name,
+            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_models": baseline_plan.unique_models,
+            "judge_model": args.judge_model,
+            "n_instructions": n_instructions,
+            "battle_thinking_token_budget": args.battle_thinking_token_budget,
+            "strip_thinking_before_judging": args.strip_thinking_before_judging,
+            "limit_events": limit_event_tracker.build_summary(),
+            "skip_judging": True,
+        }
+        with open(res_folder / f"gen-results-{name}.json", "w") as f:
+            json.dump(_to_jsonable(generation_summary), f, indent=2, allow_nan=False)
+        logger.info(
+            "skip_judging=True: wrote gen-results-%s.json and returning before judge construction.",
+            name,
+        )
+        return None
     logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judge_chat_model = make_model(

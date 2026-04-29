@@ -8,9 +8,16 @@ from huggingface_hub import snapshot_download
 ARENA_HARD_HF_REPO_ID = "lmarena-ai/arena-hard-auto"
 
 # Mirrors upstream's `JUDGE_SETTINGS` baseline assignment in
-# `arena-hard-auto/utils/judge_utils.py`: v0.1 has a single flat baseline,
-# v2.0 routes per question category. `is_arena_hard_dataset` and the
-# dispatcher in `generate_and_evaluate.py` key off this map.
+# `arena-hard-auto/utils/judge_utils.py` verbatim: v0.1 has a single flat
+# baseline, v2.0 routes per question category. `is_arena_hard_dataset` and
+# the dispatcher in `generate_and_evaluate.py` key off this map.
+#
+# Note: the released v2.0 `question.jsonl` only tags rows as `hard_prompt`
+# (500) or `creative_writing` (250); `coding` and `math` are inert keys
+# upstream ships for forward compatibility (no question carries those
+# labels, so the dispatcher never looks them up). We keep them so any
+# future re-tagging upstream lights up automatically without a code
+# change here.
 ARENA_HARD_BASELINES: dict[str, str | Mapping[str, str]] = {
     "arena-hard-v0.1": "gpt-4-0314",
     "arena-hard-v2.0": {

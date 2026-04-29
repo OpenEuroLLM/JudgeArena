@@ -47,6 +47,127 @@ def test_do_inference_records_token_usage():
     ]
 
 
+class _FakeAIMessage:
+    """Minimal AIMessage stand-in: .content + langchain-core .usage_metadata."""
+
+    def __init__(self, content: str, usage_metadata: dict[str, int] | None) -> None:
+        self.content = content
+        self.usage_metadata = usage_metadata
+        self.response_metadata: dict[str, object] = {}
+
+
+class _OpenRouterShapeModel:
+    """Mimics ChatOpenAI: returns AIMessage objects with usage_metadata, no
+    count_*_batch helpers (so the fallback tokeniser path is unavailable)."""
+
+    def __init__(self, usages: list[dict[str, int] | None]) -> None:
+        self._usages = usages
+
+    def batch(self, inputs, **invoke_kwargs):
+        return [
+            _FakeAIMessage(content=f"output-{idx}", usage_metadata=self._usages[idx])
+            for idx, _ in enumerate(inputs)
+        ]
+
+
+def test_do_inference_records_usage_metadata_for_openrouter_shape_models():
+    """For OpenRouter ChatOpenAI calls, the tracker must record API-reported
+    token counts pulled from AIMessage.usage_metadata; ``record_batch_from_model``
+    is a no-op because ChatOpenAI lacks ``count_*_batch`` helpers."""
+    tracker = pricing.OpenRouterReferencePricingTracker()
+    model = _OpenRouterShapeModel(
+        usages=[
+            {"input_tokens": 1234, "output_tokens": 17, "total_tokens": 1251},
+            {"input_tokens": 800, "output_tokens": 42, "total_tokens": 842},
+        ]
+    )
+
+    outputs = do_inference(
+        chat_model=model,
+        inputs=["prompt-1", "prompt-2"],
+        usage_tracker=tracker,
+        usage_phase="judge",
+        usage_model_spec="OpenRouter/google/gemma-4-31b-it",
+    )
+
+    assert outputs == ["output-0", "output-1"]
+    assert tracker.records == [
+        pricing.TokenUsageRecord(
+            phase="judge",
+            model_spec="OpenRouter/google/gemma-4-31b-it",
+            prompt_tokens=1234,
+            completion_tokens=17,
+            requests=1,
+        ),
+        pricing.TokenUsageRecord(
+            phase="judge",
+            model_spec="OpenRouter/google/gemma-4-31b-it",
+            prompt_tokens=800,
+            completion_tokens=42,
+            requests=1,
+        ),
+    ]
+
+
+def test_do_inference_falls_back_to_count_batch_when_usage_metadata_missing():
+    """When AIMessage results carry no ``usage_metadata`` (e.g. local vLLM path),
+    ``do_inference`` must fall back to ``record_batch_from_model`` and use the
+    chat_model's ``count_*_batch`` helpers."""
+    tracker = pricing.OpenRouterReferencePricingTracker()
+    model = CountingModel()
+
+    do_inference(
+        chat_model=model,
+        inputs=["abc", "de"],
+        usage_tracker=tracker,
+        usage_phase="generation_model_A",
+        usage_model_spec="VLLM/org/model",
+    )
+
+    assert [(r.prompt_tokens, r.completion_tokens) for r in tracker.records] == [
+        (3, 8),
+        (2, 8),
+    ]
+
+
+def test_record_batch_from_usage_metadata_returns_false_on_all_none():
+    """A batch where every entry is ``None`` must signal "no records added" so
+    the caller can fall through to the tokeniser-based path."""
+    tracker = pricing.OpenRouterReferencePricingTracker()
+
+    recorded = tracker.record_batch_from_usage_metadata(
+        phase="judge",
+        model_spec="OpenRouter/google/gemma-4-31b-it",
+        usages=[None, None, None],
+    )
+
+    assert recorded is False
+    assert tracker.records == []
+
+
+def test_record_batch_from_usage_metadata_accepts_openai_shape_keys():
+    """OpenAI-shape keys (``prompt_tokens``/``completion_tokens``) appear on
+    ``response_metadata.token_usage`` for older langchain-openai versions."""
+    tracker = pricing.OpenRouterReferencePricingTracker()
+
+    recorded = tracker.record_batch_from_usage_metadata(
+        phase="judge",
+        model_spec="OpenRouter/google/gemma-4-31b-it",
+        usages=[{"prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125}],
+    )
+
+    assert recorded is True
+    assert tracker.records == [
+        pricing.TokenUsageRecord(
+            phase="judge",
+            model_spec="OpenRouter/google/gemma-4-31b-it",
+            prompt_tokens=100,
+            completion_tokens=25,
+            requests=1,
+        )
+    ]
+
+
 def test_build_reference_pricing_summary_uses_exact_match_and_reports_partial_cost(
     monkeypatch,
 ):

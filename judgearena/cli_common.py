@@ -27,6 +27,8 @@ class BaseCliArgs:
     judge_prompt_preset: str = "default"
     battle_thinking_token_budget: int | None = None
     strip_thinking_before_judging: bool = False
+    strip_thinking_in_turn_1_carryover: bool = True
+    skip_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
@@ -160,6 +162,38 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "If specified, strip visible reasoning traces from model completions "
             "before sending them to the judge."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_in_turn_1_carryover",
+        nargs="?",
+        const=True,
+        default=True,
+        type=parse_optional_bool,
+        help=(
+            "When building the turn-2 prompt for multi-turn datasets, strip "
+            "<think>...</think> blocks (or vLLM forced thinking-budget closers) "
+            "from the turn-1 answer before the character-level truncation fires. "
+            "Matches what the Qwen3 chat template does internally for historical "
+            "assistant turns and prevents the turn-1 char cap from landing inside "
+            "a <think> block and silently destroying the </think> closer. Enabled "
+            "by default."
+        ),
+    )
+    parser.add_argument(
+        "--skip_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, generate battle-model completions and write a "
+            "generation-only summary (gen-results-<name>.json with limit_events) "
+            "but skip judge-model construction and the judging loop entirely. "
+            "Useful for decoupling expensive paid-judge calls from the cheap "
+            "local generation phase: run once with --skip_judging=True to "
+            "materialize the completion cache, inspect cap rates, then rerun "
+            "with --skip_judging=False to judge from cache."
         ),
     )
     parser.add_argument(

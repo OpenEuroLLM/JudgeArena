@@ -24,7 +24,7 @@ def _mt_bench_args(
     ``effective_judge_*`` fallback helpers instead of a duplicate shim.
     """
     args = BaseCliArgs(**base_overrides)
-    args.dataset = dataset
+    args.task = dataset
     args.model_A = model_A
     args.model_B = model_B
     args.use_tqdm = use_tqdm
@@ -155,6 +155,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         usage_tracker,
         usage_phase,
         limit_event_tracker,
+        strip_thinking_in_turn_1_carryover,
         **engine_kwargs,
     ):
         generated_models.append(model)
@@ -194,6 +195,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         max_model_len=16384,
         chat_template=None,
         battle_thinking_token_budget=None,
+        strip_thinking_in_turn_1_carryover=True,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
