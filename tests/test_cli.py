@@ -248,18 +248,45 @@ def test_unknown_elo_task_raises(capture_mains):
         )
 
 
-def test_generate_and_evaluate_requires_model_a_and_b(capture_mains):
+def test_pairwise_task_without_native_baseline_requires_model_a_and_b(capture_mains):
     with pytest.raises(SystemExit, match="--model_A and --model_B are required"):
         cli_module.cli(
             [
                 "--task",
-                "alpaca-eval",
+                "fluency-french",
                 "--model_A",
                 "Dummy/A",
                 "--judge",
                 "Dummy/J",
             ]
         )
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "alpaca-eval",
+        "m-arena-hard-v2.0-EU",
+    ],
+)
+def test_pairwise_task_allows_missing_model_b_when_native_baseline_exists(
+    capture_mains, task: str
+):
+    cli_module.cli(
+        [
+            "--task",
+            task,
+            "--model_A",
+            "Dummy/A",
+            "--judge",
+            "Dummy/J",
+        ]
+    )
+    assert capture_mains["module"] == "generate_and_evaluate"
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.task == task
+    assert ge_args.model_A == "Dummy/A"
+    assert ge_args.model_B is None
 
 
 def test_deprecated_model_flag_routes_into_pairwise_task(capture_mains):
@@ -329,3 +356,39 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
     )
     ge_args: CliArgs = capture_mains["args"]
     assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_mt_bench_defaults_to_default_judge_mode(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "mt-bench",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.mt_bench_judge_mode == "default"
+
+
+def test_mt_bench_forwards_fastchat_original_mode(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "mt-bench",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+            "--mt_bench_judge_mode",
+            "fastchat_original",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.mt_bench_judge_mode == "fastchat_original"

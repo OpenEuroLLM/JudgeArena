@@ -17,7 +17,7 @@ from judgearena.cli_common import (
 )
 from judgearena.estimate_elo_ratings import CliEloArgs
 from judgearena.estimate_elo_ratings import main as main_elo
-from judgearena.generate_and_evaluate import CliArgs
+from judgearena.generate_and_evaluate import CliArgs, native_pairwise_baseline
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
 
@@ -196,13 +196,21 @@ def _build_elo_args(
         provide_explanation=args.provide_explanation,
         swap_mode=args.swap_mode,
         ignore_cache=args.ignore_cache,
+        judge_prompt_preset=args.judge_prompt_preset,
+        mt_bench_judge_mode=args.mt_bench_judge_mode,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        skip_judging=args.skip_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
+        truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
         max_out_tokens_judge=args.max_out_tokens_judge,
         max_model_len=args.max_model_len,
+        max_judge_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
         result_folder=args.result_folder,
         engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+        judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
         verbosity=resolve_verbosity(args),
         log_file=args.log_file,
         no_log_file=args.no_log_file,
@@ -212,7 +220,9 @@ def _build_elo_args(
 def _build_generate_and_evaluate_args(
     args: argparse.Namespace, task: str, model_a: str | None
 ) -> CliArgs:
-    if model_a is None or args.model_B is None:
+    if model_a is None or (
+        args.model_B is None and native_pairwise_baseline(task) is None
+    ):
         raise SystemExit(f"--model_A and --model_B are required for task {task!r}.")
     return CliArgs(
         task=task,
@@ -224,13 +234,21 @@ def _build_generate_and_evaluate_args(
         provide_explanation=args.provide_explanation,
         swap_mode=args.swap_mode,
         ignore_cache=args.ignore_cache,
+        judge_prompt_preset=args.judge_prompt_preset,
+        mt_bench_judge_mode=args.mt_bench_judge_mode,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        skip_judging=args.skip_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
+        truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
         max_out_tokens_judge=args.max_out_tokens_judge,
         max_model_len=args.max_model_len,
+        max_judge_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
         result_folder=args.result_folder,
         engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+        judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
         verbosity=resolve_verbosity(args),
         log_file=args.log_file,
         no_log_file=args.no_log_file,

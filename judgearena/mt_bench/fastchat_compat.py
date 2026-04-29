@@ -4,14 +4,30 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.utils import do_inference
+from judgearena.judge_prompt_presets import (
+    DEFAULT_JUDGE_PROMPT_PRESET,
+    SKYWORK_JUDGE_PROMPT_PRESET,
+)
+from judgearena.mt_bench.common import (
+    MT_BENCH_REFERENCE_CATEGORIES,
+    iter_mt_bench_pairwise_rows,
+)
+from judgearena.mt_bench.prompt_templates import (
+    build_mt_bench_user_prompt_template,
+    render_mt_bench_prompt_text,
+)
+from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
+from judgearena.utils import (
+    LimitEventTracker,
+    do_inference,
+    strip_thinking_tags,
+    strip_thinking_tags_with_metadata,
+)
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -23,13 +39,6 @@ FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "stem": 0.1,
     "humanities": 0.1,
     "arena-hard-200": 0.0,
-}
-
-FASTCHAT_NEED_REF_CATS: set[str] = {
-    "math",
-    "reasoning",
-    "coding",
-    "arena-hard-200",
 }
 
 FastChatVerdict = Literal["A", "B", "tie", "error"]
@@ -45,21 +54,7 @@ class FastChatPairwisePrompt:
     ref_based: bool
 
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "mt_bench"
 _SYSTEM_BASE_FILE = "system-base.txt"
-_USER_SINGLE_BASE_FILE = "user-single-base.txt"
-_USER_MULTI_BASE_FILE = "user-multi-base.txt"
-_USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
-_USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
-
-
-def _load_prompt_text(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    return path.read_text(encoding="utf-8")
-
-
-def _render_prompt_text(filename: str, **kwargs: str) -> str:
-    return _load_prompt_text(filename).format(**kwargs)
 
 
 def _build_system_prompt(
@@ -70,24 +65,13 @@ def _build_system_prompt(
     focus_line: str = "",
 ) -> str:
     focus_segment = f"{focus_line} " if focus_line else ""
-    return _render_prompt_text(
+    return render_mt_bench_prompt_text(
         _SYSTEM_BASE_FILE,
         user_subject=user_subject,
         task_description=task_description,
         focus_line=focus_segment,
         begin_instruction=begin_instruction,
     )
-
-
-def _build_user_prompt_template(*, multi_turn: bool, ref_based: bool) -> str:
-    base_filename = _USER_MULTI_BASE_FILE if multi_turn else _USER_SINGLE_BASE_FILE
-    reference_block = ""
-    if ref_based:
-        ref_block_filename = (
-            _USER_MULTI_REF_BLOCK_FILE if multi_turn else _USER_SINGLE_REF_BLOCK_FILE
-        )
-        reference_block = _load_prompt_text(ref_block_filename).rstrip("\n") + "\n\n"
-    return _render_prompt_text(base_filename, reference_block=reference_block)
 
 
 def _load_pairwise_prompt(
@@ -110,7 +94,7 @@ def _load_pairwise_prompt(
             begin_instruction=system_begin_instruction,
             focus_line=system_focus_line,
         ),
-        user_prompt_template=_build_user_prompt_template(
+        user_prompt_template=build_mt_bench_user_prompt_template(
             multi_turn=multi_turn,
             ref_based=ref_based,
         ),
@@ -179,12 +163,86 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 )
 
 
+_SKYWORK_PAIR_V2 = _load_pairwise_prompt(
+    name="skywork-pair-v2",
+    multi_turn=False,
+    ref_based=False,
+    system_user_subject="prompt displayed below",
+    system_task_description=(
+        "You should choose the assistant that follows the user's instructions and "
+        "answers the user's prompt better. Your evaluation should consider factors "
+        "such as helpfulness, relevance, accuracy, depth, creativity, and level "
+        "of detail of the responses."
+    ),
+    system_begin_instruction="carefully comparing the two responses",
+)
+
+_SKYWORK_PAIR_V2_MULTI = _load_pairwise_prompt(
+    name="skywork-pair-v2-multi-turn",
+    multi_turn=True,
+    ref_based=False,
+    system_user_subject="questions",
+    system_task_description=(
+        "You should choose the assistant that follows the user's instructions and "
+        "answers the user's questions better. Your evaluation should consider "
+        "factors such as helpfulness, relevance, accuracy, depth, creativity, and "
+        "level of detail of the responses."
+    ),
+    system_focus_line=(
+        "You should focus on which assistant better answers the second user question."
+    ),
+    system_begin_instruction="carefully comparing the two conversations",
+)
+
+_SKYWORK_PAIR_MATH_V1 = _load_pairwise_prompt(
+    name="skywork-pair-math-v1",
+    multi_turn=False,
+    ref_based=True,
+    system_user_subject="prompt displayed below",
+    system_task_description=(
+        "You will be given a reference answer, assistant A's answer, and "
+        "assistant B's answer. Your evaluation should focus on correctness and "
+        "helpfulness while deciding which assistant is better."
+    ),
+    system_begin_instruction="carefully comparing both assistants' answers with the reference answer",
+)
+
+_SKYWORK_PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
+    name="skywork-pair-math-v1-multi-turn",
+    multi_turn=True,
+    ref_based=True,
+    system_user_subject="questions",
+    system_task_description=(
+        "You will be given reference answers together with assistant A's and "
+        "assistant B's answers. Your evaluation should focus on correctness and "
+        "helpfulness while deciding which assistant better answers the second user question."
+    ),
+    system_begin_instruction="carefully comparing both assistants' answers with the reference answers",
+)
+
+_FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] = {
+    DEFAULT_JUDGE_PROMPT_PRESET: {
+        "single": _PAIR_V2,
+        "multi": _PAIR_V2_MULTI,
+        "single_ref": _PAIR_MATH_V1,
+        "multi_ref": _PAIR_MATH_V1_MULTI,
+    },
+    SKYWORK_JUDGE_PROMPT_PRESET: {
+        "single": _SKYWORK_PAIR_V2,
+        "multi": _SKYWORK_PAIR_V2_MULTI,
+        "single_ref": _SKYWORK_PAIR_MATH_V1,
+        "multi_ref": _SKYWORK_PAIR_MATH_V1_MULTI,
+    },
+}
+
+
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    if "[[A]]" in judgment:
+    stripped = strip_thinking_tags(judgment).strip()
+    if "[[A]]" in stripped:
         return "A"
-    if "[[B]]" in judgment:
+    if "[[B]]" in stripped:
         return "B"
-    if "[[C]]" in judgment:
+    if "[[C]]" in stripped:
         return "tie"
     return "error"
 
@@ -225,15 +283,26 @@ def _winner_to_preference(winner: PairwiseWinner) -> float:
     return math.nan
 
 
-def _select_prompt(category: str | None, multi_turn: bool) -> FastChatPairwisePrompt:
-    needs_ref = (category or "") in FASTCHAT_NEED_REF_CATS
+def _select_prompt(
+    category: str | None,
+    multi_turn: bool,
+    *,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+) -> FastChatPairwisePrompt:
+    prompt_variants = _FASTCHAT_PROMPT_PRESET_REGISTRY.get(prompt_preset)
+    if prompt_variants is None:
+        supported = ", ".join(sorted(_FASTCHAT_PROMPT_PRESET_REGISTRY))
+        raise ValueError(
+            f"Unsupported MT-Bench prompt preset '{prompt_preset}'. Choose from: {supported}."
+        )
+    needs_ref = (category or "") in MT_BENCH_REFERENCE_CATEGORIES
     if needs_ref and multi_turn:
-        return _PAIR_MATH_V1_MULTI
+        return prompt_variants["multi_ref"]
     if needs_ref:
-        return _PAIR_MATH_V1
+        return prompt_variants["single_ref"]
     if multi_turn:
-        return _PAIR_V2_MULTI
-    return _PAIR_V2
+        return prompt_variants["multi"]
+    return prompt_variants["single"]
 
 
 def _group_indices_by_prompt(
@@ -267,6 +336,9 @@ def _infer_by_prompt_groups(
     items: list[dict[str, Any]],
     use_tqdm: bool,
     swap_answers: bool,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    usage_model_spec: str | None = None,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -290,6 +362,9 @@ def _infer_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=usage_model_spec,
         )
         for i, out in zip(idxs, outs, strict=True):
             judgments[i] = str(out)
@@ -304,8 +379,38 @@ def _build_fastchat_judge_items(
     eval_single: bool,
     eval_multi: bool,
     truncate_input_chars: int | None,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
+    limit_event_tracker: LimitEventTracker | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+
+    def _record_mt_bench_truncation(
+        *, case_id: str, field: str, truncated: bool
+    ) -> None:
+        if truncated and limit_event_tracker is not None:
+            limit_event_tracker.record(
+                "mt_bench_field_char_truncation",
+                stage="judge_input",
+                field=field,
+                case_id=case_id,
+            )
+
+    def _prepare_answer(answer: str, *, case_id: str, field: str) -> tuple[str, bool]:
+        if not strip_thinking_before_judging:
+            return answer, False
+        stripped_answer, stripped = strip_thinking_tags_with_metadata(answer)
+        if stripped and limit_event_tracker is not None:
+            limit_event_tracker.record(
+                "thinking_trace_stripped_before_judging",
+                stage="judge_input",
+                field=field,
+                case_id=case_id,
+                original_length=len(answer),
+                final_length=len(stripped_answer),
+            )
+        return stripped_answer, stripped
+
     for pair_row in iter_mt_bench_pairwise_rows(
         questions=questions,
         completions_a=completions_a,
@@ -314,14 +419,51 @@ def _build_fastchat_judge_items(
     ):
         category = pair_row.category
         if eval_single:
-            prompt = _select_prompt(category, multi_turn=False)
+            case_id = f"{pair_row.question_id}:turn1"
+            prompt = _select_prompt(
+                category, multi_turn=False, prompt_preset=prompt_preset
+            )
+            answer_a, answer_a_stripped = _prepare_answer(
+                pair_row.answer_a_1, case_id=case_id, field="answer_a_1"
+            )
+            answer_b, answer_b_stripped = _prepare_answer(
+                pair_row.answer_b_1, case_id=case_id, field="answer_b_1"
+            )
+            _record_mt_bench_truncation(
+                case_id=case_id,
+                field="turn_1_question",
+                truncated=pair_row.turn_1_question_truncated,
+            )
+            _record_mt_bench_truncation(
+                case_id=case_id,
+                field="answer_a_1",
+                truncated=pair_row.answer_a_1_truncated,
+            )
+            _record_mt_bench_truncation(
+                case_id=case_id,
+                field="answer_b_1",
+                truncated=pair_row.answer_b_1_truncated,
+            )
             kwargs: dict[str, str] = {
                 "question": pair_row.turn_1_question,
-                "answer_a": pair_row.answer_a_1,
-                "answer_b": pair_row.answer_b_1,
+                "answer_a": answer_a,
+                "answer_b": answer_b,
+            }
+            limit_flags = {
+                "turn_1_question_truncated": pair_row.turn_1_question_truncated,
+                "answer_a_1_truncated": pair_row.answer_a_1_truncated,
+                "answer_b_1_truncated": pair_row.answer_b_1_truncated,
+                "answer_a_1_reasoning_stripped": answer_a_stripped,
+                "answer_b_1_reasoning_stripped": answer_b_stripped,
             }
             if prompt.ref_based:
+                _record_mt_bench_truncation(
+                    case_id=case_id,
+                    field="ref_1",
+                    truncated=pair_row.ref_1_truncated,
+                )
                 kwargs["ref_answer_1"] = pair_row.ref_1
+                limit_flags["ref_1_truncated"] = pair_row.ref_1_truncated
             items.append(
                 {
                     "question_id": pair_row.question_id,
@@ -330,22 +472,73 @@ def _build_fastchat_judge_items(
                     "prompt": prompt,
                     "prompt_name": prompt.name,
                     "prompt_kwargs": kwargs,
+                    "limit_flags": limit_flags,
                 }
             )
 
         if eval_multi and pair_row.turn_2_question:
-            prompt = _select_prompt(category, multi_turn=True)
+            case_id = f"{pair_row.question_id}:turn2"
+            prompt = _select_prompt(
+                category, multi_turn=True, prompt_preset=prompt_preset
+            )
+            answer_a_1, answer_a_1_stripped = _prepare_answer(
+                pair_row.answer_a_1, case_id=case_id, field="answer_a_1"
+            )
+            answer_a_2, answer_a_2_stripped = _prepare_answer(
+                pair_row.answer_a_2, case_id=case_id, field="answer_a_2"
+            )
+            answer_b_1, answer_b_1_stripped = _prepare_answer(
+                pair_row.answer_b_1, case_id=case_id, field="answer_b_1"
+            )
+            answer_b_2, answer_b_2_stripped = _prepare_answer(
+                pair_row.answer_b_2, case_id=case_id, field="answer_b_2"
+            )
+            for field, truncated in (
+                ("turn_1_question", pair_row.turn_1_question_truncated),
+                ("turn_2_question", pair_row.turn_2_question_truncated),
+                ("answer_a_1", pair_row.answer_a_1_truncated),
+                ("answer_a_2", pair_row.answer_a_2_truncated),
+                ("answer_b_1", pair_row.answer_b_1_truncated),
+                ("answer_b_2", pair_row.answer_b_2_truncated),
+            ):
+                _record_mt_bench_truncation(
+                    case_id=case_id, field=field, truncated=truncated
+                )
             kwargs = {
                 "question_1": pair_row.turn_1_question,
                 "question_2": pair_row.turn_2_question,
-                "answer_a_1": pair_row.answer_a_1,
-                "answer_a_2": pair_row.answer_a_2,
-                "answer_b_1": pair_row.answer_b_1,
-                "answer_b_2": pair_row.answer_b_2,
+                "answer_a_1": answer_a_1,
+                "answer_a_2": answer_a_2,
+                "answer_b_1": answer_b_1,
+                "answer_b_2": answer_b_2,
+            }
+            limit_flags = {
+                "turn_1_question_truncated": pair_row.turn_1_question_truncated,
+                "turn_2_question_truncated": pair_row.turn_2_question_truncated,
+                "answer_a_1_truncated": pair_row.answer_a_1_truncated,
+                "answer_a_2_truncated": pair_row.answer_a_2_truncated,
+                "answer_b_1_truncated": pair_row.answer_b_1_truncated,
+                "answer_b_2_truncated": pair_row.answer_b_2_truncated,
+                "answer_a_1_reasoning_stripped": answer_a_1_stripped,
+                "answer_a_2_reasoning_stripped": answer_a_2_stripped,
+                "answer_b_1_reasoning_stripped": answer_b_1_stripped,
+                "answer_b_2_reasoning_stripped": answer_b_2_stripped,
             }
             if prompt.ref_based:
+                _record_mt_bench_truncation(
+                    case_id=case_id,
+                    field="ref_1",
+                    truncated=pair_row.ref_1_truncated,
+                )
+                _record_mt_bench_truncation(
+                    case_id=case_id,
+                    field="ref_2",
+                    truncated=pair_row.ref_2_truncated,
+                )
                 kwargs["ref_answer_1"] = pair_row.ref_1
                 kwargs["ref_answer_2"] = pair_row.ref_2
+                limit_flags["ref_1_truncated"] = pair_row.ref_1_truncated
+                limit_flags["ref_2_truncated"] = pair_row.ref_2_truncated
             items.append(
                 {
                     "question_id": pair_row.question_id,
@@ -354,6 +547,7 @@ def _build_fastchat_judge_items(
                     "prompt": prompt,
                     "prompt_name": prompt.name,
                     "prompt_kwargs": kwargs,
+                    "limit_flags": limit_flags,
                 }
             )
     return items
@@ -390,6 +584,7 @@ def _resolve_fastchat_item_result(
         "g1_verdict": g1_verdict,
         "g1_winner": g1_winner,
     }
+    annotation_row.update(item.get("limit_flags", {}))
 
     if g2_raw is not None:
         g2_verdict = _parse_fastchat_verdict(g2_raw)
@@ -434,8 +629,13 @@ def judge_mt_bench_pairwise_fastchat(
     swap_mode: str,
     truncate_input_chars: int | None,
     use_tqdm: bool,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
+    usage_tracker: OpenRouterReferencePricingTracker | None = None,
+    usage_phase: str | None = None,
+    limit_event_tracker: LimitEventTracker | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
-    """Pairwise MT-Bench judging compatible with FastChat's `[[A]]/[[B]]/[[C]]` format."""
+    """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
     assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
 
@@ -449,6 +649,9 @@ def judge_mt_bench_pairwise_fastchat(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
+        prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
+        limit_event_tracker=limit_event_tracker,
     )
 
     g1_judgments = _infer_by_prompt_groups(
@@ -456,6 +659,9 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        usage_tracker=usage_tracker,
+        usage_phase=usage_phase,
+        usage_model_spec=judge_model,
     )
 
     g2_judgments: list[str] | None = None
@@ -465,6 +671,9 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
+            usage_tracker=usage_tracker,
+            usage_phase=usage_phase,
+            usage_model_spec=judge_model,
         )
 
     annotations: list[dict[str, Any]] = []
