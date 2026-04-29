@@ -246,6 +246,7 @@ uv run python judgearena/estimate_elo_ratings.py \
 | `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
 | `--result_folder` | `results` | Directory where annotations and results are saved |
 | `--soft-elo` | off | Use continuous judge preferences (soft Bradley-Terry) instead of hard win/loss/tie labels |
+| `--soft-elo-temperature` | `0.3` | Initial softmax temperature for `--soft-elo`; overridden if `--calibrate-temperature` succeeds |
 | `--calibrate-temperature` | off | MLE-calibrate the score-to-preference temperature against human arena annotations (requires `--soft-elo`) |
 | `--calibration-size` | all | Number of human battles to sample for calibration (requires `--calibrate-temperature`) |
 

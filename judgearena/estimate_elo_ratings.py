@@ -32,6 +32,7 @@ class CliEloArgs(BaseCliArgs):
     seed: int = 0
     baseline_model: str | None = None
     soft_elo: bool = False
+    soft_elo_temperature: float = 0.3
     calibrate_temperature: bool = False
     calibration_size: int | None = None
 
@@ -93,6 +94,13 @@ class CliEloArgs(BaseCliArgs):
             "instead of discretising to hard win/loss/tie.",
         )
         parser.add_argument(
+            "--soft-elo-temperature",
+            type=float,
+            default=0.3,
+            help="Initial PairScore temperature used by --soft-elo (default: 0.3). "
+            "Overridden by --calibrate-temperature if calibration succeeds.",
+        )
+        parser.add_argument(
             "--calibrate-temperature",
             action="store_true",
             help="Calibrate the PairScore temperature T against available human-annotated "
@@ -117,6 +125,7 @@ class CliEloArgs(BaseCliArgs):
             seed=args.seed,
             baseline_model=args.baseline_model,
             soft_elo=args.soft_elo,
+            soft_elo_temperature=args.soft_elo_temperature,
             calibrate_temperature=args.calibrate_temperature,
             calibration_size=args.calibration_size,
             judge_model=args.judge_model,
@@ -647,12 +656,12 @@ def main(args: CliEloArgs | None = None) -> dict:
                 )
                 print(
                     f"  Calibration pairs: {len(delta_s_cal)}"
-                    f"  T* = {calibrated_temperature:.4f}  (default was 0.3)"
+                    f"  T* = {calibrated_temperature:.4f}  (default was {args.soft_elo_temperature})"
                 )
 
     # Build the score parser used for the main evaluation run.
     score_parser = PairScore(
-        temperature=calibrated_temperature if calibrated_temperature is not None else 0.3
+        temperature=calibrated_temperature if calibrated_temperature is not None else args.soft_elo_temperature
     )
 
     # If we calibrated the temperature, the prefs stored in df_judge were
