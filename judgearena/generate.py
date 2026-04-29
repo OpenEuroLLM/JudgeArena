@@ -193,7 +193,7 @@ def generate_multiturn(
     usage_tracker=None,
     usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
-    strip_thinking_in_turn_1_carryover: bool = True,
+    strip_thinking_before_turn_2_prompt: bool = False,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -324,7 +324,7 @@ def generate_multiturn(
             # destroy the </think> closer and force the whole thinking
             # fragment into the turn-2 prompt.
             t1_answer_str = str(t1_answer)
-            if strip_thinking_in_turn_1_carryover:
+            if strip_thinking_before_turn_2_prompt:
                 t1_answer_str, thinking_stripped = strip_thinking_tags_with_metadata(
                     t1_answer_str
                 )

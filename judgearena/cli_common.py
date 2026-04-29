@@ -27,7 +27,6 @@ class BaseCliArgs:
     judge_prompt_preset: str = "default"
     battle_thinking_token_budget: int | None = None
     strip_thinking_before_judging: bool = False
-    strip_thinking_in_turn_1_carryover: bool = True
     skip_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
@@ -48,26 +47,6 @@ class BaseCliArgs:
         assert self.swap_mode in supported_modes, (
             f"Only {supported_modes} modes are supported but got {self.swap_mode}."
         )
-
-    def effective_judge_truncation(self) -> int:
-        """Character cap applied to judge-side inputs (completions, reference, etc.).
-
-        Falls back to the generation-side ``truncate_all_input_chars`` when a
-        dedicated judge cap is not configured.
-        """
-        if self.truncate_judge_input_chars is not None:
-            return int(self.truncate_judge_input_chars)
-        return int(self.truncate_all_input_chars)
-
-    def effective_judge_max_model_len(self) -> int | None:
-        """Total context window for the judge vLLM instance.
-
-        Falls back to the generation-side ``max_model_len`` when a dedicated
-        judge context window is not configured.
-        """
-        if self.max_judge_model_len is not None:
-            return int(self.max_judge_model_len)
-        return self.max_model_len
 
 
 def parse_optional_bool(raw: str | None) -> bool:
@@ -165,22 +144,6 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--strip_thinking_in_turn_1_carryover",
-        nargs="?",
-        const=True,
-        default=True,
-        type=parse_optional_bool,
-        help=(
-            "When building the turn-2 prompt for multi-turn datasets, strip "
-            "<think>...</think> blocks (or vLLM forced thinking-budget closers) "
-            "from the turn-1 answer before the character-level truncation fires. "
-            "Matches what the Qwen3 chat template does internally for historical "
-            "assistant turns and prevents the turn-1 char cap from landing inside "
-            "a <think> block and silently destroying the </think> closer. Enabled "
-            "by default."
-        ),
-    )
-    parser.add_argument(
         "--skip_judging",
         nargs="?",
         const=True,
@@ -213,9 +176,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=8192,
         help=(
             "Character-level truncation applied to generation-side inputs: "
-            "truncates each instruction before model A/B generation. When "
-            "--truncate_judge_input_chars is not set, this value also caps the "
-            "judge-side inputs (completions, reference, etc.)."
+            "truncates each instruction before model A/B generation."
         ),
     )
     parser.add_argument(
@@ -225,10 +186,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Character cap applied to judge-side inputs (completions, "
-            "reference, instruction) before judge evaluation. Falls back to "
-            "--truncate_all_input_chars when not specified. Set much higher "
-            "than the generation cap to avoid cutting model completions before "
-            "they reach the judge."
+            "reference, instruction) before judge evaluation. When omitted, "
+            "judge inputs are not character-truncated by this CLI setting."
         ),
     )
     parser.add_argument(
@@ -260,8 +219,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "Optional total context window for the battle-generation VLLM "
             "instances (prompt + generation). Independent from "
             "--max_out_tokens_models/--max_out_tokens_judge, which only cap "
-            "generated tokens. When --max_judge_model_len is not set, this "
-            "value also sizes the judge instance."
+            "generated tokens."
         ),
     )
     parser.add_argument(
@@ -270,11 +228,11 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
         default=None,
         help=(
-            "Optional total context window for the judge VLLM instance. Falls "
-            "back to --max_model_len when not specified. Set higher than the "
-            "battle model_len when the judge needs to see longer prompts "
-            "(e.g. long completions from both A and B) than the battle "
-            "generator can fit."
+            "Optional total context window for the judge VLLM instance. When "
+            "omitted, no judge max_model_len override is passed. Set higher "
+            "than the battle model_len when the judge needs to see longer "
+            "prompts (e.g. long completions from both A and B) than the "
+            "battle generator can fit."
         ),
     )
     parser.add_argument(

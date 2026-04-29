@@ -20,8 +20,8 @@ def _mt_bench_args(
 ) -> BaseCliArgs:
     """Construct a ``BaseCliArgs`` with MT-Bench CLI-style extras attached.
 
-    Using the real dataclass here ensures tests exercise the production
-    ``effective_judge_*`` fallback helpers instead of a duplicate shim.
+    Using the real dataclass here keeps tests close to the production CLI
+    contract while attaching the task/model fields owned by ``CliArgs``.
     """
     args = BaseCliArgs(**base_overrides)
     args.task = dataset
@@ -137,6 +137,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     )
     generated_models = []
     generation_kwargs = []
+    generation_strip_flags = []
 
     monkeypatch.setattr(
         mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
@@ -155,11 +156,12 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         usage_tracker,
         usage_phase,
         limit_event_tracker,
-        strip_thinking_in_turn_1_carryover,
+        strip_thinking_before_turn_2_prompt,
         **engine_kwargs,
     ):
         generated_models.append(model)
         generation_kwargs.append(engine_kwargs)
+        generation_strip_flags.append(strip_thinking_before_turn_2_prompt)
         return pd.DataFrame(
             {
                 "instruction_index": [1, 2],
@@ -195,7 +197,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         max_model_len=16384,
         chat_template=None,
         battle_thinking_token_budget=None,
-        strip_thinking_in_turn_1_carryover=True,
+        strip_thinking_before_judging=True,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
@@ -211,6 +213,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert generation_kwargs == [
         {"gpu_memory_utilization": 0.7, "language_model_only": True}
     ]
+    assert generation_strip_flags == [True]
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
@@ -258,7 +261,7 @@ def test_conservative_winner_marks_one_sided_parse_failures_as_error():
     assert fastchat_compat._conservative_winner("model_A", "model_B") == ("tie", True)
 
 
-def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
+def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     questions_df = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
         index=pd.Index([1], name="instruction_index"),
@@ -338,16 +341,15 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
+    caplog.set_level("WARNING", logger=mt_bench_utils.__name__)
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
     assert args.swap_mode == "fixed"
-    assert args.max_out_tokens_judge == 24576
+    assert args.max_out_tokens_judge == 256
     assert args.max_model_len == 16384
-    assert args.max_judge_model_len == 28672
-    assert args.effective_judge_max_model_len() == 28672
-    assert args.effective_judge_truncation() == 8192
-    assert captured["make_model"]["max_tokens"] == 24576
-    assert captured["make_model"]["max_model_len"] == 28672
+    assert args.max_judge_model_len is None
+    assert captured["make_model"]["max_tokens"] == 256
+    assert captured["make_model"]["max_model_len"] is None
     assert captured["make_model"]["kwargs"] == {
         "gpu_memory_utilization": 0.7,
         "language_model_only": True,
@@ -362,6 +364,11 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch):
     assert (
         captured["run_mt_bench_fastchat"]["args"].strip_thinking_before_judging is False
     )
+    assert (
+        "MT-Bench judge prompts request an explanation before the final verdict"
+        in caplog.text
+    )
+    assert "max_out_tokens_judge=256" in caplog.text
 
 
 def test_select_prompt_supports_optional_skywork_mt_bench_preset():
@@ -444,7 +451,7 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
 
     assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
     assert captured["kwargs"]["args"].strip_thinking_before_judging is True
-    assert args.effective_judge_max_model_len() == 65536
-    assert args.effective_judge_truncation() == 80000
-    assert captured["kwargs"]["args"].effective_judge_truncation() == 80000
-    assert captured["kwargs"]["args"].effective_judge_max_model_len() == 65536
+    assert args.max_judge_model_len == 65536
+    assert args.truncate_judge_input_chars == 80000
+    assert captured["kwargs"]["args"].truncate_judge_input_chars == 80000
+    assert captured["kwargs"]["args"].max_judge_model_len == 65536

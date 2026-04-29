@@ -14,6 +14,8 @@ JUDGE_PROMPT_PRESETS = (
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_COMPLETION_LABEL_SINGLE = "Answer"
+_COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
 _EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
 _SCORE_FENCE = "\n```"
 
@@ -54,9 +56,13 @@ _PAIRWISE_PROMPT_PRESETS: dict[str, PairwiseJudgePromptPreset] = {
 
 
 def _render_user_prompt_template(
-    raw_template: str, *, provide_explanation: bool
+    raw_template: str, *, provide_explanation: bool, multi_turn: bool
 ) -> str:
     template = raw_template.replace(
+        "{completion_label}",
+        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
+    )
+    template = template.replace(
         "{explanation_suffix}",
         _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
     )
@@ -91,6 +97,7 @@ def resolve_pairwise_judge_prompt(
     default_user_prompt_template = _render_user_prompt_template(
         (_PROMPTS_DIR / prompt_filename).read_text(encoding="utf-8"),
         provide_explanation=provide_explanation,
+        multi_turn=multi_turn,
     )
     return ResolvedJudgePrompt(
         preset_name=preset.name,

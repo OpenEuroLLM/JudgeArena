@@ -174,7 +174,6 @@ class CliArgs(BaseCliArgs):
             judge_prompt_preset=args.judge_prompt_preset,
             battle_thinking_token_budget=args.battle_thinking_token_budget,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
-            strip_thinking_in_turn_1_carryover=args.strip_thinking_in_turn_1_carryover,
             skip_judging=args.skip_judging,
             truncate_all_input_chars=args.truncate_all_input_chars,
             truncate_judge_input_chars=args.truncate_judge_input_chars,
@@ -539,7 +538,7 @@ def main(args: CliArgs):
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
-        max_model_len=args.effective_judge_max_model_len(),
+        max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
         **_build_judge_model_kwargs(args=args, limit_event_tracker=limit_event_tracker),
     )
@@ -578,14 +577,14 @@ def main(args: CliArgs):
         strip_thinking_before_judging=args.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
-        truncate_input_chars=args.effective_judge_truncation(),
+        truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
         usage_tracker=usage_tracker,
         usage_phase="judge",
         usage_model_spec=args.judge_model,
         limit_event_tracker=limit_event_tracker,
         judge_tokenizer=judge_tokenizer,
-        max_judge_model_len=args.effective_judge_max_model_len(),
+        max_judge_model_len=args.max_judge_model_len,
         max_out_tokens_judge=args.max_out_tokens_judge,
     )
 

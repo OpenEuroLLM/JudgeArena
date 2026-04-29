@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from judgearena.cli_common import BaseCliArgs
 from judgearena.generate_and_evaluate import CliArgs
 from judgearena.mt_bench.mt_bench_utils import _mt_bench_generation_cache_name
 from judgearena.utils import (
@@ -127,8 +126,7 @@ def test_unclosed_think_block_is_unfixable_by_stripping():
 
 
 def test_strip_disabled_reverts_to_pre_fix_behaviour():
-    """With ``strip_thinking_in_turn_1_carryover=False`` (the pre-fix
-    behaviour, kept as a reproduction knob), the cap clips inside the
+    """When turn-1 carryover stripping is disabled, the cap clips inside the
     ``<think>`` block and the ``</think>`` closer is lost."""
     reasoning = "deep thinking " * 400
     visible = "Short answer."
@@ -144,18 +142,10 @@ def test_strip_disabled_reverts_to_pre_fix_behaviour():
     assert "</think>" not in truncated
 
 
-def test_default_flag_is_enabled_in_base_cli_args():
-    """Guard the default value: the fix ships enabled so existing runs
-    (including Phase A of the Gemma-4 benchmark) pick it up without a
-    launcher change."""
-    args = BaseCliArgs(judge_model="OpenRouter/google/gemma-4-31b-it")
-    assert args.strip_thinking_in_turn_1_carryover is True
-
-
 def _make_mt_bench_cli_args(**overrides) -> CliArgs:
     args = CliArgs(
         judge_model="OpenRouter/google/gemma-4-31b-it",
-        dataset="mt-bench",
+        task="mt-bench",
         model_A="VLLM/Qwen/Qwen3.5-9B",
         model_B="VLLM/Qwen/Qwen3.5-9B",
         n_instructions=3,
@@ -168,12 +158,10 @@ def _make_mt_bench_cli_args(**overrides) -> CliArgs:
 
 
 def test_mt_bench_cache_key_changes_when_flag_flipped():
-    """The flag participates in the MT-Bench generation cache key so that
-    flipping it off to reproduce pre-fix behaviour does not silently reuse
-    post-fix completions (and vice versa). Without this, a rerun with the
-    same numeric knobs would reuse stale cache for multi-turn datasets."""
-    args_on = _make_mt_bench_cli_args(strip_thinking_in_turn_1_carryover=True)
-    args_off = _make_mt_bench_cli_args(strip_thinking_in_turn_1_carryover=False)
+    """Judge-side thinking stripping now also controls MT-Bench turn-1
+    carryover stripping, so it must participate in the generation cache key."""
+    args_on = _make_mt_bench_cli_args(strip_thinking_before_judging=True)
+    args_off = _make_mt_bench_cli_args(strip_thinking_before_judging=False)
 
     key_on = _mt_bench_generation_cache_name(args_on, model_name="VLLM/Qwen/Qwen3.5-9B")
     key_off = _mt_bench_generation_cache_name(

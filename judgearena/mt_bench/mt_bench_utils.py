@@ -50,8 +50,7 @@ if TYPE_CHECKING:
     from judgearena.generate_and_evaluate import CliArgs
 
 
-# Original MT-Bench prompts include a visible explanation before the final verdict,
-# and Qwen can spend thousands of visible tokens after reasoning ends on turn 2.
+# Original MT-Bench prompts include a visible explanation before the final verdict.
 _MIN_MT_BENCH_JUDGE_TOKENS = 24576
 _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN = 28672
 
@@ -95,7 +94,7 @@ def _mt_bench_generation_cache_name(args: CliArgs, *, model_name: str) -> str:
         "max_model_len": args.max_model_len,
         "chat_template": args.chat_template,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
-        "strip_thinking_in_turn_1_carryover": args.strip_thinking_in_turn_1_carryover,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "engine_kwargs": _build_mt_bench_generation_kwargs(
             args=args, model_spec=model_name
         ),
@@ -143,9 +142,7 @@ def _generate_mt_bench_completions(
             usage_tracker=usage_tracker,
             usage_phase=usage_phase,
             limit_event_tracker=limit_event_tracker,
-            strip_thinking_in_turn_1_carryover=(
-                args.strip_thinking_in_turn_1_carryover
-            ),
+            strip_thinking_before_turn_2_prompt=args.strip_thinking_before_judging,
             **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
         )
 
@@ -251,7 +248,7 @@ def _run_mt_bench_fastchat(
             model_b=args.model_B,
             turns_mode="both",
             swap_mode=args.swap_mode,
-            truncate_input_chars=args.effective_judge_truncation(),
+            truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
             prompt_preset=prompt_preset,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
@@ -335,13 +332,13 @@ def run_mt_bench(
         res_folder = Path(args.result_folder) / result_name
         res_folder.mkdir(parents=True, exist_ok=True)
     if args.max_out_tokens_judge < _MIN_MT_BENCH_JUDGE_TOKENS:
-        logger.info(
-            "MT-Bench judge prompts require room for budgeted thinking, the "
-            "original explanation, and the final verdict; "
-            f"overriding max_out_tokens_judge from {args.max_out_tokens_judge} "
-            f"to {_MIN_MT_BENCH_JUDGE_TOKENS}."
+        logger.warning(
+            "MT-Bench judge prompts request an explanation before the final "
+            "verdict; max_out_tokens_judge=%s may be too small "
+            "(recommended >= %s).",
+            args.max_out_tokens_judge,
+            _MIN_MT_BENCH_JUDGE_TOKENS,
         )
-        args.max_out_tokens_judge = _MIN_MT_BENCH_JUDGE_TOKENS
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
@@ -379,24 +376,22 @@ def run_mt_bench(
             result_name,
         )
         return None
-    effective_judge_max_model_len = args.effective_judge_max_model_len()
     if (
-        effective_judge_max_model_len is not None
-        and effective_judge_max_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
+        args.max_judge_model_len is not None
+        and args.max_judge_model_len < _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     ):
-        logger.info(
-            "MT-Bench judge prompts require a larger total context window for "
-            "prompt plus completion; "
-            f"overriding judge max_model_len from {effective_judge_max_model_len} "
-            f"to {_MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN}."
+        logger.warning(
+            "MT-Bench judge prompts request an explanation before the final "
+            "verdict; max_judge_model_len=%s may be too small for prompt plus "
+            "completion (recommended >= %s).",
+            args.max_judge_model_len,
+            _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN,
         )
-        args.max_judge_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
-        effective_judge_max_model_len = _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         temperature=0.0,
-        max_model_len=effective_judge_max_model_len,
+        max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
         **_build_mt_bench_judge_model_kwargs(
             args=args, limit_event_tracker=limit_event_tracker

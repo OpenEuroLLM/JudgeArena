@@ -31,6 +31,17 @@ def test_load_judge_prompt_with_explanation_uses_freeform_scores():
     assert "Assistant B's Answer" in user_prompt
 
 
+def test_load_judge_prompt_multi_turn_uses_conversation_label():
+    _system_prompt, user_prompt = evaluate.load_judge_system_and_user_prompt(
+        provide_explanation=False,
+        multi_turn=True,
+    )
+
+    assert "Assistant A's Conversation with User" in user_prompt
+    assert "Assistant B's Conversation with User" in user_prompt
+    assert "Assistant A's Answer" not in user_prompt
+
+
 def test_parse_optional_bool_accepts_explicit_true_false_values():
     assert parse_optional_bool(None) is True
     assert parse_optional_bool("true") is True
@@ -99,7 +110,7 @@ def test_main_passes_qwen_defaults_and_aligns_dataset_completions(
 
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset="alpaca-eval",
+            task="alpaca-eval",
             model_A="Dummy/model-a",
             model_B="Dummy/model-b",
             judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
@@ -166,7 +177,7 @@ def test_main_does_not_pass_thinking_budget_to_non_reasoning_vllm_judge(
 
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset="alpaca-eval",
+            task="alpaca-eval",
             model_A="Dummy/model-a",
             model_B="Dummy/model-b",
             judge_model="VLLM/meta-llama/Llama-3.3-70B-Instruct",
@@ -220,7 +231,7 @@ def test_main_preserves_explicit_reasoning_engine_kwargs_for_non_qwen_vllm_judge
 
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset="alpaca-eval",
+            task="alpaca-eval",
             model_A="Dummy/model-a",
             model_B="Dummy/model-b",
             judge_model="VLLM/meta-llama/Llama-3.3-70B-Instruct",
@@ -238,7 +249,7 @@ def test_main_preserves_explicit_reasoning_engine_kwargs_for_non_qwen_vllm_judge
     assert captured["make_model"]["thinking_token_budget"] == 2048
 
 
-def test_annotate_battles_warns_when_judge_inputs_are_truncated(monkeypatch, capsys):
+def test_annotate_battles_warns_when_judge_inputs_are_truncated(monkeypatch, caplog):
     captured = {}
 
     def fake_do_inference(
@@ -254,6 +265,7 @@ def test_annotate_battles_warns_when_judge_inputs_are_truncated(monkeypatch, cap
         return ["score_A: 0\nscore_B: 10"]
 
     monkeypatch.setattr(evaluate, "do_inference", fake_do_inference)
+    caplog.set_level("WARNING", logger=evaluate.__name__)
 
     annotations = evaluate.annotate_battles(
         judge_chat_model=object(),
@@ -263,9 +275,9 @@ def test_annotate_battles_warns_when_judge_inputs_are_truncated(monkeypatch, cap
         truncate_input_chars=3,
     )
 
-    stdout = capsys.readouterr().out
     assert (
-        "Warning: truncated 2 judge inputs to 3 characters before evaluation." in stdout
+        "Warning: truncated 2 judge inputs to 3 characters before evaluation."
+        in caplog.text
     )
     assert "Ans" in captured["judge_prompt"]
     assert "Answer A" not in captured["judge_prompt"]
@@ -407,7 +419,7 @@ def test_main_passes_qwen_only_battle_budget_and_prompt_preset(tmp_path, monkeyp
 
     prefs = main_generate_and_eval(
         CliArgs(
-            dataset="alpaca-eval",
+            task="alpaca-eval",
             model_A="VLLM/Qwen/Qwen3.5-27B-FP8",
             model_B="VLLM/allenai/Olmo-3-7B-Instruct",
             judge_model="Dummy/judge",
@@ -434,7 +446,7 @@ def test_main_passes_qwen_only_battle_budget_and_prompt_preset(tmp_path, monkeyp
 
 def test_generation_cache_name_changes_with_generation_settings():
     args = CliArgs(
-        dataset="alpaca-eval",
+        task="alpaca-eval",
         model_A="Dummy/model-a",
         model_B="Dummy/model-b",
         judge_model="Dummy/judge",
@@ -443,7 +455,7 @@ def test_generation_cache_name_changes_with_generation_settings():
         battle_thinking_token_budget=256,
     )
     changed_args = CliArgs(
-        dataset="alpaca-eval",
+        task="alpaca-eval",
         model_A="Dummy/model-a",
         model_B="Dummy/model-b",
         judge_model="Dummy/judge",
