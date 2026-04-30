@@ -4,7 +4,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 
 from judgearena.dataset_revisions import hf_revision
-from judgearena.utils import data_root
+from judgearena.paths import data_root
 
 
 def load_m_arenahard(local_path, language: str | None = None):

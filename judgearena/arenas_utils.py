@@ -176,15 +176,12 @@ def _load_arena_dataframe(
     return df
 
 
-_DEFAULT_COMPARIA_REVISION = (
-    hf_revision("ministere-culture/comparia-votes")
-    or "7a40bce496c1f2aa3be4001da85a49cb4743042b"
-)
+_DEFAULT_COMPARIA_REVISION = hf_revision("ministere-culture/comparia-votes")
 
 
 def load_arena_dataframe(
     arena: str | None,
-    comparia_revision: str = _DEFAULT_COMPARIA_REVISION,
+    comparia_revision: str | None = _DEFAULT_COMPARIA_REVISION,
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 

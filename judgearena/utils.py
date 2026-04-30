@@ -15,49 +15,26 @@ from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.dataset_revisions import hf_revision
+from judgearena.instruction_dataset.arena_hard import (
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 from judgearena.log import get_logger
+
+# ``data_root``, ``download_hf`` and ``read_df`` live in the leaf
+# :mod:`judgearena.paths` module so that ``judgearena.instruction_dataset`` can
+# import them without going through ``judgearena.utils``.  We re-export them
+# here so existing callers that do ``from judgearena.utils import data_root``
+# (or ``download_hf`` / ``read_df``) keep working.
+from judgearena.paths import data_root, download_hf, read_df
 
 logger = get_logger(__name__)
 
-
-def _data_root_path() -> Path:
-    raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
-    if raw:
-        return Path(raw).expanduser()
-    return Path("~/judgearena-data/").expanduser()
-
-
-# Defined eagerly because the ``judgearena.instruction_dataset`` package
-# resolves ``judgearena.utils.data_root`` from inside its own __init__, so
-# ``data_root`` must be importable as soon as ``utils`` is partially loaded.
-data_root = _data_root_path()
+__all__ = ["data_root", "download_hf", "read_df"]
 
 
 def set_langchain_cache():
     set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
-
-
-def download_hf(name: str, local_path: Path):
-    local_path.mkdir(exist_ok=True, parents=True)
-    # downloads the model from huggingface into `local_path` folder
-    repo_id = "geoalgo/llmjudge"
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        allow_patterns=f"*{name}*",
-        local_dir=local_path,
-        force_download=False,
-        revision=hf_revision(repo_id),
-    )
-
-
-def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
-    assert filename.exists(), f"Dataframe file not found at {filename}"
-    if filename.name.endswith(".csv.zip") or filename.name.endswith(".csv"):
-        return pd.read_csv(filename, **pandas_kwargs)
-    else:
-        assert filename.name.endswith(".parquet"), f"Unsupported extension {filename}"
-        return pd.read_parquet(filename, **pandas_kwargs)
 
 
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
@@ -585,16 +562,6 @@ def cache_function_dataframe(
                 df.to_csv(cache_file, index=False)
                 return pd.read_csv(cache_file)
 
-
-# Imported at the bottom so that ``data_root``, ``download_hf`` and ``read_df``
-# - all touched by ``judgearena.instruction_dataset.__init__`` - are already
-# defined when the package import chain reaches back into this module.
-# Re-exported for backward compatibility (e.g. tests that monkeypatch
-# ``judgearena.utils.download_arena_hard``).
-from judgearena.instruction_dataset.arena_hard import (  # noqa: E402
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 
 if __name__ == "__main__":
     download_all()

@@ -6,7 +6,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 
 from judgearena.dataset_revisions import RAW_URL_REVISIONS, hf_revision
-from judgearena.utils import data_root
+from judgearena.paths import data_root
 
 
 def _fastchat_reference_url() -> str:
