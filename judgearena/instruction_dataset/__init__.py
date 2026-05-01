@@ -6,7 +6,7 @@ from judgearena.instruction_dataset.arena_hard import (
 )
 from judgearena.instruction_dataset.m_arenahard import load_m_arenahard
 from judgearena.log import get_logger
-from judgearena.utils import data_root, download_hf, read_df
+from judgearena.paths import data_root, download_hf, read_df
 
 logger = get_logger(__name__)
 

@@ -5,12 +5,21 @@ from urllib.request import urlretrieve
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.utils import data_root
+from judgearena.dataset_revisions import RAW_URL_REVISIONS, hf_revision
+from judgearena.paths import data_root
 
-FASTCHAT_GPT4_REFERENCE_URL = (
-    "https://raw.githubusercontent.com/lm-sys/FastChat/main/"
-    "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
-)
+
+def _fastchat_reference_url() -> str:
+    """URL for FastChat MT-Bench GPT-4 references, pinned when available."""
+    revision = RAW_URL_REVISIONS.get("lm-sys/FastChat")
+    rev = revision if revision else "main"
+    return (
+        f"https://raw.githubusercontent.com/lm-sys/FastChat/{rev}/"
+        "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
+    )
+
+
+FASTCHAT_GPT4_REFERENCE_URL = _fastchat_reference_url()
 
 
 def _download_gpt4_references(local_dir: Path) -> Path | None:
@@ -47,14 +56,16 @@ def download_mt_bench(local_dir: Path | None = None) -> tuple[Path, Path | None]
     question_path = local_dir / "data" / "mt_bench" / "question.jsonl"
     if not question_path.exists():
         try:
+            mt_bench_repo = "lmsys/mt-bench"
             snapshot_download(
-                repo_id="lmsys/mt-bench",
+                repo_id=mt_bench_repo,
                 repo_type="space",
                 allow_patterns=[
                     "data/mt_bench/question.jsonl",
                 ],
                 local_dir=local_dir,
                 force_download=False,
+                revision=hf_revision(mt_bench_repo),
             )
         except Exception as e:
             raise RuntimeError(

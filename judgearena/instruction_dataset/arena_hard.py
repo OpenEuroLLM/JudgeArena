@@ -4,6 +4,8 @@ from pathlib import Path
 import pandas as pd
 from datasets import Dataset, DatasetDict, IterableDataset, load_dataset
 
+from judgearena.dataset_revisions import hf_revision
+
 ARENA_HARD_HF_REPO_ID = "lmarena-ai/arena-hard-auto"
 
 
@@ -41,10 +43,14 @@ def arena_hard_baseline_model(dataset: str) -> str | None:
 
 
 def _load_official_arena_hard_dataset(spec: ArenaHardSpec) -> pd.DataFrame:
-    data = load_dataset(
-        path=ARENA_HARD_HF_REPO_ID,
-        data_dir=f"data/{spec.hf_variant}",
-    )
+    revision = hf_revision(ARENA_HARD_HF_REPO_ID)
+    load_kwargs: dict = {
+        "path": ARENA_HARD_HF_REPO_ID,
+        "data_dir": f"data/{spec.hf_variant}",
+    }
+    if revision:
+        load_kwargs["revision"] = revision
+    data = load_dataset(**load_kwargs)
     return _dataset_like_to_dataframe(data)
 
 

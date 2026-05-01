@@ -5,6 +5,7 @@ import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -30,11 +31,13 @@ def _load_arena_dataframe(
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
     if arena == "LMArena-55k":
+        repo_id = "lmarena-ai/arena-human-preference-55k"
         path = snapshot_download(
-            repo_id="lmarena-ai/arena-human-preference-55k",
+            repo_id=repo_id,
             repo_type="dataset",
             allow_patterns="*.csv",
             force_download=False,
+            revision=hf_revision(repo_id),
         )
         df = pd.read_csv(Path(path) / "train.csv")
 
@@ -70,11 +73,13 @@ def _load_arena_dataframe(
 
     elif "LMArena" in arena:
         size = arena.split("-")[1]  # "100k" or "140k"
+        repo_id = f"lmarena-ai/arena-human-preference-{size}"
         path = snapshot_download(
-            repo_id=f"lmarena-ai/arena-human-preference-{size}",
+            repo_id=repo_id,
             repo_type="dataset",
             allow_patterns="*parquet",
             force_download=False,
+            revision=hf_revision(repo_id),
         )
         parquet_files = sorted((Path(path) / "data").glob("*.parquet"))
         df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
@@ -171,9 +176,12 @@ def _load_arena_dataframe(
     return df
 
 
+_DEFAULT_COMPARIA_REVISION = hf_revision("ministere-culture/comparia-votes")
+
+
 def load_arena_dataframe(
     arena: str | None,
-    comparia_revision: str = "7a40bce496c1f2aa3be4001da85a49cb4743042b",
+    comparia_revision: str | None = _DEFAULT_COMPARIA_REVISION,
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 
