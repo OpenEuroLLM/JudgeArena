@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize_scalar
 from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
+from scipy.optimize import minimize_scalar
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -93,7 +93,9 @@ def calibrate_temperature(
     y = y[non_tie]
 
     if len(delta_s) == 0:
-        raise ValueError("No non-tie observations available for temperature calibration.")
+        raise ValueError(
+            "No non-tie observations available for temperature calibration."
+        )
 
     # z_i = (2y_i − 1) · Δs_i  (positive when the score difference agrees with the outcome)
     z = (2 * y - 1) * delta_s

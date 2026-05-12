@@ -133,9 +133,11 @@ def test_bradley_terry_baseline():
 
 def test_bradley_terry_soft_matches_hard():
     """Soft prefs ∈ {0, 0.5, 1} must give the same fit as hard winner labels."""
-    records = [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 7 + [
-        {"model_a": "A", "model_b": "B", "winner": "model_b"}
-    ] * 3 + [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 2
+    records = (
+        [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 7
+        + [{"model_a": "A", "model_b": "B", "winner": "model_b"}] * 3
+        + [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 2
+    )
     df = _records_with_pref(records)
     hard = fit_bradley_terry(df, pref_col="pref")
     # Passing the same column twice (continuous == quantised here) must match.

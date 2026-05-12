@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import judge_and_parse_prefs, calibrate_temperature, PairScore
+from judgearena.evaluate import PairScore, calibrate_temperature, judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
@@ -84,9 +84,7 @@ def fit_bradley_terry(
         return {}
 
     grouped = (
-        df.groupby(["model_a", "model_b", pref_col])
-        .size()
-        .reset_index(name="count")
+        df.groupby(["model_a", "model_b", pref_col]).size().reset_index(name="count")
     )
 
     all_models = sorted(set(grouped["model_a"]) | set(grouped["model_b"]))
@@ -500,7 +498,9 @@ def main(args: CliEloArgs) -> dict:
 
     # Build the score parser used for the main evaluation run.
     score_parser = PairScore(
-        temperature=calibrated_temperature if calibrated_temperature is not None else args.soft_elo_temperature
+        temperature=calibrated_temperature
+        if calibrated_temperature is not None
+        else args.soft_elo_temperature
     )
 
     # If we calibrated the temperature, the prefs stored in df_judge were
@@ -536,7 +536,9 @@ def main(args: CliEloArgs) -> dict:
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
     method_label = "Soft-ELO" if use_soft else "ELO"
-    print(f"\n=== {method_label} Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ===")
+    print(
+        f"\n=== {method_label} Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ==="
+    )
     print(
         f"Estimating {method_label} Ratings with {n_llm} LLM-judges for model {model_name} "
         f"and {n_human} human annotations for other models. Number of battles is indicated in parenthesis and "
@@ -579,9 +581,7 @@ def main(args: CliEloArgs) -> dict:
         if overlap:
             abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
             mae = np.mean(abs_errors)
-            print(
-                f"\n  MAE vs Human-ELO ({len(overlap)} arena models): {mae:.1f}"
-            )
+            print(f"\n  MAE vs Human-ELO ({len(overlap)} arena models): {mae:.1f}")
         else:
             mae = np.nan
             print("\n  No overlapping arena models to compute MAE.")
