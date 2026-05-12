@@ -266,9 +266,9 @@ JudgeArena will run the judge on a sample of human-annotated arena battles, fit 
 use it for the full evaluation:
 
 ```bash
-judgearena-elo \
-  --arena LMArena-100k \
-  --model Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+judgearena \
+  --task elo-lmarena-100k \
+  --model_A Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
   --n_instructions 200 \
   --soft-elo \

@@ -1,5 +1,4 @@
 import hashlib
-import argparse
 from dataclasses import dataclass
 from functools import partial
 
@@ -8,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
-from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
+from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, calibrate_temperature, PairScore
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
@@ -38,112 +37,6 @@ class CliEloArgs(BaseCliArgs):
     soft_elo_temperature: float = 0.3
     calibrate_temperature: bool = False
     calibration_size: int | None = None
-
-    @classmethod
-    def parse_args(cls):
-        parser = argparse.ArgumentParser(
-            prog="Estimate ELO rating for a model on an Arena (LMArena-100k, LMArena-140k, or ComparIA) with LLM judges",
-        )
-        parser.add_argument(
-            "--arena",
-            help="The arena to use. Battles are sampled from this Arena. If not passed use concatenation from all Arena. "
-            "Passing LMArena leads to loading the union of `LMArena-100k` and `LMArena-140k`",
-            choices=["LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"],
-            required=False,
-        )
-        parser.add_argument(
-            "--model",
-            required=True,
-            help="Name of the LLM to use for a generation, must be a valid choice for `generation_provider`",
-        )
-        parser.add_argument(
-            "--languages",
-            nargs="+",
-            default=None,
-            help='List of language codes to evaluate, e.g. "en fr de" (default: all languages)',
-        )
-        parser.add_argument(
-            "--n_instructions_per_language",
-            type=int,
-            required=False,
-            help="Maximum number of instructions to keep per language.",
-        )
-        parser.add_argument(
-            "--n_bootstraps",
-            type=int,
-            required=False,
-            default=20,
-            help="Number of bootstrap samples for ELO confidence intervals. Default is 20.",
-        )
-        parser.add_argument(
-            "--seed",
-            type=int,
-            required=False,
-            default=0,
-            help="Random seed for reproducibility. Default is 0.",
-        )
-        parser.add_argument(
-            "--baseline_model",
-            type=str,
-            required=False,
-            default=None,
-            help="Model name to anchor at 1000 ELO. All other ratings are expressed relative to this model. "
-            "Must be one of the models present in the arena battles. If not set, ratings are not anchored.",
-        )
-        parser.add_argument(
-            "--soft-elo",
-            action="store_true",
-            help="Use continuous judge preferences as soft labels for BT fitting "
-            "instead of discretising to hard win/loss/tie.",
-        )
-        parser.add_argument(
-            "--soft-elo-temperature",
-            type=float,
-            default=0.3,
-            help="Initial PairScore temperature used by --soft-elo (default: 0.3). "
-            "Overridden by --calibrate-temperature if calibration succeeds.",
-        )
-        parser.add_argument(
-            "--calibrate-temperature",
-            action="store_true",
-            help="Calibrate the PairScore temperature T against available human-annotated "
-            "arena battles before running soft-ELO.  Requires --soft-elo.",
-        )
-        parser.add_argument(
-            "--calibration-size",
-            type=int,
-            default=None,
-            help="Number of human arena battles to sample for temperature calibration. "
-            "Defaults to all available battles. Requires --calibrate-temperature.",
-        )
-        add_common_arguments(parser)
-        args = parser.parse_args()
-
-        return cls(
-            arena=args.arena,
-            model=args.model,
-            n_instructions_per_language=args.n_instructions_per_language,
-            languages=args.languages,
-            n_bootstraps=args.n_bootstraps,
-            seed=args.seed,
-            baseline_model=args.baseline_model,
-            soft_elo=args.soft_elo,
-            soft_elo_temperature=args.soft_elo_temperature,
-            calibrate_temperature=args.calibrate_temperature,
-            calibration_size=args.calibration_size,
-            judge_model=args.judge_model,
-            n_instructions=args.n_instructions,
-            provide_explanation=args.provide_explanation,
-            swap_mode=args.swap_mode,
-            ignore_cache=args.ignore_cache,
-            truncate_all_input_chars=args.truncate_all_input_chars,
-            max_out_tokens_models=args.max_out_tokens_models,
-            max_out_tokens_judge=args.max_out_tokens_judge,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            result_folder=args.result_folder,
-            engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
-        )
 
 
 def _winner_to_pref(winner: str) -> float | None:
@@ -279,10 +172,7 @@ def _prefs_to_battle_results(
     return pd.DataFrame(records)
 
 
-def main(args: CliEloArgs | None = None) -> dict:
-    if args is None:
-        args = CliEloArgs.parse_args()
-
+def main(args: CliEloArgs) -> dict:
     rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
