@@ -45,8 +45,8 @@ for example in dataset["train"]:
 
 Evaluate and compare two models using the JudgeArena framework:
 ```bash
-python judgearena/generate_and_evaluate.py \
-  --dataset arena-hard-EU \
+judgearena \
+  --task arena-hard-EU \
   --model_A gpt4_1106_preview \
   --model_B VLLM/utter-project/EuroLLM-9B \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \

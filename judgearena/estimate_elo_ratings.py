@@ -1,4 +1,3 @@
-import argparse
 import hashlib
 from dataclasses import dataclass
 from functools import partial
@@ -11,7 +10,10 @@ from judgearena.arenas_utils import _extract_instruction_text, load_arena_datafr
 from judgearena.cli_common import BaseCliArgs, add_common_arguments, parse_engine_kwargs
 from judgearena.evaluate import judge_and_parse_prefs, calibrate_temperature, PairScore
 from judgearena.generate import generate_instructions
+from judgearena.log import get_logger
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -343,7 +345,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
-    print(f"\n=== Step 1: Loading battles from {args.arena} ===")
+    logger.info("Step 1: Loading battles from %s", args.arena)
     df_arena_all = load_arena_dataframe(arena=args.arena)
 
     # Filter by language if specified
@@ -365,7 +367,7 @@ def main(args: CliEloArgs | None = None) -> dict:
 
     df_battles = df_battles.reset_index(drop=True)
     n = len(df_battles)
-    print(f"Loaded {n} battles.")
+    logger.info("Loaded %d battles.", n)
 
     # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
@@ -375,10 +377,10 @@ def main(args: CliEloArgs | None = None) -> dict:
         ],
         name="instruction",
     )
-    print(f"\nFirst instruction:\n{instructions.iloc[0][:300]}\n")
+    logger.debug("First instruction:\n%s", instructions.iloc[0][:300])
 
     # Step 2: Generate completions for the model under evaluation
-    print(f"=== Step 2: Generating completions with {args.model} ===")
+    logger.info("Step 2: Generating completions with %s", args.model)
 
     # Only pass extra engine kwargs that are not None
     extra_kwargs = dict(args.engine_kwargs)
@@ -412,8 +414,11 @@ def main(args: CliEloArgs | None = None) -> dict:
     )
     if len(cache_suffix) > 100:
         cache_hash = hashlib.sha256(cache_suffix.encode()).hexdigest()[:16]
-        print(
-            f"Cache suffix too long ({len(cache_suffix)} chars), using hash: {cache_hash} (full: {cache_suffix})"
+        logger.debug(
+            "Cache suffix too long (%d chars), using hash: %s (full: %s)",
+            len(cache_suffix),
+            cache_hash,
+            cache_suffix,
         )
         cache_suffix = cache_hash
     completions_df = cache_function_dataframe(
@@ -423,10 +428,10 @@ def main(args: CliEloArgs | None = None) -> dict:
     ).set_index("instruction_index")
     completions = completions_df.loc[:, "completion"]
 
-    print(f"First completion:\n{completions.iloc[0]}\n")
+    logger.debug("First completion:\n%s", completions.iloc[0])
 
     # Step 3: Judge evaluation against randomly picked arena opponents
-    print(f"=== Step 3: Judge evaluation with {args.judge_model} ===")
+    logger.info("Step 3: Judge evaluation with %s", args.judge_model)
 
     # For each battle, randomly pick opponent: model_a or model_b from the arena
     use_model_a_as_opponent = rng.choice([True, False], size=n)
@@ -505,7 +510,7 @@ def main(args: CliEloArgs | None = None) -> dict:
     opponent_models = df_judge["opponent_model"].tolist()
     prefs = df_judge["pref"].tolist()
 
-    print(f"First judge output:\n{df_judge['judge_completion'].iloc[0][:500]}\n")
+    logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results.
     # Build both hard labels (winner) and continuous prefs for each battle.
@@ -784,11 +789,3 @@ def main(args: CliEloArgs | None = None) -> dict:
         "method": method_label,
         "calibrated_temperature": calibrated_temperature,
     }
-
-
-def cli():
-    main()
-
-
-if __name__ == "__main__":
-    cli()

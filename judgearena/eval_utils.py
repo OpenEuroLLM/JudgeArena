@@ -7,14 +7,17 @@ from dataclasses import dataclass
 import pandas as pd
 
 from judgearena.evaluate import PairScore, annotate_battles
+from judgearena.log import get_logger
 from judgearena.utils import compute_pref_summary
+
+logger = get_logger(__name__)
 
 
 def print_results(results):
     """Print battle results in a readable format."""
     print("\n" + "=" * 60)
     print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Dataset: {results['dataset']}")
+    print(f"📊 Task: {results['task']}")
     print(
         f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
     )
@@ -124,8 +127,10 @@ def _make_judge_annotation(
     combined_metadata = list(metadata)
 
     if swap_mode == "both":
-        print("Correction for judge bias towards a certain model position is set.")
-        print("Evaluating completions with models reversed.")
+        logger.info(
+            "Correction for judge bias towards a certain model position is set."
+        )
+        logger.info("Evaluating completions with models reversed.")
         annotations_reversed = annotate_battles(
             judge_chat_model=judge_chat_model,
             instructions=instructions,
