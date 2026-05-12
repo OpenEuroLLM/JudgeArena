@@ -257,6 +257,7 @@ judgearena \
 | `--calibration-size` | all | Number of human battles to sample for calibration (requires `--calibrate-temperature`) |
 | `--conformal-alpha` | off | Target miscoverage for the conformal Elo interval (e.g. `0.1` for 90% coverage). Requires `--calibrate-temperature`. |
 | `--conformal-min-battles-per-anchor` | `20` | Minimum judge-scored calibration battles an anchor must appear in to contribute a residual. |
+| `--conformal-bootstrap` | `20` | Bootstrap resamples per anchor for the SE used in normalized scoring. `0` falls back to absolute residuals (uniform half-width). |
 
 ### Soft-ELO & temperature calibration
 
@@ -299,21 +300,33 @@ When `--conformal-alpha` is set together with `--calibrate-temperature`, JudgeAr
 the judge-scored human battles produced for temperature calibration as a leave-one-anchor-out
 calibration set. For each anchor model with at least `--conformal-min-battles-per-anchor`
 judge-scored battles and a human Elo reference, it refits Bradley–Terry on the human pool
-excluding that anchor plus the anchor's judge-scored battles, and records the residual
-$r_k = \mathrm{human\_elo}(m_k) - \mathrm{judge\_elo}(m_k)$. The conformal quantile
-$\hat q_\alpha$ of $\{|r_k|\}$ then gives a distribution-free marginal-coverage interval
-$\mathrm{judge\_elo}(\text{model\_A}) \pm \hat q_\alpha$ for the model under evaluation:
+excluding that anchor plus the anchor's judge-scored battles, records the residual
+$r_k = \mathrm{human\_elo}(m_k) - \mathrm{judge\_elo}(m_k)$, and bootstraps the per-anchor
+judge_elo to get a standard error $\hat\sigma_k$.
+
+Two scoring modes are available:
+
+- **Normalized** (default, `--conformal-bootstrap > 0`): the conformal score is
+  $|r_k| / \hat\sigma_k$, and the interval for the new model uses its own bootstrap SE:
+  $\mathrm{judge\_elo}(\text{model\_A}) \pm \hat q_\alpha \cdot \hat\sigma(\text{model\_A})$.
+  Models with less judge data get proportionally wider intervals — the form used in the
+  paper's `_prepare_conformal_scores` and what we recommend.
+- **Absolute** (`--conformal-bootstrap 0`): the conformal score is $|r_k|$ itself and the
+  half-width is a uniform $\hat q_\alpha$. Cheaper, but throws away the per-model
+  uncertainty signal.
+
+Sample output (normalized mode):
 
 ```
-=== Conformal Interval (α=0.10, K=24 anchors) ===
-  q̂ = 28.4 Elo
-  meta-llama/Llama-3.3-70B-Instruct-Turbo: 1089.7 ∈ [1061.3, 1118.1]
+=== Conformal Interval (α=0.10, mode=normalized, K=24 anchors) ===
+  q̂ = 2.143  SE(meta-llama/Llama-3.3-70B-Instruct-Turbo) = 8.2 Elo  → half-width = 17.6 Elo
+  meta-llama/Llama-3.3-70B-Instruct-Turbo: 1089.7 ∈ [1072.1, 1107.3]
 ```
 
 The interval is only as reliable as the calibration set is large. As a rule of thumb,
 non-trivial $\alpha = 0.1$ coverage needs at least $K \geq 19$ surviving anchors; smaller
-$K$ saturates the quantile at the worst observed residual. Raise `--calibration-size` (and
-correspondingly `--conformal-min-battles-per-anchor`) for tighter intervals.
+$K$ saturates the quantile at the worst observed residual. Raise `--calibration-size`
+(and correspondingly `--conformal-min-battles-per-anchor`) for tighter intervals.
 
 ### Offline Setup (Slurm/Air-Gapped Environments)
 

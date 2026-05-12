@@ -154,6 +154,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="[elo] Minimum judge-scored calibration battles an anchor must "
         "appear in to contribute a residual. Default 20.",
     )
+    parser.add_argument(
+        "--conformal-bootstrap",
+        type=int,
+        default=20,
+        help="[elo] Bootstrap resamples per anchor for the SE used in "
+        "normalized-residual conformal scoring. Set to 0 to use absolute "
+        "residuals (uniform half-width q̂). Default 20.",
+    )
     add_common_arguments(parser)
     return parser
 
@@ -238,6 +246,7 @@ def _build_elo_args(
         calibration_size=args.calibration_size,
         conformal_alpha=args.conformal_alpha,
         conformal_min_battles_per_anchor=args.conformal_min_battles_per_anchor,
+        conformal_bootstrap=args.conformal_bootstrap,
         judge_model=args.judge_model,
         n_instructions=args.n_instructions,
         provide_explanation=args.provide_explanation,

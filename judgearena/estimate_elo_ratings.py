@@ -39,6 +39,7 @@ class CliEloArgs(BaseCliArgs):
     calibration_size: int | None = None
     conformal_alpha: float | None = None
     conformal_min_battles_per_anchor: int = 20
+    conformal_bootstrap: int = 20
 
 
 def _winner_to_pref(winner: str) -> float | None:
@@ -173,6 +174,10 @@ def _prefs_to_battle_results(
     return pd.DataFrame(records)
 
 
+def _split_conformal_level(k: int, alpha: float) -> float:
+    return min(np.ceil((k + 1) * (1 - alpha)) / k, 1.0)
+
+
 def _compute_conformal_qhat(
     cal_annotations: list,
     cal_battles: pd.DataFrame,
@@ -181,6 +186,8 @@ def _compute_conformal_qhat(
     human_elo: dict[str, float],
     alpha: float,
     min_battles_per_anchor: int,
+    n_bootstrap: int = 0,
+    seed: int = 0,
     baseline_model: str | None = None,
 ) -> dict:
     """Conformal quantile from leave-one-anchor-out residuals.
@@ -191,7 +198,14 @@ def _compute_conformal_qhat(
     those rows, then for each surviving anchor refits BT on the human pool
     excluding that anchor plus the anchor's judge-scored battles. The
     residuals (human_elo − judge_elo) feed the standard split-conformal
-    quantile  q̂_α = ⌈(K+1)(1−α)⌉ / K -th order statistic of |residual|.
+    quantile  q̂_α = ⌈(K+1)(1−α)⌉ / K -th order statistic.
+
+    When ``n_bootstrap > 0`` each anchor's judge_elo is also bootstrapped
+    on the same combined frame to estimate its standard error; the
+    normalized score |residual| / SE is the conformal score and the
+    resulting ``qhat_norm`` is meant to be applied as
+    ``judge_elo(model_A) ± qhat_norm · SE(model_A)``. ``n_bootstrap == 0``
+    skips this and falls back to the absolute quantile.
     """
     rows = []
     for ann, (_, battle) in zip(cal_annotations, cal_battles.iterrows(), strict=True):
@@ -207,8 +221,18 @@ def _compute_conformal_qhat(
             }
         )
     cal_df = pd.DataFrame(rows).dropna(subset=["human_pref"])
+    empty_result = {
+        "qhat": None,
+        "qhat_abs": None,
+        "qhat_norm": None,
+        "n_anchors": 0,
+        "residuals": {},
+        "anchor_se": {},
+        "mode": "absolute",
+        "eligible_anchors": [],
+    }
     if cal_df.empty:
-        return {"qhat": None, "n_anchors": 0, "residuals": {}, "eligible_anchors": []}
+        return empty_result
 
     appearances = pd.concat([cal_df["model_a"], cal_df["model_b"]]).value_counts()
     eligible_anchors = [
@@ -223,17 +247,15 @@ def _compute_conformal_qhat(
             len(eligible_anchors),
             min_battles_per_anchor,
         )
-        return {
-            "qhat": None,
-            "n_anchors": len(eligible_anchors),
-            "residuals": {},
-            "eligible_anchors": eligible_anchors,
-        }
+        return {**empty_result, "n_anchors": len(eligible_anchors),
+                "eligible_anchors": eligible_anchors}
 
     human_pool = df_arena[["model_a", "model_b", "pref_hard"]].rename(
         columns={"pref_hard": "pref"}
     )
+    rng = np.random.default_rng(seed)
     residuals: dict[str, float] = {}
+    anchor_se: dict[str, float] = {}
     for anchor in eligible_anchors:
         anchor_human = human_pool[
             (human_pool["model_a"] != anchor) & (human_pool["model_b"] != anchor)
@@ -245,25 +267,61 @@ def _compute_conformal_qhat(
         ratings = fit_bradley_terry(
             combined, pref_col="pref", baseline_model=baseline_model
         )
-        if anchor in ratings:
-            residuals[anchor] = float(human_elo[anchor] - ratings[anchor])
+        if anchor not in ratings:
+            continue
+        residuals[anchor] = float(human_elo[anchor] - ratings[anchor])
+
+        if n_bootstrap > 0:
+            boot_elos: list[float] = []
+            for _ in range(n_bootstrap):
+                sample = combined.sample(
+                    n=len(combined),
+                    replace=True,
+                    random_state=int(rng.integers(0, 2**31)),
+                )
+                rb = fit_bradley_terry(
+                    sample, pref_col="pref", baseline_model=baseline_model
+                )
+                if anchor in rb:
+                    boot_elos.append(float(rb[anchor]))
+            if len(boot_elos) >= 5:
+                anchor_se[anchor] = float(np.std(boot_elos, ddof=1))
 
     K = len(residuals)
     if K < 8:
-        return {
-            "qhat": None,
-            "n_anchors": K,
-            "residuals": residuals,
-            "eligible_anchors": eligible_anchors,
-        }
+        return {**empty_result, "n_anchors": K, "residuals": residuals,
+                "anchor_se": anchor_se, "eligible_anchors": eligible_anchors}
 
     abs_res = np.abs(list(residuals.values()))
-    level = min(np.ceil((K + 1) * (1 - alpha)) / K, 1.0)
-    qhat = float(np.quantile(abs_res, level, method="higher"))
+    qhat_abs = float(np.quantile(abs_res, _split_conformal_level(K, alpha), method="higher"))
+
+    qhat_norm: float | None = None
+    if n_bootstrap > 0:
+        valid = {
+            m: anchor_se[m]
+            for m in residuals
+            if anchor_se.get(m) is not None
+            and np.isfinite(anchor_se[m])
+            and anchor_se[m] > 0
+        }
+        if len(valid) >= 8:
+            norm_scores = np.array(
+                [abs(residuals[m]) / valid[m] for m in valid], dtype=float
+            )
+            K_norm = len(valid)
+            qhat_norm = float(
+                np.quantile(norm_scores, _split_conformal_level(K_norm, alpha), method="higher")
+            )
+
+    mode = "normalized" if qhat_norm is not None else "absolute"
     return {
-        "qhat": qhat,
+        "qhat": qhat_norm if mode == "normalized" else qhat_abs,
+        "qhat_abs": qhat_abs,
+        "qhat_norm": qhat_norm,
         "n_anchors": K,
         "residuals": residuals,
+        "anchor_se": anchor_se,
+        "mode": mode,
         "eligible_anchors": eligible_anchors,
     }
 
@@ -711,20 +769,50 @@ def main(args: CliEloArgs) -> dict:
                 human_elo=human_elo,
                 alpha=args.conformal_alpha,
                 min_battles_per_anchor=args.conformal_min_battles_per_anchor,
+                n_bootstrap=args.conformal_bootstrap,
+                seed=args.seed,
                 baseline_model=args.baseline_model,
             )
-            qhat = conformal_result["qhat"]
-            if qhat is not None and model_name in mean_ratings:
+            mode = conformal_result["mode"]
+            qhat_for_interval = conformal_result["qhat"]
+            if qhat_for_interval is not None and model_name in mean_ratings:
                 point = mean_ratings[model_name]
-                lo, hi = point - qhat, point + qhat
+                if mode == "normalized":
+                    boot_vals = [
+                        r[model_name] for r in bootstrap_ratings if model_name in r
+                    ]
+                    model_se = (
+                        float(np.std(boot_vals, ddof=1)) if len(boot_vals) >= 5 else 0.0
+                    )
+                    if not np.isfinite(model_se) or model_se <= 0:
+                        # Fall back to absolute if model_A's SE is unusable.
+                        mode = "absolute"
+                        qhat_for_interval = conformal_result["qhat_abs"]
+                        half_width = qhat_for_interval
+                        model_se = 0.0
+                    else:
+                        half_width = qhat_for_interval * model_se
+                else:
+                    half_width = qhat_for_interval
+                    model_se = 0.0
+                lo, hi = point - half_width, point + half_width
+                conformal_result["mode_applied"] = mode
+                conformal_result["model_se"] = float(model_se)
                 conformal_result["point_estimate"] = float(point)
                 conformal_result["interval_lo"] = float(lo)
                 conformal_result["interval_hi"] = float(hi)
                 print(
                     f"\n=== Conformal Interval (α={args.conformal_alpha:.2f}, "
-                    f"K={conformal_result['n_anchors']} anchors) ==="
+                    f"mode={mode}, K={conformal_result['n_anchors']} anchors) ==="
                 )
-                print(f"  q̂ = {qhat:.1f} Elo")
+                if mode == "normalized":
+                    print(
+                        f"  q̂ = {qhat_for_interval:.3f}  "
+                        f"SE({model_name}) = {model_se:.1f} Elo  "
+                        f"→ half-width = {half_width:.1f} Elo"
+                    )
+                else:
+                    print(f"  q̂ = {qhat_for_interval:.1f} Elo")
                 print(f"  {model_name}: {point:.1f} ∈ [{lo:.1f}, {hi:.1f}]")
 
     return {
