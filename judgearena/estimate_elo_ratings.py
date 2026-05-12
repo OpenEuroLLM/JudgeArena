@@ -1,4 +1,5 @@
 import hashlib
+import argparse
 from dataclasses import dataclass
 from functools import partial
 
@@ -145,188 +146,6 @@ class CliEloArgs(BaseCliArgs):
         )
 
 
-def compute_bradley_terry(
-    df: pd.DataFrame,
-    winner_col: str,
-    scale: float = 400,
-    base: float = 10,
-    init_rating: float = 1000,
-    baseline_model: str | None = None,
-    baseline_rating: float = 1000,
-) -> dict[str, float]:
-    """
-    Compute Bradley-Terry ratings using MLE (logistic regression).
-
-    This method fits a Bradley-Terry model to pairwise comparison data using
-    maximum likelihood estimation via logistic regression.
-
-    Args:
-        df: DataFrame with columns 'model_a', 'model_b', and the winner column
-        winner_col: Name of the column containing the winner
-        scale: Scale factor for ELO conversion (default 400)
-        base: Base for logarithm in ELO formula (default 10)
-        init_rating: Initial rating offset (default 1000)
-        baseline_model: Model to anchor at baseline_rating
-        baseline_rating: Rating to assign to the baseline model
-
-    Returns:
-        Dictionary mapping model names to their Bradley-Terry ratings
-    """
-    # Get all unique models
-    all_models = sorted(set(df["model_a"].unique()) | set(df["model_b"].unique()))
-
-    # Create pivot tables for wins
-    ptbl_a_win = pd.pivot_table(
-        df[df[winner_col] == "model_a"],
-        index="model_a",
-        columns="model_b",
-        aggfunc="size",
-        fill_value=0,
-    )
-
-    ptbl_b_win = pd.pivot_table(
-        df[df[winner_col] == "model_b"],
-        index="model_a",
-        columns="model_b",
-        aggfunc="size",
-        fill_value=0,
-    )
-
-    # Handle ties
-    if sum(df[winner_col].isin(["tie", "tie (bothbad)"])) == 0:
-        ptbl_tie = pd.DataFrame(0, index=all_models, columns=all_models)
-    else:
-        ptbl_tie = pd.pivot_table(
-            df[df[winner_col].isin(["tie", "tie (bothbad)"])],
-            index="model_a",
-            columns="model_b",
-            aggfunc="size",
-            fill_value=0,
-        )
-        ptbl_tie = ptbl_tie.reindex(index=all_models, columns=all_models, fill_value=0)
-        ptbl_tie = ptbl_tie + ptbl_tie.T
-
-    # Reindex all pivot tables to have consistent dimensions
-    ptbl_a_win = ptbl_a_win.reindex(index=all_models, columns=all_models, fill_value=0)
-    ptbl_b_win = ptbl_b_win.reindex(index=all_models, columns=all_models, fill_value=0)
-
-    # Combined win matrix (ties count as 0.5 for each)
-    ptbl_win = ptbl_a_win * 2 + ptbl_b_win.T * 2 + ptbl_tie
-
-    models = pd.Series(np.arange(len(ptbl_win.index)), index=ptbl_win.index)
-
-    p = len(models)
-    X = np.zeros([p * (p - 1) * 2, p])
-    Y = np.zeros(p * (p - 1) * 2)
-
-    cur_row = 0
-    sample_weights = []
-    for m_a in ptbl_win.index:
-        for m_b in ptbl_win.columns:
-            if m_a == m_b:
-                continue
-            # Skip if nan or no battles between this pair
-            w_ab = ptbl_win.loc[m_a, m_b]
-            w_ba = ptbl_win.loc[m_b, m_a]
-            if np.isnan(w_ab) or np.isnan(w_ba):
-                continue
-            if w_ab == 0 and w_ba == 0:
-                continue
-            X[cur_row, models[m_a]] = +np.log(base)
-            X[cur_row, models[m_b]] = -np.log(base)
-            Y[cur_row] = 1.0
-            sample_weights.append(w_ab)
-
-            X[cur_row + 1, models[m_a]] = np.log(base)
-            X[cur_row + 1, models[m_b]] = -np.log(base)
-            Y[cur_row + 1] = 0.0
-            sample_weights.append(w_ba)
-            cur_row += 2
-
-    X = X[:cur_row]
-    Y = Y[:cur_row]
-
-    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
-    lr.fit(X, Y, sample_weight=sample_weights)
-    elo_scores = scale * lr.coef_[0] + init_rating
-
-    # Normalize to baseline model if specified
-    if baseline_model is not None and baseline_model in models.index:
-        elo_scores += baseline_rating - elo_scores[models[baseline_model]]
-
-    return dict(pd.Series(elo_scores, index=models.index))
-
-
-def compute_soft_bradley_terry(
-    df: pd.DataFrame,
-    pref_col: str = "pref",
-    scale: float = 400,
-    base: float = 10,
-    init_rating: float = 1000,
-    baseline_model: str | None = None,
-    baseline_rating: float = 1000,
-) -> dict[str, float]:
-    """Compute Bradley-Terry ratings from continuous (soft) preferences.
-
-    Each row in *df* is a single battle with columns ``model_a``, ``model_b``,
-    and *pref_col* ∈ [0, 1] where 0 → A wins, 1 → B wins, 0.5 → tie.
-
-    The soft cross-entropy for a single battle is decomposed into two
-    weighted hard-label rows so that sklearn ``LogisticRegression`` can be
-    reused:
-
-        row 1: Y=1, weight = 1 - pref   (evidence for A winning)
-        row 2: Y=0, weight = pref        (evidence for B winning)
-    """
-    df = df.dropna(subset=[pref_col]).copy()
-    if df.empty:
-        return {}
-
-    all_models = sorted(set(df["model_a"].unique()) | set(df["model_b"].unique()))
-    models = pd.Series(np.arange(len(all_models)), index=all_models)
-    p = len(models)
-
-    n_battles = len(df)
-    X = np.zeros([2 * n_battles, p])
-    Y = np.zeros(2 * n_battles)
-    sample_weights = np.zeros(2 * n_battles)
-
-    for idx, (_, row) in enumerate(df.iterrows()):
-        m_a = row["model_a"]
-        m_b = row["model_b"]
-        pref = row[pref_col]
-
-        # Row for "A wins" evidence
-        X[2 * idx, models[m_a]] = +np.log(base)
-        X[2 * idx, models[m_b]] = -np.log(base)
-        Y[2 * idx] = 1.0
-        sample_weights[2 * idx] = 1.0 - pref
-
-        # Row for "B wins" evidence
-        X[2 * idx + 1, models[m_a]] = +np.log(base)
-        X[2 * idx + 1, models[m_b]] = -np.log(base)
-        Y[2 * idx + 1] = 0.0
-        sample_weights[2 * idx + 1] = pref
-
-    # Drop rows with zero weight (pure wins have one side = 0)
-    nonzero = sample_weights > 0
-    X = X[nonzero]
-    Y = Y[nonzero]
-    sample_weights = sample_weights[nonzero]
-
-    if len(X) == 0:
-        return {}
-
-    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
-    lr.fit(X, Y, sample_weight=sample_weights)
-    elo_scores = scale * lr.coef_[0] + init_rating
-
-    if baseline_model is not None and baseline_model in models.index:
-        elo_scores += baseline_rating - elo_scores[models[baseline_model]]
-
-    return dict(pd.Series(elo_scores, index=models.index))
-
-
 def _winner_to_pref(winner: str) -> float | None:
     """Convert a hard winner label to a continuous preference value."""
     if winner == "model_a":
@@ -336,6 +155,128 @@ def _winner_to_pref(winner: str) -> float | None:
     elif winner in ("tie", "tie (bothbad)"):
         return 0.5
     return None
+
+
+def _is_nan_pref(p) -> bool:
+    return p is None or (isinstance(p, float) and np.isnan(p))
+
+
+def fit_bradley_terry(
+    df: pd.DataFrame,
+    pref_col: str = "pref",
+    scale: float = 400,
+    base: float = 10,
+    init_rating: float = 1000,
+    baseline_model: str | None = None,
+    baseline_rating: float = 1000,
+) -> dict[str, float]:
+    """Fit Bradley-Terry ratings via weighted logistic regression.
+
+    Each row in *df* is a battle with columns ``model_a``, ``model_b`` and
+    ``pref_col`` ∈ [0, 1] where 0 means A wins, 1 means B wins, 0.5 is a tie.
+    Hard win/loss/tie labels are the special case ``pref ∈ {0, 0.5, 1}``.
+
+    The soft cross-entropy for a battle is decomposed into two weighted
+    hard-label rows so sklearn's ``LogisticRegression`` can be reused:
+
+        Y=1, weight = (1 − pref) · count   (evidence A wins)
+        Y=0, weight =  pref      · count   (evidence B wins)
+
+    Identical ``(model_a, model_b, pref)`` triples are aggregated first so
+    the design matrix stays small when prefs are quantised (e.g. human
+    arena labels) and untouched when prefs are continuous floats.
+    """
+    df = df.dropna(subset=[pref_col])
+    if df.empty:
+        return {}
+
+    grouped = (
+        df.groupby(["model_a", "model_b", pref_col])
+        .size()
+        .reset_index(name="count")
+    )
+
+    all_models = sorted(set(grouped["model_a"]) | set(grouped["model_b"]))
+    models = pd.Series(np.arange(len(all_models)), index=all_models)
+    p = len(models)
+
+    m_a_idx = grouped["model_a"].map(models).to_numpy()
+    m_b_idx = grouped["model_b"].map(models).to_numpy()
+    prefs = grouped[pref_col].to_numpy(dtype=float)
+    counts = grouped["count"].to_numpy(dtype=float)
+    n = len(grouped)
+
+    log_base = np.log(base)
+    X = np.zeros((2 * n, p))
+    top = np.arange(n)
+    bot = n + top
+    X[top, m_a_idx] = +log_base
+    X[top, m_b_idx] = -log_base
+    X[bot, m_a_idx] = +log_base
+    X[bot, m_b_idx] = -log_base
+
+    Y = np.concatenate([np.ones(n), np.zeros(n)])
+    sample_weights = np.concatenate([(1.0 - prefs) * counts, prefs * counts])
+
+    nonzero = sample_weights > 0
+    if not nonzero.any():
+        return {}
+    X = X[nonzero]
+    Y = Y[nonzero]
+    sample_weights = sample_weights[nonzero]
+
+    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
+    lr.fit(X, Y, sample_weight=sample_weights)
+    elo_scores = scale * lr.coef_[0] + init_rating
+
+    if baseline_model is not None and baseline_model in models.index:
+        elo_scores += baseline_rating - elo_scores[models[baseline_model]]
+
+    return dict(pd.Series(elo_scores, index=models.index))
+
+
+def _prefs_to_battle_results(
+    prefs,
+    our_model_is_position_a,
+    opponent_models,
+    model_name: str,
+) -> pd.DataFrame:
+    """Map per-battle judge prefs into model-name-level battle rows.
+
+    The judge prompt placed our model at position A or B independently per
+    battle.  Here we re-orient each row so ``model_a``/``model_b`` carry
+    the actual model names and ``pref`` is consistent with that ordering
+    (``pref=0`` ⇒ ``model_a`` wins).  ``pref_hard`` is the quantised
+    {0, 0.5, 1} version used by the non-soft Bradley-Terry fit.
+    """
+    records = []
+    for pref, is_pos_a, opp in zip(
+        prefs, our_model_is_position_a, opponent_models, strict=True
+    ):
+        if _is_nan_pref(pref) or pref == 0.5:
+            winner = "tie"
+        elif pref < 0.5:
+            winner = "model_a"
+        else:
+            winner = "model_b"
+
+        if is_pos_a:
+            rec = {
+                "model_a": model_name,
+                "model_b": opp,
+                "winner": winner,
+                "pref": pref,
+            }
+        else:
+            rec = {
+                "model_a": opp,
+                "model_b": model_name,
+                "winner": winner,
+                "pref": None if _is_nan_pref(pref) else 1.0 - pref,
+            }
+        rec["pref_hard"] = _winner_to_pref(winner)
+        records.append(rec)
+    return pd.DataFrame(records)
 
 
 def main(args: CliEloArgs | None = None) -> dict:
@@ -513,33 +454,10 @@ def main(args: CliEloArgs | None = None) -> dict:
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results.
-    # Build both hard labels (winner) and continuous prefs for each battle.
     model_name = args.model
-    battle_results = []
-    for pref, is_pos_a, opp_model in zip(
-        prefs, our_model_is_position_a, opponent_models, strict=True
-    ):
-        if pref is None or pref == 0.5:
-            winner = "tie"
-        elif pref < 0.5:
-            winner = "model_a"
-        else:
-            winner = "model_b"
-
-        # Continuous pref is relative to judge positions (A/B).
-        # Remap so that model_a column in the DataFrame always corresponds
-        # to pref=0 and model_b to pref=1.
-        if is_pos_a:
-            battle_results.append(
-                {"model_a": model_name, "model_b": opp_model, "winner": winner, "pref": pref}
-            )
-        else:
-            battle_results.append(
-                {"model_a": opp_model, "model_b": model_name, "winner": winner, "pref": 1.0 - pref if pref is not None else None}
-            )
-
-    # LLM-judge battle results for our model
-    df_llm_judge = pd.DataFrame(battle_results)
+    df_llm_judge = _prefs_to_battle_results(
+        prefs, our_model_is_position_a, opponent_models, model_name
+    )
 
     # Normalize prefs so pref < 0.5 always means our model wins, then summarise
     prefs_normalized = pd.Series(
@@ -569,14 +487,16 @@ def main(args: CliEloArgs | None = None) -> dict:
         df_arena["model_a"].isin(well_represented)
         & df_arena["model_b"].isin(well_represented)
     ]
-    # Add pref column to arena battles (hard labels → 0.0 / 1.0 / 0.5)
+    # Add pref column to arena battles (hard labels → 0.0 / 1.0 / 0.5).
+    # Human labels are already hard, so pref_hard == pref.
     df_arena["pref"] = df_arena["winner"].map(_winner_to_pref)
+    df_arena["pref_hard"] = df_arena["pref"]
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Compute human-only BT ratings as ground-truth reference
-    human_elo = compute_bradley_terry(
-        df_arena, winner_col="winner", baseline_model=args.baseline_model
+    human_elo = fit_bradley_terry(
+        df_arena, pref_col="pref_hard", baseline_model=args.baseline_model
     )
 
     # --- Temperature calibration (optional) ---
@@ -585,11 +505,11 @@ def main(args: CliEloArgs | None = None) -> dict:
     calibrated_temperature: float | None = None
     if args.calibrate_temperature:
         if not args.soft_elo:
-            print(
-                "Warning: --calibrate-temperature has no effect without --soft-elo; skipping."
+            logger.warning(
+                "--calibrate-temperature has no effect without --soft-elo; skipping."
             )
         else:
-            print("\n=== Calibrating PairScore temperature against human annotations ===")
+            logger.info("Calibrating PairScore temperature against human annotations.")
             # Sample calibration battles from the already-loaded arena battles.
             # Use the same judge to score them so scores and labels are comparable.
             _cal_n = (
@@ -597,9 +517,12 @@ def main(args: CliEloArgs | None = None) -> dict:
                 if args.calibration_size is not None
                 else len(df_arena)
             )
+            # Keep the original df_arena_all index so we can look up the full
+            # conversation rows below; reset_index would point at non-existent
+            # 0..N labels in df_arena_all.
             cal_battles = df_arena.sample(
                 n=_cal_n, random_state=int(rng.integers(0, 2**31))
-            ).reset_index(drop=True)
+            )
 
             cal_instructions = [
                 _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][0])
@@ -651,17 +574,19 @@ def main(args: CliEloArgs | None = None) -> dict:
                 y_cal.append(1.0 - human_pref)  # pref=0 → A wins → y=1
 
             if len(delta_s_cal) < 10:
-                print(
-                    f"  Only {len(delta_s_cal)} valid calibration pairs (need ≥10); "
-                    "keeping default temperature."
+                logger.warning(
+                    "Only %d valid calibration pairs (need ≥10); keeping default temperature.",
+                    len(delta_s_cal),
                 )
             else:
                 calibrated_temperature = calibrate_temperature(
                     np.array(delta_s_cal), np.array(y_cal)
                 )
-                print(
-                    f"  Calibration pairs: {len(delta_s_cal)}"
-                    f"  T* = {calibrated_temperature:.4f}  (default was {args.soft_elo_temperature})"
+                logger.info(
+                    "Calibration pairs: %d  T* = %.4f  (default was %s)",
+                    len(delta_s_cal),
+                    calibrated_temperature,
+                    args.soft_elo_temperature,
                 )
 
     # Build the score parser used for the main evaluation run.
@@ -691,30 +616,9 @@ def main(args: CliEloArgs | None = None) -> dict:
             prefs = pd.concat([prefs_ab, 1 - prefs_ba]).reset_index(drop=True).tolist()
 
         # Rebuild battle_results with calibrated prefs
-        battle_results = []
-        for pref, is_pos_a, opp_model in zip(
-            prefs, our_model_is_position_a, opponent_models, strict=True
-        ):
-            if pref is None or (isinstance(pref, float) and np.isnan(pref)) or pref == 0.5:
-                winner = "tie"
-            elif pref < 0.5:
-                winner = "model_a"
-            else:
-                winner = "model_b"
-            if is_pos_a:
-                battle_results.append(
-                    {"model_a": model_name, "model_b": opp_model, "winner": winner, "pref": pref}
-                )
-            else:
-                battle_results.append(
-                    {
-                        "model_a": opp_model,
-                        "model_b": model_name,
-                        "winner": winner,
-                        "pref": 1.0 - pref if (pref is not None and not (isinstance(pref, float) and np.isnan(pref))) else None,
-                    }
-                )
-        df_llm_judge = pd.DataFrame(battle_results)
+        df_llm_judge = _prefs_to_battle_results(
+            prefs, our_model_is_position_a, opponent_models, model_name
+        )
         df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     n_bootstraps = args.n_bootstraps
@@ -736,19 +640,15 @@ def main(args: CliEloArgs | None = None) -> dict:
         battle_counts[row["model_a"]] = battle_counts.get(row["model_a"], 0) + 1
         battle_counts[row["model_b"]] = battle_counts.get(row["model_b"], 0) + 1
 
+    pref_col = "pref" if use_soft else "pref_hard"
     bootstrap_ratings: list[dict[str, float]] = []
     for _ in range(n_bootstraps):
         df_sample = df_results.sample(
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
-        if use_soft:
-            ratings = compute_soft_bradley_terry(
-                df_sample, pref_col="pref", baseline_model=args.baseline_model
-            )
-        else:
-            ratings = compute_bradley_terry(
-                df_sample, winner_col="winner", baseline_model=args.baseline_model
-            )
+        ratings = fit_bradley_terry(
+            df_sample, pref_col=pref_col, baseline_model=args.baseline_model
+        )
         bootstrap_ratings.append(ratings)
 
     if bootstrap_ratings:
