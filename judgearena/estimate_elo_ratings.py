@@ -111,12 +111,11 @@ def fit_bradley_terry(
     Y = np.concatenate([np.ones(n), np.zeros(n)])
     sample_weights = np.concatenate([(1.0 - prefs) * counts, prefs * counts])
 
-    nonzero = sample_weights > 0
-    if not nonzero.any():
+    # Keep zero-weight rows so sklearn LR always sees both Y classes — when
+    # every pref collapses to 0 or 1 the missing-class rows contribute nothing
+    # to the loss but stop the solver from raising on n_classes < 2.
+    if sample_weights.sum() == 0:
         return {}
-    X = X[nonzero]
-    Y = Y[nonzero]
-    sample_weights = sample_weights[nonzero]
 
     lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
     lr.fit(X, Y, sample_weight=sample_weights)
@@ -305,7 +304,7 @@ def main(args: CliEloArgs) -> dict:
             max_tokens=args.max_out_tokens_judge,
             **judge_extra_kwargs,
         )
-        annotations, _, prefs = judge_and_parse_prefs(
+        annotations, annotations_reversed, prefs = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
             instructions=instructions.tolist(),
             completions_A=completions_A,
@@ -315,16 +314,33 @@ def main(args: CliEloArgs) -> dict:
             truncate_input_chars=args.truncate_all_input_chars,
             use_tqdm=use_tqdm,
         )
+        if annotations_reversed is None:
+            row_annotations = list(annotations)
+            row_use_model_a = use_model_a_as_opponent
+            row_our_pos_a = our_model_is_position_a
+            row_opponents = list(opponent_models)
+        else:
+            # swap_mode="both": dataframe carries 2n rows (AB then BA).
+            # Position metadata is duplicated; prefs are already oriented
+            # consistently by judge_and_parse_prefs as [pref_AB, 1 - pref_BA].
+            row_annotations = list(annotations) + list(annotations_reversed)
+            row_use_model_a = np.concatenate(
+                [use_model_a_as_opponent, use_model_a_as_opponent]
+            )
+            row_our_pos_a = np.concatenate(
+                [our_model_is_position_a, our_model_is_position_a]
+            )
+            row_opponents = list(opponent_models) + list(opponent_models)
         return pd.DataFrame(
             {
-                "judge_completion": [a.judge_completion for a in annotations],
-                "instruction": [a.instruction for a in annotations],
-                "completion_A": [a.completion_A for a in annotations],
-                "completion_B": [a.completion_B for a in annotations],
+                "judge_completion": [a.judge_completion for a in row_annotations],
+                "instruction": [a.instruction for a in row_annotations],
+                "completion_A": [a.completion_A for a in row_annotations],
+                "completion_B": [a.completion_B for a in row_annotations],
                 "pref": prefs,
-                "use_model_a_as_opponent": use_model_a_as_opponent,
-                "our_model_is_position_a": our_model_is_position_a,
-                "opponent_model": opponent_models,
+                "use_model_a_as_opponent": row_use_model_a,
+                "our_model_is_position_a": row_our_pos_a,
+                "opponent_model": row_opponents,
             }
         )
 
@@ -363,7 +379,10 @@ def main(args: CliEloArgs) -> dict:
     winrate = summary["winrate"]
 
     print(f"\n=== Results for {model_name} ===")
-    print(f"Battles: {n} | Wins: {our_wins} | Losses: {our_losses} | Ties: {our_ties}")
+    print(
+        f"Battles: {len(df_llm_judge)} | Wins: {our_wins} | "
+        f"Losses: {our_losses} | Ties: {our_ties}"
+    )
     print(f"Win rate: {winrate:.2%}")
 
     # Combine LLM-judge battles with human-annotated arena battles,
