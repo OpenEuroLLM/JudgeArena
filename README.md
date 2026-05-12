@@ -255,6 +255,8 @@ judgearena \
 | `--soft-elo-temperature` | `0.3` | Initial softmax temperature for `--soft-elo`; overridden if `--calibrate-temperature` succeeds |
 | `--calibrate-temperature` | off | MLE-calibrate the score-to-preference temperature against human arena annotations (requires `--soft-elo`) |
 | `--calibration-size` | all | Number of human battles to sample for calibration (requires `--calibrate-temperature`) |
+| `--conformal-alpha` | off | Target miscoverage for the conformal Elo interval (e.g. `0.1` for 90% coverage). Requires `--calibrate-temperature`. |
+| `--conformal-min-battles-per-anchor` | `20` | Minimum judge-scored calibration battles an anchor must appear in to contribute a residual. |
 
 ### Soft-ELO & temperature calibration
 
@@ -290,6 +292,28 @@ Win rate: 60.25%
   meta-llama/Llama-3.3-70B-Instruct-Turbo  (200) <-----: 1089.7 ± 8.2
   ...
 ```
+
+### Conformal Elo intervals
+
+When `--conformal-alpha` is set together with `--calibrate-temperature`, JudgeArena reuses
+the judge-scored human battles produced for temperature calibration as a leave-one-anchor-out
+calibration set. For each anchor model with at least `--conformal-min-battles-per-anchor`
+judge-scored battles and a human Elo reference, it refits Bradley–Terry on the human pool
+excluding that anchor plus the anchor's judge-scored battles, and records the residual
+$r_k = \mathrm{human\_elo}(m_k) - \mathrm{judge\_elo}(m_k)$. The conformal quantile
+$\hat q_\alpha$ of $\{|r_k|\}$ then gives a distribution-free marginal-coverage interval
+$\mathrm{judge\_elo}(\text{model\_A}) \pm \hat q_\alpha$ for the model under evaluation:
+
+```
+=== Conformal Interval (α=0.10, K=24 anchors) ===
+  q̂ = 28.4 Elo
+  meta-llama/Llama-3.3-70B-Instruct-Turbo: 1089.7 ∈ [1061.3, 1118.1]
+```
+
+The interval is only as reliable as the calibration set is large. As a rule of thumb,
+non-trivial $\alpha = 0.1$ coverage needs at least $K \geq 19$ surviving anchors; smaller
+$K$ saturates the quantile at the worst observed residual. Raise `--calibration-size` (and
+correspondingly `--conformal-min-battles-per-anchor`) for tighter intervals.
 
 ### Offline Setup (Slurm/Air-Gapped Environments)
 

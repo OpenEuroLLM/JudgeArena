@@ -7,11 +7,12 @@ import pytest
 import judgearena.estimate_elo_ratings as estimate_elo_ratings
 from judgearena.estimate_elo_ratings import (
     CliEloArgs,
+    _compute_conformal_qhat,
     _winner_to_pref,
     fit_bradley_terry,
     main,
 )
-from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
+from judgearena.evaluate import JudgeAnnotation, PairScore, judge_and_parse_prefs
 from judgearena.utils import make_model
 
 N_BATTLES = 30
@@ -241,6 +242,80 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch):
     monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
     main(_default_args(swap_mode="both"))
     assert captured.get("swap_mode") == "both"
+
+
+def test_conformal_qhat_skips_when_too_few_anchors():
+    """Fewer than 8 surviving anchors → qhat is None and a warning is logged."""
+    cal_battles = pd.DataFrame(
+        [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 5
+    )
+    cal_annotations = [
+        JudgeAnnotation("", "", "", "score A: 5\nscore B: 1") for _ in range(5)
+    ]
+    df_arena = pd.DataFrame(
+        [
+            {"model_a": "A", "model_b": "B", "winner": "model_a", "pref_hard": 0.0},
+            {"model_a": "B", "model_b": "A", "winner": "model_b", "pref_hard": 1.0},
+        ]
+    )
+    result = _compute_conformal_qhat(
+        cal_annotations=cal_annotations,
+        cal_battles=cal_battles,
+        df_arena=df_arena,
+        score_parser=PairScore(temperature=0.5),
+        human_elo={"A": 1100.0, "B": 1000.0},
+        alpha=0.1,
+        min_battles_per_anchor=20,
+    )
+    assert result["qhat"] is None
+    assert result["n_anchors"] < 8
+
+
+def test_conformal_qhat_is_max_residual_when_quantile_saturates():
+    """With K anchors and (K+1)(1−α) > K, qhat must equal max |residual|."""
+    K = 10
+    rng = np.random.default_rng(0)
+    models = [f"M{i}" for i in range(K)]
+    human_elo = {m: 1000 + i * 40 for i, m in enumerate(models)}
+
+    arena_rows = []
+    for _ in range(600):
+        ma, mb = rng.choice(models, 2, replace=False)
+        gap = (human_elo[ma] - human_elo[mb]) / 400
+        winner = "model_a" if rng.random() < 1 / (1 + 10 ** (-gap)) else "model_b"
+        arena_rows.append(
+            {
+                "model_a": ma,
+                "model_b": mb,
+                "winner": winner,
+                "pref_hard": 0.0 if winner == "model_a" else 1.0,
+            }
+        )
+    df_arena = pd.DataFrame(arena_rows)
+
+    cal_rows, anns = [], []
+    for _ in range(400):
+        ma, mb = rng.choice(models, 2, replace=False)
+        gap = (human_elo[ma] - human_elo[mb]) / 400
+        winner = "model_a" if rng.random() < 1 / (1 + 10 ** (-gap)) else "model_b"
+        sa, sb = int(5 + 3 * gap), int(5 - 3 * gap)
+        cal_rows.append({"model_a": ma, "model_b": mb, "winner": winner})
+        anns.append(JudgeAnnotation("", "", "", f"score A: {sa}\nscore B: {sb}"))
+
+    result = _compute_conformal_qhat(
+        cal_annotations=anns,
+        cal_battles=pd.DataFrame(cal_rows),
+        df_arena=df_arena,
+        score_parser=PairScore(temperature=0.5),
+        human_elo=human_elo,
+        alpha=0.1,
+        min_battles_per_anchor=20,
+    )
+    assert result["qhat"] is not None
+    assert result["n_anchors"] >= 8
+    # For α=0.1 and K=10: level = ⌈11·0.9⌉/10 = 10/10 = 1 → qhat = max|r|
+    abs_res = np.abs(list(result["residuals"].values()))
+    assert result["qhat"] == pytest.approx(float(abs_res.max()))
 
 
 def test_judge_and_parse_prefs_none_prefs_swap_mode_both():

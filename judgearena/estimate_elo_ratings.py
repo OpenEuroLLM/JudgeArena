@@ -37,6 +37,8 @@ class CliEloArgs(BaseCliArgs):
     soft_elo_temperature: float = 0.3
     calibrate_temperature: bool = False
     calibration_size: int | None = None
+    conformal_alpha: float | None = None
+    conformal_min_battles_per_anchor: int = 20
 
 
 def _winner_to_pref(winner: str) -> float | None:
@@ -169,6 +171,101 @@ def _prefs_to_battle_results(
         rec["pref_hard"] = _winner_to_pref(winner)
         records.append(rec)
     return pd.DataFrame(records)
+
+
+def _compute_conformal_qhat(
+    cal_annotations: list,
+    cal_battles: pd.DataFrame,
+    df_arena: pd.DataFrame,
+    score_parser: "PairScore",
+    human_elo: dict[str, float],
+    alpha: float,
+    min_battles_per_anchor: int,
+    baseline_model: str | None = None,
+) -> dict:
+    """Conformal quantile from leave-one-anchor-out residuals.
+
+    Re-parses the judge annotations already collected for temperature
+    calibration to build (model_a, model_b, human_pref, judge_pref) rows,
+    keeps anchors that appear in at least ``min_battles_per_anchor`` of
+    those rows, then for each surviving anchor refits BT on the human pool
+    excluding that anchor plus the anchor's judge-scored battles. The
+    residuals (human_elo − judge_elo) feed the standard split-conformal
+    quantile  q̂_α = ⌈(K+1)(1−α)⌉ / K -th order statistic of |residual|.
+    """
+    rows = []
+    for ann, (_, battle) in zip(cal_annotations, cal_battles.iterrows(), strict=True):
+        pref_j = score_parser.parse_model_raw(ann.judge_completion)
+        if pref_j is None:
+            continue
+        rows.append(
+            {
+                "model_a": battle["model_a"],
+                "model_b": battle["model_b"],
+                "human_pref": _winner_to_pref(battle["winner"]),
+                "judge_pref": float(pref_j),
+            }
+        )
+    cal_df = pd.DataFrame(rows).dropna(subset=["human_pref"])
+    if cal_df.empty:
+        return {"qhat": None, "n_anchors": 0, "residuals": {}, "eligible_anchors": []}
+
+    appearances = pd.concat([cal_df["model_a"], cal_df["model_b"]]).value_counts()
+    eligible_anchors = [
+        m
+        for m, c in appearances.items()
+        if c >= min_battles_per_anchor and m in human_elo
+    ]
+    if len(eligible_anchors) < 8:
+        logger.warning(
+            "Conformal: only %d anchors with >=%d judge-scored calibration battles "
+            "and a human Elo reference (need >=8); skipping interval.",
+            len(eligible_anchors),
+            min_battles_per_anchor,
+        )
+        return {
+            "qhat": None,
+            "n_anchors": len(eligible_anchors),
+            "residuals": {},
+            "eligible_anchors": eligible_anchors,
+        }
+
+    human_pool = df_arena[["model_a", "model_b", "pref_hard"]].rename(
+        columns={"pref_hard": "pref"}
+    )
+    residuals: dict[str, float] = {}
+    for anchor in eligible_anchors:
+        anchor_human = human_pool[
+            (human_pool["model_a"] != anchor) & (human_pool["model_b"] != anchor)
+        ]
+        anchor_judge = cal_df[
+            (cal_df["model_a"] == anchor) | (cal_df["model_b"] == anchor)
+        ][["model_a", "model_b", "judge_pref"]].rename(columns={"judge_pref": "pref"})
+        combined = pd.concat([anchor_human, anchor_judge], ignore_index=True)
+        ratings = fit_bradley_terry(
+            combined, pref_col="pref", baseline_model=baseline_model
+        )
+        if anchor in ratings:
+            residuals[anchor] = float(human_elo[anchor] - ratings[anchor])
+
+    K = len(residuals)
+    if K < 8:
+        return {
+            "qhat": None,
+            "n_anchors": K,
+            "residuals": residuals,
+            "eligible_anchors": eligible_anchors,
+        }
+
+    abs_res = np.abs(list(residuals.values()))
+    level = min(np.ceil((K + 1) * (1 - alpha)) / K, 1.0)
+    qhat = float(np.quantile(abs_res, level, method="higher"))
+    return {
+        "qhat": qhat,
+        "n_anchors": K,
+        "residuals": residuals,
+        "eligible_anchors": eligible_anchors,
+    }
 
 
 def main(args: CliEloArgs) -> dict:
@@ -412,6 +509,8 @@ def main(args: CliEloArgs) -> dict:
     # Run the judge on a random subset of human arena battles that already
     # have ground-truth winner labels so we can fit T* via MLE.
     calibrated_temperature: float | None = None
+    cal_annotations: list | None = None
+    cal_battles: pd.DataFrame | None = None
     if args.calibrate_temperature:
         if not args.soft_elo:
             logger.warning(
@@ -588,6 +687,45 @@ def main(args: CliEloArgs) -> dict:
     else:
         print("  Not enough data to compute ELO ratings.")
         mae = np.nan
+        mean_ratings = {}
+
+    # Conformal interval (optional)
+    conformal_result: dict | None = None
+    if args.conformal_alpha is not None:
+        if not (0.0 < args.conformal_alpha < 1.0):
+            logger.warning(
+                "--conformal-alpha=%s outside (0, 1); skipping interval.",
+                args.conformal_alpha,
+            )
+        elif cal_annotations is None or cal_battles is None:
+            logger.warning(
+                "--conformal-alpha requires --calibrate-temperature to produce "
+                "judge-scored human battles; skipping interval."
+            )
+        else:
+            conformal_result = _compute_conformal_qhat(
+                cal_annotations=cal_annotations,
+                cal_battles=cal_battles,
+                df_arena=df_arena,
+                score_parser=score_parser,
+                human_elo=human_elo,
+                alpha=args.conformal_alpha,
+                min_battles_per_anchor=args.conformal_min_battles_per_anchor,
+                baseline_model=args.baseline_model,
+            )
+            qhat = conformal_result["qhat"]
+            if qhat is not None and model_name in mean_ratings:
+                point = mean_ratings[model_name]
+                lo, hi = point - qhat, point + qhat
+                conformal_result["point_estimate"] = float(point)
+                conformal_result["interval_lo"] = float(lo)
+                conformal_result["interval_hi"] = float(hi)
+                print(
+                    f"\n=== Conformal Interval (α={args.conformal_alpha:.2f}, "
+                    f"K={conformal_result['n_anchors']} anchors) ==="
+                )
+                print(f"  q̂ = {qhat:.1f} Elo")
+                print(f"  {model_name}: {point:.1f} ∈ [{lo:.1f}, {hi:.1f}]")
 
     return {
         **summary,
@@ -597,4 +735,5 @@ def main(args: CliEloArgs) -> dict:
         "model_name": model_name,
         "method": method_label,
         "calibrated_temperature": calibrated_temperature,
+        "conformal": conformal_result,
     }

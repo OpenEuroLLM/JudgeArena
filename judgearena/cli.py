@@ -139,6 +139,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="[elo] Number of human arena battles to sample for temperature "
         "calibration. Defaults to all. Requires --calibrate-temperature.",
     )
+    parser.add_argument(
+        "--conformal-alpha",
+        type=float,
+        default=None,
+        help="[elo] Target miscoverage for the conformal Elo interval (e.g. 0.1 "
+        "for 90%% coverage). Requires --calibrate-temperature so the judge has "
+        "already scored human-labeled battles; off by default.",
+    )
+    parser.add_argument(
+        "--conformal-min-battles-per-anchor",
+        type=int,
+        default=20,
+        help="[elo] Minimum judge-scored calibration battles an anchor must "
+        "appear in to contribute a residual. Default 20.",
+    )
     add_common_arguments(parser)
     return parser
 
@@ -221,6 +236,8 @@ def _build_elo_args(
         soft_elo_temperature=args.soft_elo_temperature,
         calibrate_temperature=args.calibrate_temperature,
         calibration_size=args.calibration_size,
+        conformal_alpha=args.conformal_alpha,
+        conformal_min_battles_per_anchor=args.conformal_min_battles_per_anchor,
         judge_model=args.judge_model,
         n_instructions=args.n_instructions,
         provide_explanation=args.provide_explanation,
