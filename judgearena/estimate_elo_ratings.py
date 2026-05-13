@@ -1,4 +1,5 @@
 import hashlib
+import time
 from dataclasses import dataclass
 from functools import partial
 
@@ -256,7 +257,16 @@ def _compute_conformal_qhat(
     rng = np.random.default_rng(seed)
     residuals: dict[str, float] = {}
     anchor_se: dict[str, float] = {}
-    for anchor in eligible_anchors:
+    K_total = len(eligible_anchors)
+    logger.info(
+        "[conformal] LOO over %d anchors with %d bootstrap fits each "
+        "(~%d BT fits total).",
+        K_total,
+        n_bootstrap,
+        K_total * (1 + n_bootstrap),
+    )
+    t_start = time.monotonic()
+    for idx, anchor in enumerate(eligible_anchors, start=1):
         anchor_human = human_pool[
             (human_pool["model_a"] != anchor) & (human_pool["model_b"] != anchor)
         ]
@@ -268,9 +278,14 @@ def _compute_conformal_qhat(
             combined, pref_col="pref", baseline_model=baseline_model
         )
         if anchor not in ratings:
+            logger.info(
+                "[conformal] anchor %d/%d: %s — skipped (no rating returned)",
+                idx, K_total, anchor,
+            )
             continue
         residuals[anchor] = float(human_elo[anchor] - ratings[anchor])
 
+        se_str = ""
         if n_bootstrap > 0:
             boot_elos: list[float] = []
             for _ in range(n_bootstrap):
@@ -286,6 +301,14 @@ def _compute_conformal_qhat(
                     boot_elos.append(float(rb[anchor]))
             if len(boot_elos) >= 5:
                 anchor_se[anchor] = float(np.std(boot_elos, ddof=1))
+                se_str = f", SE={anchor_se[anchor]:.1f}"
+        elapsed = time.monotonic() - t_start
+        eta = elapsed / idx * (K_total - idx)
+        logger.info(
+            "[conformal] anchor %d/%d: %s  residual=%+.1f%s  "
+            "(elapsed %.0fs, eta %.0fs)",
+            idx, K_total, anchor, residuals[anchor], se_str, elapsed, eta,
+        )
 
     K = len(residuals)
     if K < 8:
