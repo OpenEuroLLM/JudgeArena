@@ -32,7 +32,7 @@ def capture_mains(monkeypatch):
     [
         "alpaca-eval",
         "arena-hard-v2.0",
-        "m-arena-hard-EU",
+        "m-arena-hard-v2.0-EU",
         "fluency-french",
         "mt-bench",
     ],
@@ -248,18 +248,47 @@ def test_unknown_elo_task_raises(capture_mains):
         )
 
 
-def test_generate_and_evaluate_requires_model_a_and_b(capture_mains):
+def test_pairwise_task_without_native_baseline_requires_model_a_and_b(capture_mains):
     with pytest.raises(SystemExit, match="--model_A and --model_B are required"):
         cli_module.cli(
             [
                 "--task",
-                "alpaca-eval",
+                "fluency-french",
                 "--model_A",
                 "Dummy/A",
                 "--judge",
                 "Dummy/J",
             ]
         )
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "alpaca-eval",
+        "arena-hard-v0.1",
+        "m-arena-hard-v2.0-EU",
+        "mt-bench",
+    ],
+)
+def test_pairwise_task_allows_missing_model_b_when_native_baseline_exists(
+    capture_mains, task: str
+):
+    cli_module.cli(
+        [
+            "--task",
+            task,
+            "--model_A",
+            "Dummy/A",
+            "--judge",
+            "Dummy/J",
+        ]
+    )
+    assert capture_mains["module"] == "generate_and_evaluate"
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.task == task
+    assert ge_args.model_A == "Dummy/A"
+    assert ge_args.model_B is None
 
 
 def test_deprecated_model_flag_routes_into_pairwise_task(capture_mains):
@@ -329,3 +358,33 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
     )
     ge_args: CliArgs = capture_mains["args"]
     assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_judge_side_kwargs_are_parsed_separately(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "arena-hard-v2.0",
+            "--model_A",
+            "Dummy/A",
+            "--judge",
+            "Dummy/J",
+            "--truncate_judge_input_chars",
+            "80000",
+            "--max_model_len",
+            "32768",
+            "--max_judge_model_len",
+            "65536",
+            "--engine_kwargs",
+            '{"tensor_parallel_size": 1}',
+            "--judge_engine_kwargs",
+            '{"tensor_parallel_size": 4}',
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.model_B is None
+    assert ge_args.truncate_judge_input_chars == 80000
+    assert ge_args.max_model_len == 32768
+    assert ge_args.max_judge_model_len == 65536
+    assert ge_args.engine_kwargs == {"tensor_parallel_size": 1}
+    assert ge_args.judge_engine_kwargs == {"tensor_parallel_size": 4}

@@ -4,6 +4,7 @@ and then evaluates them using a judge model.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -16,9 +17,15 @@ from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
+    ARENA_HARD_BASELINES,
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.m_arenahard import (
+    M_ARENA_HARD_BASELINES,
+    split_m_arena_hard_dataset,
+)
+from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
 from judgearena.log import (
     attach_file_handler,
     get_logger,
@@ -36,6 +43,17 @@ from judgearena.utils import (
 )
 
 logger = get_logger(__name__)
+
+ALPACA_EVAL_BASELINES: dict[str, str] = {
+    "alpaca-eval": "gpt4_1106_preview",
+}
+
+PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
+    **ALPACA_EVAL_BASELINES,
+    **ARENA_HARD_BASELINES,
+    **M_ARENA_HARD_BASELINES,
+    **MT_BENCH_BASELINES,
+}
 
 
 def try_load_dataset_completions(
@@ -90,6 +108,94 @@ class CliArgs(BaseCliArgs):
     use_tqdm: bool = False
 
 
+@dataclass(frozen=True)
+class BaselinePlan:
+    """Row-aligned baseline assignment for native pairwise baselines."""
+
+    baseline_by_index: pd.Series
+
+    @classmethod
+    def flat(cls, model: str, *, index: pd.Index) -> "BaselinePlan":
+        return cls(
+            baseline_by_index=pd.Series(model, index=index, name="model_B", dtype=str)
+        )
+
+    @classmethod
+    def per_row(cls, series: pd.Series) -> "BaselinePlan":
+        return cls(baseline_by_index=series.astype(str).rename("model_B"))
+
+    @property
+    def unique_models(self) -> list[str]:
+        return sorted(self.baseline_by_index.dropna().unique().tolist())
+
+    @property
+    def is_flat(self) -> bool:
+        return len(self.unique_models) == 1
+
+    @property
+    def single_model(self) -> str:
+        if not self.is_flat:
+            raise ValueError("BaselinePlan has more than one model.")
+        return self.unique_models[0]
+
+    @property
+    def display_name(self) -> str:
+        return self.single_model if self.is_flat else "+".join(self.unique_models)
+
+    def aligned_to(self, index: pd.Index) -> pd.Series:
+        return self.baseline_by_index.loc[index]
+
+
+def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
+    """Return the dataset-native pairwise baseline, if the task defines one."""
+    if task in PAIRWISE_BASELINES:
+        return PAIRWISE_BASELINES[task]
+    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
+    if parsed_m_arena_hard is not None:
+        version_key, _lang_or_subset = parsed_m_arena_hard
+        return PAIRWISE_BASELINES[version_key]
+    return None
+
+
+def _resolve_baseline_plan(
+    args: CliArgs, instructions_df: pd.DataFrame
+) -> BaselinePlan:
+    if args.model_B is not None:
+        return BaselinePlan.flat(args.model_B, index=instructions_df.index)
+
+    native = native_pairwise_baseline(args.task)
+    if native is None:
+        raise ValueError(
+            f"--model_B is required for dataset '{args.task}'; no dataset-native "
+            "baseline is registered."
+        )
+    if isinstance(native, str):
+        return BaselinePlan.flat(native, index=instructions_df.index)
+    if isinstance(native, Mapping):
+        if "category" not in instructions_df.columns:
+            raise ValueError(
+                f"{args.task} requires a 'category' column for per-category "
+                "baseline routing."
+            )
+        per_row = instructions_df["category"].map(native)
+        if per_row.isna().any():
+            unknown = sorted(
+                instructions_df.loc[per_row.isna(), "category"].unique().tolist()
+            )
+            raise ValueError(
+                f"Unknown Arena-Hard categories for {args.task}: {unknown}. "
+                f"Known: {sorted(native.keys())}"
+            )
+        return BaselinePlan.per_row(per_row)
+    raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
+
+
+def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
+    judge_kwargs = dict(args.engine_kwargs)
+    judge_kwargs.update(args.judge_engine_kwargs)
+    return judge_kwargs
+
+
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
@@ -128,30 +234,23 @@ def main(args: CliArgs):
 
     run_started_at = datetime.now(UTC)
 
-    # Build the result folder early so the file handler captures the entire run.
-    # Include a timestamp so each run gets its own unique directory.
-    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
-    name += f"-{args.swap_mode}"
-    name = name.replace("/", "_")
-    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-    res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
-    res_folder.mkdir(parents=True, exist_ok=True)
-    if not args.no_log_file:
-        attach_file_handler(make_run_log_path(res_folder))
-
-    logger.info(
-        "Using task %s and evaluating models %s and %s.",
-        args.task,
-        args.model_A,
-        args.model_B,
-    )
-
     # Not working with vllm, not detecting model changes and serving the same cache for two different models...
     # if not args.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = args.ignore_cache
 
     if args.task == "mt-bench":
+        model_b = args.model_B or native_pairwise_baseline(args.task)
+        if not isinstance(model_b, str):
+            raise ValueError("MT-Bench requires a flat native baseline.")
+        name = f"{args.task}-{args.model_A}-{model_b}-{args.judge_model}"
+        name += f"-{args.swap_mode}"
+        name = name.replace("/", "_")
+        run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+        res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
+        res_folder.mkdir(parents=True, exist_ok=True)
+        if not args.no_log_file:
+            attach_file_handler(make_run_log_path(res_folder))
         return run_mt_bench(
             args,
             ignore_cache,
@@ -166,21 +265,42 @@ def main(args: CliArgs):
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
         lang = args.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
+        instructions_df = pd.DataFrame({"instruction": instructions})
     else:
-        instructions = load_instructions(
+        instructions_df = load_instructions(
             dataset=args.task, n_instructions=args.n_instructions
-        ).loc[:, "instruction"]
+        )
+        instructions = instructions_df.loc[:, "instruction"]
 
     n_instructions = args.n_instructions if args.n_instructions else len(instructions)
     if args.n_instructions is not None:
-        instructions = instructions[:n_instructions]
+        instructions_df = instructions_df.head(n_instructions)
+        instructions = instructions.head(n_instructions)
+
+    baseline_plan = _resolve_baseline_plan(args=args, instructions_df=instructions_df)
+
+    name = f"{args.task}-{args.model_A}-{baseline_plan.display_name}-{args.judge_model}"
+    name += f"-{args.swap_mode}"
+    name = name.replace("/", "_")
+    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+    res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
+    res_folder.mkdir(parents=True, exist_ok=True)
+    if not args.no_log_file:
+        attach_file_handler(make_run_log_path(res_folder))
 
     logger.info(
-        "Generating completions for task %s with model %s and %s "
+        "Using task %s and evaluating %s against baseline %s.",
+        args.task,
+        args.model_A,
+        baseline_plan.display_name,
+    )
+
+    logger.info(
+        "Generating completions for task %s with model %s and baseline %s "
         "(or loading them directly if present)",
         args.task,
         args.model_A,
-        args.model_B,
+        baseline_plan.display_name,
     )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
@@ -205,54 +325,59 @@ def main(args: CliArgs):
             **args.engine_kwargs,
         )
     )
-    dataset_completions_A = try_load_dataset_completions(
-        args.task, args.model_A, n_instructions
-    )
-    if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[
-            :, "completion"
-        ]
-    else:
-        completions_A = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_A,
-                use_tqdm=args.use_tqdm,
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_A}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_A = completions_A.loc[:, "completion"]
 
-    dataset_completions_B = try_load_dataset_completions(
-        args.task, args.model_B, n_instructions
-    )
-    if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[
-            :, "completion"
-        ]
-    else:
-        completions_B = cache_function_dataframe(
+    def _align_completion_series(df: pd.DataFrame) -> pd.Series:
+        return df.set_index("instruction_index").loc[instructions.index, "completion"]
+
+    def _load_or_generate_completions(model_spec: str) -> pd.Series:
+        preloaded = try_load_dataset_completions(args.task, model_spec, n_instructions)
+        if preloaded is not None:
+            return _align_completion_series(preloaded)
+        generated = cache_function_dataframe(
             lambda: gen_fun(
                 instructions=instructions,
-                model=args.model_B,
+                model=model_spec,
                 use_tqdm=args.use_tqdm,
             ),
             ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_B}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_B = completions_B.loc[:, "completion"]
+            cache_name=f"{args.task}_{model_spec}_{args.n_instructions}",
+        )
+        return _align_completion_series(generated)
+
+    completions_A = _load_or_generate_completions(args.model_A)
+
+    baseline_per_index = baseline_plan.aligned_to(instructions.index)
+    if baseline_plan.is_flat:
+        completions_B = _load_or_generate_completions(baseline_plan.single_model)
+    else:
+        per_baseline_completions = {
+            model: _load_or_generate_completions(model)
+            for model in baseline_plan.unique_models
+        }
+        completions_B = pd.Series(
+            [
+                per_baseline_completions[model].loc[instruction_index]
+                for instruction_index, model in baseline_per_index.items()
+            ],
+            index=instructions.index,
+            name="completion",
+        )
+
     logger.debug("First instruction/context: %s", instructions.values[0])
     logger.debug("First completion of %s:\n%s", args.model_A, completions_A.values[0])
-    logger.debug("First completion of %s:\n%s", args.model_B, completions_B.values[0])
+    logger.debug(
+        "First completion of %s:\n%s",
+        baseline_plan.display_name,
+        completions_B.values[0],
+    )
     logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judge_chat_model = make_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
+        max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
-        **args.engine_kwargs,
+        **_build_judge_engine_kwargs(args),
     )
 
     # save argument for results analysis
@@ -286,22 +411,22 @@ def main(args: CliArgs):
         provide_explanation=args.provide_explanation,
         system_prompt=effective_judge_system_prompt,
         user_prompt_template=judge_user_prompt_template,
-        truncate_input_chars=args.truncate_all_input_chars,
+        truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
     )
 
+    eval_instruction_index = instructions.head(n_instructions).index.tolist()
+    baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
-    df["instruction_index"] = instructions.head(n_instructions).index.tolist()
+    df["instruction_index"] = eval_instruction_index
     df["model_A"] = args.model_A
-    df["model_B"] = args.model_B
+    df["model_B"] = baseline_per_eval.tolist()
     df["judge"] = args.judge_model
 
     if args.swap_mode == "both":
         df_reversed = pd.DataFrame(annotations_reversed)
-        df_reversed["instruction_index"] = instructions.head(
-            n_instructions
-        ).index.tolist()
-        df_reversed["model_A"] = args.model_B
+        df_reversed["instruction_index"] = eval_instruction_index
+        df_reversed["model_A"] = baseline_per_eval.tolist()
         df_reversed["model_B"] = args.model_A
         df_reversed["judge"] = args.judge_model
         df = pd.concat([df, df_reversed])
@@ -314,18 +439,24 @@ def main(args: CliArgs):
     results = {
         "task": args.task,
         "model_A": args.model_A,
-        "model_B": args.model_B,
+        "model_B": baseline_plan.display_name,
+        "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+        "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
         **summary,
         "preferences": prefs.tolist(),
     }
-    logger.info("%s vs %s judged by %s", args.model_A, args.model_B, args.judge_model)
+    logger.info(
+        "%s vs %s judged by %s",
+        args.model_A,
+        baseline_plan.display_name,
+        args.judge_model,
+    )
     print_results(results)
 
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
-    eval_instruction_index = instructions.head(n_instructions).index.tolist()
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()
     eval_completions_B = completions_B.head(n_instructions).tolist()
@@ -341,6 +472,7 @@ def main(args: CliArgs):
                 "instructions": eval_instructions,
                 "completions_A": eval_completions_A,
                 "completions_B": eval_completions_B,
+                "baseline_model_B": baseline_per_eval.tolist(),
             },
             judge_system_prompt=effective_judge_system_prompt,
             judge_user_prompt_template=judge_user_prompt_template,
