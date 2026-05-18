@@ -46,7 +46,11 @@ VLLM_REASONING_START_STR = "<think>"
 VLLM_REASONING_END_STR = (
     "I have to give the solution based on the thinking directly now.</think>"
 )
-_THINKING_MODEL_SUBSTRINGS = ("qwen3", "smollm3")
+_THINKING_MODEL_PARSER_BY_SUBSTRING = (
+    ("qwen3", "qwen3"),
+    ("smollm3", "qwen3"),
+    ("olmo-3-7b-think", "olmo3"),
+)
 
 
 def _split_model_spec(model_spec: str) -> tuple[str, str]:
@@ -60,13 +64,20 @@ def is_thinking_model(model_name: str) -> bool:
     """Return True for reasoning models that emit `<think>...</think>` traces.
 
     Covers the Qwen3 family (e.g. `Qwen/Qwen3.5-9B`) and SmolLM3 (e.g.
-    `HuggingFaceTB/SmolLM3-3B`); both share the same `<think>`/`</think>` tag
-    convention so vLLM's budget enforcement and our tag-stripping apply
-    uniformly. Matching is case-insensitive to tolerate mixed-case HF repo
-    ids like `HuggingFaceTB/SmolLM3-3B`.
+    `HuggingFaceTB/SmolLM3-3B`) plus `allenai/Olmo-3-7B-Think`; all emit
+    `<think>`/`</think>` traces so vLLM's budget enforcement and our
+    tag-stripping apply uniformly. Matching is case-insensitive to tolerate
+    mixed-case HF repo ids like `HuggingFaceTB/SmolLM3-3B`.
     """
+    return _default_reasoning_parser_for_model(model_name) is not None
+
+
+def _default_reasoning_parser_for_model(model_name: str) -> str | None:
     lowered = model_name.lower()
-    return any(token in lowered for token in _THINKING_MODEL_SUBSTRINGS)
+    for token, reasoning_parser in _THINKING_MODEL_PARSER_BY_SUBSTRING:
+        if token in lowered:
+            return reasoning_parser
+    return None
 
 
 def build_default_judge_model_kwargs(
@@ -83,10 +94,10 @@ def build_default_judge_model_kwargs(
     must often stay on TP=1 to dodge compile-time deadlocks on hybrid models
     such as Qwen3.5.
     """
-    judge_model_kwargs = dict(engine_kwargs)
+    provider, model_name = _split_model_spec(judge_model)
+    judge_model_kwargs = dict(engine_kwargs) if provider == "VLLM" else {}
     if judge_engine_kwargs_override:
         judge_model_kwargs.update(judge_engine_kwargs_override)
-    provider, model_name = _split_model_spec(judge_model)
     if provider == "VLLM":
         if "thinking_token_budget" not in judge_model_kwargs and is_thinking_model(
             model_name
@@ -729,19 +740,20 @@ class ChatVLLM:
                 self._thinking_budget_marker = VLLM_REASONING_END_STR
                 self._thinking_budget_value = int(thinking_token_budget)
             elif is_thinking_model(model):
+                reasoning_parser = _default_reasoning_parser_for_model(model)
+                assert reasoning_parser is not None  # guarded by is_thinking_model()
                 vllm_kwargs.setdefault(
                     "reasoning_config",
                     ReasoningConfig(
                         reasoning_start_str=VLLM_REASONING_START_STR,
+                        # Keep the shared forced end marker for offline
+                        # `LLM.chat()` thinking-budget exhaustion detection.
+                        # The parser itself still varies by model family
+                        # (e.g. OLMo uses `olmo3`) on vLLM's OpenAI server.
                         reasoning_end_str=VLLM_REASONING_END_STR,
                     ),
                 )
-                # The `qwen3` reasoning_parser only runs inside vLLM's
-                # OpenAI-compatible server for `reasoning_content` extraction.
-                # For offline batch inference via LLM.chat() it is inert, so
-                # it is safe to reuse for any `<think>`/`</think>` model
-                # (Qwen3 + SmolLM3).
-                vllm_kwargs.setdefault("reasoning_parser", "qwen3")
+                vllm_kwargs.setdefault("reasoning_parser", reasoning_parser)
                 self._sampling_params_kwargs["thinking_token_budget"] = int(
                     thinking_token_budget
                 )
@@ -750,8 +762,9 @@ class ChatVLLM:
             else:
                 warnings.warn(
                     f"Model '{model}' is not in JudgeArena's built-in thinking-model "
-                    "defaults (Qwen3/SmolLM3). Ignoring thinking_token_budget unless "
-                    "reasoning_parser or reasoning_config is provided explicitly.",
+                    "defaults (Qwen3/SmolLM3/Olmo-3-7B-Think). Ignoring "
+                    "thinking_token_budget unless reasoning_parser or "
+                    "reasoning_config is provided explicitly.",
                     stacklevel=2,
                 )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
@@ -971,8 +984,20 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
     # kwargs via model_kwargs into chat.completions.create, which rejects them.
     if model_provider != "VLLM":
-        engine_kwargs.pop("max_model_len", None)
-        engine_kwargs.pop("chat_template", None)
+        for key in (
+            "max_model_len",
+            "chat_template",
+            "language_model_only",
+            "gpu_memory_utilization",
+            "enforce_eager",
+            "tensor_parallel_size",
+            "quantization",
+            "kv_cache_dtype",
+            "reasoning_parser",
+            "reasoning_config",
+            "trust_remote_code",
+        ):
+            engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
         return DummyModel(model)
