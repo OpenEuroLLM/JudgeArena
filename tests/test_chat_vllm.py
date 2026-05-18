@@ -90,6 +90,26 @@ def test_chat_vllm_enables_reasoning_support_for_smollm3_thinking_budget(monkeyp
     assert isinstance(llm_kwargs["reasoning_config"], fake_reasoning_config)
 
 
+def test_chat_vllm_uses_olmo3_reasoning_parser_for_olmo_think(monkeypatch):
+    captured, fake_reasoning_config = _install_fake_vllm(monkeypatch)
+
+    utils.ChatVLLM(
+        model="allenai/Olmo-3-7B-Think",
+        max_tokens=128,
+        thinking_token_budget=64,
+        gpu_memory_utilization=0.7,
+    )
+
+    assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
+    assert captured["reasoning_config_kwargs"] == {
+        "reasoning_start_str": utils.VLLM_REASONING_START_STR,
+        "reasoning_end_str": utils.VLLM_REASONING_END_STR,
+    }
+    llm_kwargs = captured["llm_init"]["kwargs"]
+    assert llm_kwargs["reasoning_parser"] == "olmo3"
+    assert isinstance(llm_kwargs["reasoning_config"], fake_reasoning_config)
+
+
 def test_chat_vllm_clamps_thinking_budget_to_total_max_tokens(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
@@ -129,6 +149,13 @@ def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():
         "thinking_token_budget": 512,
     }
     assert utils.build_default_judge_model_kwargs(
+        "VLLM/allenai/Olmo-3-7B-Think",
+        {"gpu_memory_utilization": 0.7},
+    ) == {
+        "gpu_memory_utilization": 0.7,
+        "thinking_token_budget": 512,
+    }
+    assert utils.build_default_judge_model_kwargs(
         "VLLM/meta-llama/Llama-3.3-70B-Instruct",
         {"gpu_memory_utilization": 0.7},
     ) == {"gpu_memory_utilization": 0.7}
@@ -136,6 +163,17 @@ def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():
         utils.build_default_judge_model_kwargs(
             "OpenRouter/qwen/qwen3-32b",
             {},
+        )
+        == {}
+    )
+    assert (
+        utils.build_default_judge_model_kwargs(
+            "OpenRouter/google/gemma-4-31b-it",
+            {
+                "language_model_only": True,
+                "gpu_memory_utilization": 0.9,
+                "enforce_eager": True,
+            },
         )
         == {}
     )
@@ -203,7 +241,10 @@ def test_is_thinking_model_matches_qwen3_and_smollm3_repo_ids():
     assert utils.is_thinking_model("Qwen/Qwen3.5-9B")
     assert utils.is_thinking_model("HuggingFaceTB/SmolLM3-3B")
     assert utils.is_thinking_model("Qwen/Qwen3-7B")
+    assert utils.is_thinking_model("allenai/Olmo-3-7B-Think")
     assert not utils.is_thinking_model("Qwen/Qwen2.5-7B")
+    assert not utils.is_thinking_model("allenai/Olmo-3-7B-Instruct")
+    assert not utils.is_thinking_model("CohereLabs/tiny-aya-global")
     assert not utils.is_thinking_model("utter-project/EuroLLM-9B-Instruct")
     assert not utils.is_thinking_model("meta-llama/Llama-3.1-8B")
 

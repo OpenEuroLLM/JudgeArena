@@ -215,11 +215,17 @@ def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
         max_tokens=16,
         max_model_len=4096,
         chat_template="<ct>",
+        language_model_only=True,
+        gpu_memory_utilization=0.9,
+        enforce_eager=True,
         temperature=0.5,
     )
 
     assert "max_model_len" not in model.model_kwargs
     assert "chat_template" not in model.model_kwargs
+    assert "language_model_only" not in model.model_kwargs
+    assert "gpu_memory_utilization" not in model.model_kwargs
+    assert "enforce_eager" not in model.model_kwargs
     assert model.max_tokens == 16
     assert model.temperature == 0.5
 

@@ -1,3 +1,4 @@
+import json
 import math
 
 import numpy as np
@@ -186,6 +187,70 @@ def test_main_n_instructions_limits_battles():
     )
     assert total_5 == 5
     assert total_10 == 10
+
+
+def test_main_seeded_random_sampling_is_stable_and_writes_result_json(
+    monkeypatch, tmp_path
+):
+    cache_names = []
+
+    def capture_cache(fun, **kwargs):
+        cache_names.append(kwargs["cache_name"])
+        return fun()
+
+    monkeypatch.setattr(estimate_elo_ratings, "cache_function_dataframe", capture_cache)
+
+    first = main(
+        _default_args(
+            n_instructions=None,
+            languages=["en"],
+            elo_random_battles=6,
+            seed=0,
+            model="Dummy/model-one",
+            result_folder=str(tmp_path / "first"),
+            n_bootstraps=1,
+        )
+    )
+    second = main(
+        _default_args(
+            n_instructions=None,
+            languages=["en"],
+            elo_random_battles=6,
+            seed=0,
+            model="Dummy/model-two",
+            result_folder=str(tmp_path / "second"),
+            n_bootstraps=1,
+        )
+    )
+
+    first_metadata = first["sampling_metadata"]
+    second_metadata = second["sampling_metadata"]
+    assert first_metadata["sampling_mode"] == "seeded_random"
+    assert first_metadata["sampled_rows"] == 6
+    assert (
+        first_metadata["sampled_question_ids"]
+        == second_metadata["sampled_question_ids"]
+    )
+    assert first_metadata["sample_fingerprint"] == second_metadata["sample_fingerprint"]
+    assert any(
+        "seeded-random" in name and "6" in name and "seed-0" in name
+        for name in cache_names
+    )
+
+    with open(first["result_path"]) as fh:
+        payload = json.load(fh)
+
+    assert payload["summary"]["model_A"] == first["model_name"]
+    assert payload["summary"]["arena"] == "ComparIA"
+    assert payload["summary"]["judge_model"] == "Dummy/score A: 0 score B: 10"
+    assert payload["summary"]["num_battles"] == 6
+    assert (
+        payload["summary"]["sampling_metadata"]["sample_fingerprint"]
+        == first_metadata["sample_fingerprint"]
+    )
+    assert "elo_mean" in payload["summary"]
+    assert "elo_std" in payload["summary"]
+    assert len(payload["bootstrap_ratings"]) == 1
 
 
 def test_main_swap_mode_forwarded_to_judge(monkeypatch):
