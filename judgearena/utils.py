@@ -27,7 +27,6 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.log import get_logger
-from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 
 logger = get_logger(__name__)
 
@@ -399,46 +398,10 @@ def _extract_ai_message_metadata(result: object) -> dict[str, Any]:
     return {"finish_reason": finish_reason, "stop_reason": stop_reason}
 
 
-def _extract_token_usage(result: object) -> dict[str, int] | None:
-    """Pull API-reported token usage from a LangChain AIMessage-like result.
-
-    Two shapes coexist depending on langchain-openai version:
-    - langchain-core AIMessage.usage_metadata: ``{"input_tokens", "output_tokens", "total_tokens"}``
-    - response_metadata.token_usage (OpenAI-shape): ``{"prompt_tokens", "completion_tokens", "total_tokens"}``
-
-    Returns the first shape that carries non-null counts, or ``None`` if neither
-    is present (e.g. provider that does not surface usage). Used by
-    ``OpenRouterReferencePricingTracker.record_batch_from_usage_metadata`` to
-    capture per-call billing tokens for OpenRouter / ChatOpenAI runs, which
-    cannot be tokenised via ``count_*_batch`` helpers.
-    """
-    usage_metadata = getattr(result, "usage_metadata", None)
-    if isinstance(usage_metadata, dict) and (
-        usage_metadata.get("input_tokens") is not None
-        or usage_metadata.get("output_tokens") is not None
-    ):
-        return dict(usage_metadata)
-    response_metadata = getattr(result, "response_metadata", None) or {}
-    token_usage = (
-        response_metadata.get("token_usage")
-        if isinstance(response_metadata, dict)
-        else None
-    )
-    if isinstance(token_usage, dict) and (
-        token_usage.get("prompt_tokens") is not None
-        or token_usage.get("completion_tokens") is not None
-    ):
-        return dict(token_usage)
-    return None
-
-
 def do_inference(
     chat_model,
     inputs,
     use_tqdm: bool = False,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
-    usage_model_spec: str | None = None,
     return_metadata: bool = False,
 ):
     # Retries on rate-limit/server errors with exponential backoff.
@@ -546,39 +509,10 @@ def do_inference(
 
         res, metadata = batch_with_retry(inputs)
 
-    # Pull per-call usage from AIMessage objects BEFORE flattening to .content;
-    # OpenRouter / ChatOpenAI surface API-billed token counts here but lose
-    # them after .content extraction.
-    per_call_usages = [_extract_token_usage(r) for r in res]
-
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
     res = [x.content if hasattr(x, "content") else x for x in res]
-    if (
-        usage_tracker is not None
-        and usage_phase is not None
-        and usage_model_spec is not None
-    ):
-        try:
-            recorded = usage_tracker.record_batch_from_usage_metadata(
-                phase=usage_phase,
-                model_spec=usage_model_spec,
-                usages=per_call_usages,
-            )
-            if not recorded:
-                usage_tracker.record_batch_from_model(
-                    phase=usage_phase,
-                    model_spec=usage_model_spec,
-                    chat_model=chat_model,
-                    inputs=list(inputs),
-                    outputs=res,
-                )
-        except Exception as e:
-            print(
-                f"Warning: failed to record token usage for phase "
-                f"'{usage_phase}' ({usage_model_spec}): {e}"
-            )
     if return_metadata:
         return res, (metadata or [{} for _ in res])
     return res
@@ -909,39 +843,6 @@ class ChatVLLM:
     def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
         texts, _metadata = self.batch_with_metadata(inputs, **invoke_kwargs)
         return texts
-
-    def _count_chat_prompt_tokens(self, messages: list[dict]) -> int:
-        tokenizer_kwargs: dict[str, object] = {
-            "tokenize": True,
-            "add_generation_prompt": True,
-        }
-        if self.chat_template is not None:
-            tokenizer_kwargs["chat_template"] = self.chat_template
-        if self._chat_template_kwargs is not None:
-            tokenizer_kwargs["chat_template_kwargs"] = self._chat_template_kwargs
-        try:
-            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
-        except TypeError:
-            tokenizer_kwargs.pop("chat_template_kwargs", None)
-            token_ids = self.tokenizer.apply_chat_template(messages, **tokenizer_kwargs)
-        return len(token_ids)
-
-    def count_prompt_tokens_batch(self, inputs: list) -> list[int]:
-        counts: list[int] = []
-        for input_item in inputs:
-            if self._use_generate:
-                counts.append(len(self.tokenizer.encode(self._to_raw_text(input_item))))
-            else:
-                counts.append(
-                    self._count_chat_prompt_tokens(self._to_messages(input_item))
-                )
-        return counts
-
-    def count_completion_tokens_batch(self, outputs: list[str]) -> list[int]:
-        return [
-            len(self.tokenizer.encode(output, add_special_tokens=False))
-            for output in outputs
-        ]
 
     def invoke(self, input_item, **invoke_kwargs) -> str:
         """Process a single input."""

@@ -1,8 +1,6 @@
 import sys
 from types import SimpleNamespace
 
-import pytest
-
 import judgearena.utils as utils
 
 
@@ -269,22 +267,6 @@ def test_chat_vllm_preserves_explicit_reasoning_settings_for_non_qwen(monkeypatc
     )
 
 
-def test_chat_vllm_ignores_thinking_budget_for_unknown_family(monkeypatch):
-    captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
-
-    with pytest.warns(UserWarning, match="built-in thinking-model"):
-        utils.ChatVLLM(
-            model="meta-llama/Llama-3.3-70B-Instruct",
-            max_tokens=32,
-            thinking_token_budget=64,
-            gpu_memory_utilization=0.7,
-        )
-
-    assert "thinking_token_budget" not in captured["sampling_kwargs"]
-    assert "reasoning_parser" not in captured["llm_init"]["kwargs"]
-    assert "reasoning_config" not in captured["llm_init"]["kwargs"]
-
-
 def test_chat_vllm_records_thinking_budget_exhaustion_metadata(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
@@ -350,21 +332,3 @@ def test_chat_vllm_omits_thinking_budget_metadata_without_budget(monkeypatch):
     )
     assert chat_model._thinking_budget_marker is None
     assert chat_model._thinking_budget_value is None
-
-
-def test_infer_model_spec_uses_type_based_vllm_fallback():
-    model = object.__new__(utils.ChatVLLM)
-    model.model_path = "Qwen/Qwen3.5-9B"
-
-    assert utils.infer_model_spec_from_instance(model) == "VLLM/Qwen/Qwen3.5-9B"
-
-
-def test_infer_model_spec_uses_type_based_llamacpp_fallback(monkeypatch):
-    class FakeLlamaCpp:
-        def __init__(self, model_path: str):
-            self.model_path = model_path
-
-    monkeypatch.setattr(utils, "LlamaCpp", FakeLlamaCpp)
-    model = FakeLlamaCpp("./models/model.gguf")
-
-    assert utils.infer_model_spec_from_instance(model) == "LlamaCpp/./models/model.gguf"

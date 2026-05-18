@@ -56,8 +56,6 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
-    usage_tracker=None,
-    usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
@@ -101,9 +99,6 @@ def generate_instructions(
         chat_model=chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=model,
         return_metadata=True,
     )
     hit_token_limit = _record_generation_output_limit_events(
@@ -146,8 +141,6 @@ def _infer_grouped_by_temperature(
     inputs: list,
     temperatures: list[float],
     use_tqdm: bool,
-    usage_tracker=None,
-    usage_phase: str | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     outputs: list[str] = [""] * len(inputs)
     outputs_metadata: list[dict[str, Any]] = [{} for _ in inputs]
@@ -171,9 +164,6 @@ def _infer_grouped_by_temperature(
             chat_model=group_model,
             inputs=group_inputs,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=model_spec,
             return_metadata=True,
         )
         for i, out, metadata_row in zip(idxs, group_outs, group_metadata, strict=True):
@@ -190,8 +180,6 @@ def generate_multiturn(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
-    usage_tracker=None,
-    usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
     strip_thinking_before_turn_2_prompt: bool = False,
     **model_kwargs,
@@ -260,17 +248,12 @@ def generate_multiturn(
             inputs=turn1_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
         )
     else:
         completions_turn_1, turn1_metadata = do_inference(
             chat_model=chat_model,
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=model,
             return_metadata=True,
         )
     turn1_hit_token_limit = _record_generation_output_limit_events(
@@ -374,17 +357,12 @@ def generate_multiturn(
             inputs=turn2_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
         )
     else:
         completions_turn_2, turn2_metadata = do_inference(
             chat_model=chat_model,
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=model,
             return_metadata=True,
         )
     turn2_hit_token_limit = _record_generation_output_limit_events(
@@ -425,8 +403,6 @@ def generate_base(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 32768,
     use_tqdm: bool = False,
-    usage_tracker=None,
-    usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
@@ -461,9 +437,6 @@ def generate_base(
         chat_model=model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=model_spec,
         return_metadata=True,
     )
     hit_token_limit = _record_generation_output_limit_events(

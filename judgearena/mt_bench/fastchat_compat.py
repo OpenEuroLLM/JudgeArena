@@ -21,7 +21,6 @@ from judgearena.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
     render_mt_bench_prompt_text,
 )
-from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 from judgearena.utils import (
     LimitEventTracker,
     do_inference,
@@ -336,9 +335,6 @@ def _infer_by_prompt_groups(
     items: list[dict[str, Any]],
     use_tqdm: bool,
     swap_answers: bool,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
-    usage_model_spec: str | None = None,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -362,9 +358,6 @@ def _infer_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=usage_model_spec,
         )
         for i, out in zip(idxs, outs, strict=True):
             judgments[i] = str(out)
@@ -631,8 +624,6 @@ def judge_mt_bench_pairwise_fastchat(
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
@@ -659,9 +650,6 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=judge_model,
     )
 
     g2_judgments: list[str] | None = None
@@ -671,9 +659,6 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=judge_model,
         )
 
     annotations: list[dict[str, Any]] = []

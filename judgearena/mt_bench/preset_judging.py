@@ -27,7 +27,6 @@ from judgearena.mt_bench.common import (
     iter_mt_bench_pairwise_rows,
 )
 from judgearena.mt_bench.prompt_templates import build_mt_bench_user_prompt_template
-from judgearena.openrouter_reference_pricing import OpenRouterReferencePricingTracker
 from judgearena.utils import (
     LimitEventTracker,
     do_inference,
@@ -245,9 +244,6 @@ def _infer_by_prompt_groups(
     judge_tokenizer: Any | None = None,
     max_judge_model_len: int | None = None,
     max_out_tokens_judge: int | None = None,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
-    usage_model_spec: str | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     judgments: list[str] = [""] * len(items)
     used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
@@ -282,9 +278,6 @@ def _infer_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=usage_model_spec,
         )
         for item_index, output, prompt_kwargs in zip(
             idxs, outputs, batch_kwargs, strict=True
@@ -540,8 +533,6 @@ def judge_mt_bench_with_preset(
     judge_tokenizer: Any | None = None,
     max_judge_model_len: int | None = None,
     max_out_tokens_judge: int | None = None,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     assert turns_mode in ("both", "single", "multi")
@@ -571,9 +562,6 @@ def judge_mt_bench_with_preset(
         judge_tokenizer=judge_tokenizer,
         max_judge_model_len=max_judge_model_len,
         max_out_tokens_judge=max_out_tokens_judge,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=judge_model,
     )
 
     annotations: list[dict[str, Any]] = []
@@ -636,9 +624,6 @@ def judge_mt_bench_with_preset(
             judge_tokenizer=judge_tokenizer,
             max_judge_model_len=max_judge_model_len,
             max_out_tokens_judge=max_out_tokens_judge,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=judge_model,
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 

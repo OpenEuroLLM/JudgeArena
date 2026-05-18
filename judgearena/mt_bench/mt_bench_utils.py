@@ -30,11 +30,6 @@ from judgearena.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.mt_bench.preset_judging import judge_mt_bench_with_preset
-from judgearena.openrouter_reference_pricing import (
-    OpenRouterReferencePricingTracker,
-    build_openrouter_reference_pricing_summary,
-    format_openrouter_reference_pricing_summary,
-)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     LimitEventTracker,
@@ -125,12 +120,11 @@ def _generate_mt_bench_completions(
     args: CliArgs,
     questions_df: pd.DataFrame,
     ignore_cache: bool,
-    usage_tracker: OpenRouterReferencePricingTracker,
     limit_event_tracker: LimitEventTracker | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load baseline MT-Bench answers or generate fresh multi-turn outputs."""
 
-    def _run_generation(model_name: str, usage_phase: str) -> pd.DataFrame:
+    def _run_generation(model_name: str) -> pd.DataFrame:
         return generate_multiturn(
             questions=questions_df,
             model=model_name,
@@ -140,14 +134,12 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
             limit_event_tracker=limit_event_tracker,
             strip_thinking_before_turn_2_prompt=args.strip_thinking_before_judging,
             **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
         )
 
-    def _load_or_generate(model_name: str, usage_phase: str) -> pd.DataFrame:
+    def _load_or_generate(model_name: str) -> pd.DataFrame:
         loaded_answers = load_mt_bench_model_answers(
             model_name, n_instructions=args.n_instructions
         )
@@ -159,7 +151,7 @@ def _generate_mt_bench_completions(
                 model_name=model_name,
             )
         generated_answers = cache_function_dataframe(
-            lambda: _run_generation(model_name, usage_phase),
+            lambda: _run_generation(model_name),
             ignore_cache=ignore_cache,
             cache_name=_mt_bench_generation_cache_name(args, model_name=model_name),
         )
@@ -169,8 +161,8 @@ def _generate_mt_bench_completions(
             model_name=model_name,
         )
 
-    completions_a = _load_or_generate(args.model_A, "generation_model_A")
-    completions_b = _load_or_generate(args.model_B, "generation_model_B")
+    completions_a = _load_or_generate(args.model_A)
+    completions_b = _load_or_generate(args.model_B)
     return completions_a, completions_b
 
 
@@ -208,7 +200,6 @@ def _save_mt_bench_results(
     results: dict[str, object],
     annotations_df: pd.DataFrame,
     questions_df: pd.DataFrame,
-    pricing_reference: dict[str, object] | None,
     started_at_utc: datetime,
     input_payloads: dict[str, object] | None = None,
     judge_system_prompt: str | None = None,
@@ -239,7 +230,6 @@ def _save_mt_bench_results(
         judge_system_prompt=judge_system_prompt,
         judge_user_prompt_template=judge_user_prompt_template,
         started_at_utc=started_at_utc,
-        pricing_reference=pricing_reference,
     )
 
 
@@ -253,7 +243,6 @@ def _run_mt_bench_fastchat(
     completions_b: pd.DataFrame,
     judge_chat_model,
     prompt_preset: str,
-    usage_tracker: OpenRouterReferencePricingTracker,
     limit_event_tracker: LimitEventTracker | None,
     started_at_utc: datetime,
 ) -> pd.Series:
@@ -273,8 +262,6 @@ def _run_mt_bench_fastchat(
             use_tqdm=args.use_tqdm,
             prompt_preset=prompt_preset,
             strip_thinking_before_judging=args.strip_thinking_before_judging,
-            usage_tracker=usage_tracker,
-            usage_phase="judge",
             limit_event_tracker=limit_event_tracker,
         )
     )
@@ -301,15 +288,6 @@ def _run_mt_bench_fastchat(
         "user": os.getenv("USER", ""),
     }
     print_results(results)
-    pricing_reference = build_openrouter_reference_pricing_summary(
-        tracker=usage_tracker,
-        phase_model_specs={
-            "generation_model_A": args.model_A,
-            "generation_model_B": args.model_B,
-            "judge": args.judge_model,
-        },
-    )
-    print(format_openrouter_reference_pricing_summary(pricing_reference))
     _save_mt_bench_results(
         args=args,
         res_folder=res_folder,
@@ -317,7 +295,6 @@ def _run_mt_bench_fastchat(
         results=results,
         annotations_df=pd.DataFrame(annotations),
         questions_df=questions_df,
-        pricing_reference=pricing_reference,
         started_at_utc=started_at_utc,
         input_payloads=_build_mt_bench_input_payloads(
             questions_df=questions_df,
@@ -338,7 +315,6 @@ def _run_mt_bench_preset(
     completions_b: pd.DataFrame,
     judge_chat_model,
     prompt_preset: str,
-    usage_tracker: OpenRouterReferencePricingTracker,
     limit_event_tracker: LimitEventTracker | None,
     started_at_utc: datetime,
 ) -> pd.Series:
@@ -361,8 +337,6 @@ def _run_mt_bench_preset(
             judge_tokenizer=getattr(judge_chat_model, "tokenizer", None),
             max_judge_model_len=args.max_judge_model_len,
             max_out_tokens_judge=args.max_out_tokens_judge,
-            usage_tracker=usage_tracker,
-            usage_phase="judge",
             limit_event_tracker=limit_event_tracker,
         )
     )
@@ -388,15 +362,6 @@ def _run_mt_bench_preset(
         "user": os.getenv("USER", ""),
     }
     print_results(results)
-    pricing_reference = build_openrouter_reference_pricing_summary(
-        tracker=usage_tracker,
-        phase_model_specs={
-            "generation_model_A": args.model_A,
-            "generation_model_B": args.model_B,
-            "judge": args.judge_model,
-        },
-    )
-    print(format_openrouter_reference_pricing_summary(pricing_reference))
     unique_system_prompts = {
         row.get("system_prompt")
         for row in annotations
@@ -414,7 +379,6 @@ def _run_mt_bench_preset(
         results=results,
         annotations_df=pd.DataFrame(annotations),
         questions_df=questions_df,
-        pricing_reference=pricing_reference,
         started_at_utc=started_at_utc,
         input_payloads=_build_mt_bench_input_payloads(
             questions_df=questions_df,
@@ -440,7 +404,6 @@ def run_mt_bench(
 ):
     """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
-    usage_tracker = OpenRouterReferencePricingTracker()
     limit_event_tracker = LimitEventTracker()
     prompt_preset = args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET
     fastchat_mode = args.mt_bench_judge_mode == "fastchat_original"
@@ -483,7 +446,6 @@ def run_mt_bench(
         args=args,
         questions_df=questions_df,
         ignore_cache=ignore_cache,
-        usage_tracker=usage_tracker,
         limit_event_tracker=limit_event_tracker,
     )
     if args.skip_judging:
@@ -548,7 +510,6 @@ def run_mt_bench(
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
         prompt_preset=prompt_preset,
-        usage_tracker=usage_tracker,
         limit_event_tracker=limit_event_tracker,
         started_at_utc=run_started_at,
     )

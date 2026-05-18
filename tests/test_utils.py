@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -59,79 +58,6 @@ def test_do_inference_async_path_propagates_finish_reason(monkeypatch):
     ]
 
 
-def _build_inflight_tracking_chat_model(*, hold_seconds: float = 0.05):
-    """Helper: mock chat model whose `ainvoke` records peak concurrent in-flight calls."""
-
-    state = {"in_flight": 0, "peak": 0}
-
-    async def fake_ainvoke(input_item, **_kwargs):
-        state["in_flight"] += 1
-        state["peak"] = max(state["peak"], state["in_flight"])
-        try:
-            await asyncio.sleep(hold_seconds)
-            return SimpleNamespace(
-                content=f"out-{input_item}",
-                response_metadata={"finish_reason": "stop"},
-            )
-        finally:
-            state["in_flight"] -= 1
-
-    return SimpleNamespace(ainvoke=fake_ainvoke), state
-
-
-def test_do_inference_async_path_respects_concurrency_cap(monkeypatch):
-    """With JUDGEARENA_JUDGE_MAX_CONCURRENCY=4 and 16 inputs, peak in-flight must stay <= 4."""
-    monkeypatch.setenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", "4")
-    chat_model, state = _build_inflight_tracking_chat_model()
-
-    inputs = [f"prompt-{i}" for i in range(16)]
-    results = utils.do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=True,
-    )
-
-    assert len(results) == 16
-    assert state["peak"] <= 4, (
-        f"Concurrency cap violated: peak in-flight={state['peak']}, expected <= 4"
-    )
-    assert state["peak"] >= 1
-
-
-def test_do_inference_async_path_unbounded_when_env_unset(monkeypatch):
-    """Without JUDGEARENA_JUDGE_MAX_CONCURRENCY set, all 16 calls fire concurrently."""
-    monkeypatch.delenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", raising=False)
-    chat_model, state = _build_inflight_tracking_chat_model()
-
-    inputs = [f"prompt-{i}" for i in range(16)]
-    results = utils.do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=True,
-    )
-
-    assert len(results) == 16
-    assert state["peak"] > 4, (
-        f"Expected unbounded concurrency to overshoot the capped variant; got peak={state['peak']}"
-    )
-
-
-def test_do_inference_async_path_zero_cap_is_unbounded(monkeypatch):
-    """JUDGEARENA_JUDGE_MAX_CONCURRENCY=0 falls back to unbounded (defensive default)."""
-    monkeypatch.setenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", "0")
-    chat_model, state = _build_inflight_tracking_chat_model()
-
-    inputs = [f"prompt-{i}" for i in range(16)]
-    results = utils.do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=True,
-    )
-
-    assert len(results) == 16
-    assert state["peak"] > 4
-
-
 def test_do_inference_batch_path_propagates_finish_reason_without_batch_with_metadata():
     batch_results = [
         SimpleNamespace(
@@ -157,47 +83,6 @@ def test_do_inference_batch_path_propagates_finish_reason_without_batch_with_met
     )
     assert [m["finish_reason"] for m in metadata] == ["stop", "length"]
     assert texts == ["a", "b"]
-
-
-def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
-    calls: list[tuple[str, str, object]] = []
-
-    monkeypatch.setattr(utils, "data_root", tmp_path)
-    monkeypatch.setattr(
-        utils,
-        "download_hf",
-        lambda name, local_path: calls.append(("hf", name, local_path)),
-    )
-    monkeypatch.setattr(
-        utils,
-        "download_arena_hard",
-        lambda dataset, local_tables_path: calls.append(
-            ("arena", dataset, local_tables_path)
-        ),
-    )
-    monkeypatch.setattr(
-        utils,
-        "snapshot_download",
-        lambda **kwargs: calls.append(
-            ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
-        ),
-    )
-
-    utils.download_all()
-
-    tables_dir = tmp_path / "tables"
-    assert calls[:5] == [
-        ("hf", "alpaca-eval", tables_dir),
-        ("arena", "arena-hard-v0.1", tables_dir),
-        ("arena", "arena-hard-v2.0", tables_dir),
-        ("hf", "m-arena-hard-v0.1", tables_dir),
-        ("hf", "m-arena-hard-v2.0", tables_dir),
-    ]
-    assert calls[5] == (
-        "snapshot",
-        "geoalgo/multilingual-contexts-to-be-completed",
-        tmp_path / "contexts",
-    )
 
 
 def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):

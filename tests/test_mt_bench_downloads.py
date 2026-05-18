@@ -1,5 +1,4 @@
 import importlib
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pandas as pd
@@ -155,8 +154,6 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         max_model_len,
         chat_template,
         temperature_config,
-        usage_tracker,
-        usage_phase,
         limit_event_tracker,
         strip_thinking_before_turn_2_prompt,
         **engine_kwargs,
@@ -207,7 +204,6 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         args=args,
         questions_df=questions_df,
         ignore_cache=False,
-        usage_tracker=object(),
         limit_event_tracker=None,
     )
 
@@ -235,182 +231,6 @@ def test_parse_fastchat_verdict_accepts_bracketed_verdicts_after_thinking():
 def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
     assert fastchat_compat._parse_fastchat_verdict("A") == "error"
     assert fastchat_compat._parse_fastchat_verdict('{"verdict":"B"}') == "error"
-
-
-def test_pair_v2_system_prompt_matches_original_fastchat_contract():
-    rendered = fastchat_compat._PAIR_V2.system_prompt
-
-    assert "provide a short explanation" in rendered
-    assert "valid JSON" not in rendered
-    assert '"[[A]]"' in rendered
-    assert '"[[B]]"' in rendered
-    assert '"[[C]]"' in rendered
-    assert rendered.endswith(
-        'After providing your explanation, output your final verdict by strictly following this format: "[[A]]" if assistant A is better, "[[B]]" if assistant B is better, and "[[C]]" for a tie.\n'
-    )
-
-
-def test_mt_bench_prompt_templates_preserve_multi_turn_reference_blocks():
-    prompt_templates = importlib.import_module("judgearena.mt_bench.prompt_templates")
-
-    rendered = prompt_templates.build_mt_bench_user_prompt_template(
-        multi_turn=True,
-        ref_based=True,
-    )
-
-    assert "<|The Start of Reference Answer|>" in rendered
-    assert "### User:\n{question_1}" in rendered
-    assert "### Reference answer:\n{ref_answer_2}" in rendered
-    assert "### Assistant A:\n{answer_a_2}" in rendered
-    assert "### Assistant B:\n{answer_b_2}" in rendered
-
-
-def test_select_preset_prompt_uses_default_score_mode_with_mt_bench_template():
-    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
-
-    prompt = preset_judging._select_preset_prompt(
-        "math",
-        multi_turn=True,
-        prompt_preset="default",
-        provide_explanation=False,
-    )
-
-    assert prompt.parser_mode == "score"
-    assert prompt.ref_based is True
-    assert prompt.multi_turn is True
-    assert prompt.system_prompt
-    assert "<|The Start of Reference Answer|>" in prompt.user_prompt_template
-    assert "### Assistant A:\n{answer_a_2}" in prompt.user_prompt_template
-
-
-def test_select_preset_prompt_uses_skywork_verdict_mode_with_mt_bench_template():
-    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
-
-    prompt = preset_judging._select_preset_prompt(
-        "writing",
-        multi_turn=True,
-        prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
-        provide_explanation=True,
-    )
-
-    assert prompt.parser_mode == "verdict"
-    assert prompt.ref_based is False
-    assert prompt.multi_turn is True
-    assert prompt.system_prompt is None
-    assert "Please briefly explain your reasoning first" in prompt.user_prompt_template
-    assert "### Assistant B:\n{answer_b_2}" in prompt.user_prompt_template
-
-
-def test_preset_judging_uses_shared_swap_mode_both_semantics(monkeypatch):
-    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
-    questions_df = pd.DataFrame(
-        {
-            "category": ["writing"],
-            "turn_1": ["Q1"],
-            "turn_2": ["Q2"],
-            "reference_turn_1": [""],
-            "reference_turn_2": [""],
-        },
-        index=pd.Index([1], name="question_id"),
-    )
-    completions_a = pd.DataFrame(
-        {
-            "completion_turn_1": ["A1"],
-            "completion_turn_2": ["A2"],
-        },
-        index=questions_df.index,
-    )
-    completions_b = pd.DataFrame(
-        {
-            "completion_turn_1": ["B1"],
-            "completion_turn_2": ["B2"],
-        },
-        index=questions_df.index,
-    )
-    call_count = {"count": 0}
-
-    def fake_do_inference(**kwargs):
-        call_count["count"] += 1
-        if call_count["count"] <= 2:
-            return ["score_A: 9\nscore_B: 3"]
-        return ["score_A: 2\nscore_B: 7"]
-
-    monkeypatch.setattr(preset_judging, "do_inference", fake_do_inference)
-
-    prefs, annotations, metadata, num_inconsistent = (
-        preset_judging.judge_mt_bench_with_preset(
-            judge_chat_model=object(),
-            judge_model="Dummy/J",
-            questions=questions_df,
-            completions_a=completions_a,
-            completions_b=completions_b,
-            model_a="Model/A",
-            model_b="Model/B",
-            turns_mode="both",
-            swap_mode="both",
-            truncate_input_chars=None,
-            use_tqdm=False,
-            prompt_preset="default",
-            provide_explanation=False,
-        )
-    )
-
-    assert len(prefs) == 4
-    assert len(annotations) == 4
-    assert len(metadata) == 4
-    assert num_inconsistent == 0
-    assert [row["swapped"] for row in annotations] == [False, False, True, True]
-
-
-def test_preset_judging_uses_shared_char_truncation_event_kind(monkeypatch):
-    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
-    tracker = utils.LimitEventTracker()
-
-    monkeypatch.setattr(
-        preset_judging,
-        "do_inference",
-        lambda **kwargs: ["score_A: 8\nscore_B: 4"],
-    )
-
-    prefs, annotations, metadata, num_inconsistent = (
-        preset_judging.judge_mt_bench_with_preset(
-            judge_chat_model=object(),
-            judge_model="Dummy/J",
-            questions=pd.DataFrame(
-                {
-                    "category": ["writing"],
-                    "turn_1": ["Q" * 20],
-                    "turn_2": [""],
-                    "reference_turn_1": [""],
-                    "reference_turn_2": [""],
-                },
-                index=pd.Index([1], name="question_id"),
-            ),
-            completions_a=pd.DataFrame(
-                {"completion_turn_1": ["A" * 30], "completion_turn_2": [""]},
-                index=pd.Index([1], name="question_id"),
-            ),
-            completions_b=pd.DataFrame(
-                {"completion_turn_1": ["B" * 30], "completion_turn_2": [""]},
-                index=pd.Index([1], name="question_id"),
-            ),
-            model_a="Model/A",
-            model_b="Model/B",
-            turns_mode="single",
-            swap_mode="fixed",
-            truncate_input_chars=10,
-            use_tqdm=False,
-            prompt_preset="default",
-            provide_explanation=False,
-            limit_event_tracker=tracker,
-        )
-    )
-
-    assert len(prefs) == 1
-    assert len(annotations) == 1
-    assert len(metadata) == 1
-    assert num_inconsistent == 0
-    assert tracker.build_summary()["counts_by_kind"]["judge_input_char_truncation"] == 3
 
 
 def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
@@ -487,19 +307,6 @@ def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
     )
 
 
-def test_conservative_winner_marks_one_sided_parse_failures_as_error():
-    assert fastchat_compat._conservative_winner("model_A", "error") == (
-        "error",
-        False,
-    )
-    assert fastchat_compat._conservative_winner("error", "model_B") == (
-        "error",
-        False,
-    )
-    assert fastchat_compat._conservative_winner("error", "error") == ("error", False)
-    assert fastchat_compat._conservative_winner("model_A", "model_B") == ("tie", True)
-
-
 def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     questions_df = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
@@ -515,7 +322,7 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, usage_tracker, limit_event_tracker: (
+        lambda args, questions_df, ignore_cache, limit_event_tracker: (
             pd.DataFrame(
                 {
                     "completion_turn_1": ["A1"],
@@ -613,17 +420,6 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     assert "MT-Bench ignores provide_explanation=False" not in caplog.text
 
 
-def test_select_prompt_supports_optional_skywork_mt_bench_preset():
-    prompt = fastchat_compat._select_prompt(
-        "writing",
-        multi_turn=False,
-        prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
-    )
-
-    assert prompt.name == "skywork-pair-v2"
-    assert prompt.ref_based is False
-
-
 def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
     questions_df = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
@@ -639,7 +435,7 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, usage_tracker, limit_event_tracker: (
+        lambda args, questions_df, ignore_cache, limit_event_tracker: (
             pd.DataFrame(
                 {
                     "completion_turn_1": ["A1"],
@@ -716,7 +512,7 @@ def test_run_mt_bench_default_respects_judge_temperature_from_engine_kwargs(
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, usage_tracker, limit_event_tracker: (
+        lambda args, questions_df, ignore_cache, limit_event_tracker: (
             pd.DataFrame(
                 {
                     "completion_turn_1": ["A1"],
@@ -767,43 +563,3 @@ def test_run_mt_bench_default_respects_judge_temperature_from_engine_kwargs(
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
     assert captured["temperature"] == 0.4
-
-
-def test_save_mt_bench_results_uses_explicit_res_folder(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_write_run_metadata(**kwargs):
-        captured["output_dir"] = kwargs["output_dir"]
-        return kwargs["output_dir"] / "run-metadata.v1.json"
-
-    monkeypatch.setattr(mt_bench_utils, "write_run_metadata", fake_write_run_metadata)
-
-    args = _mt_bench_args(
-        dataset="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B="gpt-4",
-        judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
-        result_folder=str(tmp_path / "results-root"),
-    )
-    explicit_res_folder = tmp_path / "explicit-run"
-    result_name = "mt-bench-run"
-
-    mt_bench_utils._save_mt_bench_results(
-        args=args,
-        res_folder=explicit_res_folder,
-        result_name=result_name,
-        results={"task": "mt-bench"},
-        annotations_df=pd.DataFrame([{"question_id": 1, "turn": 1}]),
-        questions_df=pd.DataFrame(
-            {"turn_1": ["Q1"], "turn_2": ["Q2"]},
-            index=pd.Index([1], name="question_id"),
-        ),
-        pricing_reference=None,
-        started_at_utc=datetime.now(UTC),
-    )
-
-    assert captured["output_dir"] == explicit_res_folder
-    assert (explicit_res_folder / f"args-{result_name}.json").exists()
-    assert (explicit_res_folder / f"results-{result_name}.json").exists()
-    assert (explicit_res_folder / f"{result_name}-annotations.csv").exists()
-    assert not (tmp_path / "results-root" / result_name).exists()

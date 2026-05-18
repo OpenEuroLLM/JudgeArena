@@ -21,11 +21,6 @@ from judgearena.judge_prompt_presets import (
     resolve_pairwise_judge_prompt,
 )
 from judgearena.log import get_logger
-from judgearena.openrouter_reference_pricing import (
-    OpenRouterReferencePricingTracker,
-    build_openrouter_reference_pricing_summary,
-    format_openrouter_reference_pricing_summary,
-)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     LimitEventTracker,
@@ -33,7 +28,6 @@ from judgearena.utils import (
     data_root,
     do_inference,
     download_hf,
-    infer_model_spec_from_instance,
     read_df,
     strip_thinking_tags,
     strip_thinking_tags_with_metadata,
@@ -204,8 +198,6 @@ def evaluate_completions(
         from langchain_together.llms import Together
 
         judge_chat_model = Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo")
-    judge_model_spec = infer_model_spec_from_instance(judge_chat_model)
-    usage_tracker = OpenRouterReferencePricingTracker()
     limit_event_tracker = LimitEventTracker()
 
     unique_string = dataset + "-" + datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -230,9 +222,6 @@ def evaluate_completions(
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
         strip_thinking_before_judging=strip_thinking_before_judging,
-        usage_tracker=usage_tracker,
-        usage_phase="judge",
-        usage_model_spec=judge_model_spec,
         limit_event_tracker=limit_event_tracker,
     )
 
@@ -254,13 +243,6 @@ def evaluate_completions(
     logger.info("%s against %s:\n%s", method_A, method_B, results)
     with open(output_folder / "results.json", "w") as f:
         json.dump(_to_jsonable(results), f, allow_nan=False)
-    pricing_reference = None
-    if judge_model_spec is not None:
-        pricing_reference = build_openrouter_reference_pricing_summary(
-            tracker=usage_tracker,
-            phase_model_specs={"judge": judge_model_spec},
-        )
-        print(format_openrouter_reference_pricing_summary(pricing_reference))
 
     run_metadata = {
         "dataset": dataset,
@@ -290,7 +272,6 @@ def evaluate_completions(
             judge_system_prompt=resolved_prompt.system_prompt,
             judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
-            pricing_reference=pricing_reference,
         )
     except OSError as e:
         logger.warning("Failed to write run metadata: %s", e)
@@ -324,9 +305,6 @@ def annotate_battles(
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
-    usage_model_spec: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
     judge_tokenizer: "PreTrainedTokenizerBase | None" = None,
     max_judge_model_len: int | None = None,
@@ -488,9 +466,6 @@ def annotate_battles(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=usage_model_spec,
     )
 
     annotations = []
@@ -538,9 +513,6 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
-    usage_tracker: OpenRouterReferencePricingTracker | None = None,
-    usage_phase: str | None = None,
-    usage_model_spec: str | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
     judge_tokenizer: "PreTrainedTokenizerBase | None" = None,
     max_judge_model_len: int | None = None,
@@ -576,9 +548,6 @@ def judge_and_parse_prefs(
         user_prompt_template=user_prompt_template,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
-        usage_tracker=usage_tracker,
-        usage_phase=usage_phase,
-        usage_model_spec=usage_model_spec,
         limit_event_tracker=limit_event_tracker,
         judge_tokenizer=judge_tokenizer,
         max_judge_model_len=max_judge_model_len,
@@ -600,9 +569,6 @@ def judge_and_parse_prefs(
             user_prompt_template=user_prompt_template,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
-            usage_model_spec=usage_model_spec,
             limit_event_tracker=limit_event_tracker,
             judge_tokenizer=judge_tokenizer,
             max_judge_model_len=max_judge_model_len,

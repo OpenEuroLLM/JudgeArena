@@ -40,11 +40,6 @@ from judgearena.log import (
     make_run_log_path,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.openrouter_reference_pricing import (
-    OpenRouterReferencePricingTracker,
-    build_openrouter_reference_pricing_summary,
-    format_openrouter_reference_pricing_summary,
-)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     LimitEventTracker,
@@ -372,7 +367,6 @@ def main(args: CliArgs):
     """
 
     run_started_at = datetime.now(UTC)
-    usage_tracker = OpenRouterReferencePricingTracker()
     limit_event_tracker = LimitEventTracker()
 
     # Not working with vllm, not detecting model changes and serving the same cache for two different models...
@@ -445,7 +439,7 @@ def main(args: CliArgs):
 
     generation_function = generate_base if is_fluency_task else generate_instructions
 
-    def _run_generation(model_spec: str, usage_phase: str) -> pd.DataFrame:
+    def _run_generation(model_spec: str) -> pd.DataFrame:
         return generation_function(
             instructions=instructions,
             model=model_spec,
@@ -454,8 +448,6 @@ def main(args: CliArgs):
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             use_tqdm=args.use_tqdm,
-            usage_tracker=usage_tracker,
-            usage_phase=usage_phase,
             limit_event_tracker=limit_event_tracker,
             **_build_generation_model_kwargs(args=args, model_spec=model_spec),
         )
@@ -463,14 +455,14 @@ def main(args: CliArgs):
     def _align_completion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return df.set_index("instruction_index").loc[instructions.index].reset_index()
 
-    def _load_or_generate_completions(model_spec: str, usage_phase: str) -> pd.Series:
+    def _load_or_generate_completions(model_spec: str) -> pd.Series:
         preloaded = try_load_dataset_completions(args.task, model_spec, n_instructions)
         if preloaded is not None:
             aligned = _align_completion_dataframe(preloaded)
         else:
             aligned = _align_completion_dataframe(
                 cache_function_dataframe(
-                    lambda: _run_generation(model_spec, usage_phase),
+                    lambda: _run_generation(model_spec),
                     ignore_cache=ignore_cache,
                     cache_name=_generation_cache_name(args, model_spec=model_spec),
                 )
@@ -479,13 +471,11 @@ def main(args: CliArgs):
             instructions.index, "completion"
         ]
 
-    completions_A = _load_or_generate_completions(args.model_A, "generation_model_A")
+    completions_A = _load_or_generate_completions(args.model_A)
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
     if baseline_plan.is_flat:
-        completions_B = _load_or_generate_completions(
-            baseline_plan.single_model, "generation_model_B"
-        )
+        completions_B = _load_or_generate_completions(baseline_plan.single_model)
     else:
         # Per-row plan: fetch one completion set per unique baseline, then stitch
         # them together so completions_B[uid] uses the baseline that
@@ -493,7 +483,7 @@ def main(args: CliArgs):
         per_baseline_completions: dict[str, pd.Series] = {}
         for baseline_model in baseline_plan.unique_models:
             per_baseline_completions[baseline_model] = _load_or_generate_completions(
-                baseline_model, f"generation_model_B::{baseline_model}"
+                baseline_model
             )
         completions_B = pd.Series(
             [
@@ -580,9 +570,6 @@ def main(args: CliArgs):
         user_prompt_template=resolved_prompt.user_prompt_template,
         truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
-        usage_tracker=usage_tracker,
-        usage_phase="judge",
-        usage_model_spec=args.judge_model,
         limit_event_tracker=limit_event_tracker,
         judge_tokenizer=judge_tokenizer,
         max_judge_model_len=args.max_judge_model_len,
@@ -631,21 +618,6 @@ def main(args: CliArgs):
         args.judge_model,
     )
     print_results(results)
-    phase_model_specs: dict[str, str] = {
-        "generation_model_A": args.model_A,
-        "judge": args.judge_model,
-    }
-    if baseline_plan.is_flat:
-        phase_model_specs["generation_model_B"] = baseline_plan.single_model
-    else:
-        for baseline_model in baseline_plan.unique_models:
-            phase_model_specs[f"generation_model_B::{baseline_model}"] = baseline_model
-    pricing_reference = build_openrouter_reference_pricing_summary(
-        tracker=usage_tracker,
-        phase_model_specs=phase_model_specs,
-    )
-    print(format_openrouter_reference_pricing_summary(pricing_reference))
-
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
@@ -669,7 +641,6 @@ def main(args: CliArgs):
             judge_system_prompt=resolved_prompt.system_prompt,
             judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
-            pricing_reference=pricing_reference,
         )
     except OSError as e:
         logger.warning("Failed to write run metadata: %s", e)
