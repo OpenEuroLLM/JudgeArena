@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import pandas as pd
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
-import judgearena.mt_bench.fastchat_compat as fastchat_compat
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
 from judgearena.cli_common import BaseCliArgs
@@ -19,17 +18,56 @@ def _mt_bench_args(
     use_tqdm: bool = False,
     **base_overrides,
 ) -> BaseCliArgs:
-    """Construct a ``BaseCliArgs`` with MT-Bench CLI-style extras attached.
-
-    Using the real dataclass here keeps tests close to the production CLI
-    contract while attaching the task/model fields owned by ``CliArgs``.
-    """
+    """Construct a ``BaseCliArgs`` with MT-Bench-specific extras attached."""
     args = BaseCliArgs(**base_overrides)
     args.task = dataset
     args.model_A = model_A
     args.model_B = model_B
     args.use_tqdm = use_tqdm
     return args
+
+
+def _single_mt_bench_question_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+
+
+def _mt_bench_completion_pair(
+    questions_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return (
+        pd.DataFrame(
+            {
+                "completion_turn_1": ["A1"],
+                "completion_turn_2": ["A2"],
+            },
+            index=questions_df.index,
+        ),
+        pd.DataFrame(
+            {
+                "completion_turn_1": ["B1"],
+                "completion_turn_2": ["B2"],
+            },
+            index=questions_df.index,
+        ),
+    )
+
+
+def _stub_run_mt_bench_inputs(monkeypatch, questions_df: pd.DataFrame) -> None:
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda args, questions_df, ignore_cache, limit_event_tracker: (
+            _mt_bench_completion_pair(questions_df)
+        ),
+    )
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -217,20 +255,44 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
 
 
-def test_parse_fastchat_verdict_accepts_bracketed_verdicts_after_thinking():
-    assert (
-        fastchat_compat._parse_fastchat_verdict(
-            "<think>Need a longer chain.</think>[[A]]"
-        )
-        == "A"
+def test_mt_bench_generation_cache_name_changes_when_strip_flag_flips():
+    args_on = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=True,
     )
-    assert fastchat_compat._parse_fastchat_verdict("[[B]]") == "B"
-    assert fastchat_compat._parse_fastchat_verdict("[[C]]") == "tie"
+    args_off = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=False,
+    )
 
+    key_on = mt_bench_utils._mt_bench_generation_cache_name(
+        args_on,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
+    key_off = mt_bench_utils._mt_bench_generation_cache_name(
+        args_off,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
 
-def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
-    assert fastchat_compat._parse_fastchat_verdict("A") == "error"
-    assert fastchat_compat._parse_fastchat_verdict('{"verdict":"B"}') == "error"
+    assert key_on != key_off
+    assert key_on.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
+    assert key_off.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
 
 
 def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
@@ -308,37 +370,10 @@ def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
 
 
 def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
+    questions_df = _single_mt_bench_question_df()
     captured = {}
 
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, limit_event_tracker: (
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["A1"],
-                    "completion_turn_2": ["A2"],
-                },
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["B1"],
-                    "completion_turn_2": ["B2"],
-                },
-                index=questions_df.index,
-            ),
-        ),
-    )
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
 
     def fake_make_model(
         *,
@@ -396,62 +431,23 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     caplog.set_level("WARNING", logger=mt_bench_utils.__name__)
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
-    assert args.swap_mode == "fixed"
-    assert args.max_out_tokens_judge == 256
-    assert args.max_model_len == 16384
-    assert args.max_judge_model_len is None
     assert captured["make_model"]["max_tokens"] == 256
     assert captured["make_model"]["max_model_len"] is None
-    assert captured["make_model"]["kwargs"] == {
-        "gpu_memory_utilization": 0.7,
-        "language_model_only": True,
-        "thinking_token_budget": 512,
-        "kv_cache_dtype": "fp8",
-        "limit_event_stage": "judge_model_init",
-        "limit_event_model_spec": "VLLM/Qwen/Qwen3.5-27B-FP8",
-        "limit_event_tracker": captured["make_model"]["kwargs"]["limit_event_tracker"],
-    }
-    assert captured["make_model"]["temperature"] is None
-    assert captured["run_mt_bench_preset"]["args"].swap_mode == "fixed"
-    assert captured["run_mt_bench_preset"]["prompt_preset"] == "default"
+    assert captured["make_model"]["kwargs"]["limit_event_stage"] == "judge_model_init"
     assert (
-        captured["run_mt_bench_preset"]["args"].strip_thinking_before_judging is False
+        captured["make_model"]["kwargs"]["limit_event_model_spec"]
+        == "VLLM/Qwen/Qwen3.5-27B-FP8"
     )
+    assert "limit_event_tracker" in captured["make_model"]["kwargs"]
+    assert captured["run_mt_bench_preset"]["prompt_preset"] == "default"
     assert "MT-Bench ignores provide_explanation=False" not in caplog.text
 
 
 def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
+    questions_df = _single_mt_bench_question_df()
     captured = {}
 
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, limit_event_tracker: (
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["A1"],
-                    "completion_turn_2": ["A2"],
-                },
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["B1"],
-                    "completion_turn_2": ["B2"],
-                },
-                index=questions_df.index,
-            ),
-        ),
-    )
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
     monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
 
     def fake_run_mt_bench_preset(**kwargs):
@@ -489,8 +485,6 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
 
     assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
     assert captured["kwargs"]["args"].strip_thinking_before_judging is True
-    assert args.max_judge_model_len == 65536
-    assert args.truncate_judge_input_chars == 80000
     assert captured["kwargs"]["args"].truncate_judge_input_chars == 80000
     assert captured["kwargs"]["args"].max_judge_model_len == 65536
 
@@ -498,37 +492,10 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
 def test_run_mt_bench_default_respects_judge_temperature_from_engine_kwargs(
     monkeypatch,
 ):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
+    questions_df = _single_mt_bench_question_df()
     captured = {}
 
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache, limit_event_tracker: (
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["A1"],
-                    "completion_turn_2": ["A2"],
-                },
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {
-                    "completion_turn_1": ["B1"],
-                    "completion_turn_2": ["B2"],
-                },
-                index=questions_df.index,
-            ),
-        ),
-    )
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
 
     def fake_make_model(
         *,

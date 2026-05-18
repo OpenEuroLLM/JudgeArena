@@ -1,3 +1,4 @@
+import judgearena.mt_bench.fastchat_compat as fastchat_compat
 from judgearena.evaluate import PairScore
 from judgearena.utils import strip_thinking_tags
 
@@ -81,6 +82,22 @@ def test_pair_score_score_mode_ignores_bracketed_verdict_after_thinking():
     scorer = PairScore()
 
     assert scorer.parse_model_raw(raw_text) is None
+
+
+def test_parse_fastchat_verdict_accepts_bracketed_verdicts_after_thinking():
+    assert (
+        fastchat_compat._parse_fastchat_verdict(
+            "<think>Need a longer chain.</think>[[A]]"
+        )
+        == "A"
+    )
+    assert fastchat_compat._parse_fastchat_verdict("[[B]]") == "B"
+    assert fastchat_compat._parse_fastchat_verdict("[[C]]") == "tie"
+
+
+def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
+    assert fastchat_compat._parse_fastchat_verdict("A") == "error"
+    assert fastchat_compat._parse_fastchat_verdict('{"verdict":"B"}') == "error"
 
 
 def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
