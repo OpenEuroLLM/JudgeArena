@@ -73,7 +73,7 @@ for language in [
                 "dataset": f"{language}-contexts",
                 "model_A": baseline,
                 "model_B": model,
-                "judge_model": "VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8",
+                "judge_model": "VLLM/Qwen/Qwen3.5-27B-FP8",
                 "n_instructions": 100,
                 # "ignore_cache": None,
             }
