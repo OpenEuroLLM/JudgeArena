@@ -1,0 +1,21 @@
+<|用户提示词|>
+{user_prompt}
+
+<|助手 A 的 {completion_label} 开始|>
+{completion_A}
+<|助手 A 的 {completion_label} 结束|>
+
+<|助手 B 的 {completion_label} 开始|>
+{completion_B}
+<|助手 B 的 {completion_label} 结束|>
+
+# 你的输出
+
+## 格式说明
+你的输出应遵循以下格式：
+```
+score_A: <一个 0 到 10 之间的数字，用于表示助手 A 回答的质量>
+score_B: <一个 0 到 10 之间的数字，用于表示助手 B 回答的质量>
+```
+
+## 你的输出，请勿重复上述输入{explanation_suffix}

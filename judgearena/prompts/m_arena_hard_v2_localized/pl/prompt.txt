@@ -1,0 +1,21 @@
+<|Polecenie użytkownika|>
+{user_prompt}
+
+<|Początek {completion_label} Asystenta A|>
+{completion_A}
+<|Koniec {completion_label} Asystenta A|>
+
+<|Początek {completion_label} Asystenta B|>
+{completion_B}
+<|Koniec {completion_label} Asystenta B|>
+
+# Twoje dane wyjściowe
+
+## Opis formatu
+Twoje dane wyjściowe powinny być zgodne z poniższym formatem:
+```
+score_A: <liczba od 0 do 10 określająca jakość odpowiedzi Asystenta A>
+score_B: <liczba od 0 do 10 określająca jakość odpowiedzi Asystenta B>
+```
+
+## Twoje dane wyjściowe, nie powtarzaj powyższych danych wejściowych{explanation_suffix}

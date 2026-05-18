@@ -8,9 +8,16 @@ JudgeParserMode = Literal["score", "verdict"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 SKYWORK_JUDGE_PROMPT_PRESET = "skywork"
+M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS = {
+    "ar": "m-arena-hard-v2-localized-ar",
+    "pl": "m-arena-hard-v2-localized-pl",
+    "uk": "m-arena-hard-v2-localized-uk",
+    "zh": "m-arena-hard-v2-localized-zh",
+}
 JUDGE_PROMPT_PRESETS = (
     DEFAULT_JUDGE_PROMPT_PRESET,
     SKYWORK_JUDGE_PROMPT_PRESET,
+    *M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS.values(),
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -54,6 +61,46 @@ _PAIRWISE_PROMPT_PRESETS: dict[str, PairwiseJudgePromptPreset] = {
         system_prompt_filename=None,
         user_prompt_filename="skywork-prompt.txt",
         user_prompt_with_explanation_filename="skywork-prompt-with-explanation.txt",
+    ),
+    M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["ar"]: PairwiseJudgePromptPreset(
+        name=M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["ar"],
+        parser_mode="score",
+        system_prompt_filename="m_arena_hard_v2_localized/ar/system-prompt.txt",
+        user_prompt_filename="m_arena_hard_v2_localized/ar/prompt.txt",
+        user_prompt_with_explanation_filename="m_arena_hard_v2_localized/ar/prompt.txt",
+        supports_explanation=False,
+        completion_label_single="إجابة",
+        completion_label_multi_turn="محادثة مع المستخدم",
+    ),
+    M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["pl"]: PairwiseJudgePromptPreset(
+        name=M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["pl"],
+        parser_mode="score",
+        system_prompt_filename="m_arena_hard_v2_localized/pl/system-prompt.txt",
+        user_prompt_filename="m_arena_hard_v2_localized/pl/prompt.txt",
+        user_prompt_with_explanation_filename="m_arena_hard_v2_localized/pl/prompt.txt",
+        supports_explanation=False,
+        completion_label_single="odpowiedzi",
+        completion_label_multi_turn="rozmowy z użytkownikiem",
+    ),
+    M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["uk"]: PairwiseJudgePromptPreset(
+        name=M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["uk"],
+        parser_mode="score",
+        system_prompt_filename="m_arena_hard_v2_localized/uk/system-prompt.txt",
+        user_prompt_filename="m_arena_hard_v2_localized/uk/prompt.txt",
+        user_prompt_with_explanation_filename="m_arena_hard_v2_localized/uk/prompt.txt",
+        supports_explanation=False,
+        completion_label_single="відповіді",
+        completion_label_multi_turn="розмови з користувачем",
+    ),
+    M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["zh"]: PairwiseJudgePromptPreset(
+        name=M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS["zh"],
+        parser_mode="score",
+        system_prompt_filename="m_arena_hard_v2_localized/zh/system-prompt.txt",
+        user_prompt_filename="m_arena_hard_v2_localized/zh/prompt.txt",
+        user_prompt_with_explanation_filename="m_arena_hard_v2_localized/zh/prompt.txt",
+        supports_explanation=False,
+        completion_label_single="回答",
+        completion_label_multi_turn="与用户的对话",
     ),
 }
 
