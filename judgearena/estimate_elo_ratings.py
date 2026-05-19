@@ -1,6 +1,9 @@
 import hashlib
+import json
+import re
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -33,6 +36,7 @@ class CliEloArgs(BaseCliArgs):
     n_bootstraps: int = 20
     seed: int = 0
     baseline_model: str | None = None
+    elo_random_battles: int | None = None
 
 
 def compute_bradley_terry(
@@ -147,6 +151,103 @@ def compute_bradley_terry(
     return dict(pd.Series(elo_scores, index=models.index))
 
 
+def _sample_fingerprint(sampled: pd.DataFrame) -> str:
+    rows = []
+    for index, row in sampled.iterrows():
+        rows.append(
+            {
+                "index": int(index)
+                if isinstance(index, int | np.integer)
+                else str(index),
+                "question_id": str(row.get("question_id", "")),
+                "model_a": str(row["model_a"]),
+                "model_b": str(row["model_b"]),
+            }
+        )
+    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
+
+
+def select_seeded_random_arena_battles(
+    df_battles: pd.DataFrame,
+    *,
+    n_battles: int,
+    seed: int,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Select a shared random battle panel for outside-model Elo estimation."""
+    n = min(n_battles, len(df_battles))
+    sampled = df_battles.sample(n=n, random_state=seed, replace=False)
+    metadata: dict[str, object] = {
+        "sampling_mode": "seeded_random",
+        "random_seed": seed,
+        "requested_rows": n_battles,
+        "sampled_rows": len(sampled),
+        "sampled_original_indices": [
+            int(index) if isinstance(index, int | np.integer) else str(index)
+            for index in sampled.index
+        ],
+        "sampled_question_ids": [
+            str(value) for value in sampled["question_id"].tolist()
+        ],
+        "sample_fingerprint": _sample_fingerprint(sampled),
+    }
+    return sampled.reset_index(drop=True), metadata
+
+
+def _sampling_cache_token(
+    sampling_metadata: dict[str, object],
+    *,
+    n_instructions: int | None,
+    n_instructions_per_language: int | None,
+) -> str:
+    mode = sampling_metadata.get("sampling_mode")
+    if mode == "seeded_random":
+        return (
+            "seeded-random_"
+            f"{sampling_metadata['requested_rows']}_"
+            f"seed-{sampling_metadata['random_seed']}_"
+            f"{str(sampling_metadata['sample_fingerprint'])[:12]}"
+        )
+    return f"head_{n_instructions}_{n_instructions_per_language}"
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "model"
+
+
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, float) and np.isnan(value):
+        return None
+    return value
+
+
+def write_elo_result(
+    *,
+    result_folder: str | Path,
+    summary: dict[str, object],
+    bootstrap_ratings: list[dict[str, float]],
+) -> Path:
+    model = str(summary["model_A"])
+    arena = str(summary["arena"])
+    output_dir = Path(result_folder) / f"elo-{_slugify(arena)}-{_slugify(model)}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"results-{_slugify(model)}.json"
+    payload = {
+        "summary": summary,
+        "bootstrap_ratings": bootstrap_ratings,
+    }
+    path.write_text(json.dumps(_jsonable(payload), indent=2) + "\n")
+    return path
+
+
 def main(args: CliEloArgs) -> dict:
     rng = np.random.default_rng(args.seed)
 
@@ -159,17 +260,34 @@ def main(args: CliEloArgs) -> dict:
     if args.languages:
         df_battles = df_battles[df_battles["lang"].isin(args.languages)]
 
-    # Keep at most n_instructions_per_language per language
-    if args.n_instructions_per_language is not None:
-        df_battles = (
-            df_battles.groupby("lang")
-            .head(args.n_instructions_per_language)
-            .reset_index(drop=True)
+    random_sampling = args.elo_random_battles is not None
+    sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
+    if random_sampling:
+        if (
+            args.n_instructions is not None
+            or args.n_instructions_per_language is not None
+        ):
+            raise ValueError(
+                "n_instructions and n_instructions_per_language cannot be combined "
+                "with elo_random_battles."
+            )
+        df_battles, sampling_metadata = select_seeded_random_arena_battles(
+            df_battles,
+            n_battles=args.elo_random_battles,
+            seed=args.seed,
         )
+    else:
+        # Keep at most n_instructions_per_language per language
+        if args.n_instructions_per_language is not None:
+            df_battles = (
+                df_battles.groupby("lang")
+                .head(args.n_instructions_per_language)
+                .reset_index(drop=True)
+            )
 
-    # Keep at most n_instructions total (subset used for LLM-judge evaluation)
-    if args.n_instructions is not None:
-        df_battles = df_battles.head(args.n_instructions)
+        # Keep at most n_instructions total (subset used for LLM-judge evaluation)
+        if args.n_instructions is not None:
+            df_battles = df_battles.head(args.n_instructions)
 
     df_battles = df_battles.reset_index(drop=True)
     n = len(df_battles)
@@ -212,9 +330,14 @@ def main(args: CliEloArgs) -> dict:
         if extra_kwargs
         else ""
     )
+    sampling_cache_token = _sampling_cache_token(
+        sampling_metadata,
+        n_instructions=args.n_instructions,
+        n_instructions_per_language=args.n_instructions_per_language,
+    )
     cache_suffix = (
         f"{args.arena}_{replace_slash(args.model)}_"
-        f"{args.n_instructions}_{args.n_instructions_per_language}_"
+        f"{sampling_cache_token}_"
         f"{languages_str}_{args.truncate_all_input_chars}_{args.max_out_tokens_models}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
@@ -273,8 +396,6 @@ def main(args: CliEloArgs) -> dict:
         judge_extra_kwargs["max_model_len"] = args.max_judge_model_len
     if args.chat_template is not None:
         judge_extra_kwargs["chat_template"] = args.chat_template
-    judge_extra_kwargs.update(args.engine_kwargs)
-    judge_extra_kwargs.update(args.judge_engine_kwargs)
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
@@ -419,8 +540,38 @@ def main(args: CliEloArgs) -> dict:
     else:
         print("  Not enough data to compute ELO ratings.")
 
-    return {
+    model_rating_values = [
+        rating[model_name] for rating in bootstrap_ratings if model_name in rating
+    ]
+    elo_mean = (
+        float(np.mean(model_rating_values)) if model_rating_values else float("nan")
+    )
+    elo_std = (
+        float(np.std(model_rating_values)) if model_rating_values else float("nan")
+    )
+    result_summary = {
         **summary,
+        "arena": args.arena,
+        "model_A": model_name,
+        "judge_model": args.judge_model,
+        "num_battles": n,
+        "llm_judged_battles": n_llm,
+        "human_anchor_battles": n_human,
+        "sampling_metadata": sampling_metadata,
+        "elo_mean": elo_mean,
+        "elo_std": elo_std,
+        "elo_num_bootstraps": len(model_rating_values),
+        "source_battle_counts": battle_counts,
+    }
+    result_path = write_elo_result(
+        result_folder=args.result_folder,
+        summary=result_summary,
+        bootstrap_ratings=bootstrap_ratings,
+    )
+
+    return {
+        **result_summary,
         "bootstrap_ratings": bootstrap_ratings,
         "model_name": model_name,
+        "result_path": str(result_path),
     }
