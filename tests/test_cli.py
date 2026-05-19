@@ -89,99 +89,10 @@ def test_elo_task_dispatches_to_estimate_elo_ratings(
     assert elo_args.judge_model == "Dummy/J"
 
 
-def test_dataset_flag_is_deprecated_alias(capture_mains):
-    with pytest.warns(DeprecationWarning, match="--dataset is deprecated"):
-        cli_module.cli(
-            [
-                "--dataset",
-                "alpaca-eval",
-                "--model_A",
-                "Dummy/A",
-                "--model_B",
-                "Dummy/B",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-    assert capture_mains["module"] == "generate_and_evaluate"
-    assert capture_mains["args"].task == "alpaca-eval"
-
-
-def test_arena_flag_is_deprecated_alias_lowercases(capture_mains):
-    """`--arena ComparIA` must still route to the ComparIA ELO path.
-
-    The deprecated path is allowed to be case-insensitive because that was the
-    historical contract for ``judgearena-elo --arena LMArena-140k``.
-    """
-    with pytest.warns(DeprecationWarning, match="--arena is deprecated"):
-        cli_module.cli(
-            [
-                "--arena",
-                "ComparIA",
-                "--model_A",
-                "Dummy/X",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-    assert capture_mains["module"] == "elo"
-    assert capture_mains["args"].arena == "ComparIA"
-
-
-def test_model_flag_is_deprecated_alias(capture_mains):
-    with pytest.warns(DeprecationWarning, match="--model is deprecated"):
-        cli_module.cli(
-            [
-                "--task",
-                "elo-comparia",
-                "--model",
-                "Dummy/X",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-    assert capture_mains["module"] == "elo"
-    assert capture_mains["args"].model == "Dummy/X"
-
-
-def test_model_and_model_a_collide_raises(capture_mains):
-    with pytest.raises(SystemExit, match="exactly one of --model_A/--model"):
-        cli_module.cli(
-            [
-                "--task",
-                "elo-comparia",
-                "--model",
-                "Dummy/X",
-                "--model_A",
-                "Dummy/Y",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-
-
 def test_missing_task_raises(capture_mains):
-    with pytest.raises(SystemExit, match="One of --task"):
+    with pytest.raises(SystemExit, match="--task is required"):
         cli_module.cli(
             [
-                "--model_A",
-                "Dummy/A",
-                "--model_B",
-                "Dummy/B",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-
-
-def test_multiple_task_flags_raise(capture_mains):
-    with pytest.raises(SystemExit, match="exactly one of"):
-        cli_module.cli(
-            [
-                "--task",
-                "alpaca-eval",
-                "--dataset",
-                "alpaca-eval",
                 "--model_A",
                 "Dummy/A",
                 "--model_B",
@@ -289,26 +200,6 @@ def test_pairwise_task_allows_missing_model_b_when_native_baseline_exists(
     assert ge_args.task == task
     assert ge_args.model_A == "Dummy/A"
     assert ge_args.model_B is None
-
-
-def test_deprecated_model_flag_routes_into_pairwise_task(capture_mains):
-    """`--model` is a deprecated alias for `--model_A` even on pairwise tasks."""
-    with pytest.warns(DeprecationWarning, match="--model is deprecated"):
-        cli_module.cli(
-            [
-                "--task",
-                "alpaca-eval",
-                "--model",
-                "Dummy/A",
-                "--model_B",
-                "Dummy/B",
-                "--judge",
-                "Dummy/J",
-            ]
-        )
-    assert capture_mains["module"] == "generate_and_evaluate"
-    assert capture_mains["args"].model_A == "Dummy/A"
-    assert capture_mains["args"].model_B == "Dummy/B"
 
 
 def test_elo_forwards_optional_flags(capture_mains):

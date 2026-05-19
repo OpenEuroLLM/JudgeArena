@@ -8,7 +8,6 @@ ELO rating flow; anything else runs the generate-and-judge flow.
 from __future__ import annotations
 
 import argparse
-import warnings
 
 from judgearena.cli_common import (
     add_common_arguments,
@@ -56,14 +55,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--dataset",
-        help="[DEPRECATED] Use `--task` instead.",
-    )
-    parser.add_argument(
-        "--arena",
-        help="[DEPRECATED] Use `--task elo-<arena>` instead.",
-    )
-    parser.add_argument(
         "--model_A",
         help=(
             "Model under evaluation. For pairwise tasks, this is Model A (paired with "
@@ -73,10 +64,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model_B",
         help="Model B for generate+judge tasks (not yet supported for elo tasks).",
-    )
-    parser.add_argument(
-        "--model",
-        help="[DEPRECATED] Use `--model_A` instead.",
     )
     parser.add_argument(
         "--use_tqdm",
@@ -118,58 +105,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_task(args: argparse.Namespace) -> str:
-    """Return the task value from --task, or a deprecated --dataset / --arena."""
-    set_flags = [
-        name
-        for name, value in (
-            ("--task", args.task),
-            ("--dataset", args.dataset),
-            ("--arena", args.arena),
-        )
-        if value is not None
-    ]
-    if len(set_flags) > 1:
-        raise SystemExit(
-            f"Specify exactly one of --task/--dataset/--arena, got {set_flags}."
-        )
-    if not set_flags:
-        raise SystemExit("One of --task/--dataset/--arena is required.")
-
-    if args.task is not None:
-        return args.task
-    if args.dataset is not None:
-        warnings.warn(
-            "--dataset is deprecated; use --task instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return args.dataset
-    # --arena was historically case-sensitive (e.g. "LMArena-140k").  Lowercase it
-    # here so the deprecated path lands on a valid ELO_TASK_TO_ARENA key without
-    # asking users to relearn the arena names.
-    lower_arena = args.arena.lower()
-    warnings.warn(
-        f"--arena is deprecated; use --task {ELO_TASK_PREFIX}{lower_arena} instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return f"{ELO_TASK_PREFIX}{lower_arena}"
-
-
-def _resolve_model_a(args: argparse.Namespace) -> str | None:
-    """Collapse the deprecated --model flag into --model_A."""
-    if args.model is not None and args.model_A is not None:
-        raise SystemExit(
-            "Specify exactly one of --model_A/--model; --model is a deprecated alias."
-        )
-    if args.model is not None:
-        warnings.warn(
-            "--model is deprecated; use --model_A instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return args.model
-    return args.model_A
+    if args.task is None:
+        raise SystemExit("--task is required.")
+    return args.task
 
 
 def _build_elo_args(
@@ -250,17 +188,20 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
-    model_a = _resolve_model_a(args)
     if task.startswith(ELO_TASK_PREFIX):
         if task not in ELO_TASK_TO_ARENA:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
+        elo_args = _build_elo_args(
+            args, arena=ELO_TASK_TO_ARENA[task], model_a=args.model_A
+        )
         logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:
-        ge_args = _build_generate_and_evaluate_args(args, task=task, model_a=model_a)
+        ge_args = _build_generate_and_evaluate_args(
+            args, task=task, model_a=args.model_A
+        )
         logger.debug("Running with CLI args: %s", ge_args.__dict__)
         main_generate_and_evaluate(ge_args)
 

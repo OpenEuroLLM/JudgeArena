@@ -70,19 +70,12 @@ def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
     string and dict across answer files, so `datasets.load_dataset` can't
     materialize them into a single Arrow schema.
 
-    Re-downloads when the instructions table is stale - currently only v2.0
-    detects this, because routing by category requires the `category` column
-    that older caches were written without.
     """
     if dataset not in _ARENA_HARD_HF_VARIANTS:
         return
     instructions_path = local_tables_path / "instructions" / f"{dataset}.csv"
     model_outputs_path = local_tables_path / "model_outputs" / f"{dataset}.csv.zip"
-    if (
-        instructions_path.exists()
-        and model_outputs_path.exists()
-        and _instructions_cache_is_fresh(instructions_path, dataset)
-    ):
+    if instructions_path.exists() and model_outputs_path.exists():
         return
 
     variant = _ARENA_HARD_HF_VARIANTS[dataset]
@@ -106,15 +99,6 @@ def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
     df_instructions.to_csv(instructions_path, index=False)
     if df_model_outputs is not None:
         df_model_outputs.to_csv(model_outputs_path, index=False)
-
-
-def _instructions_cache_is_fresh(instructions_path: Path, dataset: str) -> bool:
-    """Category-aware datasets need a `category` column; older caches lack it."""
-    native = arena_hard_native_baseline(dataset)
-    if not isinstance(native, Mapping):
-        return True
-    cached_columns = pd.read_csv(instructions_path, nrows=0).columns
-    return "category" in cached_columns
 
 
 def _read_arena_hard_jsonl_frames(variant_dir: Path) -> pd.DataFrame:
