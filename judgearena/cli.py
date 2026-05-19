@@ -8,6 +8,7 @@ ELO rating flow; anything else runs the generate-and-judge flow.
 from __future__ import annotations
 
 import argparse
+import warnings
 
 from judgearena.cli_common import (
     add_common_arguments,
@@ -53,6 +54,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "`mt-bench`, `fluency-{lang}`. ELO tasks: `elo-lmarena-100k`, `elo-lmarena-140k`, "
             "`elo-lmarena`, `elo-comparia`."
         ),
+    )
+    parser.add_argument(
+        "--dataset",
+        help="[DEPRECATED] Use `--task` instead.",
+    )
+    parser.add_argument(
+        "--arena",
+        help="[DEPRECATED] Use `--task elo-<arena>` instead.",
     )
     parser.add_argument(
         "--model_A",
@@ -105,9 +114,42 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_task(args: argparse.Namespace) -> str:
-    if args.task is None:
-        raise SystemExit("--task is required.")
-    return args.task
+    """Return the task value from --task, or a deprecated --dataset / --arena."""
+    set_flags = [
+        name
+        for name, value in (
+            ("--task", args.task),
+            ("--dataset", args.dataset),
+            ("--arena", args.arena),
+        )
+        if value is not None
+    ]
+    if len(set_flags) > 1:
+        raise SystemExit(
+            f"Specify exactly one of --task/--dataset/--arena, got {set_flags}."
+        )
+    if not set_flags:
+        raise SystemExit("One of --task/--dataset/--arena is required.")
+
+    if args.task is not None:
+        return args.task
+    if args.dataset is not None:
+        warnings.warn(
+            "--dataset is deprecated; use --task instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return args.dataset
+    # --arena was historically case-sensitive (e.g. "LMArena-140k").  Lowercase it
+    # here so the deprecated path lands on a valid ELO_TASK_TO_ARENA key without
+    # asking users to relearn the arena names.
+    lower_arena = args.arena.lower()
+    warnings.warn(
+        f"--arena is deprecated; use --task {ELO_TASK_PREFIX}{lower_arena} instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return f"{ELO_TASK_PREFIX}{lower_arena}"
 
 
 def _build_elo_args(

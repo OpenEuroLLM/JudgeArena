@@ -89,10 +89,63 @@ def test_elo_task_dispatches_to_estimate_elo_ratings(
     assert elo_args.judge_model == "Dummy/J"
 
 
-def test_missing_task_raises(capture_mains):
-    with pytest.raises(SystemExit, match="--task is required"):
+def test_dataset_flag_is_deprecated_alias(capture_mains):
+    with pytest.warns(DeprecationWarning, match="--dataset is deprecated"):
         cli_module.cli(
             [
+                "--dataset",
+                "alpaca-eval",
+                "--model_A",
+                "Dummy/A",
+                "--model_B",
+                "Dummy/B",
+                "--judge",
+                "Dummy/J",
+            ]
+        )
+    assert capture_mains["module"] == "generate_and_evaluate"
+    assert capture_mains["args"].task == "alpaca-eval"
+
+
+def test_arena_flag_is_deprecated_alias_lowercases(capture_mains):
+    """`--arena ComparIA` must still route to the ComparIA ELO path."""
+    with pytest.warns(DeprecationWarning, match="--arena is deprecated"):
+        cli_module.cli(
+            [
+                "--arena",
+                "ComparIA",
+                "--model_A",
+                "Dummy/X",
+                "--judge",
+                "Dummy/J",
+            ]
+        )
+    assert capture_mains["module"] == "elo"
+    assert capture_mains["args"].arena == "ComparIA"
+
+
+def test_missing_task_raises(capture_mains):
+    with pytest.raises(SystemExit, match="One of --task"):
+        cli_module.cli(
+            [
+                "--model_A",
+                "Dummy/A",
+                "--model_B",
+                "Dummy/B",
+                "--judge",
+                "Dummy/J",
+            ]
+        )
+
+
+def test_multiple_task_flags_raise(capture_mains):
+    with pytest.raises(SystemExit, match="exactly one of"):
+        cli_module.cli(
+            [
+                "--task",
+                "alpaca-eval",
+                "--dataset",
+                "alpaca-eval",
                 "--model_A",
                 "Dummy/A",
                 "--model_B",
