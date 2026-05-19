@@ -75,6 +75,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model B for generate+judge tasks (not yet supported for elo tasks).",
     )
     parser.add_argument(
+        "--model",
+        help="[DEPRECATED] Use `--model_A` instead.",
+    )
+    parser.add_argument(
         "--use_tqdm",
         action="store_true",
         help="[generate+judge] Use tqdm (not compatible with vLLM).",
@@ -152,6 +156,22 @@ def _resolve_task(args: argparse.Namespace) -> str:
     return f"{ELO_TASK_PREFIX}{lower_arena}"
 
 
+def _resolve_model_a(args: argparse.Namespace) -> str | None:
+    """Collapse the deprecated --model flag into --model_A."""
+    if args.model is not None and args.model_A is not None:
+        raise SystemExit(
+            "Specify exactly one of --model_A/--model; --model is a deprecated alias."
+        )
+    if args.model is not None:
+        warnings.warn(
+            "--model is deprecated; use --model_A instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return args.model
+    return args.model_A
+
+
 def _build_elo_args(
     args: argparse.Namespace, arena: str, model_a: str | None
 ) -> CliEloArgs:
@@ -178,6 +198,9 @@ def _build_elo_args(
         ignore_cache=args.ignore_cache,
         judge_prompt_preset=args.judge_prompt_preset,
         mt_bench_judge_mode=args.mt_bench_judge_mode,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        skip_judging=args.skip_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
         truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
@@ -213,6 +236,9 @@ def _build_generate_and_evaluate_args(
         ignore_cache=args.ignore_cache,
         judge_prompt_preset=args.judge_prompt_preset,
         mt_bench_judge_mode=args.mt_bench_judge_mode,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        skip_judging=args.skip_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
         truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
@@ -234,20 +260,17 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
+    model_a = _resolve_model_a(args)
     if task.startswith(ELO_TASK_PREFIX):
         if task not in ELO_TASK_TO_ARENA:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(
-            args, arena=ELO_TASK_TO_ARENA[task], model_a=args.model_A
-        )
+        elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
         logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:
-        ge_args = _build_generate_and_evaluate_args(
-            args, task=task, model_a=args.model_A
-        )
+        ge_args = _build_generate_and_evaluate_args(args, task=task, model_a=model_a)
         logger.debug("Running with CLI args: %s", ge_args.__dict__)
         main_generate_and_evaluate(ge_args)
 
