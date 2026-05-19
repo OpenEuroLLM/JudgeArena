@@ -245,7 +245,6 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
-            prompt_preset=prompt_preset,
             limit_event_tracker=limit_event_tracker,
         )
     )

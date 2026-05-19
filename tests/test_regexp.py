@@ -1,5 +1,6 @@
 import judgearena.mt_bench.fastchat_compat as fastchat_compat
 from judgearena.evaluate import PairScore
+from judgearena.judge_prompt_presets import resolve_pairwise_judge_prompt
 
 
 def test_pair_score():
@@ -74,3 +75,13 @@ def test_pair_score_verdict_mode_does_not_parse_score_only_outputs():
     scorer = PairScore(parser_mode="verdict")
 
     assert scorer.parse_model_raw(raw_text) is None
+
+
+def test_localized_prompt_preset_renders_translated_labels():
+    resolved = resolve_pairwise_judge_prompt(
+        prompt_preset="m-arena-hard-v2-localized-zh",
+        provide_explanation=False,
+    )
+
+    assert resolved.parser_mode == "score"
+    assert "<|助手 A 的 回答 开始|>" in resolved.user_prompt_template

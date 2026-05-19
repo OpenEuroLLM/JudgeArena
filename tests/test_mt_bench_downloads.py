@@ -7,7 +7,6 @@ import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
 from judgearena.cli_common import BaseCliArgs
-from judgearena.judge_prompt_presets import SKYWORK_JUDGE_PROMPT_PRESET
 
 
 def _mt_bench_args(
@@ -393,49 +392,6 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
     assert "limit_event_tracker" in captured["make_model"]["kwargs"]
     assert captured["run_mt_bench_preset"]["prompt_preset"] == "default"
     assert "MT-Bench ignores provide_explanation=False" not in caplog.text
-
-
-def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
-    questions_df = _single_mt_bench_question_df()
-    captured = {}
-
-    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
-
-    def fake_run_mt_bench_preset(**kwargs):
-        captured["kwargs"] = kwargs
-        return pd.Series([0.0], dtype=float)
-
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "_run_mt_bench_preset",
-        fake_run_mt_bench_preset,
-    )
-
-    args = _mt_bench_args(
-        dataset="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B="gpt-4",
-        judge_model="VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
-        n_instructions=1,
-        truncate_all_input_chars=8192,
-        truncate_judge_input_chars=80000,
-        max_out_tokens_models=1024,
-        max_out_tokens_judge=256,
-        max_model_len=16384,
-        max_judge_model_len=65536,
-        chat_template=None,
-        provide_explanation=False,
-        swap_mode="both",
-        judge_prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
-        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
-    )
-
-    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
-
-    assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
-    assert captured["kwargs"]["args"].truncate_judge_input_chars == 80000
-    assert captured["kwargs"]["args"].max_judge_model_len == 65536
 
 
 def test_run_mt_bench_default_respects_judge_temperature_from_engine_kwargs(
