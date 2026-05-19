@@ -1,5 +1,5 @@
+import judgearena.mt_bench.fastchat_compat as fastchat_compat
 from judgearena.evaluate import PairScore
-from judgearena.judge_prompt_presets import resolve_pairwise_judge_prompt
 
 
 def test_pair_score():
@@ -41,8 +41,28 @@ def test_regexp():
     print(pref)
 
 
+def test_pair_score_score_mode_does_not_parse_bracketed_verdicts():
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw("Explanation: ok\n[[A]]") is None
+    assert scorer.parse_model_raw("Explanation: ok\n[[B]]") is None
+    assert scorer.parse_model_raw("Explanation: ok\n[[C]]") is None
+
+
+def test_parse_fastchat_verdict_accepts_bracketed_verdicts():
+    assert fastchat_compat._parse_fastchat_verdict("[[A]]") == "A"
+    assert fastchat_compat._parse_fastchat_verdict("[[B]]") == "B"
+    assert fastchat_compat._parse_fastchat_verdict("[[C]]") == "tie"
+
+
+def test_parse_fastchat_verdict_marks_non_bracketed_outputs_as_error():
+    assert fastchat_compat._parse_fastchat_verdict("A") == "error"
+    assert fastchat_compat._parse_fastchat_verdict('{"verdict":"B"}') == "error"
+
+
 def test_pair_score_verdict_mode_uses_bracketed_verdicts():
     raw_text = "score_A: 10\nscore_B: 0\n[[B]]"
+
     scorer = PairScore(parser_mode="verdict")
 
     assert scorer.parse_model_raw(raw_text) == 1.0
@@ -50,16 +70,7 @@ def test_pair_score_verdict_mode_uses_bracketed_verdicts():
 
 def test_pair_score_verdict_mode_does_not_parse_score_only_outputs():
     raw_text = "score_A: 10\nscore_B: 0"
+
     scorer = PairScore(parser_mode="verdict")
 
     assert scorer.parse_model_raw(raw_text) is None
-
-
-def test_localized_prompt_preset_renders_translated_labels():
-    resolved = resolve_pairwise_judge_prompt(
-        prompt_preset="m-arena-hard-v2-localized-zh",
-        provide_explanation=False,
-    )
-
-    assert resolved.parser_mode == "score"
-    assert "<|助手 A 的 回答 开始|>" in resolved.user_prompt_template

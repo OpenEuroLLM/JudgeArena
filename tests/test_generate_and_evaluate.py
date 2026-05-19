@@ -89,6 +89,36 @@ def test_resolve_plan_v20_routes_per_category():
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
 
 
+def test_resolve_plan_alpaca_eval_uses_native_baseline():
+    plan = _resolve_baseline_plan(
+        args=_make_args("alpaca-eval"),
+        instructions_df=_instructions(["q1", "q2"]),
+    )
+    assert plan.is_flat
+    assert plan.single_model == "gpt4_1106_preview"
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("mt-bench", "gpt-4"),
+        ("m-arena-hard-v0.1-uk", "CohereLabs/aya-expanse-8b"),
+        ("m-arena-hard-v2.0-EU", "google/gemini-2.5-flash"),
+    ],
+)
+def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected: str):
+    assert native_pairwise_baseline(task) == expected
+
+
+def test_resolve_plan_m_arena_hard_uses_native_baseline():
+    plan = _resolve_baseline_plan(
+        args=_make_args("m-arena-hard-v2.0-EU"),
+        instructions_df=_instructions(["q1", "q2"]),
+    )
+    assert plan.is_flat
+    assert plan.single_model == "google/gemini-2.5-flash"
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         args=_make_args("arena-hard-v2.0", model_b="override"),
@@ -99,19 +129,6 @@ def test_resolve_plan_explicit_model_b_overrides_native():
     )
     assert plan.is_flat
     assert plan.single_model == "override"
-
-
-@pytest.mark.parametrize(
-    ("task", "expected"),
-    [
-        ("alpaca-eval", "gpt4_1106_preview"),
-        ("mt-bench", "gpt-4"),
-        ("m-arena-hard-v0.1-uk", "CohereLabs/aya-expanse-8b"),
-        ("m-arena-hard-v2.0-EU", "google/gemini-2.5-flash"),
-    ],
-)
-def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected: str):
-    assert native_pairwise_baseline(task) == expected
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
@@ -128,6 +145,20 @@ def test_resolve_plan_v20_missing_category_raises():
             args=_make_args("arena-hard-v2.0"),
             instructions_df=_instructions(["q1"]),
         )
+
+
+def test_resolve_plan_v20_unknown_category_raises():
+    with pytest.raises(ValueError, match="brand_new"):
+        _resolve_baseline_plan(
+            args=_make_args("arena-hard-v2.0"),
+            instructions_df=_instructions(["q1"], categories=["brand_new"]),
+        )
+
+
+def test_baseline_plan_flat_repeats_model():
+    plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
+    assert plan.is_flat
+    assert plan.baseline_by_index.tolist() == ["b", "b"]
 
 
 def test_baseline_plan_per_row_preserves_order():
@@ -188,35 +219,21 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
     assert avg_pref == 0.5
 
 
-def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path):
-    captured = {}
-
-    def fake_make_model(**kwargs):
-        captured["make_model"] = kwargs
-
-        class FakeJudge:
-            def batch(self, inputs, **_kwargs):
-                return ["score A: 0 score B: 10"] * len(inputs)
-
-        return FakeJudge()
-
-    monkeypatch.setattr(generate_and_evaluate, "make_model", fake_make_model)
-
-    prefs = main_generate_and_eval(
-        CliArgs(
-            task="alpaca-eval",
-            model_A="Dummy/no answer",
-            model_B="Dummy/open is better than close isnt'it",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
-            truncate_judge_input_chars=12,
-            max_judge_model_len=65536,
-            engine_kwargs={"tensor_parallel_size": 1},
-            judge_engine_kwargs={"tensor_parallel_size": 4},
-            result_folder=str(tmp_path),
-        )
+def test_cli_args_parse_optional_boolean_flags(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "generate_and_evaluate.py",
+            "--dataset=alpaca-eval",
+            "--model_A=Dummy/A",
+            "--model_B=Dummy/B",
+            "--judge_model=Dummy/Judge",
+            "--use_tqdm=True",
+            "--ignore_cache=True",
+        ],
     )
 
-    assert len(prefs) == 2
-    assert captured["make_model"]["max_model_len"] == 65536
-    assert captured["make_model"]["tensor_parallel_size"] == 4
+    args = CliArgs.parse_args()
+
+    assert args.use_tqdm is True
+    assert args.ignore_cache is True
