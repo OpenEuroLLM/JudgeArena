@@ -28,6 +28,9 @@ class BaseCliArgs:
     ignore_cache: bool = False
     judge_prompt_preset: str = "default"
     mt_bench_judge_mode: str = "default"
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
+    skip_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
@@ -54,6 +57,17 @@ class BaseCliArgs:
         )
 
 
+def parse_optional_bool(raw: str | None) -> bool:
+    if raw is None:
+        return True
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got '{raw}'.")
+
+
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     """Register the CLI flags shared by all judgearena entrypoints."""
     parser.add_argument(
@@ -75,7 +89,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--provide_explanation",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help=(
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
@@ -96,7 +113,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--ignore_cache",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
         help="If specified, ignore cache of previous completions.",
     )
     parser.add_argument(
@@ -106,7 +126,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default="default",
         help=(
             "Judge prompt preset to use. 'default' preserves the existing score-first "
-            "JudgeArena prompts, while 'skywork' enables a verdict-first preset."
+            "JudgeArena prompts, while 'skywork' enables an optional Skywork-style "
+            "verdict-first preset."
         ),
     )
     parser.add_argument(
@@ -119,6 +140,43 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "--judge_prompt_preset like the other benchmarks, while "
             "'fastchat_original' preserves the original FastChat-style "
             "prompting and [[A]]/[[B]]/[[C]] verdict parsing."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
+        ),
+    )
+    parser.add_argument(
+        "--skip_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, generate battle-model completions and write a "
+            "generation-only summary (gen-results-<name>.json with limit_events) "
+            "but skip judge-model construction and the judging loop entirely. "
+            "Useful for decoupling expensive paid-judge calls from the cheap "
+            "local generation phase: run once with --skip_judging=True to "
+            "materialize the completion cache, inspect cap rates, then rerun "
+            "with --skip_judging=False to judge from cache."
         ),
     )
     parser.add_argument(
@@ -147,9 +205,9 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         required=False,
         default=None,
         help=(
-            "Character cap applied to judge-side inputs before evaluation. "
-            "When omitted, judge inputs are not character-truncated by this "
-            "CLI setting."
+            "Character cap applied to judge-side inputs (completions, "
+            "reference, instruction) before judge evaluation. When omitted, "
+            "judge inputs are not character-truncated by this CLI setting."
         ),
     )
     parser.add_argument(
@@ -191,7 +249,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Optional total context window for the judge VLLM instance. When "
-            "omitted, no judge max_model_len override is passed."
+            "omitted, no judge max_model_len override is passed. Set higher "
+            "than the battle model_len when the judge needs to see longer "
+            "prompts (e.g. long completions from both A and B) than the "
+            "battle generator can fit."
         ),
     )
     parser.add_argument(
@@ -223,7 +284,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         default="{}",
         help=(
             "Optional JSON dict of engine-specific kwargs that override "
-            "--engine_kwargs only for the judge model."
+            "``--engine_kwargs`` only for the judge model. Useful when the "
+            "judge needs a different tensor-parallel or quantization config "
+            "than the battle models, e.g. a 70B judge on TP=2 while the "
+            "battle models run on TP=1 to dodge compile-time deadlocks."
         ),
     )
     parser.add_argument(

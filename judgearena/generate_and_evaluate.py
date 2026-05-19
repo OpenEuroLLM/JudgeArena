@@ -3,16 +3,23 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
+import argparse
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 
 import pandas as pd
 
-from judgearena.cli_common import BaseCliArgs
+from judgearena.cli_common import (
+    BaseCliArgs,
+    add_common_arguments,
+    parse_engine_kwargs,
+    parse_optional_bool,
+    resolve_verbosity,
+)
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -26,6 +33,7 @@ from judgearena.instruction_dataset.m_arenahard import (
     split_m_arena_hard_dataset,
 )
 from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
+from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.log import (
     attach_file_handler,
     get_logger,
@@ -34,10 +42,13 @@ from judgearena.log import (
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
+    LimitEventTracker,
+    build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
+    is_thinking_model,
     make_model,
     read_df,
 )
@@ -107,10 +118,85 @@ class CliArgs(BaseCliArgs):
     model_B: str | None = None
     use_tqdm: bool = False
 
+    @classmethod
+    def parse_args(cls):
+        parser = argparse.ArgumentParser(
+            prog="Generate completion and evaluate with a judge",
+        )
+        parser.add_argument(
+            "--dataset",
+            help="The dataset to use. For instance `alpaca-eval`, `arena-hard-v2.0`, "
+            "`arena-hard-v0.1`, `m-arena-hard-v0.1-EU`, `m-arena-hard-v2.0-uk` for "
+            "instruction tuning cases or `french-contexts`, `spanish-contexts` for "
+            "base models.",
+        )
+        parser.add_argument(
+            "--model_A",
+            required=True,
+            help="Name of the LLM to use for a generation, must be a valid choice for `generation_provider`",
+        )
+        parser.add_argument(
+            "--model_B",
+            default=None,
+            help=(
+                "Name of the baseline LLM for a generation. Optional for Arena-Hard "
+                "datasets (which ship a dataset-native default per category; see "
+                "`ARENA_HARD_BASELINES`) and MT-Bench (see `MT_BENCH_BASELINES`, "
+                "defaults to `gpt-4`). Required for every other dataset."
+            ),
+        )
+        parser.add_argument(
+            "--use_tqdm",
+            nargs="?",
+            const=True,
+            default=False,
+            type=parse_optional_bool,
+            help="If specified, use tqdm, does not work with all model providers, vLLM in particular.",
+        )
+        add_common_arguments(parser)
+        args = parser.parse_args()
+
+        return cls(
+            task=args.dataset,
+            model_A=args.model_A,
+            model_B=args.model_B,
+            use_tqdm=args.use_tqdm,
+            judge_model=args.judge_model,
+            n_instructions=args.n_instructions,
+            provide_explanation=args.provide_explanation,
+            swap_mode=args.swap_mode,
+            ignore_cache=args.ignore_cache,
+            judge_prompt_preset=args.judge_prompt_preset,
+            mt_bench_judge_mode=args.mt_bench_judge_mode,
+            battle_thinking_token_budget=args.battle_thinking_token_budget,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
+            skip_judging=args.skip_judging,
+            truncate_all_input_chars=args.truncate_all_input_chars,
+            truncate_judge_input_chars=args.truncate_judge_input_chars,
+            max_out_tokens_models=args.max_out_tokens_models,
+            max_out_tokens_judge=args.max_out_tokens_judge,
+            max_model_len=args.max_model_len,
+            max_judge_model_len=args.max_judge_model_len,
+            chat_template=args.chat_template,
+            result_folder=args.result_folder,
+            engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
+            judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
+            verbosity=resolve_verbosity(args),
+            log_file=args.log_file,
+            no_log_file=args.no_log_file,
+        )
+
 
 @dataclass(frozen=True)
 class BaselinePlan:
-    """Row-aligned baseline assignment for native pairwise baselines."""
+    """Row-aligned baseline assignment for `--model_B`.
+
+    Mirrors upstream's `JUDGE_SETTINGS[question["category"]]["baseline"]` lookup
+    in `arena-hard-auto/gen_judgment.py`: a flat plan assigns one baseline to
+    every row, a per-row plan assigns a different baseline per category (v2.0
+    mixes `o3-mini-2025-01-31` on hard prompts with `gemini-2.0-flash-001` on
+    creative writing).
+    """
 
     baseline_by_index: pd.Series
 
@@ -135,7 +221,9 @@ class BaselinePlan:
     @property
     def single_model(self) -> str:
         if not self.is_flat:
-            raise ValueError("BaselinePlan has more than one model.")
+            raise ValueError(
+                "BaselinePlan is per-row; use baseline_by_index for row-level lookups"
+            )
         return self.unique_models[0]
 
     @property
@@ -146,23 +234,14 @@ class BaselinePlan:
         return self.baseline_by_index.loc[index]
 
 
-def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
-    """Return the dataset-native pairwise baseline, if the task defines one."""
-    if task in PAIRWISE_BASELINES:
-        return PAIRWISE_BASELINES[task]
-    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
-    if parsed_m_arena_hard is not None:
-        version_key, _lang_or_subset = parsed_m_arena_hard
-        return PAIRWISE_BASELINES[version_key]
-    return None
-
-
 def _resolve_baseline_plan(
     args: CliArgs, instructions_df: pd.DataFrame
 ) -> BaselinePlan:
+    """Explicit `--model_B` wins; otherwise fall back to the dataset-native
+    assignment. Non-arena-hard datasets without an override raise.
+    """
     if args.model_B is not None:
         return BaselinePlan.flat(args.model_B, index=instructions_df.index)
-
     native = native_pairwise_baseline(args.task)
     if native is None:
         raise ValueError(
@@ -175,7 +254,8 @@ def _resolve_baseline_plan(
         if "category" not in instructions_df.columns:
             raise ValueError(
                 f"{args.task} requires a 'category' column for per-category "
-                "baseline routing."
+                "baseline routing; re-run dataset download to regenerate the "
+                "instructions table."
             )
         per_row = instructions_df["category"].map(native)
         if per_row.isna().any():
@@ -190,15 +270,69 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
 
 
-def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
-    judge_kwargs = dict(args.engine_kwargs)
-    judge_kwargs.update(args.judge_engine_kwargs)
-    return judge_kwargs
+def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
+    """Return the dataset-native pairwise baseline, if the task defines one."""
+    if task in PAIRWISE_BASELINES:
+        return PAIRWISE_BASELINES[task]
+    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
+    if parsed_m_arena_hard is not None:
+        version_key, _lang_or_subset = parsed_m_arena_hard
+        return PAIRWISE_BASELINES[version_key]
+    return None
 
 
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
+
+
+def _build_generation_model_kwargs(
+    *, args: CliArgs, model_spec: str
+) -> dict[str, object]:
+    generation_model_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        generation_model_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_model_kwargs
+
+
+def _build_judge_model_kwargs(
+    *, args: CliArgs, limit_event_tracker: LimitEventTracker | None
+) -> dict[str, object]:
+    judge_model_kwargs = build_default_judge_model_kwargs(
+        args.judge_model,
+        args.engine_kwargs,
+        judge_engine_kwargs_override=args.judge_engine_kwargs,
+    )
+    if limit_event_tracker is not None:
+        judge_model_kwargs["limit_event_tracker"] = limit_event_tracker
+        judge_model_kwargs["limit_event_stage"] = "judge_model_init"
+        judge_model_kwargs["limit_event_model_spec"] = args.judge_model
+    return judge_model_kwargs
+
+
+def _generation_cache_name(args: CliArgs, *, model_spec: str) -> str:
+    generation_config = {
+        "truncate_all_input_chars": args.truncate_all_input_chars,
+        "max_out_tokens_models": args.max_out_tokens_models,
+        "max_model_len": args.max_model_len,
+        "chat_template": args.chat_template,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "engine_kwargs": _build_generation_model_kwargs(
+            args=args, model_spec=model_spec
+        ),
+    }
+    generation_config_hash = hashlib.sha256(
+        json.dumps(generation_config, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"{args.task}_{model_spec}_{args.n_instructions}_{generation_config_hash}"
 
 
 def print_results(results):
@@ -233,6 +367,7 @@ def main(args: CliArgs):
     """
 
     run_started_at = datetime.now(UTC)
+    limit_event_tracker = LimitEventTracker()
 
     # Not working with vllm, not detecting model changes and serving the same cache for two different models...
     # if not args.ignore_cache:
@@ -240,10 +375,9 @@ def main(args: CliArgs):
     ignore_cache = args.ignore_cache
 
     if args.task == "mt-bench":
-        model_b = args.model_B or native_pairwise_baseline(args.task)
-        if not isinstance(model_b, str):
-            raise ValueError("MT-Bench requires a flat native baseline.")
-        name = f"{args.task}-{args.model_A}-{model_b}-{args.judge_model}"
+        name = (
+            f"{args.task}-{args.model_A}-{args.model_B or 'native'}-{args.judge_model}"
+        )
         name += f"-{args.swap_mode}"
         name = name.replace("/", "_")
         run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
@@ -265,12 +399,13 @@ def main(args: CliArgs):
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
         lang = args.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
-        instructions_df = pd.DataFrame({"instruction": instructions})
+        instructions_df = pd.DataFrame({"instruction": instructions.values})
+        instructions_df.index = instructions.index
     else:
         instructions_df = load_instructions(
             dataset=args.task, n_instructions=args.n_instructions
         )
-        instructions = instructions_df.loc[:, "instruction"]
+        instructions = instructions_df["instruction"]
 
     n_instructions = args.n_instructions if args.n_instructions else len(instructions)
     if args.n_instructions is not None:
@@ -289,12 +424,11 @@ def main(args: CliArgs):
         attach_file_handler(make_run_log_path(res_folder))
 
     logger.info(
-        "Using task %s and evaluating %s against baseline %s.",
+        "Using task %s and evaluating %s vs baseline %s.",
         args.task,
         args.model_A,
         baseline_plan.display_name,
     )
-
     logger.info(
         "Generating completions for task %s with model %s and baseline %s "
         "(or loading them directly if present)",
@@ -303,46 +437,39 @@ def main(args: CliArgs):
         baseline_plan.display_name,
     )
 
-    # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    gen_fun = (
-        partial(
-            generate_base,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-        if is_fluency_task
-        else partial(
-            generate_instructions,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-    )
+    generation_function = generate_base if is_fluency_task else generate_instructions
 
-    def _align_completion_series(df: pd.DataFrame) -> pd.Series:
-        return df.set_index("instruction_index").loc[instructions.index, "completion"]
+    def _run_generation(model_spec: str) -> pd.DataFrame:
+        return generation_function(
+            instructions=instructions,
+            model=model_spec,
+            truncate_input_chars=args.truncate_all_input_chars,
+            max_tokens=args.max_out_tokens_models,
+            max_model_len=args.max_model_len,
+            chat_template=args.chat_template,
+            use_tqdm=args.use_tqdm,
+            limit_event_tracker=limit_event_tracker,
+            **_build_generation_model_kwargs(args=args, model_spec=model_spec),
+        )
+
+    def _align_completion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+        return df.set_index("instruction_index").loc[instructions.index].reset_index()
 
     def _load_or_generate_completions(model_spec: str) -> pd.Series:
         preloaded = try_load_dataset_completions(args.task, model_spec, n_instructions)
         if preloaded is not None:
-            return _align_completion_series(preloaded)
-        generated = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=model_spec,
-                use_tqdm=args.use_tqdm,
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{model_spec}_{args.n_instructions}",
-        )
-        return _align_completion_series(generated)
+            aligned = _align_completion_dataframe(preloaded)
+        else:
+            aligned = _align_completion_dataframe(
+                cache_function_dataframe(
+                    lambda: _run_generation(model_spec),
+                    ignore_cache=ignore_cache,
+                    cache_name=_generation_cache_name(args, model_spec=model_spec),
+                )
+            )
+        return aligned.set_index("instruction_index").loc[
+            instructions.index, "completion"
+        ]
 
     completions_A = _load_or_generate_completions(args.model_A)
 
@@ -350,14 +477,18 @@ def main(args: CliArgs):
     if baseline_plan.is_flat:
         completions_B = _load_or_generate_completions(baseline_plan.single_model)
     else:
-        per_baseline_completions = {
-            model: _load_or_generate_completions(model)
-            for model in baseline_plan.unique_models
-        }
+        # Per-row plan: fetch one completion set per unique baseline, then stitch
+        # them together so completions_B[uid] uses the baseline that
+        # ARENA_HARD_BASELINES routes uid's category to.
+        per_baseline_completions: dict[str, pd.Series] = {}
+        for baseline_model in baseline_plan.unique_models:
+            per_baseline_completions[baseline_model] = _load_or_generate_completions(
+                baseline_model
+            )
         completions_B = pd.Series(
             [
-                per_baseline_completions[model].loc[instruction_index]
-                for instruction_index, model in baseline_per_index.items()
+                per_baseline_completions[model].loc[uid]
+                for uid, model in baseline_per_index.items()
             ],
             index=instructions.index,
             name="completion",
@@ -370,6 +501,29 @@ def main(args: CliArgs):
         baseline_plan.display_name,
         completions_B.values[0],
     )
+    if args.skip_judging:
+        with open(res_folder / f"args-{name}.json", "w") as f:
+            json.dump(asdict(args), f, indent=2)
+        generation_summary = {
+            "task": args.task,
+            "model_A": args.model_A,
+            "model_B": baseline_plan.display_name,
+            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_models": baseline_plan.unique_models,
+            "judge_model": args.judge_model,
+            "n_instructions": n_instructions,
+            "battle_thinking_token_budget": args.battle_thinking_token_budget,
+            "strip_thinking_before_judging": args.strip_thinking_before_judging,
+            "limit_events": limit_event_tracker.build_summary(),
+            "skip_judging": True,
+        }
+        with open(res_folder / f"gen-results-{name}.json", "w") as f:
+            json.dump(_to_jsonable(generation_summary), f, indent=2, allow_nan=False)
+        logger.info(
+            "skip_judging=True: wrote gen-results-%s.json and returning before judge construction.",
+            name,
+        )
+        return None
     logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judge_chat_model = make_model(
@@ -377,8 +531,9 @@ def main(args: CliArgs):
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
-        **_build_judge_engine_kwargs(args),
+        **_build_judge_model_kwargs(args=args, limit_event_tracker=limit_event_tracker),
     )
+    judge_tokenizer = getattr(judge_chat_model, "tokenizer", None)
 
     # save argument for results analysis
     with open(res_folder / f"args-{name}.json", "w") as f:
@@ -396,7 +551,7 @@ def main(args: CliArgs):
         system_prompt = None
     resolved_prompt = resolve_judge_prompts(
         provide_explanation=args.provide_explanation,
-        prompt_preset=args.judge_prompt_preset,
+        prompt_preset=args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET,
         system_prompt=system_prompt,
     )
 
@@ -405,17 +560,25 @@ def main(args: CliArgs):
         instructions=instructions.head(n_instructions).tolist(),
         completions_A=completions_A.head(n_instructions).tolist(),
         completions_B=completions_B.head(n_instructions).tolist(),
+        case_ids=instructions.head(n_instructions).index.tolist(),
         swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
+        prompt_preset=resolved_prompt.preset_name,
+        parser_mode=resolved_prompt.parser_mode,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
         truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
+        limit_event_tracker=limit_event_tracker,
+        judge_tokenizer=judge_tokenizer,
+        max_judge_model_len=args.max_judge_model_len,
+        max_out_tokens_judge=args.max_out_tokens_judge,
     )
 
     eval_instruction_index = instructions.head(n_instructions).index.tolist()
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
+
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
     df["model_A"] = args.model_A
@@ -432,7 +595,6 @@ def main(args: CliArgs):
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    # compute and report statistics
     summary = compute_pref_summary(prefs)
 
     results = {
@@ -443,7 +605,10 @@ def main(args: CliArgs):
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
         "judge_prompt_preset": resolved_prompt.preset_name,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **summary,
+        "limit_events": limit_event_tracker.build_summary(),
         "preferences": prefs.tolist(),
     }
     logger.info(
@@ -453,7 +618,6 @@ def main(args: CliArgs):
         args.judge_model,
     )
     print_results(results)
-
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 

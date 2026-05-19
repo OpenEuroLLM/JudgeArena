@@ -1,9 +1,73 @@
+import importlib
+from types import SimpleNamespace
+
 import pandas as pd
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
-from judgearena.generate_and_evaluate import CliArgs
+from judgearena.cli_common import BaseCliArgs
+from judgearena.judge_prompt_presets import SKYWORK_JUDGE_PROMPT_PRESET
+
+
+def _mt_bench_args(
+    *,
+    dataset: str,
+    model_A: str,
+    model_B: str,
+    use_tqdm: bool = False,
+    **base_overrides,
+) -> BaseCliArgs:
+    """Construct a ``BaseCliArgs`` with MT-Bench-specific extras attached."""
+    args = BaseCliArgs(**base_overrides)
+    args.task = dataset
+    args.model_A = model_A
+    args.model_B = model_B
+    args.use_tqdm = use_tqdm
+    return args
+
+
+def _single_mt_bench_question_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+
+
+def _mt_bench_completion_pair(
+    questions_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return (
+        pd.DataFrame(
+            {
+                "completion_turn_1": ["A1"],
+                "completion_turn_2": ["A2"],
+            },
+            index=questions_df.index,
+        ),
+        pd.DataFrame(
+            {
+                "completion_turn_1": ["B1"],
+                "completion_turn_2": ["B2"],
+            },
+            index=questions_df.index,
+        ),
+    )
+
+
+def _stub_run_mt_bench_inputs(monkeypatch, questions_df: pd.DataFrame) -> None:
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda args, questions_df, ignore_cache, limit_event_tracker: (
+            _mt_bench_completion_pair(questions_df)
+        ),
+    )
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -111,13 +175,30 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         index=pd.Index([1, 2], name="instruction_index"),
     )
     generated_models = []
+    generation_kwargs = []
+    generation_strip_flags = []
 
     monkeypatch.setattr(
         mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
     )
 
-    def fake_generate_multiturn(**kwargs):
-        generated_models.append(kwargs["model"])
+    def fake_generate_multiturn(
+        *,
+        questions,
+        model,
+        truncate_input_chars,
+        max_tokens,
+        use_tqdm,
+        max_model_len,
+        chat_template,
+        temperature_config,
+        limit_event_tracker,
+        strip_thinking_before_turn_2_prompt,
+        **engine_kwargs,
+    ):
+        generated_models.append(model)
+        generation_kwargs.append(engine_kwargs)
+        generation_strip_flags.append(strip_thinking_before_turn_2_prompt)
         return pd.DataFrame(
             {
                 "instruction_index": [1, 2],
@@ -143,94 +224,309 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         ),
     )
 
-    args = CliArgs(
-        task="mt-bench",
+    args = SimpleNamespace(
         model_A="VLLM/example/model-a",
         model_B="gpt-4",
-        judge_model="Dummy/J",
         n_instructions=2,
-        engine_kwargs={"gpu_memory_utilization": 0.7},
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        use_tqdm=False,
+        max_model_len=16384,
+        chat_template=None,
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=True,
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
     completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
         args=args,
         questions_df=questions_df,
         ignore_cache=False,
+        limit_event_tracker=None,
     )
 
     assert generated_models == ["VLLM/example/model-a"]
+    assert generation_kwargs == [
+        {"gpu_memory_utilization": 0.7, "language_model_only": True}
+    ]
+    assert generation_strip_flags == [True]
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
 
 
-def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
-    monkeypatch, tmp_path
-):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
+def test_mt_bench_generation_cache_name_changes_when_strip_flag_flips():
+    args_on = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=True,
     )
+    args_off = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=False,
+    )
+
+    key_on = mt_bench_utils._mt_bench_generation_cache_name(
+        args_on,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
+    key_off = mt_bench_utils._mt_bench_generation_cache_name(
+        args_off,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
+
+    assert key_on != key_off
+    assert key_on.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
+    assert key_off.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
+
+
+def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
+    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
+    tracker = utils.LimitEventTracker()
     captured = {}
 
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_utils,
-        "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache: (
-            pd.DataFrame(
-                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
-                index=questions_df.index,
+    class FakeTokenizer:
+        def apply_chat_template(self, messages, tokenize=True):
+            text = "".join(
+                str(
+                    message["content"] if isinstance(message, dict) else message.content
+                )
+                for message in messages
+            )
+            return [0] * len(text)
+
+        def encode(self, text):
+            return [0] * len(text)
+
+    def fake_do_inference(*, inputs, **kwargs):
+        captured["inputs"] = inputs
+        return ["score_A: 8\nscore_B: 4"]
+
+    monkeypatch.setattr(preset_judging, "do_inference", fake_do_inference)
+
+    prefs, annotations, metadata, num_inconsistent = (
+        preset_judging.judge_mt_bench_with_preset(
+            judge_chat_model=object(),
+            judge_model="Dummy/J",
+            questions=pd.DataFrame(
+                {
+                    "category": ["writing"],
+                    "turn_1": ["Question"],
+                    "turn_2": [""],
+                    "reference_turn_1": [""],
+                    "reference_turn_2": [""],
+                },
+                index=pd.Index([1], name="question_id"),
             ),
-            pd.DataFrame(
-                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
-                index=questions_df.index,
+            completions_a=pd.DataFrame(
+                {"completion_turn_1": ["A" * 1200], "completion_turn_2": [""]},
+                index=pd.Index([1], name="question_id"),
             ),
-        ),
+            completions_b=pd.DataFrame(
+                {"completion_turn_1": ["B" * 1200], "completion_turn_2": [""]},
+                index=pd.Index([1], name="question_id"),
+            ),
+            model_a="Model/A",
+            model_b="Model/B",
+            turns_mode="single",
+            swap_mode="fixed",
+            truncate_input_chars=None,
+            use_tqdm=False,
+            prompt_preset="default",
+            provide_explanation=False,
+            limit_event_tracker=tracker,
+            judge_tokenizer=FakeTokenizer(),
+            max_judge_model_len=2300,
+            max_out_tokens_judge=32,
+        )
     )
 
-    def fake_make_model(**kwargs):
-        captured["make_model"] = kwargs
+    prompt_value = captured["inputs"][0]
+    assert len(prefs) == 1
+    assert len(annotations) == 1
+    assert len(metadata) == 1
+    assert num_inconsistent == 0
+    assert len(FakeTokenizer().apply_chat_template(prompt_value.to_messages())) <= 2012
+    assert annotations[0]["answer_a_1_truncated"] is True
+    assert annotations[0]["answer_b_1_truncated"] is True
+    assert (
+        tracker.build_summary()["counts_by_kind"]["judge_input_token_truncation"] >= 1
+    )
+
+
+def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
+    questions_df = _single_mt_bench_question_df()
+    captured = {}
+
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
+
+    def fake_make_model(
+        *,
+        model,
+        max_tokens,
+        temperature=None,
+        max_model_len,
+        chat_template,
+        **kwargs,
+    ):
+        captured["make_model"] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "max_model_len": max_model_len,
+            "chat_template": chat_template,
+            "kwargs": kwargs,
+        }
         return object()
 
     monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
 
-    def fake_run_mt_bench_fastchat(**kwargs):
-        captured["fastchat"] = kwargs
+    def fake_run_mt_bench_preset(**kwargs):
+        captured["run_mt_bench_preset"] = kwargs
+        return pd.Series(
+            kwargs["questions_df"].index.to_list(),
+            dtype=float,
+        )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        fake_run_mt_bench_preset,
+    )
+
+    args = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/example/model-a",
+        model_B="gpt-4",
+        judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
+        n_instructions=1,
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        max_out_tokens_judge=256,
+        max_model_len=16384,
+        chat_template=None,
+        provide_explanation=False,
+        swap_mode="fixed",
+        judge_prompt_preset="default",
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=False,
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
+    )
+
+    caplog.set_level("WARNING", logger=mt_bench_utils.__name__)
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    assert captured["make_model"]["max_tokens"] == 256
+    assert captured["make_model"]["max_model_len"] is None
+    assert captured["make_model"]["kwargs"]["limit_event_stage"] == "judge_model_init"
+    assert (
+        captured["make_model"]["kwargs"]["limit_event_model_spec"]
+        == "VLLM/Qwen/Qwen3.5-27B-FP8"
+    )
+    assert "limit_event_tracker" in captured["make_model"]["kwargs"]
+    assert captured["run_mt_bench_preset"]["prompt_preset"] == "default"
+    assert "MT-Bench ignores provide_explanation=False" not in caplog.text
+
+
+def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
+    questions_df = _single_mt_bench_question_df()
+    captured = {}
+
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
+    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_run_mt_bench_preset(**kwargs):
+        captured["kwargs"] = kwargs
         return pd.Series([0.0], dtype=float)
 
     monkeypatch.setattr(
         mt_bench_utils,
-        "_run_mt_bench_fastchat",
-        fake_run_mt_bench_fastchat,
+        "_run_mt_bench_preset",
+        fake_run_mt_bench_preset,
     )
 
-    args = CliArgs(
-        task="mt-bench",
+    args = _mt_bench_args(
+        dataset="mt-bench",
         model_A="VLLM/example/model-a",
-        model_B=None,
-        judge_model="VLLM/Judge",
+        model_B="gpt-4",
+        judge_model="VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
         n_instructions=1,
+        truncate_all_input_chars=8192,
         truncate_judge_input_chars=80000,
+        max_out_tokens_models=1024,
+        max_out_tokens_judge=256,
+        max_model_len=16384,
         max_judge_model_len=65536,
-        mt_bench_judge_mode="fastchat_original",
-        engine_kwargs={"tensor_parallel_size": 1},
-        judge_engine_kwargs={"tensor_parallel_size": 4},
-        result_folder=str(tmp_path),
+        chat_template=None,
+        provide_explanation=False,
+        swap_mode="both",
+        judge_prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
+        battle_thinking_token_budget=512,
+        strip_thinking_before_judging=True,
+        engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
-    mt_bench_utils.run_mt_bench(
-        args,
-        ignore_cache=False,
-        res_folder=tmp_path,
-        result_name="mt-bench-test",
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
+    assert captured["kwargs"]["args"].strip_thinking_before_judging is True
+    assert captured["kwargs"]["args"].truncate_judge_input_chars == 80000
+    assert captured["kwargs"]["args"].max_judge_model_len == 65536
+
+
+def test_run_mt_bench_default_respects_judge_temperature_from_engine_kwargs(
+    monkeypatch,
+):
+    questions_df = _single_mt_bench_question_df()
+    captured = {}
+
+    _stub_run_mt_bench_inputs(monkeypatch, questions_df)
+
+    def fake_make_model(
+        *,
+        model,
+        max_tokens,
+        temperature=None,
+        max_model_len,
+        chat_template,
+        **kwargs,
+    ):
+        captured["temperature"] = temperature
+        return object()
+
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        lambda **kwargs: pd.Series([0.0], dtype=float),
     )
 
-    assert args.model_B == "gpt-4"
-    assert captured["make_model"]["max_model_len"] == 65536
-    assert captured["make_model"]["tensor_parallel_size"] == 4
-    assert captured["fastchat"]["args"].truncate_judge_input_chars == 80000
+    args = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/example/model-a",
+        model_B="gpt-4",
+        judge_model="VLLM/Qwen/Qwen3.5-27B-FP8",
+        n_instructions=1,
+        max_out_tokens_judge=256,
+        engine_kwargs={"temperature": 0.8},
+        judge_engine_kwargs={"temperature": 0.4},
+    )
+
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    assert captured["temperature"] == 0.4
