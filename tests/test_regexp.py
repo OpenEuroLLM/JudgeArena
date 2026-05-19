@@ -1,4 +1,5 @@
 from judgearena.evaluate import PairScore
+from judgearena.judge_prompt_presets import resolve_pairwise_judge_prompt
 
 
 def test_pair_score():
@@ -38,3 +39,27 @@ def test_regexp():
     assert pref == 0.5744425168116589
 
     print(pref)
+
+
+def test_pair_score_verdict_mode_uses_bracketed_verdicts():
+    raw_text = "score_A: 10\nscore_B: 0\n[[B]]"
+    scorer = PairScore(parser_mode="verdict")
+
+    assert scorer.parse_model_raw(raw_text) == 1.0
+
+
+def test_pair_score_verdict_mode_does_not_parse_score_only_outputs():
+    raw_text = "score_A: 10\nscore_B: 0"
+    scorer = PairScore(parser_mode="verdict")
+
+    assert scorer.parse_model_raw(raw_text) is None
+
+
+def test_localized_prompt_preset_renders_translated_labels():
+    resolved = resolve_pairwise_judge_prompt(
+        prompt_preset="m-arena-hard-v2-localized-zh",
+        provide_explanation=False,
+    )
+
+    assert resolved.parser_mode == "score"
+    assert "<|助手 A 的 回答 开始|>" in resolved.user_prompt_template

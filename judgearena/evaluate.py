@@ -14,6 +14,11 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.judge_prompt_presets import (
+    DEFAULT_JUDGE_PROMPT_PRESET,
+    ResolvedJudgePrompt,
+    resolve_pairwise_judge_prompt,
+)
 from judgearena.log import get_logger
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
@@ -29,9 +34,10 @@ logger = get_logger(__name__)
 
 
 class PairScore:
-    def __init__(self):
+    def __init__(self, *, parser_mode: str = "score"):
         super(PairScore).__init__()
         self.temperature = 0.3
+        self.parser_mode = parser_mode
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
@@ -39,17 +45,30 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        # lower case to avoid confusion, e.g. when "a" is used instead of "A"
-        score_a = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
-        )
-        score_b = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?b[": *\n]*(-?\d+)'
-        )
+        if self.parser_mode == "verdict":
+            return self._parse_bracketed_verdict(judge_completion)
+        if self.parser_mode == "score":
+            return self._parse_numeric_scores(judge_completion)
+        raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
+
+    def _parse_numeric_scores(self, judge_completion: str) -> float | None:
+        lowered = judge_completion.lower()
+        score_a = self.get_regexp_match(lowered, r'score.*?a[": *\n]*(-?\d+)')
+        score_b = self.get_regexp_match(lowered, r'score.*?b[": *\n]*(-?\d+)')
         if score_a is None or score_b is None:
             return None
-        else:
-            return float(self.preference_from_scores(score_a, score_b))
+        return float(self.preference_from_scores(score_a, score_b))
+
+    def _parse_bracketed_verdict(self, judge_completion: str) -> float | None:
+        verdict_match = re.search(r"\[\[\s*([ABCabc])\s*\]\]", judge_completion)
+        if verdict_match is None:
+            return None
+        bracketed_verdict = verdict_match.group(1).lower()
+        return {
+            "a": 0.0,
+            "b": 1.0,
+            "c": 0.5,
+        }[bracketed_verdict]
 
     def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
@@ -59,54 +78,32 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
-_COMPLETION_LABEL_SINGLE = "Answer"
-_COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
-_EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
-_SCORE_FENCE = "\n```"
-
-
 def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
     multi_turn: bool = False,
 ) -> tuple[str, str]:
-    prompts_dir = Path(__file__).parent / "prompts"
-    system_prompt = (prompts_dir / "system-prompt.txt").read_text()
-
-    prompt_filename = (
-        "prompt-with-explanation.txt" if provide_explanation else "prompt.txt"
+    resolved = resolve_pairwise_judge_prompt(
+        prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
+        provide_explanation=provide_explanation,
+        multi_turn=multi_turn,
     )
-    user_prompt_template = (prompts_dir / prompt_filename).read_text()
-    user_prompt_template = user_prompt_template.replace(
-        "{completion_label}",
-        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
-    )
-    user_prompt_template = user_prompt_template.replace(
-        "{explanation_suffix}",
-        _EXPLANATION_SUFFIX if provide_explanation else _SCORE_FENCE,
-    )
-
-    return system_prompt, user_prompt_template
+    return resolved.system_prompt or "", resolved.user_prompt_template
 
 
 def resolve_judge_prompts(
     *,
     provide_explanation: bool,
     multi_turn: bool = False,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
-) -> tuple[str, str]:
-    default_system_prompt, default_user_prompt_template = (
-        load_judge_system_and_user_prompt(
-            provide_explanation=provide_explanation, multi_turn=multi_turn
-        )
-    )
-    return (
-        system_prompt if system_prompt is not None else default_system_prompt,
-        (
-            user_prompt_template
-            if user_prompt_template is not None
-            else default_user_prompt_template
-        ),
+) -> ResolvedJudgePrompt:
+    return resolve_pairwise_judge_prompt(
+        prompt_preset=prompt_preset,
+        provide_explanation=provide_explanation,
+        multi_turn=multi_turn,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
     )
 
 
@@ -119,6 +116,7 @@ def evaluate_completions(
     use_tqdm: bool = False,
     truncate_input_chars: int | None = 8192,
     provide_explanation: bool = False,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
 ):
     """
     :param dataset:
@@ -191,32 +189,36 @@ def evaluate_completions(
     output_folder = data_root / "judge-evals" / unique_string
     logger.info("Saving results in %s", output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
-    (
-        judge_system_prompt,
-        judge_user_prompt_template,
-    ) = resolve_judge_prompts(provide_explanation=provide_explanation)
+    resolved_prompt = resolve_judge_prompts(
+        provide_explanation=provide_explanation,
+        prompt_preset=prompt_preset,
+    )
 
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions.tolist(),
         completions_A=completions_A.loc[instructions.index].tolist(),
         completions_B=completions_B.loc[instructions.index].tolist(),
-        system_prompt=judge_system_prompt,
-        user_prompt_template=judge_user_prompt_template,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
     )
 
     # Pairwise judge results
-    score_parser = PairScore()
+    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
     prefs = pd.Series(
         [
             score_parser.parse_model_raw(annotation.judge_completion)
             for annotation in annotations
         ]
     )
-    results = {**compute_pref_summary(prefs)}
+    results = {
+        **compute_pref_summary(prefs),
+        "judge_prompt_preset": resolved_prompt.preset_name,
+    }
     pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
 
     logger.info("%s against %s:\n%s", method_A, method_B, results)
@@ -232,6 +234,7 @@ def evaluate_completions(
         "use_tqdm": use_tqdm,
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
+        "judge_prompt_preset": resolved_prompt.preset_name,
     }
 
     try:
@@ -246,8 +249,8 @@ def evaluate_completions(
                 "completions_A": completions_A.loc[instructions.index].tolist(),
                 "completions_B": completions_B.loc[instructions.index].tolist(),
             },
-            judge_system_prompt=judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
         )
     except OSError as e:
@@ -261,6 +264,7 @@ class JudgeAnnotation:
     completion_B: str  # completion of the second model
     judge_completion: str  # output of the judge
     judge_input: str | None = None  # input that was passed to the judge
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
 
 
 def annotate_battles(
@@ -273,6 +277,7 @@ def annotate_battles(
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     provide_explanation: bool = False,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -305,15 +310,18 @@ def annotate_battles(
     # alternatively pass list of tuples
     assert len(instructions) == len(completions_A) == len(completions_B)
 
-    system_prompt, user_prompt_template = resolve_judge_prompts(
+    resolved_prompt = resolve_judge_prompts(
         provide_explanation=provide_explanation,
+        prompt_preset=prompt_preset,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
     )
 
-    prompt_template = ChatPromptTemplate.from_messages(
-        [("system", system_prompt), ("user", user_prompt_template)]
-    )
+    message_templates: list[tuple[str, str]] = []
+    if resolved_prompt.system_prompt is not None:
+        message_templates.append(("system", resolved_prompt.system_prompt))
+    message_templates.append(("user", resolved_prompt.user_prompt_template))
+    prompt_template = ChatPromptTemplate.from_messages(message_templates)
 
     inputs = prompt_template.batch(
         [
@@ -350,6 +358,7 @@ def annotate_battles(
                 instruction=instruction,
                 completion_A=completion_A,
                 completion_B=completion_B,
+                prompt_preset=resolved_prompt.preset_name,
             )
         )
     return annotations
@@ -364,6 +373,7 @@ def judge_and_parse_prefs(
     provide_explanation: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
@@ -384,14 +394,22 @@ def judge_and_parse_prefs(
             judge_chat_model,
         )
 
+    resolved_prompt = resolve_judge_prompts(
+        provide_explanation=provide_explanation,
+        prompt_preset=prompt_preset,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+    )
+
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
         completions_A=completions_A,
         completions_B=completions_B,
         provide_explanation=provide_explanation,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
     )
@@ -404,8 +422,9 @@ def judge_and_parse_prefs(
             completions_A=completions_B,
             completions_B=completions_A,
             provide_explanation=provide_explanation,
-            system_prompt=system_prompt,
-            user_prompt_template=user_prompt_template,
+            system_prompt=resolved_prompt.system_prompt,
+            user_prompt_template=resolved_prompt.user_prompt_template,
+            prompt_preset=resolved_prompt.preset_name,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
         )
@@ -413,7 +432,7 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    score_parser = PairScore()
+    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
     prefs = pd.Series(
         [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
     )

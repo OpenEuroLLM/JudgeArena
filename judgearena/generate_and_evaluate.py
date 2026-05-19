@@ -394,11 +394,9 @@ def main(args: CliArgs):
     else:
         # the default system prompt of annotate is to compare instruction tuned models.
         system_prompt = None
-    (
-        effective_judge_system_prompt,
-        judge_user_prompt_template,
-    ) = resolve_judge_prompts(
+    resolved_prompt = resolve_judge_prompts(
         provide_explanation=args.provide_explanation,
+        prompt_preset=args.judge_prompt_preset,
         system_prompt=system_prompt,
     )
 
@@ -409,8 +407,9 @@ def main(args: CliArgs):
         completions_B=completions_B.head(n_instructions).tolist(),
         swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
-        system_prompt=effective_judge_system_prompt,
-        user_prompt_template=judge_user_prompt_template,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
         truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
     )
@@ -443,6 +442,7 @@ def main(args: CliArgs):
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
+        "judge_prompt_preset": resolved_prompt.preset_name,
         **summary,
         "preferences": prefs.tolist(),
     }
@@ -474,8 +474,8 @@ def main(args: CliArgs):
                 "completions_B": eval_completions_B,
                 "baseline_model_B": baseline_per_eval.tolist(),
             },
-            judge_system_prompt=effective_judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
         )
     except OSError as e:

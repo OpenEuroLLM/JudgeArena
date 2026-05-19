@@ -217,6 +217,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         n_instructions=1,
         truncate_judge_input_chars=80000,
         max_judge_model_len=65536,
+        mt_bench_judge_mode="fastchat_original",
         engine_kwargs={"tensor_parallel_size": 1},
         judge_engine_kwargs={"tensor_parallel_size": 4},
         result_folder=str(tmp_path),
