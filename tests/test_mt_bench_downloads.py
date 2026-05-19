@@ -176,6 +176,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     )
     generated_models = []
     generation_kwargs = []
+    generation_strip_flags = []
 
     monkeypatch.setattr(
         mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
@@ -192,10 +193,12 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         chat_template,
         temperature_config,
         limit_event_tracker,
+        strip_thinking_before_turn_2_prompt,
         **engine_kwargs,
     ):
         generated_models.append(model)
         generation_kwargs.append(engine_kwargs)
+        generation_strip_flags.append(strip_thinking_before_turn_2_prompt)
         return pd.DataFrame(
             {
                 "instruction_index": [1, 2],
@@ -230,6 +233,8 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         use_tqdm=False,
         max_model_len=16384,
         chat_template=None,
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=True,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
@@ -244,9 +249,50 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert generation_kwargs == [
         {"gpu_memory_utilization": 0.7, "language_model_only": True}
     ]
+    assert generation_strip_flags == [True]
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
+
+
+def test_mt_bench_generation_cache_name_changes_when_strip_flag_flips():
+    args_on = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=True,
+    )
+    args_off = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/Qwen/Qwen3.5-9B",
+        judge_model="OpenRouter/google/gemma-4-31b-it",
+        n_instructions=3,
+        truncate_all_input_chars=30000,
+        max_out_tokens_models=49152,
+        max_model_len=57344,
+        battle_thinking_token_budget=32768,
+        strip_thinking_before_judging=False,
+    )
+
+    key_on = mt_bench_utils._mt_bench_generation_cache_name(
+        args_on,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
+    key_off = mt_bench_utils._mt_bench_generation_cache_name(
+        args_off,
+        model_name="VLLM/Qwen/Qwen3.5-9B",
+    )
+
+    assert key_on != key_off
+    assert key_on.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
+    assert key_off.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
 
 
 def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
@@ -377,6 +423,8 @@ def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):
         provide_explanation=False,
         swap_mode="fixed",
         judge_prompt_preset="default",
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=False,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
@@ -428,12 +476,15 @@ def test_run_mt_bench_keeps_skywork_prompt_preset(monkeypatch):
         provide_explanation=False,
         swap_mode="both",
         judge_prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
+        battle_thinking_token_budget=512,
+        strip_thinking_before_judging=True,
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
     mt_bench_utils.run_mt_bench(args, ignore_cache=False)
 
     assert captured["kwargs"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
+    assert captured["kwargs"]["args"].strip_thinking_before_judging is True
     assert captured["kwargs"]["args"].truncate_judge_input_chars == 80000
     assert captured["kwargs"]["args"].max_judge_model_len == 65536
 

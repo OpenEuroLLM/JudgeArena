@@ -28,6 +28,8 @@ class BaseCliArgs:
     ignore_cache: bool = False
     judge_prompt_preset: str = "default"
     mt_bench_judge_mode: str = "default"
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
     skip_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
@@ -138,6 +140,27 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "--judge_prompt_preset like the other benchmarks, while "
             "'fastchat_original' preserves the original FastChat-style "
             "prompting and [[A]]/[[B]]/[[C]] verdict parsing."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_optional_bool,
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
         ),
     )
     parser.add_argument(

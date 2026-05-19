@@ -24,6 +24,8 @@ from judgearena.mt_bench.prompt_templates import (
 from judgearena.utils import (
     LimitEventTracker,
     do_inference,
+    strip_thinking_tags,
+    strip_thinking_tags_with_metadata,
 )
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
@@ -234,7 +236,7 @@ _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] =
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    stripped = judgment.strip()
+    stripped = strip_thinking_tags(judgment).strip()
     if "[[A]]" in stripped:
         return "A"
     if "[[B]]" in stripped:
@@ -371,6 +373,7 @@ def _build_fastchat_judge_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
     limit_event_tracker: LimitEventTracker | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
@@ -386,6 +389,21 @@ def _build_fastchat_judge_items(
                 case_id=case_id,
             )
 
+    def _prepare_answer(answer: str, *, case_id: str, field: str) -> tuple[str, bool]:
+        if not strip_thinking_before_judging:
+            return answer, False
+        stripped_answer, stripped = strip_thinking_tags_with_metadata(answer)
+        if stripped and limit_event_tracker is not None:
+            limit_event_tracker.record(
+                "thinking_trace_stripped_before_judging",
+                stage="judge_input",
+                field=field,
+                case_id=case_id,
+                original_length=len(answer),
+                final_length=len(stripped_answer),
+            )
+        return stripped_answer, stripped
+
     for pair_row in iter_mt_bench_pairwise_rows(
         questions=questions,
         completions_a=completions_a,
@@ -398,8 +416,12 @@ def _build_fastchat_judge_items(
             prompt = _select_prompt(
                 category, multi_turn=False, prompt_preset=prompt_preset
             )
-            answer_a = pair_row.answer_a_1
-            answer_b = pair_row.answer_b_1
+            answer_a, answer_a_stripped = _prepare_answer(
+                pair_row.answer_a_1, case_id=case_id, field="answer_a_1"
+            )
+            answer_b, answer_b_stripped = _prepare_answer(
+                pair_row.answer_b_1, case_id=case_id, field="answer_b_1"
+            )
             _record_mt_bench_truncation(
                 case_id=case_id,
                 field="turn_1_question",
@@ -424,6 +446,8 @@ def _build_fastchat_judge_items(
                 "turn_1_question_truncated": pair_row.turn_1_question_truncated,
                 "answer_a_1_truncated": pair_row.answer_a_1_truncated,
                 "answer_b_1_truncated": pair_row.answer_b_1_truncated,
+                "answer_a_1_reasoning_stripped": answer_a_stripped,
+                "answer_b_1_reasoning_stripped": answer_b_stripped,
             }
             if prompt.ref_based:
                 _record_mt_bench_truncation(
@@ -450,10 +474,18 @@ def _build_fastchat_judge_items(
             prompt = _select_prompt(
                 category, multi_turn=True, prompt_preset=prompt_preset
             )
-            answer_a_1 = pair_row.answer_a_1
-            answer_a_2 = pair_row.answer_a_2
-            answer_b_1 = pair_row.answer_b_1
-            answer_b_2 = pair_row.answer_b_2
+            answer_a_1, answer_a_1_stripped = _prepare_answer(
+                pair_row.answer_a_1, case_id=case_id, field="answer_a_1"
+            )
+            answer_a_2, answer_a_2_stripped = _prepare_answer(
+                pair_row.answer_a_2, case_id=case_id, field="answer_a_2"
+            )
+            answer_b_1, answer_b_1_stripped = _prepare_answer(
+                pair_row.answer_b_1, case_id=case_id, field="answer_b_1"
+            )
+            answer_b_2, answer_b_2_stripped = _prepare_answer(
+                pair_row.answer_b_2, case_id=case_id, field="answer_b_2"
+            )
             for field, truncated in (
                 ("turn_1_question", pair_row.turn_1_question_truncated),
                 ("turn_2_question", pair_row.turn_2_question_truncated),
@@ -480,6 +512,10 @@ def _build_fastchat_judge_items(
                 "answer_a_2_truncated": pair_row.answer_a_2_truncated,
                 "answer_b_1_truncated": pair_row.answer_b_1_truncated,
                 "answer_b_2_truncated": pair_row.answer_b_2_truncated,
+                "answer_a_1_reasoning_stripped": answer_a_1_stripped,
+                "answer_a_2_reasoning_stripped": answer_a_2_stripped,
+                "answer_b_1_reasoning_stripped": answer_b_1_stripped,
+                "answer_b_2_reasoning_stripped": answer_b_2_stripped,
             }
             if prompt.ref_based:
                 _record_mt_bench_truncation(
@@ -587,6 +623,7 @@ def judge_mt_bench_pairwise_fastchat(
     truncate_input_chars: int | None,
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
     limit_event_tracker: LimitEventTracker | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
@@ -604,6 +641,7 @@ def judge_mt_bench_pairwise_fastchat(
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
         limit_event_tracker=limit_event_tracker,
     )
 

@@ -36,6 +36,7 @@ from judgearena.utils import (
     build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
+    is_thinking_model,
     make_model,
 )
 
@@ -53,7 +54,18 @@ _MIN_MT_BENCH_JUDGE_MAX_MODEL_LEN = 28672
 def _build_mt_bench_generation_kwargs(
     *, args: CliArgs, model_spec: str
 ) -> dict[str, object]:
-    return dict(args.engine_kwargs)
+    generation_model_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        generation_model_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_model_kwargs
 
 
 def _build_mt_bench_judge_model_kwargs(
@@ -77,6 +89,8 @@ def _mt_bench_generation_cache_name(args: CliArgs, *, model_name: str) -> str:
         "max_out_tokens_models": args.max_out_tokens_models,
         "max_model_len": args.max_model_len,
         "chat_template": args.chat_template,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "engine_kwargs": _build_mt_bench_generation_kwargs(
             args=args, model_spec=model_name
         ),
@@ -121,6 +135,7 @@ def _generate_mt_bench_completions(
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
             limit_event_tracker=limit_event_tracker,
+            strip_thinking_before_turn_2_prompt=args.strip_thinking_before_judging,
             **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
         )
 
@@ -246,6 +261,7 @@ def _run_mt_bench_fastchat(
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
             prompt_preset=prompt_preset,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
             limit_event_tracker=limit_event_tracker,
         )
     )
@@ -258,6 +274,8 @@ def _run_mt_bench_fastchat(
         "judge_model": args.judge_model,
         "judge_prompt_preset": prompt_preset,
         "mt_bench_judge_mode": args.mt_bench_judge_mode,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         "num_inconsistent": num_inconsistent,
         **stats,
         "limit_events": limit_event_tracker.build_summary()
@@ -315,6 +333,7 @@ def _run_mt_bench_preset(
             use_tqdm=args.use_tqdm,
             prompt_preset=prompt_preset,
             provide_explanation=args.provide_explanation,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
             judge_tokenizer=getattr(judge_chat_model, "tokenizer", None),
             max_judge_model_len=args.max_judge_model_len,
             max_out_tokens_judge=args.max_out_tokens_judge,
@@ -330,6 +349,8 @@ def _run_mt_bench_preset(
         "judge_model": args.judge_model,
         "judge_prompt_preset": prompt_preset,
         "mt_bench_judge_mode": args.mt_bench_judge_mode,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **stats,
         "limit_events": limit_event_tracker.build_summary()
         if limit_event_tracker is not None
@@ -441,6 +462,8 @@ def run_mt_bench(
             "n_instructions": args.n_instructions
             if args.n_instructions is not None
             else len(questions_df),
+            "battle_thinking_token_budget": args.battle_thinking_token_budget,
+            "strip_thinking_before_judging": args.strip_thinking_before_judging,
             "limit_events": limit_event_tracker.build_summary(),
             "skip_judging": True,
         }

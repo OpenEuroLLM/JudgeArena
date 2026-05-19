@@ -48,6 +48,7 @@ from judgearena.utils import (
     compute_pref_summary,
     data_root,
     download_hf,
+    is_thinking_model,
     make_model,
     read_df,
 )
@@ -167,6 +168,8 @@ class CliArgs(BaseCliArgs):
             ignore_cache=args.ignore_cache,
             judge_prompt_preset=args.judge_prompt_preset,
             mt_bench_judge_mode=args.mt_bench_judge_mode,
+            battle_thinking_token_budget=args.battle_thinking_token_budget,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
             skip_judging=args.skip_judging,
             truncate_all_input_chars=args.truncate_all_input_chars,
             truncate_judge_input_chars=args.truncate_judge_input_chars,
@@ -286,7 +289,18 @@ def load_contexts(dataset: str) -> pd.Series:
 def _build_generation_model_kwargs(
     *, args: CliArgs, model_spec: str
 ) -> dict[str, object]:
-    return dict(args.engine_kwargs)
+    generation_model_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        generation_model_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_model_kwargs
 
 
 def _build_judge_model_kwargs(
@@ -310,6 +324,7 @@ def _generation_cache_name(args: CliArgs, *, model_spec: str) -> str:
         "max_out_tokens_models": args.max_out_tokens_models,
         "max_model_len": args.max_model_len,
         "chat_template": args.chat_template,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         "engine_kwargs": _build_generation_model_kwargs(
             args=args, model_spec=model_spec
         ),
@@ -497,6 +512,8 @@ def main(args: CliArgs):
             "baseline_models": baseline_plan.unique_models,
             "judge_model": args.judge_model,
             "n_instructions": n_instructions,
+            "battle_thinking_token_budget": args.battle_thinking_token_budget,
+            "strip_thinking_before_judging": args.strip_thinking_before_judging,
             "limit_events": limit_event_tracker.build_summary(),
             "skip_judging": True,
         }
@@ -548,6 +565,7 @@ def main(args: CliArgs):
         provide_explanation=args.provide_explanation,
         prompt_preset=resolved_prompt.preset_name,
         parser_mode=resolved_prompt.parser_mode,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
         truncate_input_chars=args.truncate_judge_input_chars,
@@ -587,6 +605,8 @@ def main(args: CliArgs):
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
         "judge_prompt_preset": resolved_prompt.preset_name,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **summary,
         "limit_events": limit_event_tracker.build_summary(),
         "preferences": prefs.tolist(),

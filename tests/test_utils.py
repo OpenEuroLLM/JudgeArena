@@ -85,6 +85,84 @@ def test_do_inference_batch_path_propagates_finish_reason_without_batch_with_met
     assert texts == ["a", "b"]
 
 
+def _strip_then_cap(
+    answer: str, cap: int, *, strip: bool = True
+) -> tuple[str, bool, bool]:
+    if strip:
+        stripped_text, thinking_stripped = utils.strip_thinking_tags_with_metadata(
+            answer
+        )
+    else:
+        stripped_text, thinking_stripped = answer, False
+    truncated, was_truncated = utils.truncate_with_metadata(stripped_text, max_len=cap)
+    return truncated, was_truncated, thinking_stripped
+
+
+@pytest.mark.parametrize(
+    ("answer", "cap", "expected"),
+    [
+        (
+            f"<think>{'so let me think through this... ' * 400}</think>\n\n"
+            "The capital of France is Paris.",
+            1024,
+            "The capital of France is Paris.",
+        ),
+        (
+            f"<think>{'step 1... ' * 500}{utils.VLLM_REASONING_END_STR}"
+            "Final answer: 42.",
+            256,
+            "Final answer: 42.",
+        ),
+        (
+            f"{'leftover reasoning fragment ' * 100}</think>\nAnswer: yes.",
+            512,
+            "Answer: yes.",
+        ),
+    ],
+)
+def test_strip_then_cap_drops_reasoning_prefixes(answer: str, cap: int, expected: str):
+    truncated, was_truncated, thinking_stripped = _strip_then_cap(answer, cap)
+
+    assert thinking_stripped is True
+    assert was_truncated is False
+    assert truncated == expected
+    assert "<think>" not in truncated
+    assert "</think>" not in truncated
+
+
+def test_strip_then_cap_passthrough_without_thinking_tags():
+    visible = "Paris is the capital of France. " * 50
+
+    truncated, was_truncated, thinking_stripped = _strip_then_cap(visible, cap=512)
+
+    assert thinking_stripped is False
+    assert was_truncated is True
+    assert truncated == visible[:512]
+
+
+def test_strip_then_cap_unclosed_think_block_remains_truncated():
+    answer = f"<think>{'still reasoning ' * 1000}"
+
+    truncated, was_truncated, thinking_stripped = _strip_then_cap(answer, cap=256)
+
+    assert thinking_stripped is False
+    assert was_truncated is True
+    assert truncated.startswith("<think>")
+
+
+def test_strip_then_cap_disabled_preserves_pre_fix_behavior():
+    answer = f"<think>{'deep thinking ' * 400}</think>\nShort answer."
+
+    truncated, was_truncated, thinking_stripped = _strip_then_cap(
+        answer, cap=1024, strip=False
+    )
+
+    assert thinking_stripped is False
+    assert was_truncated is True
+    assert truncated.startswith("<think>")
+    assert "</think>" not in truncated
+
+
 def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
     """vLLM-engine-only kwargs must not leak into ChatOpenAI.model_kwargs.
 

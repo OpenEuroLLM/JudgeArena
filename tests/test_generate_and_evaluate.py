@@ -230,6 +230,7 @@ def test_cli_args_parse_optional_boolean_flags(monkeypatch):
             "--judge_model=Dummy/Judge",
             "--use_tqdm=True",
             "--ignore_cache=True",
+            "--strip_thinking_before_judging=False",
         ],
     )
 
@@ -237,3 +238,4 @@ def test_cli_args_parse_optional_boolean_flags(monkeypatch):
 
     assert args.use_tqdm is True
     assert args.ignore_cache is True
+    assert args.strip_thinking_before_judging is False

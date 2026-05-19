@@ -7,6 +7,7 @@ from judgearena.utils import (
     LimitEventTracker,
     do_inference,
     make_model,
+    strip_thinking_tags_with_metadata,
     truncate_with_metadata,
 )
 
@@ -35,6 +36,15 @@ def _record_generation_output_limit_events(
                 case_id=case_id,
                 model_spec=model_spec,
                 note=finish_reason,
+            )
+        if row.get("thinking_budget_exhausted"):
+            limit_event_tracker.record(
+                "generation_thinking_token_budget",
+                stage="generation_output",
+                field=field,
+                case_id=case_id,
+                model_spec=model_spec,
+                note=str(row.get("thinking_token_budget")),
             )
     return hit_token_limit
 
@@ -171,6 +181,7 @@ def generate_multiturn(
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
     limit_event_tracker: LimitEventTracker | None = None,
+    strip_thinking_before_turn_2_prompt: bool = False,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -257,6 +268,7 @@ def generate_multiturn(
     turn2_turn1_truncated: list[bool] = []
     turn2_answer_truncated: list[bool] = []
     turn2_prompt_truncated: list[bool] = []
+    turn2_turn1_answer_thinking_stripped: list[bool] = []
     for (question_id, row), t1_answer in zip(
         questions.iterrows(), completions_turn_1, strict=True
     ):
@@ -264,6 +276,7 @@ def generate_multiturn(
             turn2_turn1_truncated.append(False)
             turn2_answer_truncated.append(False)
             turn2_prompt_truncated.append(False)
+            turn2_turn1_answer_thinking_stripped.append(False)
             turn2_inputs.append(
                 turn1_template.invoke({"user_prompt": "No follow-up question."})
             )
@@ -286,7 +299,21 @@ def generate_multiturn(
                 case_id=question_id,
                 model_spec=model,
             )
+            # Strip <think>...</think> from the turn-1 answer before the
+            # character cap fires. Mirrors what the Qwen3 chat template does
+            # natively for historical assistant turns; applying it here
+            # ensures a 30K-char cap lands on the visible answer rather than
+            # deep inside a runaway reasoning block, which would silently
+            # destroy the </think> closer and force the whole thinking
+            # fragment into the turn-2 prompt.
             t1_answer_str = str(t1_answer)
+            if strip_thinking_before_turn_2_prompt:
+                t1_answer_str, thinking_stripped = strip_thinking_tags_with_metadata(
+                    t1_answer_str
+                )
+            else:
+                thinking_stripped = False
+            turn2_turn1_answer_thinking_stripped.append(thinking_stripped)
             truncated_turn_1_answer, answer_was_truncated = truncate_with_metadata(
                 t1_answer_str,
                 max_len=truncate_input_chars,
@@ -358,6 +385,9 @@ def generate_multiturn(
             "generation_turn_1_hit_token_limit": turn1_hit_token_limit,
             "generation_turn_2_turn_1_prompt_truncated": turn2_turn1_truncated,
             "generation_turn_2_turn_1_answer_truncated": turn2_answer_truncated,
+            "generation_turn_2_turn_1_answer_thinking_stripped": (
+                turn2_turn1_answer_thinking_stripped
+            ),
             "generation_turn_2_prompt_truncated": turn2_prompt_truncated,
             "generation_turn_2_finish_reason": [
                 metadata_row.get("finish_reason") for metadata_row in turn2_metadata

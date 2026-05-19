@@ -29,6 +29,8 @@ from judgearena.utils import (
     do_inference,
     download_hf,
     read_df,
+    strip_thinking_tags,
+    strip_thinking_tags_with_metadata,
     truncate_with_metadata,
 )
 
@@ -54,6 +56,7 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
+        judge_completion = strip_thinking_tags(judge_completion)
         if self.parser_mode == "verdict":
             return self._parse_bracketed_verdict(judge_completion)
         if self.parser_mode == "score":
@@ -126,6 +129,7 @@ def evaluate_completions(
     truncate_input_chars: int | None = 8192,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ):
     """
     :param dataset:
@@ -217,6 +221,7 @@ def evaluate_completions(
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
+        strip_thinking_before_judging=strip_thinking_before_judging,
         limit_event_tracker=limit_event_tracker,
     )
 
@@ -249,6 +254,7 @@ def evaluate_completions(
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
         "judge_prompt_preset": resolved_prompt.preset_name,
+        "strip_thinking_before_judging": strip_thinking_before_judging,
     }
 
     try:
@@ -280,6 +286,8 @@ class JudgeAnnotation:
     judge_input: str | None = None  # input that was passed to the judge
     completion_A_for_judge: str | None = None
     completion_B_for_judge: str | None = None
+    completion_A_reasoning_stripped: bool = False
+    completion_B_reasoning_stripped: bool = False
     completion_A_truncated_for_judge: bool = False
     completion_B_truncated_for_judge: bool = False
 
@@ -296,6 +304,7 @@ def annotate_battles(
     use_tqdm: bool = False,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
     limit_event_tracker: LimitEventTracker | None = None,
     judge_tokenizer: "PreTrainedTokenizerBase | None" = None,
     max_judge_model_len: int | None = None,
@@ -367,6 +376,33 @@ def annotate_battles(
         raw_completion_B = completion_B if isinstance(completion_B, str) else ""
         completion_A_for_judge = raw_completion_A
         completion_B_for_judge = raw_completion_B
+        stripped_A = False
+        stripped_B = False
+        if strip_thinking_before_judging:
+            completion_A_for_judge, stripped_A = strip_thinking_tags_with_metadata(
+                completion_A_for_judge
+            )
+            completion_B_for_judge, stripped_B = strip_thinking_tags_with_metadata(
+                completion_B_for_judge
+            )
+            if stripped_A and limit_event_tracker is not None:
+                limit_event_tracker.record(
+                    "thinking_trace_stripped_before_judging",
+                    stage="judge_input",
+                    field="completion_A",
+                    case_id=case_id,
+                    original_length=len(raw_completion_A),
+                    final_length=len(completion_A_for_judge),
+                )
+            if stripped_B and limit_event_tracker is not None:
+                limit_event_tracker.record(
+                    "thinking_trace_stripped_before_judging",
+                    stage="judge_input",
+                    field="completion_B",
+                    case_id=case_id,
+                    original_length=len(raw_completion_B),
+                    final_length=len(completion_B_for_judge),
+                )
         truncated_completion_A, truncated_A = truncate_with_metadata(
             completion_A_for_judge,
             max_len=truncate_input_chars,
@@ -398,6 +434,8 @@ def annotate_battles(
             {
                 "completion_A_for_judge": truncated_completion_A,
                 "completion_B_for_judge": truncated_completion_B,
+                "completion_A_reasoning_stripped": stripped_A,
+                "completion_B_reasoning_stripped": stripped_B,
                 "completion_A_truncated_for_judge": truncated_A,
                 "completion_B_truncated_for_judge": truncated_B,
             }
@@ -470,6 +508,7 @@ def judge_and_parse_prefs(
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     parser_mode: str = "score",
+    strip_thinking_before_judging: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
@@ -504,6 +543,7 @@ def judge_and_parse_prefs(
         case_ids=case_ids,
         provide_explanation=provide_explanation,
         prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         truncate_input_chars=truncate_input_chars,
@@ -524,6 +564,7 @@ def judge_and_parse_prefs(
             case_ids=case_ids,
             provide_explanation=provide_explanation,
             prompt_preset=prompt_preset,
+            strip_thinking_before_judging=strip_thinking_before_judging,
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             truncate_input_chars=truncate_input_chars,
