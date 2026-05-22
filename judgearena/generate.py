@@ -230,6 +230,7 @@ def generate_base(
     completions = model.batch(
         inputs=inputs,
         max_tokens=max_tokens,
+        stop=".",
     )
     completions = [x.content if hasattr(x, "content") else x for x in completions]
 
