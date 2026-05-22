@@ -14,10 +14,6 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.instruction_dataset.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -469,6 +465,11 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
 
 def download_all():
+    from judgearena.instruction_dataset.arena_hard import (
+        download_arena_hard,
+        is_arena_hard_dataset,
+    )
+
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
     for dataset in [
