@@ -237,6 +237,7 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        use_generate: bool = False,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -277,10 +278,15 @@ class ChatVLLM:
         )
 
         # Resolve chat template:
-        # 1. Explicit override always wins → use chat() with that template
-        # 2. If tokenizer has one, use it → use chat() (pass None to vLLM)
-        # 3. No template found → fall back to generate() for base models
-        if chat_template:
+        # 1. use_generate=True → always use llm.generate() (base/pretrained models)
+        # 2. Explicit chat_template → always use llm.chat() with that template
+        # 3. Tokenizer has a template → use llm.chat() with the tokenizer's own
+        # 4. No template found → fall back to llm.generate()
+        if use_generate:
+            self.chat_template = None
+            self._use_generate = True
+            logger.info("ChatVLLM: forced llm.generate() for '%s'", model)
+        elif chat_template:
             self.chat_template = chat_template
             self._use_generate = False
             logger.info("ChatVLLM: using explicit chat template for '%s'", model)
@@ -410,6 +416,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     if model_provider != "VLLM":
         engine_kwargs.pop("max_model_len", None)
         engine_kwargs.pop("chat_template", None)
+        engine_kwargs.pop("use_generate", None)
 
     if model_provider == "Dummy":
         return DummyModel(model)

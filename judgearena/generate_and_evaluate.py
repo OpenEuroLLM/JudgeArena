@@ -191,6 +191,7 @@ def main(args: CliArgs):
             max_tokens=args.max_out_tokens_models,
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
+            use_generate=True,
             use_tqdm=args.use_tqdm,
             **args.engine_kwargs,
         )
