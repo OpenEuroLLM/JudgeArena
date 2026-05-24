@@ -475,7 +475,8 @@ def download_all():
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
-        "m-arena-hard",
+        "m-arena-hard-v0.1",
+        "m-arena-hard-v2.0",
     ]:
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)

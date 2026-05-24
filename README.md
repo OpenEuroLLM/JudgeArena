@@ -197,20 +197,36 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 
 ### Generate + judge (pairwise)
 
-| Task                  | Description                                                                                    |
-|-----------------------|------------------------------------------------------------------------------------------------|
-| `alpaca-eval`         | General instruction-following benchmark                                                        |
-| `arena-hard-v2.0`     | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                             |
-| `arena-hard-v0.1`     | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                      |
-| `m-arena-hard`        | Translated version of Arena-Hard in 23 languages                                               |
-| `m-arena-hard-{lang}` | Language-specific variants (e.g., `ar`, `cs`, `de`)                                            |
-| `m-arena-hard-EU`     | All EU languages combined                                                                      |
-| `mt-bench`            | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
-| `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+| Task                         | Description                                                                                    |
+|------------------------------|------------------------------------------------------------------------------------------------|
+| `alpaca-eval`                | General instruction-following benchmark                                                        |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                              |
+| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                       |
+| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                   |
+| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                        |
+| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                 |
+| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages          |
+| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
+| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
+| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
+| `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+
+For MT-Bench, the default pairwise baseline is `gpt-4`.
+We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
+a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
+ship in the `lmsys/mt-bench` HF Space. Override per run with `--model_B`.
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`
-- `arena-hard-v2.0`: `o3-mini-2025-01-31` (standard prompts)
+- `arena-hard-v2.0`: per-question baseline routed by `category`:
+  - `o3-mini-2025-01-31` for `hard_prompt`, `coding`, and `math` (500 prompts).
+  - `gemini-2.0-flash-001` for `creative_writing` (250 prompts).
+
+For m-Arena-Hard, baseline completions are tied to the benchmark release:
+- `m-arena-hard-v0.1`: Aya Expanse 8B (`CohereLabs/aya-expanse-8b`), ingested
+  from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
+  [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
+- `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
 
 ### ELO rating
 

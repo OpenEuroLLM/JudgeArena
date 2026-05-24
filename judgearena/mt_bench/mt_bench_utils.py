@@ -18,6 +18,10 @@ import pandas as pd
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
+from judgearena.instruction_dataset.mt_bench import (
+    load_mt_bench_model_answers,
+    mt_bench_native_baseline,
+)
 from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
@@ -49,20 +53,26 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            **args.engine_kwargs,
         )
 
-    completions_a = cache_function_dataframe(
-        lambda: _run_generation(args.model_A),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_A}_{args.n_instructions}",
-    ).set_index("instruction_index")
+    def _load_or_generate(model_name: str) -> pd.DataFrame:
+        preloaded = load_mt_bench_model_answers(
+            model_name, n_instructions=args.n_instructions
+        )
+        if preloaded is not None:
+            return preloaded.set_index("instruction_index").loc[questions_df.index]
+        return (
+            cache_function_dataframe(
+                lambda: _run_generation(model_name),
+                ignore_cache=ignore_cache,
+                cache_name=f"{cache_prefix}_{model_name}_{args.n_instructions}",
+            )
+            .set_index("instruction_index")
+            .loc[questions_df.index]
+        )
 
-    completions_b = cache_function_dataframe(
-        lambda: _run_generation(args.model_B),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_B}_{args.n_instructions}",
-    ).set_index("instruction_index")
-    return completions_a, completions_b
+    return _load_or_generate(args.model_A), _load_or_generate(args.model_B)
 
 
 def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
@@ -111,7 +121,7 @@ def _run_mt_bench_fastchat(
             model_b=args.model_B,
             turns_mode="both",
             swap_mode=args.swap_mode,
-            truncate_input_chars=args.truncate_all_input_chars,
+            truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
         )
     )
@@ -149,6 +159,13 @@ def run_mt_bench(
     result_name: str,
 ):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
+    if args.model_B is None:
+        args.model_B = mt_bench_native_baseline(args.task)
+    if args.model_B is None:
+        raise ValueError(
+            f"--model_B is required for dataset '{args.task}'; "
+            "no dataset-native baseline registered."
+        )
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
@@ -164,8 +181,9 @@ def run_mt_bench(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
         temperature=0.0,
-        max_model_len=args.max_model_len,
+        max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
+        **{**args.engine_kwargs, **args.judge_engine_kwargs},
     )
     return _run_mt_bench_fastchat(
         args=args,
