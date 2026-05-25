@@ -8,6 +8,9 @@ JudgeParserMode = Literal["score", "verdict"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 SKYWORK_JUDGE_PROMPT_PRESET = "skywork"
+
+# m-ArenaHard v2.0 itself spans many more languages; these are only the
+# localized prompt variants that we currently ship translations for.
 M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS = {
     "ar": "m-arena-hard-v2-localized-ar",
     "pl": "m-arena-hard-v2-localized-pl",
