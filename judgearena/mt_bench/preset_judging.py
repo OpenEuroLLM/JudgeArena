@@ -157,11 +157,30 @@ def _truncation_flag_name(field: str) -> str:
     return f"{field}_truncated"
 
 
+def _oriented_limit_flags(
+    flags: dict[str, Any], *, swapped: bool, multi_turn: bool
+) -> dict[str, Any]:
+    oriented = dict(flags)
+    if not swapped:
+        return oriented
+
+    turns = ("1", "2") if multi_turn else ("1",)
+    for turn in turns:
+        for suffix in ("truncated", "reasoning_stripped"):
+            answer_a_key = f"answer_a_{turn}_{suffix}"
+            answer_b_key = f"answer_b_{turn}_{suffix}"
+            if answer_a_key in flags or answer_b_key in flags:
+                oriented[answer_a_key] = flags.get(answer_b_key, False)
+                oriented[answer_b_key] = flags.get(answer_a_key, False)
+    return oriented
+
+
 def _preflight_prompt_group_to_judge_budget(
     *,
     prompt_template: ChatPromptTemplate,
     prompt_kwargs_batch: list[dict[str, str]],
     batch_items: list[dict[str, Any]],
+    prompt_limit_flags_batch: list[dict[str, Any]],
     judge_tokenizer: Any,
     max_judge_model_len: int,
     max_out_tokens_judge: int | None,
@@ -180,6 +199,7 @@ def _preflight_prompt_group_to_judge_budget(
         for idx, _token_count in overflows:
             prompt_kwargs = prompt_kwargs_batch[idx]
             item = batch_items[idx]
+            prompt_limit_flags = prompt_limit_flags_batch[idx]
             answer_fields = item["answer_fields"]
             if not answer_fields:
                 continue
@@ -213,7 +233,7 @@ def _preflight_prompt_group_to_judge_budget(
                     case_id=item["case_id"],
                 )
                 if shrunk:
-                    item["limit_flags"][_truncation_flag_name(field)] = True
+                    prompt_limit_flags[_truncation_flag_name(field)] = True
 
         prompt_inputs = prompt_template.batch(prompt_kwargs_batch)
 
@@ -244,14 +264,16 @@ def _infer_by_prompt_groups(
     judge_tokenizer: Any | None = None,
     max_judge_model_len: int | None = None,
     max_out_tokens_judge: int | None = None,
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[list[str], list[dict[str, str]], list[dict[str, Any]]]:
     judgments: list[str] = [""] * len(items)
     used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
+    used_limit_flags: list[dict[str, Any]] = [{} for _ in items]
     for idxs in _group_indices_by_prompt(items).values():
         prompt: MTBenchPresetPrompt = items[idxs[0]]["prompt"]
         prompt_template = _build_chat_prompt_template(prompt)
 
         batch_kwargs: list[dict[str, str]] = []
+        batch_limit_flags: list[dict[str, Any]] = []
         batch_items = [items[item_index] for item_index in idxs]
         for item_index in idxs:
             prompt_kwargs = dict(items[item_index]["prompt_kwargs"])
@@ -261,12 +283,20 @@ def _infer_by_prompt_groups(
                     multi_turn=prompt.multi_turn,
                 )
             batch_kwargs.append(prompt_kwargs)
+            batch_limit_flags.append(
+                _oriented_limit_flags(
+                    items[item_index]["limit_flags"],
+                    swapped=swap_answers,
+                    multi_turn=prompt.multi_turn,
+                )
+            )
 
         if judge_tokenizer is not None and max_judge_model_len is not None:
             prompt_inputs = _preflight_prompt_group_to_judge_budget(
                 prompt_template=prompt_template,
                 prompt_kwargs_batch=batch_kwargs,
                 batch_items=batch_items,
+                prompt_limit_flags_batch=batch_limit_flags,
                 judge_tokenizer=judge_tokenizer,
                 max_judge_model_len=max_judge_model_len,
                 max_out_tokens_judge=max_out_tokens_judge,
@@ -279,12 +309,13 @@ def _infer_by_prompt_groups(
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
         )
-        for item_index, output, prompt_kwargs in zip(
-            idxs, outputs, batch_kwargs, strict=True
+        for item_index, output, prompt_kwargs, limit_flags in zip(
+            idxs, outputs, batch_kwargs, batch_limit_flags, strict=True
         ):
             judgments[item_index] = str(output)
             used_prompt_kwargs[item_index] = prompt_kwargs
-    return judgments, used_prompt_kwargs
+            used_limit_flags[item_index] = limit_flags
+    return judgments, used_prompt_kwargs, used_limit_flags
 
 
 def _build_mt_bench_preset_items(
@@ -554,7 +585,7 @@ def judge_mt_bench_with_preset(
         limit_event_tracker=limit_event_tracker,
     )
 
-    judgments, prompt_kwargs_used = _infer_by_prompt_groups(
+    judgments, prompt_kwargs_used, limit_flags_used = _infer_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
         use_tqdm=use_tqdm,
@@ -571,11 +602,12 @@ def judge_mt_bench_with_preset(
     def _append_results(
         raw_judgments: list[str],
         used_prompt_kwargs: list[dict[str, str]],
+        used_limit_flags: list[dict[str, Any]],
         *,
         swapped: bool,
     ) -> None:
-        for item, raw_judgment, prompt_kwargs in zip(
-            items, raw_judgments, used_prompt_kwargs, strict=True
+        for item, raw_judgment, prompt_kwargs, limit_flags in zip(
+            items, raw_judgments, used_prompt_kwargs, used_limit_flags, strict=True
         ):
             prompt: MTBenchPresetPrompt = item["prompt"]
             parsed_preference = PairScore(
@@ -602,7 +634,7 @@ def judge_mt_bench_with_preset(
                 "preference": normalized_preference,
                 "swapped": swapped,
             }
-            annotation_row.update(item.get("limit_flags", {}))
+            annotation_row.update(limit_flags)
             annotations.append(annotation_row)
             metadata.append(
                 {
@@ -613,18 +645,25 @@ def judge_mt_bench_with_preset(
             )
             preferences.append(normalized_preference)
 
-    _append_results(judgments, prompt_kwargs_used, swapped=False)
+    _append_results(judgments, prompt_kwargs_used, limit_flags_used, swapped=False)
 
     if swap_mode == "both":
-        swapped_judgments, swapped_prompt_kwargs = _infer_by_prompt_groups(
-            judge_chat_model=judge_chat_model,
-            items=items,
-            use_tqdm=use_tqdm,
-            swap_answers=True,
-            judge_tokenizer=judge_tokenizer,
-            max_judge_model_len=max_judge_model_len,
-            max_out_tokens_judge=max_out_tokens_judge,
+        swapped_judgments, swapped_prompt_kwargs, swapped_limit_flags = (
+            _infer_by_prompt_groups(
+                judge_chat_model=judge_chat_model,
+                items=items,
+                use_tqdm=use_tqdm,
+                swap_answers=True,
+                judge_tokenizer=judge_tokenizer,
+                max_judge_model_len=max_judge_model_len,
+                max_out_tokens_judge=max_out_tokens_judge,
+            )
         )
-        _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
+        _append_results(
+            swapped_judgments,
+            swapped_prompt_kwargs,
+            swapped_limit_flags,
+            swapped=True,
+        )
 
     return pd.Series(preferences, dtype=float), annotations, metadata, 0

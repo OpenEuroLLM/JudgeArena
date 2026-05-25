@@ -422,10 +422,28 @@ def do_inference(
         async def process_with_real_progress(chat_model, inputs, pbar):
             sem = asyncio.Semaphore(cap) if cap else None
 
+            async def ainvoke_with_metadata(input_item):
+                if return_metadata:
+                    if hasattr(chat_model, "ainvoke_with_metadata"):
+                        return await chat_model.ainvoke_with_metadata(
+                            input_item, **invoke_kwargs
+                        )
+                    if hasattr(chat_model, "batch_with_metadata"):
+                        loop = asyncio.get_running_loop()
+                        texts, row_metadata = await loop.run_in_executor(
+                            None,
+                            lambda: chat_model.batch_with_metadata(
+                                [input_item], **invoke_kwargs
+                            ),
+                        )
+                        return texts[0], row_metadata[0]
+                result = await chat_model.ainvoke(input_item, **invoke_kwargs)
+                return result, _extract_ai_message_metadata(result)
+
             async def process_single(input_item, max_retries=5, base_delay=1.0):
                 for attempt in range(max_retries):
                     try:
-                        result = await chat_model.ainvoke(input_item, **invoke_kwargs)
+                        result = await ainvoke_with_metadata(input_item)
                         pbar.update(1)
                         return result
                     except Exception as e:
@@ -459,7 +477,8 @@ def do_inference(
             )
         # Always materialize metadata; it is cheap and keeps return_metadata
         # behavior consistent with the batch path.
-        metadata = [_extract_ai_message_metadata(r) for r in res]
+        metadata = [m for _r, m in res]
+        res = [r for r, _m in res]
     else:
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
@@ -851,12 +870,20 @@ class ChatVLLM:
 
     async def ainvoke(self, input_item, **invoke_kwargs):
         """Async version - runs sync version in executor for compatibility."""
-        import asyncio
-
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None, lambda: self.invoke(input_item, **invoke_kwargs)
         )
+
+    async def ainvoke_with_metadata(
+        self, input_item, **invoke_kwargs
+    ) -> tuple[str, dict[str, Any]]:
+        """Async single-input inference that preserves vLLM finish metadata."""
+        loop = asyncio.get_event_loop()
+        texts, metadata = await loop.run_in_executor(
+            None, lambda: self.batch_with_metadata([input_item], **invoke_kwargs)
+        )
+        return texts[0], metadata[0]
 
 
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):

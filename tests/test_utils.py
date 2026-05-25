@@ -58,6 +58,26 @@ def test_do_inference_async_path_propagates_finish_reason(monkeypatch):
     ]
 
 
+def test_do_inference_async_path_uses_single_item_batch_metadata():
+    class PlainTextAsyncModel:
+        async def ainvoke(self, input_item, **_kwargs):
+            return f"plain-{input_item}"
+
+        def batch_with_metadata(self, inputs, **_kwargs):
+            assert inputs == ["prompt"]
+            return ["out"], [{"finish_reason": "length", "stop_reason": None}]
+
+    texts, metadata = utils.do_inference(
+        chat_model=PlainTextAsyncModel(),
+        inputs=["prompt"],
+        use_tqdm=True,
+        return_metadata=True,
+    )
+
+    assert texts == ["out"]
+    assert metadata == [{"finish_reason": "length", "stop_reason": None}]
+
+
 def test_do_inference_batch_path_propagates_finish_reason_without_batch_with_metadata():
     batch_results = [
         SimpleNamespace(

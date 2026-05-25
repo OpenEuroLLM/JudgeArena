@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -10,6 +11,122 @@ from judgearena.utils import (
     strip_thinking_tags_with_metadata,
     truncate_with_metadata,
 )
+
+_GENERATION_ROW_LIMIT_EVENT_KINDS = {
+    "generation_input_char_truncation",
+    "generation_output_token_limit",
+    "generation_thinking_token_budget",
+}
+
+
+@dataclass(frozen=True)
+class GenerationLimitColumnSpec:
+    dataframe: pd.DataFrame
+    model_spec: str
+    input_truncation_columns: dict[str, str]
+    output_limit_columns: dict[str, tuple[str, str | None]]
+    thinking_budget_columns: dict[str, tuple[str, str | None]]
+
+
+def _is_truthy(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
+
+
+def _note_from_row(row: pd.Series, column: str | None, default: str) -> str:
+    if column is None or column not in row.index:
+        return default
+    value = row[column]
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _output_metadata_values(
+    metadata: list[dict[str, Any]], key: str
+) -> list[object | None]:
+    return [(metadata_row or {}).get(key) for metadata_row in metadata]
+
+
+def _output_metadata_flags(metadata: list[dict[str, Any]], key: str) -> list[bool]:
+    return [_is_truthy((metadata_row or {}).get(key)) for metadata_row in metadata]
+
+
+def record_generation_limit_events_from_dataframe(
+    *,
+    source: GenerationLimitColumnSpec,
+    limit_event_tracker: LimitEventTracker,
+) -> None:
+    if "instruction_index" not in source.dataframe.columns:
+        return
+
+    for _idx, row in source.dataframe.iterrows():
+        case_id = row["instruction_index"]
+        for column, field in source.input_truncation_columns.items():
+            if column in row.index and _is_truthy(row[column]):
+                limit_event_tracker.record(
+                    "generation_input_char_truncation",
+                    stage="generation_input",
+                    field=field,
+                    case_id=case_id,
+                    model_spec=source.model_spec,
+                )
+
+        for column, (
+            field,
+            finish_reason_column,
+        ) in source.output_limit_columns.items():
+            if column in row.index and _is_truthy(row[column]):
+                limit_event_tracker.record(
+                    "generation_output_token_limit",
+                    stage="generation_output",
+                    field=field,
+                    case_id=case_id,
+                    model_spec=source.model_spec,
+                    note=_note_from_row(row, finish_reason_column, "length"),
+                )
+
+        for column, (field, budget_column) in source.thinking_budget_columns.items():
+            if column in row.index and _is_truthy(row[column]):
+                limit_event_tracker.record(
+                    "generation_thinking_token_budget",
+                    stage="generation_output",
+                    field=field,
+                    case_id=case_id,
+                    model_spec=source.model_spec,
+                    note=_note_from_row(row, budget_column, ""),
+                )
+
+
+def build_limit_event_summary(
+    *,
+    limit_event_tracker: LimitEventTracker | None,
+    generation_sources: list[GenerationLimitColumnSpec],
+) -> dict[str, Any]:
+    combined_tracker = LimitEventTracker()
+    if limit_event_tracker is not None:
+        combined_tracker.events.extend(
+            event
+            for event in limit_event_tracker.events
+            if event.kind not in _GENERATION_ROW_LIMIT_EVENT_KINDS
+        )
+    for source in generation_sources:
+        record_generation_limit_events_from_dataframe(
+            source=source,
+            limit_event_tracker=combined_tracker,
+        )
+    return combined_tracker.build_summary()
 
 
 def _record_generation_output_limit_events(
@@ -118,6 +235,12 @@ def generate_instructions(
                 for metadata_row in completion_metadata
             ],
             "generation_output_hit_token_limit": hit_token_limit,
+            "generation_output_thinking_budget_exhausted": _output_metadata_flags(
+                completion_metadata, "thinking_budget_exhausted"
+            ),
+            "generation_output_thinking_token_budget": _output_metadata_values(
+                completion_metadata, "thinking_token_budget"
+            ),
         },
     )
     return df_outputs
@@ -383,6 +506,12 @@ def generate_multiturn(
                 metadata_row.get("finish_reason") for metadata_row in turn1_metadata
             ],
             "generation_turn_1_hit_token_limit": turn1_hit_token_limit,
+            "generation_turn_1_thinking_budget_exhausted": _output_metadata_flags(
+                turn1_metadata, "thinking_budget_exhausted"
+            ),
+            "generation_turn_1_thinking_token_budget": _output_metadata_values(
+                turn1_metadata, "thinking_token_budget"
+            ),
             "generation_turn_2_turn_1_prompt_truncated": turn2_turn1_truncated,
             "generation_turn_2_turn_1_answer_truncated": turn2_answer_truncated,
             "generation_turn_2_turn_1_answer_thinking_stripped": (
@@ -393,6 +522,12 @@ def generate_multiturn(
                 metadata_row.get("finish_reason") for metadata_row in turn2_metadata
             ],
             "generation_turn_2_hit_token_limit": turn2_hit_token_limit,
+            "generation_turn_2_thinking_budget_exhausted": _output_metadata_flags(
+                turn2_metadata, "thinking_budget_exhausted"
+            ),
+            "generation_turn_2_thinking_token_budget": _output_metadata_values(
+                turn2_metadata, "thinking_token_budget"
+            ),
         },
     )
 
@@ -457,6 +592,12 @@ def generate_base(
                 for metadata_row in completion_metadata
             ],
             "generation_output_hit_token_limit": hit_token_limit,
+            "generation_output_thinking_budget_exhausted": _output_metadata_flags(
+                completion_metadata, "thinking_budget_exhausted"
+            ),
+            "generation_output_thinking_token_budget": _output_metadata_values(
+                completion_metadata, "thinking_token_budget"
+            ),
         },
     )
 

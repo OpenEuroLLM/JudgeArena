@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 
@@ -217,6 +219,49 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
 
     avg_pref = sum(prefs) / len(prefs)
     assert avg_pref == 0.5
+
+
+def test_skip_judging_warm_cache_summarizes_generation_limit_events(
+    tmp_path, monkeypatch
+):
+    def fake_cache_function_dataframe(fun, **_kwargs):
+        return pd.DataFrame(
+            {
+                "instruction_index": [0, 1],
+                "completion": ["cached 0", "cached 1"],
+                "generation_prompt_truncated": [True, False],
+                "generation_output_finish_reason": ["length", "stop"],
+                "generation_output_hit_token_limit": [True, False],
+                "generation_output_thinking_budget_exhausted": [False, True],
+                "generation_output_thinking_token_budget": [None, 512],
+            }
+        )
+
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "cache_function_dataframe",
+        fake_cache_function_dataframe,
+    )
+
+    main_generate_and_eval(
+        CliArgs(
+            task="alpaca-eval",
+            model_A="Cached/A",
+            model_B="Cached/B",
+            judge_model="Dummy/Judge",
+            n_instructions=2,
+            skip_judging=True,
+            result_folder=str(tmp_path),
+        )
+    )
+
+    result_path = next(tmp_path.glob("*/gen-results-*.json"))
+    results = json.loads(result_path.read_text())
+    counts = results["limit_events"]["counts_by_kind"]
+
+    assert counts["generation_input_char_truncation"] == 2
+    assert counts["generation_output_token_limit"] == 2
+    assert counts["generation_thinking_token_budget"] == 2
 
 
 def test_cli_args_parse_optional_boolean_flags(monkeypatch):

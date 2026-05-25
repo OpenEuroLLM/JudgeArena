@@ -21,7 +21,12 @@ from judgearena.cli_common import (
     resolve_verbosity,
 )
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
-from judgearena.generate import generate_base, generate_instructions
+from judgearena.generate import (
+    GenerationLimitColumnSpec,
+    build_limit_event_summary,
+    generate_base,
+    generate_instructions,
+)
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     ARENA_HARD_BASELINES,
@@ -455,39 +460,82 @@ def main(args: CliArgs):
     def _align_completion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         return df.set_index("instruction_index").loc[instructions.index].reset_index()
 
-    def _load_or_generate_completions(model_spec: str) -> pd.Series:
+    def _generation_limit_source(
+        df: pd.DataFrame, model_spec: str
+    ) -> GenerationLimitColumnSpec:
+        prompt_field = "instruction" if is_fluency_task else "user_prompt"
+        return GenerationLimitColumnSpec(
+            dataframe=df,
+            model_spec=model_spec,
+            input_truncation_columns={"generation_prompt_truncated": prompt_field},
+            output_limit_columns={
+                "generation_output_hit_token_limit": (
+                    "completion",
+                    "generation_output_finish_reason",
+                )
+            },
+            thinking_budget_columns={
+                "generation_output_thinking_budget_exhausted": (
+                    "completion",
+                    "generation_output_thinking_token_budget",
+                )
+            },
+        )
+
+    def _completion_series(df: pd.DataFrame) -> pd.Series:
+        return df.set_index("instruction_index").loc[instructions.index, "completion"]
+
+    def _load_or_generate_completions(model_spec: str) -> pd.DataFrame:
         preloaded = try_load_dataset_completions(args.task, model_spec, n_instructions)
         if preloaded is not None:
-            aligned = _align_completion_dataframe(preloaded)
-        else:
-            aligned = _align_completion_dataframe(
-                cache_function_dataframe(
-                    lambda: _run_generation(model_spec),
-                    ignore_cache=ignore_cache,
-                    cache_name=_generation_cache_name(args, model_spec=model_spec),
-                )
+            return _align_completion_dataframe(preloaded)
+        return _align_completion_dataframe(
+            cache_function_dataframe(
+                lambda: _run_generation(model_spec),
+                ignore_cache=ignore_cache,
+                cache_name=_generation_cache_name(args, model_spec=model_spec),
             )
-        return aligned.set_index("instruction_index").loc[
-            instructions.index, "completion"
-        ]
+        )
 
-    completions_A = _load_or_generate_completions(args.model_A)
+    generation_sources: list[GenerationLimitColumnSpec] = []
+
+    completions_A_df = _load_or_generate_completions(args.model_A)
+    generation_sources.append(_generation_limit_source(completions_A_df, args.model_A))
+    completions_A = _completion_series(completions_A_df)
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
     if baseline_plan.is_flat:
-        completions_B = _load_or_generate_completions(baseline_plan.single_model)
+        completions_B_df = _load_or_generate_completions(baseline_plan.single_model)
+        generation_sources.append(
+            _generation_limit_source(completions_B_df, baseline_plan.single_model)
+        )
+        completions_B = _completion_series(completions_B_df)
     else:
         # Per-row plan: fetch one completion set per unique baseline, then stitch
         # them together so completions_B[uid] uses the baseline that
         # ARENA_HARD_BASELINES routes uid's category to.
-        per_baseline_completions: dict[str, pd.Series] = {}
+        per_baseline_completions: dict[str, pd.DataFrame] = {}
         for baseline_model in baseline_plan.unique_models:
             per_baseline_completions[baseline_model] = _load_or_generate_completions(
                 baseline_model
             )
+            assigned_ids = baseline_per_index[
+                baseline_per_index == baseline_model
+            ].index
+            assigned_df = (
+                per_baseline_completions[baseline_model]
+                .set_index("instruction_index")
+                .loc[assigned_ids]
+                .reset_index()
+            )
+            generation_sources.append(
+                _generation_limit_source(assigned_df, baseline_model)
+            )
         completions_B = pd.Series(
             [
-                per_baseline_completions[model].loc[uid]
+                per_baseline_completions[model]
+                .set_index("instruction_index")
+                .loc[uid, "completion"]
                 for uid, model in baseline_per_index.items()
             ],
             index=instructions.index,
@@ -514,7 +562,10 @@ def main(args: CliArgs):
             "n_instructions": n_instructions,
             "battle_thinking_token_budget": args.battle_thinking_token_budget,
             "strip_thinking_before_judging": args.strip_thinking_before_judging,
-            "limit_events": limit_event_tracker.build_summary(),
+            "limit_events": build_limit_event_summary(
+                limit_event_tracker=limit_event_tracker,
+                generation_sources=generation_sources,
+            ),
             "skip_judging": True,
         }
         with open(res_folder / f"gen-results-{name}.json", "w") as f:
@@ -608,7 +659,10 @@ def main(args: CliArgs):
         "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **summary,
-        "limit_events": limit_event_tracker.build_summary(),
+        "limit_events": build_limit_event_summary(
+            limit_event_tracker=limit_event_tracker,
+            generation_sources=generation_sources,
+        ),
         "preferences": prefs.tolist(),
     }
     logger.info(

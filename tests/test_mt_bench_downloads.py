@@ -1,4 +1,5 @@
 import importlib
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -65,7 +66,8 @@ def _stub_run_mt_bench_inputs(monkeypatch, questions_df: pd.DataFrame) -> None:
         mt_bench_utils,
         "_generate_mt_bench_completions",
         lambda args, questions_df, ignore_cache, limit_event_tracker: (
-            _mt_bench_completion_pair(questions_df)
+            *_mt_bench_completion_pair(questions_df),
+            [],
         ),
     )
 
@@ -238,11 +240,13 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         engine_kwargs={"gpu_memory_utilization": 0.7, "language_model_only": True},
     )
 
-    completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
-        args=args,
-        questions_df=questions_df,
-        ignore_cache=False,
-        limit_event_tracker=None,
+    completions_a, completions_b, generation_sources = (
+        mt_bench_utils._generate_mt_bench_completions(
+            args=args,
+            questions_df=questions_df,
+            ignore_cache=False,
+            limit_event_tracker=None,
+        )
     )
 
     assert generated_models == ["VLLM/example/model-a"]
@@ -253,6 +257,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
+    assert len(generation_sources) == 2
 
 
 def test_mt_bench_generation_cache_name_changes_when_strip_flag_flips():
@@ -293,6 +298,81 @@ def test_mt_bench_generation_cache_name_changes_when_strip_flag_flips():
     assert key_on != key_off
     assert key_on.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
     assert key_off.startswith("mt-bench_VLLM/Qwen/Qwen3.5-9B_3_")
+
+
+def test_mt_bench_skip_judging_warm_cache_summarizes_generation_limit_events(
+    tmp_path, monkeypatch
+):
+    questions_df = _single_mt_bench_question_df()
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: None,
+    )
+
+    def fake_cache_function_dataframe(fun, **_kwargs):
+        return pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["cached turn 1"],
+                "completion_turn_2": ["cached turn 2"],
+                "generation_turn_1_prompt_truncated": [True],
+                "generation_turn_1_finish_reason": ["length"],
+                "generation_turn_1_hit_token_limit": [True],
+                "generation_turn_1_thinking_budget_exhausted": [False],
+                "generation_turn_1_thinking_token_budget": [None],
+                "generation_turn_2_turn_1_prompt_truncated": [False],
+                "generation_turn_2_turn_1_answer_truncated": [False],
+                "generation_turn_2_prompt_truncated": [False],
+                "generation_turn_2_finish_reason": ["stop"],
+                "generation_turn_2_hit_token_limit": [False],
+                "generation_turn_2_thinking_budget_exhausted": [True],
+                "generation_turn_2_thinking_token_budget": [512],
+            }
+        )
+
+    monkeypatch.setattr(
+        mt_bench_utils, "cache_function_dataframe", fake_cache_function_dataframe
+    )
+
+    args = _mt_bench_args(
+        dataset="mt-bench",
+        model_A="Cached/A",
+        model_B="Cached/B",
+        judge_model="Dummy/Judge",
+        n_instructions=1,
+        result_folder=str(tmp_path),
+        skip_judging=True,
+        truncate_all_input_chars=8192,
+        max_out_tokens_models=1024,
+        max_out_tokens_judge=256,
+        max_model_len=16384,
+        max_judge_model_len=None,
+        chat_template=None,
+        provide_explanation=False,
+        swap_mode="fixed",
+        judge_prompt_preset="default",
+        battle_thinking_token_budget=None,
+        strip_thinking_before_judging=False,
+        engine_kwargs={},
+        judge_engine_kwargs={},
+        mt_bench_judge_mode="default",
+    )
+
+    mt_bench_utils.run_mt_bench(args, ignore_cache=False)
+
+    result_path = next(tmp_path.glob("*/gen-results-*.json"))
+    results = json.loads(result_path.read_text())
+    counts = results["limit_events"]["counts_by_kind"]
+
+    assert counts["generation_input_char_truncation"] == 2
+    assert counts["generation_output_token_limit"] == 2
+    assert counts["generation_thinking_token_budget"] == 2
 
 
 def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
@@ -367,6 +447,60 @@ def test_preset_judging_preflights_token_budget_for_default_mode(monkeypatch):
     assert (
         tracker.build_summary()["counts_by_kind"]["judge_input_token_truncation"] >= 1
     )
+
+
+def test_preset_judging_swapped_rows_orient_limit_flags(monkeypatch):
+    preset_judging = importlib.import_module("judgearena.mt_bench.preset_judging")
+
+    def fake_do_inference(*, inputs, **kwargs):
+        return ["score_A: 8\nscore_B: 4"] * len(inputs)
+
+    monkeypatch.setattr(preset_judging, "do_inference", fake_do_inference)
+
+    _prefs, annotations, _metadata, _num_inconsistent = (
+        preset_judging.judge_mt_bench_with_preset(
+            judge_chat_model=object(),
+            judge_model="Dummy/J",
+            questions=pd.DataFrame(
+                {
+                    "category": ["writing"],
+                    "turn_1": ["Question"],
+                    "turn_2": [""],
+                    "reference_turn_1": [""],
+                    "reference_turn_2": [""],
+                },
+                index=pd.Index([1], name="question_id"),
+            ),
+            completions_a=pd.DataFrame(
+                {"completion_turn_1": ["A" * 20], "completion_turn_2": [""]},
+                index=pd.Index([1], name="question_id"),
+            ),
+            completions_b=pd.DataFrame(
+                {"completion_turn_1": ["B"], "completion_turn_2": [""]},
+                index=pd.Index([1], name="question_id"),
+            ),
+            model_a="Model/A",
+            model_b="Model/B",
+            turns_mode="single",
+            swap_mode="both",
+            truncate_input_chars=5,
+            use_tqdm=False,
+            prompt_preset="default",
+            provide_explanation=False,
+            limit_event_tracker=utils.LimitEventTracker(),
+        )
+    )
+
+    original_row, swapped_row = annotations
+    assert original_row["swapped"] is False
+    assert original_row["model_A"] == "Model/A"
+    assert original_row["answer_a_1_truncated"] is True
+    assert original_row["answer_b_1_truncated"] is False
+
+    assert swapped_row["swapped"] is True
+    assert swapped_row["model_A"] == "Model/B"
+    assert swapped_row["answer_a_1_truncated"] is False
+    assert swapped_row["answer_b_1_truncated"] is True
 
 
 def test_run_mt_bench_forwards_engine_kwargs_to_judge(monkeypatch, caplog):

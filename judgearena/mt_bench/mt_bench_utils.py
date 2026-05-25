@@ -17,7 +17,11 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.eval_utils import _compute_grouped_stats, print_results
-from judgearena.generate import generate_multiturn
+from judgearena.generate import (
+    GenerationLimitColumnSpec,
+    build_limit_event_summary,
+    generate_multiturn,
+)
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.mt_bench import (
     load_mt_bench_model_answers,
@@ -116,12 +120,47 @@ def _align_mt_bench_completions(
     return indexed.loc[questions_df.index]
 
 
+def _mt_bench_generation_limit_source(
+    df: pd.DataFrame, model_spec: str
+) -> GenerationLimitColumnSpec:
+    return GenerationLimitColumnSpec(
+        dataframe=df.reset_index(),
+        model_spec=model_spec,
+        input_truncation_columns={
+            "generation_turn_1_prompt_truncated": "turn_1",
+            "generation_turn_2_turn_1_prompt_truncated": "turn_1_for_turn_2",
+            "generation_turn_2_turn_1_answer_truncated": "turn_1_answer",
+            "generation_turn_2_prompt_truncated": "turn_2",
+        },
+        output_limit_columns={
+            "generation_turn_1_hit_token_limit": (
+                "completion_turn_1",
+                "generation_turn_1_finish_reason",
+            ),
+            "generation_turn_2_hit_token_limit": (
+                "completion_turn_2",
+                "generation_turn_2_finish_reason",
+            ),
+        },
+        thinking_budget_columns={
+            "generation_turn_1_thinking_budget_exhausted": (
+                "completion_turn_1",
+                "generation_turn_1_thinking_token_budget",
+            ),
+            "generation_turn_2_thinking_budget_exhausted": (
+                "completion_turn_2",
+                "generation_turn_2_thinking_token_budget",
+            ),
+        },
+    )
+
+
 def _generate_mt_bench_completions(
     args: CliArgs,
     questions_df: pd.DataFrame,
     ignore_cache: bool,
     limit_event_tracker: LimitEventTracker | None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[GenerationLimitColumnSpec]]:
     """Load baseline MT-Bench answers or generate fresh multi-turn outputs."""
 
     def _run_generation(model_name: str) -> pd.DataFrame:
@@ -163,7 +202,11 @@ def _generate_mt_bench_completions(
 
     completions_a = _load_or_generate(args.model_A)
     completions_b = _load_or_generate(args.model_B)
-    return completions_a, completions_b
+    generation_sources = [
+        _mt_bench_generation_limit_source(completions_a, args.model_A),
+        _mt_bench_generation_limit_source(completions_b, args.model_B),
+    ]
+    return completions_a, completions_b, generation_sources
 
 
 def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
@@ -244,6 +287,7 @@ def _run_mt_bench_fastchat(
     judge_chat_model,
     prompt_preset: str,
     limit_event_tracker: LimitEventTracker | None,
+    generation_sources: list[GenerationLimitColumnSpec],
     started_at_utc: datetime,
 ) -> pd.Series:
     """Run FastChat-style MT-Bench judging and save the resulting artifacts."""
@@ -278,9 +322,10 @@ def _run_mt_bench_fastchat(
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
         "num_inconsistent": num_inconsistent,
         **stats,
-        "limit_events": limit_event_tracker.build_summary()
-        if limit_event_tracker is not None
-        else {},
+        "limit_events": build_limit_event_summary(
+            limit_event_tracker=limit_event_tracker,
+            generation_sources=generation_sources,
+        ),
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
         "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
         "preferences": prefs.tolist(),
@@ -316,6 +361,7 @@ def _run_mt_bench_preset(
     judge_chat_model,
     prompt_preset: str,
     limit_event_tracker: LimitEventTracker | None,
+    generation_sources: list[GenerationLimitColumnSpec],
     started_at_utc: datetime,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, _num_inconsistent = (
@@ -352,9 +398,10 @@ def _run_mt_bench_preset(
         "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **stats,
-        "limit_events": limit_event_tracker.build_summary()
-        if limit_event_tracker is not None
-        else {},
+        "limit_events": build_limit_event_summary(
+            limit_event_tracker=limit_event_tracker,
+            generation_sources=generation_sources,
+        ),
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
         "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
         "preferences": prefs.tolist(),
@@ -442,7 +489,7 @@ def run_mt_bench(
         args.model_A,
         args.model_B,
     )
-    completions_a, completions_b = _generate_mt_bench_completions(
+    completions_a, completions_b, generation_sources = _generate_mt_bench_completions(
         args=args,
         questions_df=questions_df,
         ignore_cache=ignore_cache,
@@ -464,7 +511,10 @@ def run_mt_bench(
             else len(questions_df),
             "battle_thinking_token_budget": args.battle_thinking_token_budget,
             "strip_thinking_before_judging": args.strip_thinking_before_judging,
-            "limit_events": limit_event_tracker.build_summary(),
+            "limit_events": build_limit_event_summary(
+                limit_event_tracker=limit_event_tracker,
+                generation_sources=generation_sources,
+            ),
             "skip_judging": True,
         }
         with open(res_folder / f"gen-results-{result_name}.json", "w") as f:
@@ -511,5 +561,6 @@ def run_mt_bench(
         judge_chat_model=judge_chat_model,
         prompt_preset=prompt_preset,
         limit_event_tracker=limit_event_tracker,
+        generation_sources=generation_sources,
         started_at_utc=run_started_at,
     )
