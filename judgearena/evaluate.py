@@ -45,8 +45,6 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        if self.parser_mode == "verdict":
-            return self._parse_bracketed_verdict(judge_completion)
         if self.parser_mode == "score":
             return self._parse_numeric_scores(judge_completion)
         raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
@@ -58,17 +56,6 @@ class PairScore:
         if score_a is None or score_b is None:
             return None
         return float(self.preference_from_scores(score_a, score_b))
-
-    def _parse_bracketed_verdict(self, judge_completion: str) -> float | None:
-        verdict_match = re.search(r"\[\[\s*([ABCabc])\s*\]\]", judge_completion)
-        if verdict_match is None:
-            return None
-        bracketed_verdict = verdict_match.group(1).lower()
-        return {
-            "a": 0.0,
-            "b": 1.0,
-            "c": 0.5,
-        }[bracketed_verdict]
 
     def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)

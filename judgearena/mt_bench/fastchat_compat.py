@@ -9,10 +9,7 @@ from typing import Any, Literal
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.judge_prompt_presets import (
-    DEFAULT_JUDGE_PROMPT_PRESET,
-    SKYWORK_JUDGE_PROMPT_PRESET,
-)
+from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.mt_bench.common import (
     MT_BENCH_REFERENCE_CATEGORIES,
     iter_mt_bench_pairwise_rows,
@@ -157,75 +154,12 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 )
 
 
-_SKYWORK_PAIR_V2 = _load_pairwise_prompt(
-    name="skywork-pair-v2",
-    multi_turn=False,
-    ref_based=False,
-    system_user_subject="prompt displayed below",
-    system_task_description=(
-        "You should choose the assistant that follows the user's instructions and "
-        "answers the user's prompt better. Your evaluation should consider factors "
-        "such as helpfulness, relevance, accuracy, depth, creativity, and level "
-        "of detail of the responses."
-    ),
-    system_begin_instruction="carefully comparing the two responses",
-)
-
-_SKYWORK_PAIR_V2_MULTI = _load_pairwise_prompt(
-    name="skywork-pair-v2-multi-turn",
-    multi_turn=True,
-    ref_based=False,
-    system_user_subject="questions",
-    system_task_description=(
-        "You should choose the assistant that follows the user's instructions and "
-        "answers the user's questions better. Your evaluation should consider "
-        "factors such as helpfulness, relevance, accuracy, depth, creativity, and "
-        "level of detail of the responses."
-    ),
-    system_focus_line=(
-        "You should focus on which assistant better answers the second user question."
-    ),
-    system_begin_instruction="carefully comparing the two conversations",
-)
-
-_SKYWORK_PAIR_MATH_V1 = _load_pairwise_prompt(
-    name="skywork-pair-math-v1",
-    multi_turn=False,
-    ref_based=True,
-    system_user_subject="prompt displayed below",
-    system_task_description=(
-        "You will be given a reference answer, assistant A's answer, and "
-        "assistant B's answer. Your evaluation should focus on correctness and "
-        "helpfulness while deciding which assistant is better."
-    ),
-    system_begin_instruction="carefully comparing both assistants' answers with the reference answer",
-)
-
-_SKYWORK_PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
-    name="skywork-pair-math-v1-multi-turn",
-    multi_turn=True,
-    ref_based=True,
-    system_user_subject="questions",
-    system_task_description=(
-        "You will be given reference answers together with assistant A's and "
-        "assistant B's answers. Your evaluation should focus on correctness and "
-        "helpfulness while deciding which assistant better answers the second user question."
-    ),
-    system_begin_instruction="carefully comparing both assistants' answers with the reference answers",
-)
-
 _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] = {
     DEFAULT_JUDGE_PROMPT_PRESET: {
         "single": _PAIR_V2,
         "multi": _PAIR_V2_MULTI,
         "single_ref": _PAIR_MATH_V1,
         "multi_ref": _PAIR_MATH_V1_MULTI,
-    },
-    SKYWORK_JUDGE_PROMPT_PRESET: {
-        "single": _SKYWORK_PAIR_V2,
-        "multi": _SKYWORK_PAIR_V2_MULTI,
-        "single_ref": _SKYWORK_PAIR_MATH_V1,
-        "multi_ref": _SKYWORK_PAIR_MATH_V1_MULTI,
     },
 }
 

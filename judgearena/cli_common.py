@@ -105,8 +105,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         choices=JUDGE_PROMPT_PRESETS,
         default="default",
         help=(
-            "Judge prompt preset to use. 'default' preserves the existing score-first "
-            "JudgeArena prompts, while 'skywork' enables a verdict-first preset."
+            "Judge prompt preset to use. 'default' preserves the existing "
+            "score-first JudgeArena prompts."
         ),
     )
     parser.add_argument(

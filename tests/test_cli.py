@@ -316,11 +316,11 @@ def test_judge_prompt_preset_is_forwarded(capture_mains):
             "--judge",
             "Dummy/J",
             "--judge_prompt_preset",
-            "skywork",
+            "default",
         ]
     )
     ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.judge_prompt_preset == "skywork"
+    assert ge_args.judge_prompt_preset == "default"
 
 
 def test_mt_bench_defaults_to_default_judge_mode(capture_mains):
