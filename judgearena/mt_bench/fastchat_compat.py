@@ -9,7 +9,6 @@ from typing import Any, Literal
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.mt_bench.common import (
     MT_BENCH_REFERENCE_CATEGORIES,
     iter_mt_bench_pairwise_rows,
@@ -18,6 +17,7 @@ from judgearena.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
     render_mt_bench_prompt_text,
 )
+from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.utils import do_inference
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {

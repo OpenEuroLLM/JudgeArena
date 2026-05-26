@@ -22,13 +22,17 @@ from judgearena.instruction_dataset.mt_bench import (
     load_mt_bench_model_answers,
     mt_bench_native_baseline,
 )
-from judgearena.judge_prompt_presets import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.prompts.registry import (
+    DEFAULT_JUDGE_PROMPT_PRESET,
+    ResolvedJudgePrompt,
+    resolve_run_judge_prompt,
+)
 from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
@@ -111,7 +115,8 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    prompt_preset: str,
+    resolved_prompt: ResolvedJudgePrompt,
+    fastchat_prompt_preset: str,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
@@ -126,7 +131,7 @@ def _run_mt_bench_fastchat(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
-            prompt_preset=prompt_preset,
+            prompt_preset=fastchat_prompt_preset,
         )
     )
 
@@ -136,8 +141,7 @@ def _run_mt_bench_fastchat(
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
-        "judge_prompt_preset": prompt_preset,
-        "mt_bench_judge_mode": args.mt_bench_judge_mode,
+        **resolved_prompt.metadata(),
         "num_inconsistent": num_inconsistent,
         **stats,
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
@@ -166,7 +170,7 @@ def _run_mt_bench_preset(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    prompt_preset: str,
+    resolved_prompt: ResolvedJudgePrompt,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, _num_inconsistent = (
         judge_mt_bench_with_preset(
@@ -181,8 +185,10 @@ def _run_mt_bench_preset(
             swap_mode=args.swap_mode,
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
-            prompt_preset=prompt_preset,
+            prompt_preset=args.judge_prompt_preset or resolved_prompt.preset_name,
             provide_explanation=args.provide_explanation,
+            system_file=args.judge_system_prompt_file,
+            user_file=args.judge_user_prompt_file,
         )
     )
     stats = compute_pref_summary(prefs)
@@ -191,8 +197,7 @@ def _run_mt_bench_preset(
         "model_A": args.model_A,
         "model_B": args.model_B,
         "judge_model": args.judge_model,
-        "judge_prompt_preset": prompt_preset,
-        "mt_bench_judge_mode": args.mt_bench_judge_mode,
+        **resolved_prompt.metadata(),
         **stats,
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
         "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
@@ -237,8 +242,7 @@ def run_mt_bench(
         questions_df=questions_df,
         ignore_cache=ignore_cache,
     )
-    prompt_preset = args.judge_prompt_preset or DEFAULT_JUDGE_PROMPT_PRESET
-    fastchat_mode = args.mt_bench_judge_mode == "fastchat_original"
+    resolved_prompt = resolve_run_judge_prompt(args.task, args, multi_turn=True)
     judge_model_kwargs = {
         "model": args.judge_model,
         "max_tokens": args.max_out_tokens_judge,
@@ -246,11 +250,22 @@ def run_mt_bench(
         "chat_template": args.chat_template,
         **{**args.engine_kwargs, **args.judge_engine_kwargs},
     }
-    if fastchat_mode:
+    if resolved_prompt.delegated:
         judge_model_kwargs["temperature"] = 0.0
     judge_chat_model = make_model(**judge_model_kwargs)
-    runner = _run_mt_bench_fastchat if fastchat_mode else _run_mt_bench_preset
-    return runner(
+    if resolved_prompt.delegated:
+        return _run_mt_bench_fastchat(
+            args=args,
+            res_folder=res_folder,
+            result_name=result_name,
+            questions_df=questions_df,
+            completions_a=completions_a,
+            completions_b=completions_b,
+            judge_chat_model=judge_chat_model,
+            resolved_prompt=resolved_prompt,
+            fastchat_prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
+        )
+    return _run_mt_bench_preset(
         args=args,
         res_folder=res_folder,
         result_name=result_name,
@@ -258,5 +273,5 @@ def run_mt_bench(
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
-        prompt_preset=prompt_preset,
+        resolved_prompt=resolved_prompt,
     )

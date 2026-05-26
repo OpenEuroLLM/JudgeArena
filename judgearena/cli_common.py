@@ -11,9 +11,7 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
-from judgearena.judge_prompt_presets import JUDGE_PROMPT_PRESETS
-
-MT_BENCH_JUDGE_MODES = ("default", "fastchat_original")
+from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 
 
 @dataclass
@@ -26,8 +24,9 @@ class BaseCliArgs:
     provide_explanation: bool = False
     swap_mode: str = "fixed"
     ignore_cache: bool = False
-    judge_prompt_preset: str = "default"
-    mt_bench_judge_mode: str = "default"
+    judge_prompt_preset: str | None = None
+    judge_system_prompt_file: str | None = None
+    judge_user_prompt_file: str | None = None
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
@@ -46,11 +45,6 @@ class BaseCliArgs:
         supported_modes = ["fixed", "both"]
         assert self.swap_mode in supported_modes, (
             f"Only {supported_modes} modes are supported but got {self.swap_mode}."
-        )
-        assert self.mt_bench_judge_mode in MT_BENCH_JUDGE_MODES, (
-            "Only "
-            f"{list(MT_BENCH_JUDGE_MODES)} MT-Bench judge modes are supported but "
-            f"got {self.mt_bench_judge_mode!r}."
         )
 
 
@@ -77,6 +71,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--provide_explanation",
         action="store_true",
         help=(
+            "Equivalent to --judge_prompt_preset default_with_explanation. "
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
             "but enables some result interpretation."
@@ -103,22 +98,28 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--judge_prompt_preset",
         type=str,
         choices=JUDGE_PROMPT_PRESETS,
-        default="default",
+        default=None,
         help=(
-            "Judge prompt preset to use. 'default' preserves the existing "
-            "score-first JudgeArena prompts."
+            "Judge prompt preset to use. When omitted, JudgeArena selects a "
+            "per-task default."
         ),
     )
     parser.add_argument(
-        "--mt_bench_judge_mode",
+        "--judge_system_prompt_file",
         type=str,
-        choices=MT_BENCH_JUDGE_MODES,
-        default="default",
+        default=None,
         help=(
-            "MT-Bench-only judging mode. 'default' makes MT-Bench obey "
-            "--judge_prompt_preset like the other benchmarks, while "
-            "'fastchat_original' preserves the original FastChat-style "
-            "prompting and [[A]]/[[B]]/[[C]] verdict parsing."
+            "Path to a custom judge system prompt. Must be combined with "
+            "--judge_user_prompt_file and takes precedence over presets."
+        ),
+    )
+    parser.add_argument(
+        "--judge_user_prompt_file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a custom judge user-prompt template. Must be combined "
+            "with --judge_system_prompt_file and takes precedence over presets."
         ),
     )
     parser.add_argument(

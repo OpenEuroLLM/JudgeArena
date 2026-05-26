@@ -8,16 +8,16 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.evaluate import PairScore
-from judgearena.judge_prompt_presets import (
-    DEFAULT_JUDGE_PROMPT_PRESET,
-    ResolvedJudgePrompt,
-    resolve_pairwise_judge_prompt,
-)
 from judgearena.mt_bench.common import (
     MT_BENCH_REFERENCE_CATEGORIES,
     iter_mt_bench_pairwise_rows,
 )
 from judgearena.mt_bench.prompt_templates import build_mt_bench_user_prompt_template
+from judgearena.prompts.registry import (
+    DEFAULT_JUDGE_PROMPT_PRESET,
+    ResolvedJudgePrompt,
+    resolve_judge_prompt,
+)
 from judgearena.utils import do_inference
 
 
@@ -71,13 +71,22 @@ def _select_preset_prompt(
     *,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     provide_explanation: bool,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> MTBenchPresetPrompt:
     ref_based = (category or "") in MT_BENCH_REFERENCE_CATEGORIES
-    resolved_prompt = resolve_pairwise_judge_prompt(
-        prompt_preset=prompt_preset,
+    resolved_prompt = resolve_judge_prompt(
+        preset=prompt_preset,
+        system_file=system_file,
+        user_file=user_file,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
     )
+    if resolved_prompt.delegated:
+        raise ValueError(
+            f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
+            "cannot be used for MT-Bench preset judging."
+        )
     suffix = "multi" if multi_turn else "single"
     if ref_based:
         suffix += "_ref"
@@ -172,6 +181,8 @@ def _build_mt_bench_preset_items(
     truncate_input_chars: int | None,
     prompt_preset: str,
     provide_explanation: bool,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for pair_row in iter_mt_bench_pairwise_rows(
@@ -188,6 +199,8 @@ def _build_mt_bench_preset_items(
                 multi_turn=False,
                 prompt_preset=prompt_preset,
                 provide_explanation=provide_explanation,
+                system_file=system_file,
+                user_file=user_file,
             )
             prompt_kwargs: dict[str, str] = {
                 "question": pair_row.turn_1_question,
@@ -215,6 +228,8 @@ def _build_mt_bench_preset_items(
                 multi_turn=True,
                 prompt_preset=prompt_preset,
                 provide_explanation=provide_explanation,
+                system_file=system_file,
+                user_file=user_file,
             )
             prompt_kwargs = {
                 "question_1": pair_row.turn_1_question,
@@ -262,6 +277,8 @@ def judge_mt_bench_with_preset(
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     provide_explanation: bool = False,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
@@ -275,6 +292,8 @@ def judge_mt_bench_with_preset(
         truncate_input_chars=truncate_input_chars,
         prompt_preset=prompt_preset,
         provide_explanation=provide_explanation,
+        system_file=system_file,
+        user_file=user_file,
     )
     judgments, prompt_kwargs_used = _infer_by_prompt_groups(
         judge_chat_model=judge_chat_model,

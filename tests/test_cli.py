@@ -275,6 +275,12 @@ def test_elo_forwards_optional_flags(capture_mains):
             "7",
             "--baseline_model",
             "gpt-4o",
+            "--judge_prompt_preset",
+            "default_with_explanation",
+            "--judge_system_prompt_file",
+            "system.txt",
+            "--judge_user_prompt_file",
+            "user.txt",
         ]
     )
     elo_args: CliEloArgs = capture_mains["args"]
@@ -283,6 +289,9 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert elo_args.n_bootstraps == 5
     assert elo_args.seed == 7
     assert elo_args.baseline_model == "gpt-4o"
+    assert elo_args.judge_prompt_preset == "default_with_explanation"
+    assert elo_args.judge_system_prompt_file == "system.txt"
+    assert elo_args.judge_user_prompt_file == "user.txt"
 
 
 def test_engine_kwargs_parsed_as_json(capture_mains):
@@ -316,14 +325,36 @@ def test_judge_prompt_preset_is_forwarded(capture_mains):
             "--judge",
             "Dummy/J",
             "--judge_prompt_preset",
-            "default",
+            "default_with_explanation",
         ]
     )
     ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.judge_prompt_preset == "default"
+    assert ge_args.judge_prompt_preset == "default_with_explanation"
 
 
-def test_mt_bench_defaults_to_default_judge_mode(capture_mains):
+def test_custom_judge_prompt_files_are_forwarded(capture_mains):
+    cli_module.cli(
+        [
+            "--task",
+            "alpaca-eval",
+            "--model_A",
+            "Dummy/A",
+            "--model_B",
+            "Dummy/B",
+            "--judge",
+            "Dummy/J",
+            "--judge_system_prompt_file",
+            "system.txt",
+            "--judge_user_prompt_file",
+            "user.txt",
+        ]
+    )
+    ge_args: CliArgs = capture_mains["args"]
+    assert ge_args.judge_system_prompt_file == "system.txt"
+    assert ge_args.judge_user_prompt_file == "user.txt"
+
+
+def test_mt_bench_omits_prompt_preset_for_task_default(capture_mains):
     cli_module.cli(
         [
             "--task",
@@ -337,26 +368,7 @@ def test_mt_bench_defaults_to_default_judge_mode(capture_mains):
         ]
     )
     ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.mt_bench_judge_mode == "default"
-
-
-def test_mt_bench_forwards_fastchat_original_mode(capture_mains):
-    cli_module.cli(
-        [
-            "--task",
-            "mt-bench",
-            "--model_A",
-            "Dummy/A",
-            "--model_B",
-            "Dummy/B",
-            "--judge",
-            "Dummy/J",
-            "--mt_bench_judge_mode",
-            "fastchat_original",
-        ]
-    )
-    ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.mt_bench_judge_mode == "fastchat_original"
+    assert ge_args.judge_prompt_preset is None
 
 
 def test_judge_side_kwargs_are_parsed_separately(capture_mains):

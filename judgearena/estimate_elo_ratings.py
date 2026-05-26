@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import judge_and_parse_prefs
+from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
@@ -258,6 +258,7 @@ def main(args: CliEloArgs) -> dict:
     ]
 
     our_completions = completions.tolist()
+    resolved_prompt = resolve_run_judge_prompt(args.arena, args)
 
     completions_A = [
         our_completions[i] if our_model_is_position_a[i] else opponent_completions[i]
@@ -289,6 +290,9 @@ def main(args: CliEloArgs) -> dict:
             completions_B=completions_B,
             swap_mode=args.swap_mode,
             provide_explanation=args.provide_explanation,
+            system_prompt=resolved_prompt.system_prompt,
+            user_prompt_template=resolved_prompt.user_prompt_template,
+            prompt_preset=resolved_prompt.preset_name,
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
         )

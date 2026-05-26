@@ -1,5 +1,5 @@
 from judgearena.evaluate import PairScore
-from judgearena.judge_prompt_presets import resolve_pairwise_judge_prompt
+from judgearena.prompts.registry import resolve_judge_prompt
 
 
 def test_pair_score():
@@ -42,8 +42,8 @@ def test_regexp():
 
 
 def test_default_prompt_preset_renders_answer_labels():
-    resolved = resolve_pairwise_judge_prompt(
-        prompt_preset="default",
+    resolved = resolve_judge_prompt(
+        preset="default",
         provide_explanation=False,
     )
 

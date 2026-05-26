@@ -14,12 +14,15 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.judge_prompt_presets import (
+from judgearena.log import get_logger
+from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
-    resolve_pairwise_judge_prompt,
+    resolve_judge_prompt,
 )
-from judgearena.log import get_logger
+from judgearena.prompts.registry import (
+    resolve_run_judge_prompt as _resolve_run_judge_prompt,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -69,8 +72,8 @@ def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
     multi_turn: bool = False,
 ) -> tuple[str, str]:
-    resolved = resolve_pairwise_judge_prompt(
-        prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
+    resolved = resolve_judge_prompt(
+        preset=DEFAULT_JUDGE_PROMPT_PRESET,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
     )
@@ -79,19 +82,51 @@ def load_judge_system_and_user_prompt(
 
 def resolve_judge_prompts(
     *,
-    provide_explanation: bool,
+    provide_explanation: bool = False,
     multi_turn: bool = False,
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    prompt_preset: str | None = None,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
+    task: str | None = None,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> ResolvedJudgePrompt:
-    return resolve_pairwise_judge_prompt(
-        prompt_preset=prompt_preset,
+    if system_prompt is not None and user_prompt_template is not None:
+        return ResolvedJudgePrompt(
+            preset_name=prompt_preset or "custom",
+            parser_mode="score",
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            source="override",
+        )
+    if system_prompt is not None or user_prompt_template is not None:
+        raise ValueError(
+            "Both system_prompt and user_prompt_template must be provided together."
+        )
+
+    resolved = resolve_judge_prompt(
+        task=task,
+        preset=prompt_preset,
+        system_file=system_file,
+        user_file=user_file,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
     )
+    if resolved.delegated:
+        raise ValueError(
+            f"Judge prompt preset '{resolved.preset_name}' is delegated and cannot "
+            "be used for generic pairwise judging."
+        )
+    return resolved
+
+
+def resolve_run_judge_prompt(
+    task: str | None,
+    cli_args,
+    *,
+    multi_turn: bool = False,
+) -> ResolvedJudgePrompt:
+    return _resolve_run_judge_prompt(task, cli_args, multi_turn=multi_turn)
 
 
 def evaluate_completions(
@@ -204,7 +239,7 @@ def evaluate_completions(
     )
     results = {
         **compute_pref_summary(prefs),
-        "judge_prompt_preset": resolved_prompt.preset_name,
+        **resolved_prompt.metadata(),
     }
     pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
 
@@ -221,7 +256,7 @@ def evaluate_completions(
         "use_tqdm": use_tqdm,
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
-        "judge_prompt_preset": resolved_prompt.preset_name,
+        **resolved_prompt.metadata(),
     }
 
     try:
