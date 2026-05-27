@@ -15,6 +15,15 @@ MT_BENCH_REFERENCE_CATEGORIES: set[str] = {
 }
 
 
+def is_reference_based_category(category: str | None) -> bool:
+    return (category or "") in MT_BENCH_REFERENCE_CATEGORIES
+
+
+def resolve_mt_bench_turn_flags(turns_mode: str) -> tuple[bool, bool]:
+    assert turns_mode in ("both", "single", "multi")
+    return turns_mode in ("both", "single"), turns_mode in ("both", "multi")
+
+
 @dataclass(frozen=True)
 class MTBenchPairwiseRow:
     question_id: object

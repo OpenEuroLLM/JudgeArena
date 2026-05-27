@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
@@ -266,7 +267,12 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
+
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
@@ -276,6 +282,11 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         mt_bench_utils,
         "_run_mt_bench_fastchat",
         fake_run_mt_bench_fastchat,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        lambda **_kwargs: pytest.fail("preset path should not run"),
     )
 
     args = CliArgs(
@@ -295,6 +306,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     )
 
     assert args.model_B == "gpt-4"
+    assert captured["make_model"]["temperature"] == 0.0
     assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
     assert captured["fastchat"]["resolved_prompt"].preset_name == (
         FASTCHAT_PAIRWISE_PROMPT_PRESET
@@ -326,17 +338,26 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
 
     def fake_run_mt_bench_preset(**kwargs):
         captured["preset"] = kwargs
         return pd.Series([0.0], dtype=float)
 
     captured = {}
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
     monkeypatch.setattr(
         mt_bench_utils,
         "_run_mt_bench_preset",
         fake_run_mt_bench_preset,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        lambda **_kwargs: pytest.fail("fastchat path should not run"),
     )
 
     args = CliArgs(
@@ -359,3 +380,4 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     assert captured["preset"]["resolved_prompt"].preset_name == (
         "default_with_explanation"
     )
+    assert "temperature" not in captured["make_model"]

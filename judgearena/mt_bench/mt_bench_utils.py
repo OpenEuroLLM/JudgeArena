@@ -106,6 +106,43 @@ def _save_mt_bench_results(
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
 
 
+def _finalize_mt_bench_run(
+    *,
+    args: CliArgs,
+    res_folder: Path,
+    result_name: str,
+    prefs: pd.Series,
+    annotations: list[dict[str, object]],
+    combined_metadata: list[dict[str, object]],
+    resolved_prompt: ResolvedJudgePrompt,
+    extra_result_fields: dict[str, object] | None = None,
+) -> pd.Series:
+    stats = compute_pref_summary(prefs)
+    results = {
+        "task": args.task,
+        "model_A": args.model_A,
+        "model_B": args.model_B,
+        "judge_model": args.judge_model,
+        **resolved_prompt.metadata(),
+        **(extra_result_fields or {}),
+        **stats,
+        "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
+        "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
+        "preferences": prefs.tolist(),
+        "date": str(datetime.now().isoformat()),
+        "user": os.getenv("USER", ""),
+    }
+    print_results(results)
+    _save_mt_bench_results(
+        args=args,
+        res_folder=res_folder,
+        result_name=result_name,
+        results=results,
+        annotations_df=pd.DataFrame(annotations),
+    )
+    return prefs
+
+
 def _run_mt_bench_fastchat(
     *,
     args: CliArgs,
@@ -134,31 +171,16 @@ def _run_mt_bench_fastchat(
             prompt_preset=fastchat_prompt_preset,
         )
     )
-
-    stats = compute_pref_summary(prefs)
-    results = {
-        "task": args.task,
-        "model_A": args.model_A,
-        "model_B": args.model_B,
-        "judge_model": args.judge_model,
-        **resolved_prompt.metadata(),
-        "num_inconsistent": num_inconsistent,
-        **stats,
-        "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
-        "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
-        "preferences": prefs.tolist(),
-        "date": str(datetime.now().isoformat()),
-        "user": os.getenv("USER", ""),
-    }
-    print_results(results)
-    _save_mt_bench_results(
+    return _finalize_mt_bench_run(
         args=args,
         res_folder=res_folder,
         result_name=result_name,
-        results=results,
-        annotations_df=pd.DataFrame(annotations),
+        prefs=prefs,
+        annotations=annotations,
+        combined_metadata=combined_metadata,
+        resolved_prompt=resolved_prompt,
+        extra_result_fields={"num_inconsistent": num_inconsistent},
     )
-    return prefs
 
 
 def _run_mt_bench_preset(
@@ -191,29 +213,15 @@ def _run_mt_bench_preset(
             user_file=args.judge_user_prompt_file,
         )
     )
-    stats = compute_pref_summary(prefs)
-    results = {
-        "task": args.task,
-        "model_A": args.model_A,
-        "model_B": args.model_B,
-        "judge_model": args.judge_model,
-        **resolved_prompt.metadata(),
-        **stats,
-        "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
-        "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
-        "preferences": prefs.tolist(),
-        "date": str(datetime.now().isoformat()),
-        "user": os.getenv("USER", ""),
-    }
-    print_results(results)
-    _save_mt_bench_results(
+    return _finalize_mt_bench_run(
         args=args,
         res_folder=res_folder,
         result_name=result_name,
-        results=results,
-        annotations_df=pd.DataFrame(annotations),
+        prefs=prefs,
+        annotations=annotations,
+        combined_metadata=combined_metadata,
+        resolved_prompt=resolved_prompt,
     )
-    return prefs
 
 
 def run_mt_bench(
