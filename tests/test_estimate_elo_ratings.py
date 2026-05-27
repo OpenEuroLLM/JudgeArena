@@ -5,7 +5,12 @@ import pandas as pd
 import pytest
 
 import judgearena.estimate_elo_ratings as estimate_elo_ratings
-from judgearena.estimate_elo_ratings import CliEloArgs, compute_bradley_terry, main
+from judgearena.estimate_elo_ratings import (
+    CliEloArgs,
+    _winner_to_pref,
+    fit_bradley_terry,
+    main,
+)
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.utils import make_model
 
@@ -89,7 +94,13 @@ def _default_args(**kwargs) -> CliEloArgs:
     return CliEloArgs(**defaults)
 
 
-# --- compute_bradley_terry unit tests ---
+# --- fit_bradley_terry unit tests ---
+
+
+def _records_with_pref(records: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(records)
+    df["pref"] = df["winner"].map(_winner_to_pref)
+    return df
 
 
 def test_bradley_terry_clear_winner():
@@ -97,28 +108,43 @@ def test_bradley_terry_clear_winner():
     records = [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 10 + [
         {"model_a": "B", "model_b": "A", "winner": "model_b"}
     ] * 10
-    ratings = compute_bradley_terry(pd.DataFrame(records), winner_col="winner")
+    ratings = fit_bradley_terry(_records_with_pref(records))
     assert ratings["A"] > ratings["B"]
 
 
 def test_bradley_terry_all_ties():
     """All ties → ratings should be equal."""
     records = [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 20
-    ratings = compute_bradley_terry(pd.DataFrame(records), winner_col="winner")
+    ratings = fit_bradley_terry(_records_with_pref(records))
     assert abs(ratings["A"] - ratings["B"]) < 1.0
 
 
 def test_bradley_terry_baseline():
     """Baseline model is anchored at baseline_rating."""
     records = [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 10
-    ratings = compute_bradley_terry(
-        pd.DataFrame(records),
-        winner_col="winner",
+    ratings = fit_bradley_terry(
+        _records_with_pref(records),
         baseline_model="B",
         baseline_rating=1000,
     )
     assert ratings["B"] == pytest.approx(1000.0)
     assert ratings["A"] > 1000.0
+
+
+def test_bradley_terry_soft_matches_hard():
+    """Soft prefs ∈ {0, 0.5, 1} must give the same fit as hard winner labels."""
+    records = (
+        [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 7
+        + [{"model_a": "A", "model_b": "B", "winner": "model_b"}] * 3
+        + [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 2
+    )
+    df = _records_with_pref(records)
+    hard = fit_bradley_terry(df, pref_col="pref")
+    # Passing the same column twice (continuous == quantised here) must match.
+    df["pref_soft"] = df["pref"].astype(float)
+    soft = fit_bradley_terry(df, pref_col="pref_soft")
+    assert hard["A"] == pytest.approx(soft["A"], abs=1e-3)
+    assert hard["B"] == pytest.approx(soft["B"], abs=1e-3)
 
 
 # --- main() integration tests ---

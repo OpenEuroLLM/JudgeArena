@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
+from scipy.optimize import minimize_scalar
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -29,9 +30,9 @@ logger = get_logger(__name__)
 
 
 class PairScore:
-    def __init__(self):
+    def __init__(self, temperature: float = 0.3):
         super(PairScore).__init__()
-        self.temperature = 0.3
+        self.temperature = temperature
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
@@ -57,6 +58,58 @@ class PairScore:
             return None
         else:
             return float(m.group(group_index).strip(" "))
+
+
+def calibrate_temperature(
+    delta_s: np.ndarray,
+    y: np.ndarray,
+    bounds: tuple[float, float] = (-10.0, 10.0),
+) -> float:
+    """Find the MLE temperature T* for the model P(A>B) = σ(T·Δs).
+
+    The log-likelihood is:
+
+        L(T) = Σ_i [ y_i·log σ(T·Δs_i) + (1−y_i)·log σ(−T·Δs_i) ]
+               = Σ_i log σ(T · (2y_i − 1) · Δs_i)
+
+    This is concave in T (single global maximum) so ``minimize_scalar`` with
+    the 'bounded' method is guaranteed to converge.
+
+    Args:
+        delta_s: Score differences ``s_A − s_B`` for each battle, shape (N,).
+        y: Observed hard labels (1 = A was preferred, 0 = B was preferred,
+           0.5 = tie).  Ties contribute zero gradient and are skipped.
+        bounds: Search interval for T (default −10 to +10).
+
+    Returns:
+        The calibrated temperature T*.
+    """
+    delta_s = np.asarray(delta_s, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Skip ties (y == 0.5) — they carry no directional information.
+    non_tie = y != 0.5
+    delta_s = delta_s[non_tie]
+    y = y[non_tie]
+
+    if len(delta_s) == 0:
+        raise ValueError(
+            "No non-tie observations available for temperature calibration."
+        )
+
+    # z_i = (2y_i − 1) · Δs_i  (positive when the score difference agrees with the outcome)
+    z = (2 * y - 1) * delta_s
+
+    def neg_log_likelihood(T: float) -> float:
+        # log σ(T·z) = −log(1 + exp(−T·z)) = −logaddexp(0, −T·z)
+        return float(np.sum(np.logaddexp(0.0, -T * z)))
+
+    result = minimize_scalar(
+        neg_log_likelihood,
+        bounds=bounds,
+        method="bounded",
+    )
+    return float(result.x)
 
 
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -366,6 +419,7 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
+    score_parser: "PairScore | None" = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -413,7 +467,8 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    score_parser = PairScore()
+    if score_parser is None:
+        score_parser = PairScore()
     prefs = pd.Series(
         [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
     )
