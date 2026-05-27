@@ -291,10 +291,12 @@ def main(args: CliEloArgs) -> dict:
     ]
 
     judge_extra_kwargs = {}
-    if args.max_model_len is not None:
-        judge_extra_kwargs["max_model_len"] = args.max_model_len
+    if args.max_judge_model_len is not None:
+        judge_extra_kwargs["max_model_len"] = args.max_judge_model_len
     if args.chat_template is not None:
         judge_extra_kwargs["chat_template"] = args.chat_template
+    judge_extra_kwargs.update(args.engine_kwargs)
+    judge_extra_kwargs.update(args.judge_engine_kwargs)
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
@@ -309,7 +311,7 @@ def main(args: CliEloArgs) -> dict:
             completions_B=completions_B,
             swap_mode=args.swap_mode,
             provide_explanation=args.provide_explanation,
-            truncate_input_chars=args.truncate_all_input_chars,
+            truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
         )
         if annotations_reversed is None:
