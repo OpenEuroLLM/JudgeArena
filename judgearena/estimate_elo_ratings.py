@@ -33,7 +33,7 @@ class CliEloArgs(BaseCliArgs):
     n_bootstraps: int = 20
     seed: int = 0
     baseline_model: str | None = None
-    soft_elo: bool = False
+    soft_elo: bool = True
     soft_elo_temperature: float = 0.3
     calibrate_temperature: bool = False
     calibration_size: int | None = None
@@ -415,7 +415,7 @@ def main(args: CliEloArgs) -> dict:
     if args.calibrate_temperature:
         if not args.soft_elo:
             logger.warning(
-                "--calibrate-temperature has no effect without --soft-elo; skipping."
+                "--calibrate-temperature has no effect with --no-soft-elo; skipping."
             )
         else:
             logger.info("Calibrating PairScore temperature against human annotations.")
