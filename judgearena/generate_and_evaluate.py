@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
+from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -385,22 +385,7 @@ def main(args: CliArgs):
         json.dump(asdict(args), f, indent=2)
 
     logger.info("Saving results to %s", res_folder)
-    if is_fluency_task:
-        system_prompt = """You are a highly efficient assistant, who evaluates and selects the best large language \
-        model based on the quality of completion of a sentence. You will see a sentence to be completed and two \
-        completions from Assistant A and Assistant B and will have to decide which one is best. Make sure to not \
-        over-confidently prefer one assistant or the other and also make sure to not bias your preference based on \
-        the ordering or on the length of the answers."""
-    else:
-        # the default system prompt of annotate is to compare instruction tuned models.
-        system_prompt = None
-    (
-        effective_judge_system_prompt,
-        judge_user_prompt_template,
-    ) = resolve_judge_prompts(
-        provide_explanation=args.provide_explanation,
-        system_prompt=system_prompt,
-    )
+    resolved_prompt = resolve_run_judge_prompt(args.task, args)
 
     annotations, annotations_reversed, prefs = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
@@ -409,8 +394,9 @@ def main(args: CliArgs):
         completions_B=completions_B.head(n_instructions).tolist(),
         swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
-        system_prompt=effective_judge_system_prompt,
-        user_prompt_template=judge_user_prompt_template,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
         truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
     )
@@ -443,6 +429,7 @@ def main(args: CliArgs):
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
+        **resolved_prompt.metadata(),
         **summary,
         "preferences": prefs.tolist(),
     }
@@ -474,8 +461,8 @@ def main(args: CliArgs):
                 "completions_B": eval_completions_B,
                 "baseline_model_B": baseline_per_eval.tolist(),
             },
-            judge_system_prompt=effective_judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
         )
     except OSError as e:
