@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pandas as pd
 import pytest
 
@@ -164,6 +166,87 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
+
+
+def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1", "Q2"], "turn_2": ["Q1b", "Q2b"]},
+        index=pd.Index([1, 2], name="instruction_index"),
+    )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["Base A1"],
+                "completion_turn_2": ["Base B1"],
+            }
+        ),
+    )
+
+    args = CliArgs(
+        task="mt-bench",
+        model_A="gpt-4",
+        model_B="gpt-4",
+        judge_model="Dummy/J",
+        n_instructions=2,
+    )
+
+    with pytest.raises(ValueError, match="missing 1 question"):
+        mt_bench_utils._generate_mt_bench_completions(
+            args=args,
+            questions_df=questions_df,
+            ignore_cache=False,
+        )
+
+
+def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_write_run_metadata(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "run-metadata.v1.json"
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "write_run_metadata",
+        fake_write_run_metadata,
+    )
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    args = CliArgs(
+        task="mt-bench",
+        model_A="model-a",
+        model_B="model-b",
+        judge_model="judge",
+    )
+    started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+
+    mt_bench_utils._save_mt_bench_results(
+        args=args,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+        results={"win_rate": 0.5, "preferences": [1.0]},
+        annotations_df=pd.DataFrame([{"preference": 1.0}]),
+        questions_df=questions_df,
+        started_at_utc=started_at,
+        input_payloads={"instruction_index": [1]},
+        judge_system_prompt="system",
+        judge_user_prompt_template="user",
+    )
+
+    assert (tmp_path / "args-mt-bench-test.json").exists()
+    assert (tmp_path / "mt-bench-test-annotations.csv").exists()
+    assert (tmp_path / "results-mt-bench-test.json").exists()
+    assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
+    assert captured["input_payloads"] == {"instruction_index": [1]}
+    assert captured["judge_system_prompt"] == "system"
+    assert captured["judge_user_prompt_template"] == "user"
+    assert captured["started_at_utc"] == started_at
 
 
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
