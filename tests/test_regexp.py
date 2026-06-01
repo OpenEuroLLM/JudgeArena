@@ -1,5 +1,6 @@
 from judgearena.evaluate import PairScore
 from judgearena.prompts.registry import resolve_judge_prompt
+from judgearena.utils import strip_thinking_tags
 
 
 def test_pair_score():
@@ -49,3 +50,48 @@ def test_default_prompt_preset_renders_answer_labels():
 
     assert resolved.parser_mode == "score"
     assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
+
+
+def test_pair_score_ignores_scores_inside_thinking_tags():
+    raw_text = """
+    <think>
+    Early draft:
+    score_A: 2
+    score_B: 1
+    </think>
+    Explanation: Assistant B is clearly better overall.
+    score_A: 0
+    score_B: 10
+    """
+
+    scorer = PairScore()
+    pref = scorer.parse_model_raw(raw_text)
+
+    assert pref is not None
+    assert pref == 0.9525741268224333
+
+
+def test_pair_score_score_mode_ignores_bracketed_verdict_after_thinking():
+    raw_text = """
+    <think>
+    score_A: 0
+    score_B: 10
+    </think>
+    Concise verdict only.
+    [[B]]
+    """
+
+    scorer = PairScore()
+
+    assert scorer.parse_model_raw(raw_text) is None
+
+
+def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
+    raw_text = (
+        "Reasoning that started implicitly and kept going.\n"
+        "Still reasoning.\n"
+        "</think>\n"
+        "Final answer."
+    )
+
+    assert strip_thinking_tags(raw_text) == "Final answer."

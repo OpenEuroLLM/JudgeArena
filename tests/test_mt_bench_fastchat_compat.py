@@ -54,6 +54,8 @@ def _completions_df(prefix: str) -> pd.DataFrame:
         ("Explanation [[B]]", "B"),
         ("Explanation [[C]]", "tie"),
         ("No bracketed verdict", "error"),
+        ("<think>Long chain of reasoning.</think>[[A]]", "A"),
+        ("<think>score_A: 0\nscore_B: 10</think>Concise [[B]]", "B"),
     ],
 )
 def test_parse_fastchat_verdict(raw: str, expected: str):

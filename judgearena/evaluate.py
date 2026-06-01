@@ -30,6 +30,7 @@ from judgearena.utils import (
     do_inference,
     download_hf,
     read_df,
+    strip_thinking_tags,
     truncate,
 )
 
@@ -48,6 +49,7 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
+        judge_completion = strip_thinking_tags(judge_completion)
         if self.parser_mode == "score":
             return self._parse_numeric_scores(judge_completion)
         raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
@@ -139,6 +141,7 @@ def evaluate_completions(
     truncate_input_chars: int | None = 8192,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ):
     """
     :param dataset:
@@ -227,6 +230,7 @@ def evaluate_completions(
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
     # Pairwise judge results
@@ -257,6 +261,7 @@ def evaluate_completions(
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
         **resolved_prompt.metadata(),
+        "strip_thinking_before_judging": strip_thinking_before_judging,
     }
 
     try:
@@ -300,6 +305,7 @@ def annotate_battles(
     use_tqdm: bool = False,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -344,6 +350,9 @@ def annotate_battles(
         message_templates.append(("system", resolved_prompt.system_prompt))
     message_templates.append(("user", resolved_prompt.user_prompt_template))
     prompt_template = ChatPromptTemplate.from_messages(message_templates)
+    if strip_thinking_before_judging:
+        completions_A = [strip_thinking_tags(c) for c in completions_A]
+        completions_B = [strip_thinking_tags(c) for c in completions_B]
 
     inputs = prompt_template.batch(
         [
@@ -357,6 +366,7 @@ def annotate_battles(
             )
         ]
     )
+
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     judge_completions = do_inference(
         chat_model=judge_chat_model,
@@ -393,6 +403,7 @@ def judge_and_parse_prefs(
     completions_B: list[str],
     swap_mode: str = "fixed",
     provide_explanation: bool = False,
+    strip_thinking_before_judging: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
@@ -423,6 +434,7 @@ def judge_and_parse_prefs(
         completions_A=completions_A,
         completions_B=completions_B,
         provide_explanation=provide_explanation,
+        strip_thinking_before_judging=strip_thinking_before_judging,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         prompt_preset=prompt_preset,
@@ -438,6 +450,7 @@ def judge_and_parse_prefs(
             completions_A=completions_B,
             completions_B=completions_A,
             provide_explanation=provide_explanation,
+            strip_thinking_before_judging=strip_thinking_before_judging,
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             prompt_preset=prompt_preset,

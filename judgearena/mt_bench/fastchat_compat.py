@@ -24,6 +24,7 @@ from judgearena.mt_bench.prompt_templates import (
     render_mt_bench_prompt_text,
 )
 from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
+from judgearena.utils import strip_thinking_tags
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -170,7 +171,7 @@ _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] =
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    stripped = judgment.strip()
+    stripped = strip_thinking_tags(judgment).strip()
     if "[[A]]" in stripped:
         return "A"
     if "[[B]]" in stripped:
@@ -247,6 +248,7 @@ def _build_fastchat_judge_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
@@ -260,6 +262,7 @@ def _build_fastchat_judge_items(
             multi_turn=multi_turn,
             prompt_preset=prompt_preset,
         ),
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
 
@@ -348,6 +351,7 @@ def judge_mt_bench_pairwise_fastchat(
     truncate_input_chars: int | None,
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
     assert swap_mode in ("fixed", "both")
@@ -361,6 +365,7 @@ def judge_mt_bench_pairwise_fastchat(
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
     g1_judgments, _ = infer_pairwise_judgments_by_prompt_groups(

@@ -37,6 +37,7 @@ from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
+    is_thinking_model,
     make_model,
 )
 
@@ -61,6 +62,24 @@ def _align_mt_bench_completions(
     return indexed.loc[questions_df.index]
 
 
+def _build_mt_bench_generation_kwargs(
+    *, args: CliArgs, model_spec: str
+) -> dict[str, object]:
+    """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
+    generation_engine_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        generation_engine_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_engine_kwargs
+
+
 def _generate_mt_bench_completions(
     args: CliArgs,
     questions_df: pd.DataFrame,
@@ -78,7 +97,8 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
-            **args.engine_kwargs,
+            strip_thinking_before_turn_2_prompt=args.strip_thinking_before_judging,
+            **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
         )
 
     def _load_or_generate(model_name: str) -> pd.DataFrame:
@@ -179,6 +199,8 @@ def _finalize_mt_bench_run(
         "model_B": args.model_B,
         "judge_model": args.judge_model,
         **resolved_prompt.metadata(),
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
         **(extra_result_fields or {}),
         **stats,
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
@@ -233,6 +255,7 @@ def _run_mt_bench_fastchat(
             truncate_input_chars=args.truncate_judge_input_chars,
             use_tqdm=args.use_tqdm,
             prompt_preset=fastchat_prompt_preset,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
         )
     )
     return _finalize_mt_bench_run(
@@ -280,6 +303,7 @@ def _run_mt_bench_preset(
             provide_explanation=args.provide_explanation,
             system_file=args.judge_system_prompt_file,
             user_file=args.judge_user_prompt_file,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
         )
     )
     return _finalize_mt_bench_run(
