@@ -105,15 +105,6 @@ def _generate_mt_bench_completions(
     return _load_or_generate(args.model_A), _load_or_generate(args.model_B)
 
 
-def _build_mt_bench_result_name(args: CliArgs, suffix: str | None = None) -> str:
-    """Build a filesystem-safe MT-Bench result artifact prefix."""
-    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
-    name += f"-{args.swap_mode}"
-    if suffix:
-        name += f"-{suffix}"
-    return name.replace("/", "_")
-
-
 def _build_mt_bench_input_payloads(
     *,
     questions_df: pd.DataFrame,
@@ -138,9 +129,8 @@ def _save_mt_bench_results(
     result_name: str,
     results: dict[str, object],
     annotations_df: pd.DataFrame,
-    questions_df: pd.DataFrame,
     started_at_utc: datetime,
-    input_payloads: dict[str, object] | None = None,
+    input_payloads: dict[str, object],
     judge_system_prompt: str | None = None,
     judge_user_prompt_template: str | None = None,
 ) -> None:
@@ -160,12 +150,7 @@ def _save_mt_bench_results(
         entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
         run=asdict(args),
         results=results,
-        input_payloads=input_payloads
-        or {
-            "instruction_index": questions_df.index.tolist(),
-            "turn_1": questions_df["turn_1"].tolist(),
-            "turn_2": questions_df["turn_2"].tolist(),
-        },
+        input_payloads=input_payloads,
         judge_system_prompt=judge_system_prompt,
         judge_user_prompt_template=judge_user_prompt_template,
         started_at_utc=started_at_utc,
@@ -209,7 +194,6 @@ def _finalize_mt_bench_run(
         result_name=result_name,
         results=results,
         annotations_df=pd.DataFrame(annotations),
-        questions_df=questions_df,
         started_at_utc=started_at_utc,
         input_payloads=_build_mt_bench_input_payloads(
             questions_df=questions_df,
@@ -317,8 +301,8 @@ def run_mt_bench(
     args: CliArgs,
     ignore_cache: bool,
     *,
-    res_folder: Path | None = None,
-    result_name: str | None = None,
+    res_folder: Path,
+    result_name: str,
 ):
     """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
@@ -329,11 +313,6 @@ def run_mt_bench(
             f"--model_B is required for dataset '{args.task}'; "
             "no dataset-native baseline registered."
         )
-    if result_name is None:
-        result_name = _build_mt_bench_result_name(args, suffix="mtbench")
-    if res_folder is None:
-        res_folder = Path(args.result_folder) / result_name
-        res_folder.mkdir(parents=True, exist_ok=True)
     questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",

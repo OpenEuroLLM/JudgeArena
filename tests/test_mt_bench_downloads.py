@@ -214,10 +214,6 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         "write_run_metadata",
         fake_write_run_metadata,
     )
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
     args = CliArgs(
         task="mt-bench",
         model_A="model-a",
@@ -232,7 +228,6 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         result_name="mt-bench-test",
         results={"win_rate": 0.5, "preferences": [1.0]},
         annotations_df=pd.DataFrame([{"preference": 1.0}]),
-        questions_df=questions_df,
         started_at_utc=started_at,
         input_payloads={"instruction_index": [1]},
         judge_system_prompt="system",
