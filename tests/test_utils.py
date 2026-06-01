@@ -128,6 +128,38 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
     )
 
 
+def test_strip_thinking_tags_removes_full_reasoning_block():
+    raw = (
+        "<think>so let me think through this carefully</think>\n\n"
+        "The capital of France is Paris."
+    )
+
+    cleaned, stripped = utils.strip_thinking_tags_with_metadata(raw)
+
+    assert stripped is True
+    assert cleaned == "The capital of France is Paris."
+    assert "<think>" not in cleaned
+    assert "</think>" not in cleaned
+
+
+def test_strip_thinking_tags_passthrough_without_reasoning():
+    visible = "Paris is the capital of France."
+
+    cleaned, stripped = utils.strip_thinking_tags_with_metadata(visible)
+
+    assert stripped is False
+    assert cleaned == visible
+
+
+def test_strip_thinking_tags_keeps_unclosed_reasoning_block():
+    answer = "<think>still reasoning and never closing the tag"
+
+    cleaned, stripped = utils.strip_thinking_tags_with_metadata(answer)
+
+    assert stripped is False
+    assert cleaned == answer
+
+
 def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
     """vLLM-engine-only kwargs must not leak into ChatOpenAI.model_kwargs.
 

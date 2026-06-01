@@ -4,6 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from judgearena.utils import (
     do_inference,
     make_model,
+    strip_thinking_tags,
     truncate,
 )
 
@@ -105,6 +106,7 @@ def generate_multiturn(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
+    strip_thinking_before_turn_2_prompt: bool = False,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -173,12 +175,19 @@ def generate_multiturn(
                     ("user", "{turn_2}"),
                 ]
             )
+            # Strip <think>...</think> from the turn-1 answer before the
+            # character cap fires so a long cap lands on the visible answer
+            # rather than deep inside a reasoning block (which would destroy
+            # the </think> closer and push the thinking fragment into turn 2).
+            t1_answer_str = str(t1_answer)
+            if strip_thinking_before_turn_2_prompt:
+                t1_answer_str = strip_thinking_tags(t1_answer_str)
             turn2_inputs.append(
                 multi_turn_template.invoke(
                     {
                         "turn_1": truncate(row["turn_1"], max_len=truncate_input_chars),
                         "turn_1_answer": truncate(
-                            str(t1_answer), max_len=truncate_input_chars
+                            t1_answer_str, max_len=truncate_input_chars
                         ),
                         "turn_2": truncate(row["turn_2"], max_len=truncate_input_chars),
                     }

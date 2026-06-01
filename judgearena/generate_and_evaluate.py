@@ -38,6 +38,7 @@ from judgearena.utils import (
     compute_pref_summary,
     data_root,
     download_hf,
+    is_thinking_model,
     make_model,
     read_df,
 )
@@ -202,6 +203,22 @@ def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
     )
 
 
+def _build_generation_engine_kwargs(args: CliArgs, model_spec: str) -> dict[str, object]:
+    """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
+    generation_engine_kwargs = dict(args.engine_kwargs)
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        args.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        generation_engine_kwargs["thinking_token_budget"] = min(
+            int(args.battle_thinking_token_budget),
+            int(args.max_out_tokens_models),
+        )
+    return generation_engine_kwargs
+
+
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
@@ -322,7 +339,7 @@ def main(args: CliArgs):
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
+            **_build_generation_engine_kwargs(args, model_spec),
         )
 
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
@@ -389,6 +406,7 @@ def main(args: CliArgs):
         completions_B=completions_B.head(n_instructions).tolist(),
         swap_mode=args.swap_mode,
         provide_explanation=args.provide_explanation,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
         prompt_preset=resolved_prompt.preset_name,
@@ -426,6 +444,8 @@ def main(args: CliArgs):
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
         **resolved_prompt.metadata(),
+        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": args.battle_thinking_token_budget,
         **summary,
         "preferences": prefs.tolist(),
     }

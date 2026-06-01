@@ -27,6 +27,8 @@ class BaseCliArgs:
     judge_prompt_preset: str | None = None
     judge_system_prompt_file: str | None = None
     judge_user_prompt_file: str | None = None
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
@@ -120,6 +122,24 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         help=(
             "Path to a custom judge user-prompt template. Must be combined "
             "with --judge_system_prompt_file and takes precedence over presets."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        action="store_true",
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
         ),
     )
     parser.add_argument(

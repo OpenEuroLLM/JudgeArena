@@ -459,3 +459,114 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         "default_with_explanation"
     )
     assert "temperature" not in captured["make_model"]
+
+
+def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: None,
+    )
+
+    def fake_generate_multiturn(**kwargs):
+        captured[kwargs["model"]] = kwargs
+        return pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["A1"],
+                "completion_turn_2": ["B1"],
+            }
+        )
+
+    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate_multiturn)
+
+    args = CliArgs(
+        task="mt-bench",
+        model_A="VLLM/Qwen/Qwen3.5-9B",
+        model_B="VLLM/meta-llama/Llama-3.1-8B",
+        judge_model="Dummy/J",
+        n_instructions=1,
+        max_out_tokens_models=8192,
+        battle_thinking_token_budget=16384,
+        strip_thinking_before_judging=True,
+    )
+
+    mt_bench_utils._generate_mt_bench_completions(
+        args=args,
+        questions_df=questions_df,
+        ignore_cache=False,
+    )
+
+    thinking_call = captured["VLLM/Qwen/Qwen3.5-9B"]
+    plain_call = captured["VLLM/meta-llama/Llama-3.1-8B"]
+
+    assert thinking_call["strip_thinking_before_turn_2_prompt"] is True
+    assert thinking_call["thinking_token_budget"] == 8192
+    assert plain_call["strip_thinking_before_turn_2_prompt"] is True
+    assert "thinking_token_budget" not in plain_call
+
+
+def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp_path):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda args, questions_df, ignore_cache: (
+            pd.DataFrame(
+                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
+                index=questions_df.index,
+            ),
+            pd.DataFrame(
+                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
+                index=questions_df.index,
+            ),
+        ),
+    )
+    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+    monkeypatch.setattr(
+        mt_bench_utils, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
+    )
+
+    def fake_judge(**kwargs):
+        captured["judge"] = kwargs
+        return pd.Series([0.0], dtype=float), [], [], 0
+
+    monkeypatch.setattr(mt_bench_utils, "judge_mt_bench_pairwise_fastchat", fake_judge)
+
+    args = CliArgs(
+        task="mt-bench",
+        model_A="VLLM/example/model-a",
+        model_B=None,
+        judge_model="VLLM/Judge",
+        n_instructions=1,
+        strip_thinking_before_judging=True,
+        result_folder=str(tmp_path),
+    )
+
+    mt_bench_utils.run_mt_bench(
+        args,
+        ignore_cache=False,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+    )
+
+    assert captured["judge"]["strip_thinking_before_judging"] is True
