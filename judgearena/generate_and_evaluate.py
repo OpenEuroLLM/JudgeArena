@@ -423,6 +423,7 @@ def main(args: CliArgs):
 
     judge_cache_name = f"judge_{name}_{n_instructions}"
 
+    # TODO it would be better to refactor judge_and_parse_prefs to return a cachable dataframe rather than having to construct preferences twice
     def _run_judging() -> pd.DataFrame:
         anns, anns_rev, _ = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
