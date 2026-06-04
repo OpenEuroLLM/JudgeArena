@@ -58,14 +58,24 @@ def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
         return pd.read_parquet(filename, **pandas_kwargs)
 
 
-def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
-    """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B)."""
+def compute_pref_summary(
+    prefs: pd.Series, n_instructions: int | None = None
+) -> dict[str, float | int]:
+    """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B).
+
+    Args:
+        prefs: Series of floats (0=A wins, 0.5=tie, 1=B wins, NaN=unparseable).
+            For swap_mode="both" this has length 2*n_instructions.
+        n_instructions: Number of unique instructions evaluated.  When provided,
+            used as ``num_battles`` instead of ``len(prefs)`` so that swap_mode="both"
+            does not report twice the actual number of instructions.
+    """
     prefs = pd.Series(prefs, dtype="float64")
     valid = prefs.dropna()
     num_wins = int((valid < 0.5).sum())
     num_losses = int((valid > 0.5).sum())
     num_ties = int((valid == 0.5).sum())
-    num_battles = int(len(prefs))
+    num_battles = n_instructions if n_instructions is not None else int(len(prefs))
     denom = num_wins + num_losses + num_ties
     winrate = float((num_wins + 0.5 * num_ties) / denom) if denom > 0 else float("nan")
     return {
@@ -74,7 +84,7 @@ def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
         "num_wins": num_wins,
         "num_losses": num_losses,
         "num_ties": num_ties,
-        "num_missing": int(num_battles - denom),
+        "num_missing": int(len(prefs) - denom),
     }
 
 
