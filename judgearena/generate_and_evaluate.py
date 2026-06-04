@@ -218,10 +218,15 @@ def print_results(results):
     print("📈 Results Summary:")
     num_battles = results["num_battles"]
     num_missing = results.get("num_missing", 0)
+    swap_mode = results.get("swap_mode", "fixed")
     if num_missing > 0:
         parsed = num_battles - num_missing
         print(
             f"   Total Battles: {num_battles}  ⚠️  {num_missing} unparseable (parsed: {parsed}/{num_battles})"
+        )
+    elif swap_mode == "both":
+        print(
+            f"   Total Battles: {num_battles} (2×{num_battles // 2} — each instruction judged in both orders to detect positional bias)"
         )
     else:
         print(f"   Total Battles: {num_battles}")
@@ -515,18 +520,8 @@ def main(args: CliArgs):
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    # For swap_mode="both", prefs has 2*n entries (direct + bias-corrected reversed).
-    # Average per instruction so that wins/losses/ties are counts over n unique instructions.
-    if args.swap_mode == "both":
-        half = n_instructions
-        prefs_direct = prefs.iloc[:half].reset_index(drop=True)
-        prefs_reversed = prefs.iloc[half:].reset_index(drop=True)
-        prefs_for_summary = (prefs_direct + prefs_reversed) / 2
-    else:
-        prefs_for_summary = prefs
-
     # compute and report statistics
-    summary = compute_pref_summary(prefs_for_summary, n_instructions=n_instructions)
+    summary = compute_pref_summary(prefs)
 
     results = {
         "task": args.task,
@@ -535,6 +530,7 @@ def main(args: CliArgs):
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
+        "swap_mode": args.swap_mode,
         "result_folder": str(res_folder),
         **summary,
         "preferences": prefs.tolist(),
