@@ -212,11 +212,26 @@ def print_results(results):
     )
     print(f"⚖️ Judge: {results['judge_model']}")
     print("📈 Results Summary:")
-    print(f"   Total Battles: {results['num_battles']}")
+    num_battles = results["num_battles"]
+    num_missing = results.get("num_missing", 0)
+    swap_mode = results.get("swap_mode", "fixed")
+    if num_missing > 0:
+        parsed = num_battles - num_missing
+        print(
+            f"   Total Battles: {num_battles}  ⚠️  {num_missing} unparseable (parsed: {parsed}/{num_battles})"
+        )
+    elif swap_mode == "both":
+        print(
+            f"   Total Battles: {num_battles} (2×{num_battles // 2} — each instruction judged in both orders to detect positional bias)"
+        )
+    else:
+        print(f"   Total Battles: {num_battles}")
     print(f"   Win Rate (A): {results['winrate']:.1%}")
     print(f"   ✅ Wins:   {results['num_wins']}")
     print(f"   ❌ Losses: {results['num_losses']}")
     print(f"   🤝 Ties:   {results['num_ties']}")
+    if results.get("result_folder"):
+        print(f"📁 Results: {results['result_folder']}")
     print("=" * 60 + "\n")
 
 
@@ -443,6 +458,8 @@ def main(args: CliArgs):
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
         "baseline_models": baseline_plan.unique_models,
         "judge_model": args.judge_model,
+        "swap_mode": args.swap_mode,
+        "result_folder": str(res_folder),
         **summary,
         "preferences": prefs.tolist(),
     }
