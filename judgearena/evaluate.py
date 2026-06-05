@@ -431,7 +431,9 @@ def judge_and_parse_prefs(
 
     if swap_mode == "both":
         prefs = prefs.apply(_none_to_nan)
-        prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(_none_to_nan)
+        prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(
+            _none_to_nan
+        )
         prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
 
     return annotations, annotations_reversed, prefs
