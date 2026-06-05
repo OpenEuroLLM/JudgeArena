@@ -13,11 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import (
-    JudgeAnnotation,
-    judge_and_parse_prefs,
-    resolve_judge_prompts,
-)
+from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -421,87 +417,18 @@ def main(args: CliArgs):
         system_prompt=system_prompt,
     )
 
-    judge_cache_name = f"judge_{name}_{n_instructions}"
-
-    # TODO it would be better to refactor judge_and_parse_prefs to return a cachable dataframe rather than having to construct preferences twice
-    def _run_judging() -> pd.DataFrame:
-        anns, anns_rev, _ = judge_and_parse_prefs(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions.head(n_instructions).tolist(),
-            completions_A=completions_A.head(n_instructions).tolist(),
-            completions_B=completions_B.head(n_instructions).tolist(),
-            swap_mode=args.swap_mode,
-            provide_explanation=args.provide_explanation,
-            system_prompt=effective_judge_system_prompt,
-            user_prompt_template=judge_user_prompt_template,
-            truncate_input_chars=args.truncate_judge_input_chars,
-            use_tqdm=args.use_tqdm,
-        )
-        rows = [
-            {
-                "instruction": a.instruction,
-                "completion_A": a.completion_A,
-                "completion_B": a.completion_B,
-                "judge_completion": a.judge_completion,
-                "is_reversed": False,
-            }
-            for a in anns
-        ]
-        if anns_rev:
-            rows += [
-                {
-                    "instruction": a.instruction,
-                    "completion_A": a.completion_A,
-                    "completion_B": a.completion_B,
-                    "judge_completion": a.judge_completion,
-                    "is_reversed": True,
-                }
-                for a in anns_rev
-            ]
-        return pd.DataFrame(rows)
-
-    cached = cache_function_dataframe(
-        _run_judging, cache_name=judge_cache_name, ignore_cache=ignore_cache
+    annotations, annotations_reversed, prefs = judge_and_parse_prefs(
+        judge_chat_model=judge_chat_model,
+        instructions=instructions.head(n_instructions).tolist(),
+        completions_A=completions_A.head(n_instructions).tolist(),
+        completions_B=completions_B.head(n_instructions).tolist(),
+        swap_mode=args.swap_mode,
+        provide_explanation=args.provide_explanation,
+        system_prompt=effective_judge_system_prompt,
+        user_prompt_template=judge_user_prompt_template,
+        truncate_input_chars=args.truncate_judge_input_chars,
+        use_tqdm=args.use_tqdm,
     )
-
-    is_reversed_mask = cached["is_reversed"].astype(str).str.lower() == "true"
-    direct_df = cached[~is_reversed_mask].reset_index(drop=True)
-    rev_df = cached[is_reversed_mask].reset_index(drop=True)
-
-    def _df_to_annotations(df: pd.DataFrame) -> list[JudgeAnnotation]:
-        return [
-            JudgeAnnotation(
-                instruction=row.instruction,
-                completion_A=row.completion_A,
-                completion_B=row.completion_B,
-                judge_completion=row.judge_completion,
-            )
-            for _, row in df.iterrows()
-        ]
-
-    annotations = _df_to_annotations(direct_df)
-    annotations_reversed = _df_to_annotations(rev_df) if len(rev_df) > 0 else None
-
-    # Recompute prefs from cached completions (mirrors judge_and_parse_prefs logic)
-    from judgearena.evaluate import PairScore
-
-    score_parser = PairScore()
-
-    def _none_to_nan(x):
-        return float("nan") if x is None else x
-
-    prefs = pd.Series(
-        [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
-    )
-    if args.swap_mode == "both" and annotations_reversed:
-        prefs = prefs.apply(_none_to_nan)
-        prefs_rev = pd.Series(
-            [
-                score_parser.parse_model_raw(a.judge_completion)
-                for a in annotations_reversed
-            ]
-        ).apply(_none_to_nan)
-        prefs = pd.concat([prefs, (1 - prefs_rev)]).reset_index(drop=True)
 
     eval_instruction_index = instructions.head(n_instructions).index.tolist()
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
