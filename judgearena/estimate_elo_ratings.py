@@ -462,7 +462,8 @@ def main(args: CliEloArgs) -> dict:
                 completions_A=cal_completions_a,
                 completions_B=cal_completions_b,
                 swap_mode=args.swap_mode,
-                truncate_input_chars=args.truncate_all_input_chars,
+                provide_explanation=args.provide_explanation,
+                truncate_input_chars=args.truncate_judge_input_chars,
             )
 
             # Build (delta_s, y) pairs from calibration battles.
