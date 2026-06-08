@@ -408,6 +408,18 @@ def annotate_battles(
     return annotations
 
 
+def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
+    """Combine swap_mode='both' prefs into one P(B wins) series: [pref_AB, 1 - pref_BA].
+
+    ``prefs_ab`` are P(B wins) from the AB ordering; ``prefs_ba`` are P(B wins)
+    from the swapped BA ordering, so ``1 - prefs_ba`` re-orients them to the AB
+    frame before stacking.
+    """
+    return pd.concat(
+        [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
+    ).reset_index(drop=True)
+
+
 def judge_and_parse_prefs(
     judge_chat_model,
     instructions: list[str],
@@ -474,13 +486,12 @@ def judge_and_parse_prefs(
     )
 
     if swap_mode == "both":
-        prefs = prefs.apply(_none_to_nan)
         prefs_reversed = pd.Series(
             [
                 score_parser.parse_model_raw(a.judge_completion)
                 for a in annotations_reversed
             ]
         ).apply(_none_to_nan)
-        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
+        prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
 
     return annotations, annotations_reversed, prefs

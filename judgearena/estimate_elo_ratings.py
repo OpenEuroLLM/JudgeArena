@@ -8,7 +8,12 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import PairScore, calibrate_temperature, judge_and_parse_prefs
+from judgearena.evaluate import (
+    PairScore,
+    calibrate_temperature,
+    combine_swapped_prefs,
+    judge_and_parse_prefs,
+)
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
@@ -505,28 +510,27 @@ def main(args: CliEloArgs) -> dict:
         else args.soft_elo_temperature
     )
 
-    # If we calibrated the temperature, the prefs stored in df_judge were
-    # computed with the default T=0.3.  Re-parse them with the new parser so
-    # the soft-ELO bootstrap uses calibrated preferences.
-    if calibrated_temperature is not None:
+    # The prefs cached in df_judge were parsed at the default T=0.3, and the
+    # judge cache key ignores temperature, so they cannot reflect
+    # --soft-elo-temperature (or a calibrated T*).  Re-parse from the stored
+    # judge completions with this run's score_parser so the soft-ELO bootstrap
+    # uses the requested temperature.
+    if args.soft_elo:
         new_prefs_ab = pd.Series(
             [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
-        )
-        prefs = new_prefs_ab.tolist()
-
-        def _none_to_nan(x):
-            return float("nan") if x is None else x
+        ).apply(lambda x: float("nan") if x is None else x)
 
         if args.swap_mode == "both":
-            # df_judge contains AB and BA annotations interleaved; the original
-            # run_judge() already combined them — we just need to re-parse the
-            # stored completions in the same order.
+            # df_judge stores AB then BA completions; re-orient the halves the
+            # same way run_judge() did.
             n_half = len(df_judge) // 2
-            prefs_ab = new_prefs_ab[:n_half].apply(_none_to_nan)
-            prefs_ba = new_prefs_ab[n_half:].apply(_none_to_nan).reset_index(drop=True)
-            prefs = pd.concat([prefs_ab, 1 - prefs_ba]).reset_index(drop=True).tolist()
+            prefs = combine_swapped_prefs(
+                new_prefs_ab[:n_half], new_prefs_ab[n_half:]
+            ).tolist()
+        else:
+            prefs = new_prefs_ab.tolist()
 
-        # Rebuild battle_results with calibrated prefs
+        # Rebuild battle results with the re-parsed prefs.
         df_llm_judge = _prefs_to_battle_results(
             prefs, our_model_is_position_a, opponent_models, model_name
         )
