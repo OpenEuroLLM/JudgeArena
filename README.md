@@ -282,6 +282,29 @@ judgearena \
 | `--n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
 | `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
 | `--result_folder` | `results` | Directory where annotations and results are saved |
+| `--no-soft-elo` | off | Disable soft Bradley-Terry (default on) and fall back to hard win/loss/tie labels |
+| `--soft-elo-temperature` | `0.3` | Initial softmax temperature for soft-ELO; overridden if `--calibrate-temperature` succeeds |
+| `--calibrate-temperature` | off | MLE-calibrate the score-to-preference temperature against human arena annotations (ignored with `--no-soft-elo`) |
+| `--calibration-size` | all | Number of human battles to sample for calibration (requires `--calibrate-temperature`) |
+
+### Soft-ELO & temperature calibration
+
+By default, judge scores are converted into continuous preferences via a softmax (temperature `0.3`) and fed into a soft
+Bradley-Terry model. Pass `--no-soft-elo` to fall back to hard win/loss/tie labels.
+
+To let the data choose the best temperature automatically, add `--calibrate-temperature`.
+JudgeArena will run the judge on a sample of human-annotated arena battles, fit the temperature $T^*$ by MLE, and
+use it for the full evaluation:
+
+```bash
+judgearena \
+  --task elo-lmarena-100k \
+  --model_A Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --n_instructions 200 \
+  --calibrate-temperature \
+  --calibration-size 300
+```
 
 ### Output
 

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
+from scipy.optimize import minimize_scalar
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -29,9 +30,9 @@ logger = get_logger(__name__)
 
 
 class PairScore:
-    def __init__(self):
+    def __init__(self, temperature: float = 0.3):
         super(PairScore).__init__()
-        self.temperature = 0.3
+        self.temperature = temperature
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
@@ -39,24 +40,82 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        # lower case to avoid confusion, e.g. when "a" is used instead of "A"
-        score_a = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
-        )
-        score_b = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?b[": *\n]*(-?\d+)'
-        )
+        score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         else:
             return float(self.preference_from_scores(score_a, score_b))
 
-    def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
+    @staticmethod
+    def parse_raw_scores(
+        judge_completion: str,
+    ) -> tuple[float | None, float | None]:
+        """Extract the raw A and B scores from a judge completion (no temperature)."""
+        # lower case to avoid confusion, e.g. when "a" is used instead of "A"
+        text = judge_completion.lower()
+        score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
+        score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
+        return score_a, score_b
+
+    @staticmethod
+    def get_regexp_match(s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
         if m is None:
             return None
         else:
             return float(m.group(group_index).strip(" "))
+
+
+def calibrate_temperature(
+    delta_s: np.ndarray,
+    y: np.ndarray,
+    bounds: tuple[float, float] = (-10.0, 10.0),
+) -> float:
+    """Find the MLE temperature T* for the model P(A>B) = σ(T·Δs).
+
+    The log-likelihood is:
+
+        L(T) = Σ_i [ y_i·log σ(T·Δs_i) + (1−y_i)·log σ(−T·Δs_i) ]
+               = Σ_i log σ(T · (2y_i − 1) · Δs_i)
+
+    This is concave in T (single global maximum) so ``minimize_scalar`` with
+    the 'bounded' method is guaranteed to converge.
+
+    Args:
+        delta_s: Score differences ``s_A − s_B`` for each battle, shape (N,).
+        y: Observed hard labels (1 = A was preferred, 0 = B was preferred,
+           0.5 = tie).  Ties contribute zero gradient and are skipped.
+        bounds: Search interval for T (default −10 to +10).
+
+    Returns:
+        The calibrated temperature T*.
+    """
+    delta_s = np.asarray(delta_s, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Skip ties (y == 0.5) — they carry no directional information.
+    non_tie = y != 0.5
+    delta_s = delta_s[non_tie]
+    y = y[non_tie]
+
+    if len(delta_s) == 0:
+        raise ValueError(
+            "No non-tie observations available for temperature calibration."
+        )
+
+    # z_i = (2y_i − 1) · Δs_i  (positive when the score difference agrees with the outcome)
+    z = (2 * y - 1) * delta_s
+
+    def neg_log_likelihood(T: float) -> float:
+        # log σ(T·z) = −log(1 + exp(−T·z)) = −logaddexp(0, −T·z)
+        return float(np.sum(np.logaddexp(0.0, -T * z)))
+
+    result = minimize_scalar(
+        neg_log_likelihood,
+        bounds=bounds,
+        method="bounded",
+    )
+    return float(result.x)
 
 
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -355,6 +414,18 @@ def annotate_battles(
     return annotations
 
 
+def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
+    """Combine swap_mode='both' prefs into one P(B wins) series: [pref_AB, 1 - pref_BA].
+
+    ``prefs_ab`` are P(B wins) from the AB ordering; ``prefs_ba`` are P(B wins)
+    from the swapped BA ordering, so ``1 - prefs_ba`` re-orients them to the AB
+    frame before stacking.
+    """
+    return pd.concat(
+        [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
+    ).reset_index(drop=True)
+
+
 def judge_and_parse_prefs(
     judge_chat_model,
     instructions: list[str],
@@ -366,6 +437,7 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
+    score_parser: "PairScore | None" = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -413,7 +485,8 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    score_parser = PairScore()
+    if score_parser is None:
+        score_parser = PairScore()
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
         results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]
@@ -430,10 +503,9 @@ def judge_and_parse_prefs(
     prefs = _parse_and_warn(annotations, "direct")
 
     if swap_mode == "both":
-        prefs = prefs.apply(_none_to_nan)
         prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(
             _none_to_nan
         )
-        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
+        prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
 
     return annotations, annotations_reversed, prefs
