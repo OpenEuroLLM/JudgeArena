@@ -94,19 +94,12 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.generation.n_instructions == 10
 
 
-def _runconfig_from_argv(argv: list[str]) -> RunConfig:
-    parser = cli_module._build_parser()
-    args = parser.parse_args(argv)
-    task = cli_module._resolve_task(args)
-    return cli_module._build_run_config(args, task)
+def test_cli_yaml_equivalence_generate(tmp_path):
+    from judgearena.config import build_run_config, load_config
 
-
-def test_argparse_yaml_equivalence_generate(tmp_path):
-    from judgearena.config import load_config
-
-    expected = _runconfig_from_argv(
-        ["--task", "alpaca-eval", "--model_A", "Dummy/a",
-         "--model_B", "Dummy/b", "--judge_model", "Dummy/j"]
+    expected = build_run_config(
+        ["--task", "alpaca-eval", "--model.path", "Dummy/a",
+         "--model.path_b", "Dummy/b", "--judge.model", "Dummy/j"]
     )
     yaml_path = tmp_path / "g.yaml"
     yaml_path.write_text(
@@ -118,11 +111,11 @@ def test_argparse_yaml_equivalence_generate(tmp_path):
     assert actual == expected
 
 
-def test_argparse_yaml_equivalence_elo(tmp_path):
-    from judgearena.config import load_config
+def test_cli_yaml_equivalence_elo(tmp_path):
+    from judgearena.config import build_run_config, load_config
 
-    expected = _runconfig_from_argv(
-        ["--task", "elo-comparia", "--model_A", "Dummy/m", "--judge_model", "Dummy/j"]
+    expected = build_run_config(
+        ["--task", "elo-comparia", "--model.path", "Dummy/m", "--judge.model", "Dummy/j"]
     )
     yaml_path = tmp_path / "e.yaml"
     yaml_path.write_text(
@@ -154,23 +147,51 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     assert captured["elo"].elo.arena == "ComparIA"
 
 
-def test_runconfig_from_args_maps_nested_groups():
-    parser = cli_module._build_parser()
-    args = parser.parse_args(
-        [
-            "--task", "elo-comparia",
-            "--model_A", "Dummy/m",
-            "--judge", "Dummy/j",
-            "--n_bootstraps", "5",
-            "--seed", "7",
-            "--engine_kwargs", '{"tensor_parallel_size": 2}',
-        ]
+def test_build_run_config_cli_only():
+    from judgearena.config import build_run_config
+
+    cfg = build_run_config(
+        ["--task", "alpaca-eval", "--model.path", "Dummy/a",
+         "--model.path_b", "Dummy/b", "--judge.model", "Dummy/j"]
     )
-    cfg = cli_module._runconfig_from_args(args, task="elo-comparia")
-    assert cfg.model.path == "Dummy/m"
+    assert cfg.task == "alpaca-eval"
+    assert cfg.model.path == "Dummy/a"
+    assert cfg.model.path_b == "Dummy/b"
     assert cfg.judge.model == "Dummy/j"
-    assert cfg.elo is not None
-    assert cfg.elo.n_bootstraps == 5
-    assert cfg.elo.arena == "ComparIA"
-    assert cfg.run.seed == 7
-    assert cfg.model.engine_kwargs == {"tensor_parallel_size": 2}
+
+
+def test_build_run_config_cli_overrides_yaml_partial(tmp_path):
+    from judgearena.config import build_run_config
+
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        "task: alpaca-eval\n"
+        "model: {path: Dummy/a, path_b: Dummy/b}\n"
+        "judge: {model: yaml-judge, swap_mode: both}\n"
+    )
+    cfg = build_run_config(
+        ["--config_path", str(yaml_path), "--judge.model", "cli-judge"]
+    )
+    assert cfg.judge.model == "cli-judge"  # CLI overrides YAML
+    assert cfg.judge.swap_mode == "both"  # preserved (partial update)
+    assert cfg.model.path == "Dummy/a"  # from YAML
+    assert cfg.generation.truncate_all_input_chars == 8192  # model default
+
+
+def test_build_run_config_engine_kwargs_json():
+    from judgearena.config import build_run_config
+
+    cfg = build_run_config(
+        ["--task", "alpaca-eval", "--model.path", "Dummy/a", "--model.path_b", "Dummy/b",
+         "--judge.model", "Dummy/j", "--judge.engine_kwargs", '{"tensor_parallel_size": 4}']
+    )
+    assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
+
+
+def test_build_run_config_elo_arena_derived():
+    from judgearena.config import build_run_config
+
+    cfg = build_run_config(
+        ["--task", "elo-comparia", "--model.path", "Dummy/m", "--judge.model", "Dummy/j"]
+    )
+    assert cfg.elo is not None and cfg.elo.arena == "ComparIA"

@@ -247,3 +247,23 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
     assert len(prefs) == 2
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
+
+
+def test_run_writes_roundtrippable_config(tmp_path):
+    from judgearena.config import load_config
+
+    main_generate_and_eval(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/no answer",
+            model_B="Dummy/x",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
+    written = list(tmp_path.glob("*/config.yaml"))
+    assert written, "config.yaml not written"
+    reloaded = load_config(written[0])
+    assert reloaded.task == "alpaca-eval"
+    assert reloaded.model.path == "Dummy/no answer"

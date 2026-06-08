@@ -246,6 +246,8 @@ def main(cfg: "RunConfig"):
     # if not cfg.run.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = cfg.run.ignore_cache
+    # Lazy import: config imports this module (native_pairwise_baseline) at load time.
+    from judgearena.config import dump_config
 
     if cfg.task == "mt-bench":
         model_b = cfg.model.path_b or native_pairwise_baseline(cfg.task)
@@ -257,6 +259,7 @@ def main(cfg: "RunConfig"):
         run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
         res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
         res_folder.mkdir(parents=True, exist_ok=True)
+        dump_config(cfg, res_folder / "config.yaml")
         if not cfg.run.no_log_file:
             attach_file_handler(make_run_log_path(res_folder))
         return run_mt_bench(
@@ -295,6 +298,7 @@ def main(cfg: "RunConfig"):
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
     res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
     res_folder.mkdir(parents=True, exist_ok=True)
+    dump_config(cfg, res_folder / "config.yaml")
     if not cfg.run.no_log_file:
         attach_file_handler(make_run_log_path(res_folder))
 
