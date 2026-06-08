@@ -467,19 +467,13 @@ def main(args: CliEloArgs) -> dict:
             )
 
             # Build (delta_s, y) pairs from calibration battles.
-            # delta_s = score_A - score_B (raw, using default T=1 to extract scores)
-            raw_parser = PairScore(temperature=1.0)
+            # delta_s = score_A - score_B, extracted exactly as the main run does.
             delta_s_cal = []
             y_cal = []
             for ann, human_winner in zip(
                 cal_annotations, cal_battles["winner"].tolist(), strict=True
             ):
-                sa = raw_parser.get_regexp_match(
-                    ann.judge_completion.lower(), r'score.*?a[":\s*\n]*(-?\d+)'
-                )
-                sb = raw_parser.get_regexp_match(
-                    ann.judge_completion.lower(), r'score.*?b[":\s*\n]*(-?\d+)'
-                )
+                sa, sb = PairScore.parse_raw_scores(ann.judge_completion)
                 if sa is None or sb is None:
                     continue
                 human_pref = _winner_to_pref(human_winner)

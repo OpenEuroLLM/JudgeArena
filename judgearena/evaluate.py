@@ -40,19 +40,25 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        # lower case to avoid confusion, e.g. when "a" is used instead of "A"
-        score_a = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?a[": *\n]*(-?\d+)'
-        )
-        score_b = self.get_regexp_match(
-            judge_completion.lower(), r'score.*?b[": *\n]*(-?\d+)'
-        )
+        score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         else:
             return float(self.preference_from_scores(score_a, score_b))
 
-    def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
+    @staticmethod
+    def parse_raw_scores(
+        judge_completion: str,
+    ) -> tuple[float | None, float | None]:
+        """Extract the raw A and B scores from a judge completion (no temperature)."""
+        # lower case to avoid confusion, e.g. when "a" is used instead of "A"
+        text = judge_completion.lower()
+        score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
+        score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
+        return score_a, score_b
+
+    @staticmethod
+    def get_regexp_match(s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
         if m is None:
             return None
