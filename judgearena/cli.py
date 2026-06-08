@@ -17,6 +17,7 @@ from judgearena.cli_common import (
     parse_engine_kwargs,
     resolve_verbosity,
 )
+from judgearena.config import RunConfig, load_config
 from judgearena.estimate_elo_ratings import CliEloArgs
 from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import CliArgs, native_pairwise_baseline
@@ -147,8 +148,54 @@ def _resolve_task(args: argparse.Namespace) -> str:
     return f"{ELO_TASK_PREFIX}{lower_arena}"
 
 
+def _runconfig_from_args(args: argparse.Namespace, task: str) -> RunConfig:
+    """Single argparse-Namespace -> RunConfig mapping (shared by both builders)."""
+    elo_kwargs = None
+    if task.startswith(ELO_TASK_PREFIX):
+        elo_kwargs = {
+            "baseline_model": args.baseline_model,
+            "n_bootstraps": args.n_bootstraps,
+            "languages": args.languages,
+            "n_instructions_per_language": args.n_instructions_per_language,
+        }
+    return RunConfig(
+        task=task,
+        model={
+            "path": args.model_A,
+            "path_b": args.model_B,
+            "max_out_tokens": args.max_out_tokens_models,
+            "max_model_len": args.max_model_len,
+            "chat_template": args.chat_template,
+            "engine_kwargs": parse_engine_kwargs(args.engine_kwargs),
+        },
+        judge={
+            "model": args.judge_model,
+            "max_out_tokens": args.max_out_tokens_judge,
+            "max_model_len": args.max_judge_model_len,
+            "engine_kwargs": parse_engine_kwargs(args.judge_engine_kwargs),
+            "provide_explanation": args.provide_explanation,
+            "swap_mode": args.swap_mode,
+        },
+        generation={
+            "n_instructions": args.n_instructions,
+            "truncate_all_input_chars": args.truncate_all_input_chars,
+            "truncate_judge_input_chars": args.truncate_judge_input_chars,
+        },
+        elo=elo_kwargs,
+        run={
+            "seed": args.seed,
+            "result_folder": args.result_folder,
+            "ignore_cache": args.ignore_cache,
+            "use_tqdm": args.use_tqdm,
+            "verbosity": resolve_verbosity(args),
+            "log_file": args.log_file,
+            "no_log_file": args.no_log_file,
+        },
+    )
+
+
 def _build_elo_args(
-    args: argparse.Namespace, arena: str, model_a: str | None
+    args: argparse.Namespace, task: str, model_a: str | None
 ) -> CliEloArgs:
     if model_a is None:
         raise SystemExit(
@@ -158,33 +205,7 @@ def _build_elo_args(
         raise SystemExit(
             "--model_B is not yet supported for elo tasks; only --model_A is used."
         )
-    return CliEloArgs(
-        arena=arena,
-        model=model_a,
-        n_instructions_per_language=args.n_instructions_per_language,
-        languages=args.languages,
-        n_bootstraps=args.n_bootstraps,
-        seed=args.seed,
-        baseline_model=args.baseline_model,
-        judge_model=args.judge_model,
-        n_instructions=args.n_instructions,
-        provide_explanation=args.provide_explanation,
-        swap_mode=args.swap_mode,
-        ignore_cache=args.ignore_cache,
-        truncate_all_input_chars=args.truncate_all_input_chars,
-        truncate_judge_input_chars=args.truncate_judge_input_chars,
-        max_out_tokens_models=args.max_out_tokens_models,
-        max_out_tokens_judge=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
-        max_judge_model_len=args.max_judge_model_len,
-        chat_template=args.chat_template,
-        result_folder=args.result_folder,
-        engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
-        judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
-        verbosity=resolve_verbosity(args),
-        log_file=args.log_file,
-        no_log_file=args.no_log_file,
-    )
+    return _runconfig_from_args(args, task).to_flat_args()
 
 
 def _build_generate_and_evaluate_args(
@@ -194,30 +215,7 @@ def _build_generate_and_evaluate_args(
         args.model_B is None and native_pairwise_baseline(task) is None
     ):
         raise SystemExit(f"--model_A and --model_B are required for task {task!r}.")
-    return CliArgs(
-        task=task,
-        model_A=model_a,
-        model_B=args.model_B,
-        use_tqdm=args.use_tqdm,
-        judge_model=args.judge_model,
-        n_instructions=args.n_instructions,
-        provide_explanation=args.provide_explanation,
-        swap_mode=args.swap_mode,
-        ignore_cache=args.ignore_cache,
-        truncate_all_input_chars=args.truncate_all_input_chars,
-        truncate_judge_input_chars=args.truncate_judge_input_chars,
-        max_out_tokens_models=args.max_out_tokens_models,
-        max_out_tokens_judge=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
-        max_judge_model_len=args.max_judge_model_len,
-        chat_template=args.chat_template,
-        result_folder=args.result_folder,
-        engine_kwargs=parse_engine_kwargs(args.engine_kwargs),
-        judge_engine_kwargs=parse_engine_kwargs(args.judge_engine_kwargs),
-        verbosity=resolve_verbosity(args),
-        log_file=args.log_file,
-        no_log_file=args.no_log_file,
-    )
+    return _runconfig_from_args(args, task).to_flat_args()
 
 
 def cli(argv: list[str] | None = None) -> None:
@@ -225,8 +223,6 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.config_path is not None:
-        from judgearena.config import load_config
-
         cfg = load_config(args.config_path)
         configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
         flat = cfg.to_flat_args()
@@ -246,9 +242,7 @@ def cli(argv: list[str] | None = None) -> None:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(
-            args, arena=ELO_TASK_TO_ARENA[task], model_a=args.model_A
-        )
+        elo_args = _build_elo_args(args, task=task, model_a=args.model_A)
         logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:

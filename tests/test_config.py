@@ -125,9 +125,7 @@ def _flat_from_argv(argv: list[str]):
     args = parser.parse_args(argv)
     task = cli_module._resolve_task(args)
     if task.startswith("elo-"):
-        return cli_module._build_elo_args(
-            args, arena=cli_module.ELO_TASK_TO_ARENA[task], model_a=args.model_A
-        )
+        return cli_module._build_elo_args(args, task=task, model_a=args.model_A)
     return cli_module._build_generate_and_evaluate_args(
         args, task=task, model_a=args.model_A
     )
@@ -185,3 +183,25 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     assert "ge" not in captured
     assert isinstance(captured["elo"], CliEloArgs)
     assert captured["elo"].arena == "ComparIA"
+
+
+def test_runconfig_from_args_maps_nested_groups():
+    parser = cli_module._build_parser()
+    args = parser.parse_args(
+        [
+            "--task", "elo-comparia",
+            "--model_A", "Dummy/m",
+            "--judge", "Dummy/j",
+            "--n_bootstraps", "5",
+            "--seed", "7",
+            "--engine_kwargs", '{"tensor_parallel_size": 2}',
+        ]
+    )
+    cfg = cli_module._runconfig_from_args(args, task="elo-comparia")
+    assert cfg.model.path == "Dummy/m"
+    assert cfg.judge.model == "Dummy/j"
+    assert cfg.elo is not None
+    assert cfg.elo.n_bootstraps == 5
+    assert cfg.elo.arena == "ComparIA"
+    assert cfg.run.seed == 7
+    assert cfg.model.engine_kwargs == {"tensor_parallel_size": 2}
