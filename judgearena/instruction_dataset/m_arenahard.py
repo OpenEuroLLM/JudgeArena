@@ -13,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
+
 EU_LANGUAGES: tuple[str, ...] = (
     "cs",
     "de",
@@ -120,6 +122,7 @@ def load_m_arenahard(
         allow_patterns="*",
         local_dir=local_path / local_subdir,
         force_download=False,
+        revision=hf_revision(repo_id),
     )
     m_arena_root = local_path / local_subdir
 
@@ -146,6 +149,6 @@ def load_m_arenahard(
 
 
 if __name__ == "__main__":
-    from judgearena.utils import data_root
+    from judgearena.paths import data_root
 
     load_m_arenahard(local_path=data_root, version="m-arena-hard-v0.1", language="EU")
