@@ -162,7 +162,7 @@ def _prefs_to_battle_results(
                 "model_a": opp,
                 "model_b": model_name,
                 "winner": winner,
-                "pref": None if _is_nan_pref(pref) else 1.0 - pref,
+                "pref": None if _is_nan_pref(pref) else pref,
             }
         rec["pref_hard"] = _winner_to_pref(winner)
         records.append(rec)
