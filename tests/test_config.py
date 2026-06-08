@@ -94,43 +94,17 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.generation.n_instructions == 10
 
 
-def test_to_flat_args_generate():
-    from judgearena.generate_and_evaluate import CliArgs
-
-    cfg = RunConfig(**_base_generate())
-    flat = cfg.to_flat_args()
-    assert isinstance(flat, CliArgs)
-    assert flat.task == "alpaca-eval"
-    assert flat.model_A == "Dummy/a"
-    assert flat.model_B == "Dummy/b"
-    assert flat.judge_model == "Dummy/j"
-    assert flat.swap_mode == "fixed"
-    assert flat.engine_kwargs == {}
-
-
-def test_to_flat_args_elo():
-    from judgearena.estimate_elo_ratings import CliEloArgs
-
-    cfg = RunConfig(**_base_elo())
-    flat = cfg.to_flat_args()
-    assert isinstance(flat, CliEloArgs)
-    assert flat.arena == "ComparIA"
-    assert flat.model == "Dummy/m"
-    assert flat.judge_model == "Dummy/j"
-    assert flat.n_bootstraps == 20
-
-
-def _flat_from_argv(argv: list[str]):
+def _runconfig_from_argv(argv: list[str]) -> RunConfig:
     parser = cli_module._build_parser()
     args = parser.parse_args(argv)
     task = cli_module._resolve_task(args)
-    return cli_module._build_run_config(args, task).to_flat_args()
+    return cli_module._build_run_config(args, task)
 
 
 def test_argparse_yaml_equivalence_generate(tmp_path):
     from judgearena.config import load_config
 
-    expected = _flat_from_argv(
+    expected = _runconfig_from_argv(
         ["--task", "alpaca-eval", "--model_A", "Dummy/a",
          "--model_B", "Dummy/b", "--judge_model", "Dummy/j"]
     )
@@ -140,14 +114,14 @@ def test_argparse_yaml_equivalence_generate(tmp_path):
         "model: {path: Dummy/a, path_b: Dummy/b}\n"
         "judge: {model: Dummy/j}\n"
     )
-    actual = load_config(yaml_path).to_flat_args()
+    actual = load_config(yaml_path)
     assert actual == expected
 
 
 def test_argparse_yaml_equivalence_elo(tmp_path):
     from judgearena.config import load_config
 
-    expected = _flat_from_argv(
+    expected = _runconfig_from_argv(
         ["--task", "elo-comparia", "--model_A", "Dummy/m", "--judge_model", "Dummy/j"]
     )
     yaml_path = tmp_path / "e.yaml"
@@ -156,7 +130,7 @@ def test_argparse_yaml_equivalence_elo(tmp_path):
         "model: {path: Dummy/m}\n"
         "judge: {model: Dummy/j}\n"
     )
-    actual = load_config(yaml_path).to_flat_args()
+    actual = load_config(yaml_path)
     assert actual == expected
 
 

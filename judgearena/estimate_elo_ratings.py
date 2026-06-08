@@ -1,5 +1,4 @@
 import hashlib
-from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -8,7 +7,6 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
-from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
@@ -18,25 +16,6 @@ if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class CliEloArgs(BaseCliArgs):
-    """CLI arguments for the ELO rating estimation entrypoint.
-
-    Note: inheriting from a dataclass (BaseCliArgs) forces every field here to
-    have a default value, even for fields like ``arena`` and ``model`` that
-    logically should be required.  If this becomes too messy we may want to
-    move away from dataclass inheritance.
-    """
-
-    arena: str | None = None
-    model: str | None = None
-    n_instructions_per_language: int | None = None
-    languages: list[str] | None = None
-    n_bootstraps: int = 20
-    seed: int = 0
-    baseline_model: str | None = None
 
 
 def compute_bradley_terry(

@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -100,16 +99,6 @@ def try_load_dataset_completions(
             "instruction_index": completions.index.tolist(),
         }
     )
-
-
-@dataclass
-class CliArgs(BaseCliArgs):
-    """CLI arguments for the generate-and-evaluate entrypoint."""
-
-    task: str | None = None
-    model_A: str | None = None
-    model_B: str | None = None
-    use_tqdm: bool = False
 
 
 @dataclass(frozen=True)

@@ -10,8 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
 from judgearena.cli_common import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
-from judgearena.estimate_elo_ratings import CliEloArgs
-from judgearena.generate_and_evaluate import CliArgs, native_pairwise_baseline
+from judgearena.generate_and_evaluate import native_pairwise_baseline
 
 
 class ModelArgs(BaseModel):
@@ -98,51 +97,6 @@ class RunConfig(BaseSettings):
             ):
                 raise ValueError(f"model.path_b is required for task {self.task!r}.")
         return self
-
-    def _base_flat_kwargs(self) -> dict:
-        """Fields shared by CliArgs and CliEloArgs (the BaseCliArgs fields)."""
-        return dict(
-            judge_model=self.judge.model,
-            n_instructions=self.generation.n_instructions,
-            provide_explanation=self.judge.provide_explanation,
-            swap_mode=self.judge.swap_mode,
-            ignore_cache=self.run.ignore_cache,
-            truncate_all_input_chars=self.generation.truncate_all_input_chars,
-            truncate_judge_input_chars=self.generation.truncate_judge_input_chars,
-            max_out_tokens_models=self.model.max_out_tokens,
-            max_out_tokens_judge=self.judge.max_out_tokens,
-            max_model_len=self.model.max_model_len,
-            max_judge_model_len=self.judge.max_model_len,
-            chat_template=self.model.chat_template,
-            result_folder=self.run.result_folder,
-            engine_kwargs=dict(self.model.engine_kwargs),
-            judge_engine_kwargs=dict(self.judge.engine_kwargs),
-            verbosity=self.run.verbosity,
-            log_file=self.run.log_file,
-            no_log_file=self.run.no_log_file,
-        )
-
-    def to_flat_args(self) -> CliArgs | CliEloArgs:
-        base = self._base_flat_kwargs()
-        if self.task.startswith(ELO_TASK_PREFIX):
-            assert self.elo is not None and self.elo.arena is not None
-            return CliEloArgs(
-                arena=self.elo.arena,
-                model=self.model.path,
-                n_instructions_per_language=self.elo.n_instructions_per_language,
-                languages=self.elo.languages,
-                n_bootstraps=self.elo.n_bootstraps,
-                seed=self.run.seed,
-                baseline_model=self.elo.baseline_model,
-                **base,
-            )
-        return CliArgs(
-            task=self.task,
-            model_A=self.model.path,
-            model_B=self.model.path_b,
-            use_tqdm=self.run.use_tqdm,
-            **base,
-        )
 
 
 def load_config(path: str | Path) -> RunConfig:

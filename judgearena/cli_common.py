@@ -1,15 +1,13 @@
 """Shared CLI configuration for judgearena entrypoints.
 
-Houses the base dataclass fields and argparse definitions that are common
-to both ``judgearena`` (generate_and_evaluate) and ``judgearena-elo``
-(estimate_elo_ratings) CLI tools.
+Houses the argparse definitions and task constants common to the judgearena
+CLI tools.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass, field
 
 ELO_TASK_PREFIX = "elo-"
 
@@ -23,37 +21,6 @@ ELO_TASK_TO_ARENA: dict[str, str] = {
     "elo-lmarena": "LMArena",
     "elo-comparia": "ComparIA",
 }
-
-
-@dataclass
-class BaseCliArgs:
-    """Fields shared by every judgearena CLI entrypoint."""
-
-    judge_model: str
-
-    n_instructions: int | None = None
-    provide_explanation: bool = False
-    swap_mode: str = "fixed"
-    ignore_cache: bool = False
-    truncate_all_input_chars: int = 8192
-    truncate_judge_input_chars: int | None = None
-    max_out_tokens_models: int = 32768
-    max_out_tokens_judge: int = 32768
-    max_model_len: int | None = None
-    max_judge_model_len: int | None = None
-    chat_template: str | None = None
-    result_folder: str = "results"
-    engine_kwargs: dict = field(default_factory=dict)
-    judge_engine_kwargs: dict = field(default_factory=dict)
-    verbosity: int = 0
-    log_file: str | None = None
-    no_log_file: bool = False
-
-    def __post_init__(self):
-        supported_modes = ["fixed", "both"]
-        assert self.swap_mode in supported_modes, (
-            f"Only {supported_modes} modes are supported but got {self.swap_mode}."
-        )
 
 
 def add_common_arguments(parser: argparse.ArgumentParser) -> None:

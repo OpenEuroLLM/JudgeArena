@@ -196,7 +196,7 @@ def test_main_n_instructions_limits_battles():
 
 
 def test_main_swap_mode_forwarded_to_judge(monkeypatch):
-    """swap_mode from CliEloArgs must be forwarded to judge_and_parse_prefs.
+    """swap_mode from the run config must be forwarded to judge_and_parse_prefs.
 
     Regression test: previously run_judge() called judge_and_parse_prefs without
     swap_mode, so --swap_mode both was silently ignored.
