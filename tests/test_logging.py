@@ -122,7 +122,7 @@ def test_attach_file_handler_creates_parent_directory(tmp_path):
     assert log_file.parent.exists()
 
 
-# ---------- resolve_verbosity ----------
+# ---------- verbosity ----------
 
 
 def test_quiet_overrides_verbose():
