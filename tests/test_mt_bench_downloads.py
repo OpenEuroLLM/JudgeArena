@@ -3,7 +3,7 @@ import pandas as pd
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
-from judgearena.generate_and_evaluate import CliArgs
+from judgearena.config import RunConfig
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -143,17 +143,19 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         ),
     )
 
-    args = CliArgs(
+    cfg = RunConfig(
         task="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B="gpt-4",
-        judge_model="Dummy/J",
-        n_instructions=2,
-        engine_kwargs={"gpu_memory_utilization": 0.7},
+        model={
+            "path": "VLLM/example/model-a",
+            "path_b": "gpt-4",
+            "engine_kwargs": {"gpu_memory_utilization": 0.7},
+        },
+        judge={"model": "Dummy/J"},
+        generation={"n_instructions": 2},
     )
 
     completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
-        args=args,
+        cfg=cfg,
         questions_df=questions_df,
         ignore_cache=False,
     )
@@ -181,7 +183,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache: (
+        lambda cfg, questions_df, ignore_cache: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -209,27 +211,32 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         fake_run_mt_bench_fastchat,
     )
 
-    args = CliArgs(
+    cfg = RunConfig(
         task="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B=None,
-        judge_model="VLLM/Judge",
-        n_instructions=1,
-        truncate_judge_input_chars=80000,
-        max_judge_model_len=65536,
-        engine_kwargs={"tensor_parallel_size": 1},
-        judge_engine_kwargs={"tensor_parallel_size": 4},
-        result_folder=str(tmp_path),
+        model={
+            "path": "VLLM/example/model-a",
+            "path_b": None,
+            "engine_kwargs": {"tensor_parallel_size": 1},
+        },
+        judge={
+            "model": "VLLM/Judge",
+            "max_model_len": 65536,
+            "engine_kwargs": {"tensor_parallel_size": 4},
+        },
+        generation={"n_instructions": 1, "truncate_judge_input_chars": 80000},
+        run={"result_folder": str(tmp_path)},
     )
 
     mt_bench_utils.run_mt_bench(
-        args,
+        cfg,
         ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
 
-    assert args.model_B == "gpt-4"
+    assert cfg.model.path_b == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
-    assert captured["fastchat"]["args"].truncate_judge_input_chars == 80000
+    assert (
+        captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
+    )

@@ -124,11 +124,7 @@ def _flat_from_argv(argv: list[str]):
     parser = cli_module._build_parser()
     args = parser.parse_args(argv)
     task = cli_module._resolve_task(args)
-    if task.startswith("elo-"):
-        return cli_module._build_elo_args(args, task=task, model_a=args.model_A)
-    return cli_module._build_generate_and_evaluate_args(
-        args, task=task, model_a=args.model_A
-    )
+    return cli_module._build_run_config(args, task).to_flat_args()
 
 
 def test_argparse_yaml_equivalence_generate(tmp_path):
@@ -165,8 +161,6 @@ def test_argparse_yaml_equivalence_elo(tmp_path):
 
 
 def test_config_path_dispatches_elo(tmp_path, monkeypatch):
-    from judgearena.estimate_elo_ratings import CliEloArgs
-
     captured = {}
     monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "main_elo", lambda a: captured.setdefault("elo", a))
@@ -181,8 +175,9 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     )
     cli_module.cli(["--config_path", str(yaml_path)])
     assert "ge" not in captured
-    assert isinstance(captured["elo"], CliEloArgs)
-    assert captured["elo"].arena == "ComparIA"
+    assert isinstance(captured["elo"], RunConfig)
+    assert captured["elo"].elo is not None
+    assert captured["elo"].elo.arena == "ComparIA"
 
 
 def test_runconfig_from_args_maps_nested_groups():

@@ -1,6 +1,7 @@
 import hashlib
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,9 @@ from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
 
@@ -147,29 +151,30 @@ def compute_bradley_terry(
     return dict(pd.Series(elo_scores, index=models.index))
 
 
-def main(args: CliEloArgs) -> dict:
-    rng = np.random.default_rng(args.seed)
+def main(cfg: "RunConfig") -> dict:
+    assert cfg.elo is not None  # main is dispatched only for elo tasks
+    rng = np.random.default_rng(cfg.run.seed)
 
     # Step 1: Load arena battles
-    logger.info("Step 1: Loading battles from %s", args.arena)
-    df_arena_all = load_arena_dataframe(arena=args.arena)
+    logger.info("Step 1: Loading battles from %s", cfg.elo.arena)
+    df_arena_all = load_arena_dataframe(arena=cfg.elo.arena)
 
     # Filter by language if specified
     df_battles = df_arena_all
-    if args.languages:
-        df_battles = df_battles[df_battles["lang"].isin(args.languages)]
+    if cfg.elo.languages:
+        df_battles = df_battles[df_battles["lang"].isin(cfg.elo.languages)]
 
     # Keep at most n_instructions_per_language per language
-    if args.n_instructions_per_language is not None:
+    if cfg.elo.n_instructions_per_language is not None:
         df_battles = (
             df_battles.groupby("lang")
-            .head(args.n_instructions_per_language)
+            .head(cfg.elo.n_instructions_per_language)
             .reset_index(drop=True)
         )
 
     # Keep at most n_instructions total (subset used for LLM-judge evaluation)
-    if args.n_instructions is not None:
-        df_battles = df_battles.head(args.n_instructions)
+    if cfg.generation.n_instructions is not None:
+        df_battles = df_battles.head(cfg.generation.n_instructions)
 
     df_battles = df_battles.reset_index(drop=True)
     n = len(df_battles)
@@ -186,19 +191,19 @@ def main(args: CliEloArgs) -> dict:
     logger.debug("First instruction:\n%s", instructions.iloc[0][:300])
 
     # Step 2: Generate completions for the model under evaluation
-    logger.info("Step 2: Generating completions with %s", args.model)
+    logger.info("Step 2: Generating completions with %s", cfg.model.path)
 
     # Only pass extra engine kwargs that are not None
-    extra_kwargs = dict(args.engine_kwargs)
-    if args.max_model_len is not None:
-        extra_kwargs["max_model_len"] = args.max_model_len
-    if args.chat_template is not None:
-        extra_kwargs["chat_template"] = args.chat_template
+    extra_kwargs = dict(cfg.model.engine_kwargs)
+    if cfg.model.max_model_len is not None:
+        extra_kwargs["max_model_len"] = cfg.model.max_model_len
+    if cfg.model.chat_template is not None:
+        extra_kwargs["chat_template"] = cfg.model.chat_template
     use_tqdm = False
     gen_fun = partial(
         generate_instructions,
-        truncate_input_chars=args.truncate_all_input_chars,
-        max_tokens=args.max_out_tokens_models,
+        truncate_input_chars=cfg.generation.truncate_all_input_chars,
+        max_tokens=cfg.model.max_out_tokens,
         use_tqdm=use_tqdm,
         **extra_kwargs,
     )
@@ -206,16 +211,17 @@ def main(args: CliEloArgs) -> dict:
     def replace_slash(s: str) -> str:
         return s.replace("/", "_")
 
-    languages_str = "-".join(sorted(args.languages)) if args.languages else "all"
+    languages_str = "-".join(sorted(cfg.elo.languages)) if cfg.elo.languages else "all"
     extra_kwargs_str = (
         "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
         if extra_kwargs
         else ""
     )
     cache_suffix = (
-        f"{args.arena}_{replace_slash(args.model)}_"
-        f"{args.n_instructions}_{args.n_instructions_per_language}_"
-        f"{languages_str}_{args.truncate_all_input_chars}_{args.max_out_tokens_models}"
+        f"{cfg.elo.arena}_{replace_slash(cfg.model.path)}_"
+        f"{cfg.generation.n_instructions}_{cfg.elo.n_instructions_per_language}_"
+        f"{languages_str}_{cfg.generation.truncate_all_input_chars}_"
+        f"{cfg.model.max_out_tokens}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
     if len(cache_suffix) > 100:
@@ -228,8 +234,8 @@ def main(args: CliEloArgs) -> dict:
         )
         cache_suffix = cache_hash
     completions_df = cache_function_dataframe(
-        lambda: gen_fun(instructions=instructions, model=args.model),
-        ignore_cache=args.ignore_cache,
+        lambda: gen_fun(instructions=instructions, model=cfg.model.path),
+        ignore_cache=cfg.run.ignore_cache,
         cache_name=f"elo/{cache_suffix}",
     ).set_index("instruction_index")
     completions = completions_df.loc[:, "completion"]
@@ -237,7 +243,7 @@ def main(args: CliEloArgs) -> dict:
     logger.debug("First completion:\n%s", completions.iloc[0])
 
     # Step 3: Judge evaluation against randomly picked arena opponents
-    logger.info("Step 3: Judge evaluation with %s", args.judge_model)
+    logger.info("Step 3: Judge evaluation with %s", cfg.judge.model)
 
     # For each battle, randomly pick opponent: model_a or model_b from the arena
     use_model_a_as_opponent = rng.choice([True, False], size=n)
@@ -269,17 +275,17 @@ def main(args: CliEloArgs) -> dict:
     ]
 
     judge_extra_kwargs = {}
-    if args.max_judge_model_len is not None:
-        judge_extra_kwargs["max_model_len"] = args.max_judge_model_len
-    if args.chat_template is not None:
-        judge_extra_kwargs["chat_template"] = args.chat_template
-    judge_extra_kwargs.update(args.engine_kwargs)
-    judge_extra_kwargs.update(args.judge_engine_kwargs)
+    if cfg.judge.max_model_len is not None:
+        judge_extra_kwargs["max_model_len"] = cfg.judge.max_model_len
+    if cfg.model.chat_template is not None:
+        judge_extra_kwargs["chat_template"] = cfg.model.chat_template
+    judge_extra_kwargs.update(cfg.model.engine_kwargs)
+    judge_extra_kwargs.update(cfg.judge.engine_kwargs)
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
-            model=args.judge_model,
-            max_tokens=args.max_out_tokens_judge,
+            model=cfg.judge.model,
+            max_tokens=cfg.judge.max_out_tokens,
             **judge_extra_kwargs,
         )
         annotations, _, prefs = judge_and_parse_prefs(
@@ -287,9 +293,9 @@ def main(args: CliEloArgs) -> dict:
             instructions=instructions.tolist(),
             completions_A=completions_A,
             completions_B=completions_B,
-            swap_mode=args.swap_mode,
-            provide_explanation=args.provide_explanation,
-            truncate_input_chars=args.truncate_judge_input_chars,
+            swap_mode=cfg.judge.swap_mode,
+            provide_explanation=cfg.judge.provide_explanation,
+            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
         )
         return pd.DataFrame(
@@ -308,7 +314,7 @@ def main(args: CliEloArgs) -> dict:
     judge_cache_suffix = f"judge_{cache_suffix}"
     df_judge = cache_function_dataframe(
         run_judge,
-        ignore_cache=args.ignore_cache,
+        ignore_cache=cfg.run.ignore_cache,
         cache_name=f"elo/{judge_cache_suffix}",
     )
 
@@ -321,7 +327,7 @@ def main(args: CliEloArgs) -> dict:
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results
-    model_name = args.model
+    model_name = cfg.model.path
     battle_results = []
     for pref, is_pos_a, opp_model in zip(
         prefs, our_model_is_position_a, opponent_models, strict=True
@@ -376,7 +382,7 @@ def main(args: CliEloArgs) -> dict:
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Bootstrap Bradley-Terry ELO ratings
-    n_bootstraps = args.n_bootstraps
+    n_bootstraps = cfg.elo.n_bootstraps
 
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
@@ -399,7 +405,7 @@ def main(args: CliEloArgs) -> dict:
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
         ratings = compute_bradley_terry(
-            df_sample, winner_col="winner", baseline_model=args.baseline_model
+            df_sample, winner_col="winner", baseline_model=cfg.elo.baseline_model
         )
         bootstrap_ratings.append(ratings)
 

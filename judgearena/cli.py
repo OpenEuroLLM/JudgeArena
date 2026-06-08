@@ -18,10 +18,9 @@ from judgearena.cli_common import (
     resolve_verbosity,
 )
 from judgearena.config import RunConfig, load_config
-from judgearena.estimate_elo_ratings import CliEloArgs
 from judgearena.estimate_elo_ratings import main as main_elo
-from judgearena.generate_and_evaluate import CliArgs, native_pairwise_baseline
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
+from judgearena.generate_and_evaluate import native_pairwise_baseline
 from judgearena.log import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -194,28 +193,26 @@ def _runconfig_from_args(args: argparse.Namespace, task: str) -> RunConfig:
     )
 
 
-def _build_elo_args(
-    args: argparse.Namespace, task: str, model_a: str | None
-) -> CliEloArgs:
-    if model_a is None:
-        raise SystemExit(
-            "--model_A is required for elo tasks (use `--task elo-<arena> --model_A <model>`)."
-        )
-    if args.model_B is not None:
-        raise SystemExit(
-            "--model_B is not yet supported for elo tasks; only --model_A is used."
-        )
-    return _runconfig_from_args(args, task).to_flat_args()
-
-
-def _build_generate_and_evaluate_args(
-    args: argparse.Namespace, task: str, model_a: str | None
-) -> CliArgs:
-    if model_a is None or (
+def _build_run_config(args: argparse.Namespace, task: str) -> RunConfig:
+    """Validate CLI inputs (with the historical messages) and build a RunConfig."""
+    if task.startswith(ELO_TASK_PREFIX):
+        if task not in ELO_TASK_TO_ARENA:
+            raise SystemExit(
+                f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
+            )
+        if args.model_A is None:
+            raise SystemExit(
+                "--model_A is required for elo tasks (use `--task elo-<arena> --model_A <model>`)."
+            )
+        if args.model_B is not None:
+            raise SystemExit(
+                "--model_B is not yet supported for elo tasks; only --model_A is used."
+            )
+    elif args.model_A is None or (
         args.model_B is None and native_pairwise_baseline(task) is None
     ):
         raise SystemExit(f"--model_A and --model_B are required for task {task!r}.")
-    return _runconfig_from_args(args, task).to_flat_args()
+    return _runconfig_from_args(args, task)
 
 
 def cli(argv: list[str] | None = None) -> None:
@@ -224,33 +221,18 @@ def cli(argv: list[str] | None = None) -> None:
 
     if args.config_path is not None:
         cfg = load_config(args.config_path)
-        configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
-        flat = cfg.to_flat_args()
-        logger.debug("Running with config args: %s", flat.__dict__)
-        if isinstance(flat, CliEloArgs):
-            main_elo(flat)
-        else:
-            main_generate_and_evaluate(flat)
-        return
-
-    if args.judge_model is None:
-        parser.error("the following arguments are required: --judge/--judge_model")
-    configure_logging(resolve_verbosity(args), log_file=args.log_file)
-    task = _resolve_task(args)
-    if task.startswith(ELO_TASK_PREFIX):
-        if task not in ELO_TASK_TO_ARENA:
-            raise SystemExit(
-                f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
-            )
-        elo_args = _build_elo_args(args, task=task, model_a=args.model_A)
-        logger.debug("Running with CLI args: %s", elo_args.__dict__)
-        main_elo(elo_args)
     else:
-        ge_args = _build_generate_and_evaluate_args(
-            args, task=task, model_a=args.model_A
-        )
-        logger.debug("Running with CLI args: %s", ge_args.__dict__)
-        main_generate_and_evaluate(ge_args)
+        if args.judge_model is None:
+            parser.error("the following arguments are required: --judge/--judge_model")
+        task = _resolve_task(args)
+        cfg = _build_run_config(args, task)
+
+    configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
+    logger.debug("Running with config: %s", cfg.model_dump())
+    if cfg.task.startswith(ELO_TASK_PREFIX):
+        main_elo(cfg)
+    else:
+        main_generate_and_evaluate(cfg)
 
 
 if __name__ == "__main__":

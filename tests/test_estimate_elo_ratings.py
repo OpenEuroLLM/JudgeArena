@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 
 import judgearena.estimate_elo_ratings as estimate_elo_ratings
-from judgearena.estimate_elo_ratings import CliEloArgs, compute_bradley_terry, main
+from judgearena.config import RunConfig
+from judgearena.estimate_elo_ratings import compute_bradley_terry, main
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.utils import make_model
 
@@ -77,16 +78,22 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
     )
 
 
-def _default_args(**kwargs) -> CliEloArgs:
-    defaults = dict(
-        arena="ComparIA",
-        model="Dummy/my model",
-        judge_model="Dummy/score A: 0 score B: 10",
-        n_instructions=10,
-        n_bootstraps=3,
+def _default_args(**kwargs) -> RunConfig:
+    arena = kwargs.pop("arena", "ComparIA")
+    model = kwargs.pop("model", "Dummy/my model")
+    judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
+    n_instructions = kwargs.pop("n_instructions", 10)
+    n_bootstraps = kwargs.pop("n_bootstraps", 3)
+    languages = kwargs.pop("languages", None)
+    swap_mode = kwargs.pop("swap_mode", "fixed")
+    assert not kwargs, f"unexpected kwargs: {kwargs}"
+    return RunConfig(
+        task="elo-comparia",
+        model={"path": model},
+        judge={"model": judge_model, "swap_mode": swap_mode},
+        generation={"n_instructions": n_instructions},
+        elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
     )
-    defaults.update(kwargs)
-    return CliEloArgs(**defaults)
 
 
 # --- compute_bradley_terry unit tests ---

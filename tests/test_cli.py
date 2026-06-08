@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 from judgearena import cli as cli_module
-from judgearena.estimate_elo_ratings import CliEloArgs
-from judgearena.generate_and_evaluate import CliArgs
+from judgearena.config import RunConfig
 
 
 @pytest.fixture
@@ -14,11 +13,11 @@ def capture_mains(monkeypatch):
     """Replace both main functions with spies that record the dispatched args."""
     captured: dict[str, object] = {}
 
-    def fake_main_ge(args: CliArgs) -> None:
+    def fake_main_ge(args: RunConfig) -> None:
         captured["module"] = "generate_and_evaluate"
         captured["args"] = args
 
-    def fake_main_elo(args: CliEloArgs) -> None:
+    def fake_main_elo(args: RunConfig) -> None:
         captured["module"] = "elo"
         captured["args"] = args
 
@@ -51,12 +50,12 @@ def test_task_dispatches_to_generate_and_evaluate(capture_mains, task: str):
         ]
     )
     assert capture_mains["module"] == "generate_and_evaluate"
-    ge_args: CliArgs = capture_mains["args"]
-    assert isinstance(ge_args, CliArgs)
-    assert ge_args.task == task
-    assert ge_args.model_A == "Dummy/A"
-    assert ge_args.model_B == "Dummy/B"
-    assert ge_args.judge_model == "Dummy/J"
+    ge_cfg: RunConfig = capture_mains["args"]
+    assert isinstance(ge_cfg, RunConfig)
+    assert ge_cfg.task == task
+    assert ge_cfg.model.path == "Dummy/A"
+    assert ge_cfg.model.path_b == "Dummy/B"
+    assert ge_cfg.judge.model == "Dummy/J"
 
 
 @pytest.mark.parametrize(
@@ -82,11 +81,12 @@ def test_elo_task_dispatches_to_estimate_elo_ratings(
         ]
     )
     assert capture_mains["module"] == "elo"
-    elo_args: CliEloArgs = capture_mains["args"]
-    assert isinstance(elo_args, CliEloArgs)
-    assert elo_args.arena == expected_arena
-    assert elo_args.model == "Dummy/X"
-    assert elo_args.judge_model == "Dummy/J"
+    elo_cfg: RunConfig = capture_mains["args"]
+    assert isinstance(elo_cfg, RunConfig)
+    assert elo_cfg.elo is not None
+    assert elo_cfg.elo.arena == expected_arena
+    assert elo_cfg.model.path == "Dummy/X"
+    assert elo_cfg.judge.model == "Dummy/J"
 
 
 def test_dataset_flag_is_deprecated_alias(capture_mains):
@@ -121,7 +121,7 @@ def test_arena_flag_is_deprecated_alias_lowercases(capture_mains):
             ]
         )
     assert capture_mains["module"] == "elo"
-    assert capture_mains["args"].arena == "ComparIA"
+    assert capture_mains["args"].elo.arena == "ComparIA"
 
 
 def test_missing_task_raises(capture_mains):
@@ -249,10 +249,10 @@ def test_pairwise_task_allows_missing_model_b_when_native_baseline_exists(
         ]
     )
     assert capture_mains["module"] == "generate_and_evaluate"
-    ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.task == task
-    assert ge_args.model_A == "Dummy/A"
-    assert ge_args.model_B is None
+    ge_cfg: RunConfig = capture_mains["args"]
+    assert ge_cfg.task == task
+    assert ge_cfg.model.path == "Dummy/A"
+    assert ge_cfg.model.path_b is None
 
 
 def test_elo_forwards_optional_flags(capture_mains):
@@ -277,12 +277,13 @@ def test_elo_forwards_optional_flags(capture_mains):
             "gpt-4o",
         ]
     )
-    elo_args: CliEloArgs = capture_mains["args"]
-    assert elo_args.languages == ["en", "fr"]
-    assert elo_args.n_instructions_per_language == 50
-    assert elo_args.n_bootstraps == 5
-    assert elo_args.seed == 7
-    assert elo_args.baseline_model == "gpt-4o"
+    elo_cfg: RunConfig = capture_mains["args"]
+    assert elo_cfg.elo is not None
+    assert elo_cfg.elo.languages == ["en", "fr"]
+    assert elo_cfg.elo.n_instructions_per_language == 50
+    assert elo_cfg.elo.n_bootstraps == 5
+    assert elo_cfg.run.seed == 7
+    assert elo_cfg.elo.baseline_model == "gpt-4o"
 
 
 def test_engine_kwargs_parsed_as_json(capture_mains):
@@ -300,8 +301,8 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
             '{"tensor_parallel_size": 4}',
         ]
     )
-    ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
+    ge_cfg: RunConfig = capture_mains["args"]
+    assert ge_cfg.model.engine_kwargs == {"tensor_parallel_size": 4}
 
 
 def test_missing_judge_model_errors(monkeypatch):
@@ -333,10 +334,10 @@ def test_judge_side_kwargs_are_parsed_separately(capture_mains):
             '{"tensor_parallel_size": 4}',
         ]
     )
-    ge_args: CliArgs = capture_mains["args"]
-    assert ge_args.model_B is None
-    assert ge_args.truncate_judge_input_chars == 80000
-    assert ge_args.max_model_len == 32768
-    assert ge_args.max_judge_model_len == 65536
-    assert ge_args.engine_kwargs == {"tensor_parallel_size": 1}
-    assert ge_args.judge_engine_kwargs == {"tensor_parallel_size": 4}
+    ge_cfg: RunConfig = capture_mains["args"]
+    assert ge_cfg.model.path_b is None
+    assert ge_cfg.generation.truncate_judge_input_chars == 80000
+    assert ge_cfg.model.max_model_len == 32768
+    assert ge_cfg.judge.max_model_len == 65536
+    assert ge_cfg.model.engine_kwargs == {"tensor_parallel_size": 1}
+    assert ge_cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
