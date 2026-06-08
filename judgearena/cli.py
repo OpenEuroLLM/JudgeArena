@@ -11,6 +11,8 @@ import argparse
 import warnings
 
 from judgearena.cli_common import (
+    ELO_TASK_PREFIX,
+    ELO_TASK_TO_ARENA,
     add_common_arguments,
     parse_engine_kwargs,
     resolve_verbosity,
@@ -23,19 +25,6 @@ from judgearena.log import configure_logging, get_logger
 
 logger = get_logger(__name__)
 
-ELO_TASK_PREFIX = "elo-"
-
-# Lowercase CLI task name -> canonical arena identifier used inside
-# ``judgearena.arenas_utils.KNOWN_ARENAS`` and the ``benchmark`` column of
-# saved battle dataframes.  The CLI stays lowercase (matching ``alpaca-eval``
-# conventions) while internal identifiers keep their original casing.
-ELO_TASK_TO_ARENA: dict[str, str] = {
-    "elo-lmarena-100k": "LMArena-100k",
-    "elo-lmarena-140k": "LMArena-140k",
-    "elo-lmarena": "LMArena",
-    "elo-comparia": "ComparIA",
-}
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -45,6 +34,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "benchmarks (e.g. alpaca-eval, arena-hard-v2.0, mt-bench) or "
             "`--task elo-<arena>` for ELO rating (e.g. elo-lmarena-140k, elo-comparia)."
         ),
+    )
+    parser.add_argument(
+        "--config_path",
+        default=None,
+        help="Path to a YAML run config. When set, all other run options come "
+        "from the file.",
     )
     parser.add_argument(
         "--task",
@@ -228,6 +223,22 @@ def _build_generate_and_evaluate_args(
 def cli(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.config_path is not None:
+        from judgearena.config import load_config
+
+        cfg = load_config(args.config_path)
+        configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
+        flat = cfg.to_flat_args()
+        logger.debug("Running with config args: %s", flat.__dict__)
+        if isinstance(flat, CliEloArgs):
+            main_elo(flat)
+        else:
+            main_generate_and_evaluate(flat)
+        return
+
+    if args.judge_model is None:
+        parser.error("the following arguments are required: --judge/--judge_model")
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
     if task.startswith(ELO_TASK_PREFIX):

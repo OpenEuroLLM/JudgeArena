@@ -11,6 +11,19 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
+ELO_TASK_PREFIX = "elo-"
+
+# Lowercase CLI task name -> canonical arena identifier used inside
+# ``judgearena.arenas_utils.KNOWN_ARENAS`` and the ``benchmark`` column of
+# saved battle dataframes.  The CLI stays lowercase (matching ``alpaca-eval``
+# conventions) while internal identifiers keep their original casing.
+ELO_TASK_TO_ARENA: dict[str, str] = {
+    "elo-lmarena-100k": "LMArena-100k",
+    "elo-lmarena-140k": "LMArena-140k",
+    "elo-lmarena": "LMArena",
+    "elo-comparia": "ComparIA",
+}
+
 
 @dataclass
 class BaseCliArgs:
@@ -49,7 +62,8 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--judge",
         "--judge_model",
         dest="judge_model",
-        required=True,
+        required=False,
+        default=None,
         help=(
             "Name of the LLM to use as judge, for instance "
             "`Together/meta-llama/Meta-Llama-3-70B-Instruct-Turbo`, "

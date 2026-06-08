@@ -304,6 +304,14 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
     assert ge_args.engine_kwargs == {"tensor_parallel_size": 4}
 
 
+def test_missing_judge_model_errors(monkeypatch):
+    monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
+    with pytest.raises(SystemExit):
+        cli_module.cli(
+            ["--task", "alpaca-eval", "--model_A", "Dummy/a", "--model_B", "Dummy/b"]
+        )
+
+
 def test_judge_side_kwargs_are_parsed_separately(capture_mains):
     cli_module.cli(
         [
