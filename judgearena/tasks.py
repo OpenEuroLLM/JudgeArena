@@ -1,4 +1,4 @@
-"""Shared task constants for judgearena entrypoints."""
+"""Task identifiers and the ELO task -> arena mapping."""
 
 from __future__ import annotations
 

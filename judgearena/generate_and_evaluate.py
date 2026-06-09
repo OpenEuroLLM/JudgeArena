@@ -159,7 +159,7 @@ def _resolve_baseline_plan(
     native = native_pairwise_baseline(task)
     if native is None:
         raise ValueError(
-            f"--model_B is required for dataset '{task}'; no dataset-native "
+            f"model.baseline is required for task '{task}'; no dataset-native "
             "baseline is registered."
         )
     if isinstance(native, str):

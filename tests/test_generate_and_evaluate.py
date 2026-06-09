@@ -140,7 +140,7 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
-    with pytest.raises(ValueError, match="model_B"):
+    with pytest.raises(ValueError, match="baseline"):
         _resolve_baseline_plan(
             task="fluency-french",
             model_b=None,

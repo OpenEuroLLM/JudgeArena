@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from judgearena.cli_common import ELO_TASK_PREFIX
 from judgearena.config import build_run_config
 from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
+from judgearena.tasks import ELO_TASK_PREFIX
 
 logger = get_logger(__name__)
 

@@ -162,7 +162,7 @@ def run_mt_bench(
         cfg.model.baseline = mt_bench_native_baseline(cfg.task)
     if cfg.model.baseline is None:
         raise ValueError(
-            f"--model_B is required for dataset '{cfg.task}'; "
+            f"model.baseline is required for task '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
     questions_df = load_instructions("mt-bench", n_instructions=cfg.generation.n_instructions)
