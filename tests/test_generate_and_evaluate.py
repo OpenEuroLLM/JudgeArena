@@ -29,7 +29,7 @@ def _cfg(
 ) -> RunConfig:
     return RunConfig(
         task=task,
-        model={"path": model_A, "path_b": model_B, "engine_kwargs": engine_kwargs or {}},
+        model={"name": model_A, "baseline": model_B, "engine_kwargs": engine_kwargs or {}},
         judge={
             "model": judge_model,
             "swap_mode": swap_mode,
@@ -266,4 +266,4 @@ def test_run_writes_roundtrippable_config(tmp_path):
     assert written, "config.yaml not written"
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval"
-    assert reloaded.model.path == "Dummy/no answer"
+    assert reloaded.model.name == "Dummy/no answer"

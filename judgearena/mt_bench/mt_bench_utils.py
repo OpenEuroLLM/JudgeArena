@@ -71,11 +71,11 @@ def _generate_mt_bench_completions(
             .loc[questions_df.index]
         )
 
-    return _load_or_generate(cfg.model.path), _load_or_generate(cfg.model.path_b)
+    return _load_or_generate(cfg.model.name), _load_or_generate(cfg.model.baseline)
 
 
 def _build_mt_bench_result_name(cfg: RunConfig, suffix: str | None = None) -> str:
-    name = f"{cfg.task}-{cfg.model.path}-{cfg.model.path_b}-{cfg.judge.model}"
+    name = f"{cfg.task}-{cfg.model.name}-{cfg.model.baseline}-{cfg.judge.model}"
     name += f"-{cfg.judge.swap_mode}"
     if suffix:
         name += f"-{suffix}"
@@ -116,8 +116,8 @@ def _run_mt_bench_fastchat(
             questions=questions_df,
             completions_a=completions_a,
             completions_b=completions_b,
-            model_a=cfg.model.path,
-            model_b=cfg.model.path_b,
+            model_a=cfg.model.name,
+            model_b=cfg.model.baseline,
             turns_mode="both",
             swap_mode=cfg.judge.swap_mode,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
@@ -128,8 +128,8 @@ def _run_mt_bench_fastchat(
     stats = compute_pref_summary(prefs)
     results = {
         "task": cfg.task,
-        "model_A": cfg.model.path,
-        "model_B": cfg.model.path_b,
+        "model_A": cfg.model.name,
+        "model_B": cfg.model.baseline,
         "judge_model": cfg.judge.model,
         "num_inconsistent": num_inconsistent,
         **stats,
@@ -158,9 +158,9 @@ def run_mt_bench(
     result_name: str,
 ):
     """MT-Bench pipeline with FastChat-compatible pairwise judging."""
-    if cfg.model.path_b is None:
-        cfg.model.path_b = mt_bench_native_baseline(cfg.task)
-    if cfg.model.path_b is None:
+    if cfg.model.baseline is None:
+        cfg.model.baseline = mt_bench_native_baseline(cfg.task)
+    if cfg.model.baseline is None:
         raise ValueError(
             f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
@@ -168,8 +168,8 @@ def run_mt_bench(
     questions_df = load_instructions("mt-bench", n_instructions=cfg.generation.n_instructions)
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
-        cfg.model.path,
-        cfg.model.path_b,
+        cfg.model.name,
+        cfg.model.baseline,
     )
     completions_a, completions_b = _generate_mt_bench_completions(
         cfg=cfg,

@@ -146,8 +146,8 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     cfg = RunConfig(
         task="mt-bench",
         model={
-            "path": "VLLM/example/model-a",
-            "path_b": "gpt-4",
+            "name": "VLLM/example/model-a",
+            "baseline": "gpt-4",
             "engine_kwargs": {"gpu_memory_utilization": 0.7},
         },
         judge={"model": "Dummy/J"},
@@ -214,8 +214,8 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     cfg = RunConfig(
         task="mt-bench",
         model={
-            "path": "VLLM/example/model-a",
-            "path_b": None,
+            "name": "VLLM/example/model-a",
+            "baseline": None,
             "engine_kwargs": {"tensor_parallel_size": 1},
         },
         judge={
@@ -234,7 +234,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         result_name="mt-bench-test",
     )
 
-    assert cfg.model.path_b == "gpt-4"
+    assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
     assert (

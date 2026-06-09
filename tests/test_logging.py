@@ -130,8 +130,8 @@ def test_quiet_overrides_verbose():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["-q", "-v", "--task", "alpaca-eval", "--model.path", "Dummy/a",
-         "--model.path_b", "Dummy/b", "--judge.model", "Dummy/j"]
+        ["-q", "-v", "--task", "alpaca-eval", "--model.name", "Dummy/a",
+         "--model.baseline", "Dummy/b", "--judge.model", "Dummy/j"]
     )
     assert cfg.run.verbosity == -1
 

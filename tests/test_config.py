@@ -8,7 +8,7 @@ from judgearena.config import RunConfig
 def _base_generate() -> dict:
     return {
         "task": "alpaca-eval",
-        "model": {"path": "Dummy/a", "path_b": "Dummy/b"},
+        "model": {"name": "Dummy/a", "baseline": "Dummy/b"},
         "judge": {"model": "Dummy/j"},
     }
 
@@ -16,7 +16,7 @@ def _base_generate() -> dict:
 def _base_elo() -> dict:
     return {
         "task": "elo-comparia",
-        "model": {"path": "Dummy/m"},
+        "model": {"name": "Dummy/m"},
         "judge": {"model": "Dummy/j"},
     }
 
@@ -24,7 +24,7 @@ def _base_elo() -> dict:
 def test_generate_config_constructs():
     cfg = RunConfig(**_base_generate())
     assert cfg.task == "alpaca-eval"
-    assert cfg.model.path == "Dummy/a"
+    assert cfg.model.name == "Dummy/a"
     assert cfg.judge.model == "Dummy/j"
     assert cfg.elo is None
 
@@ -52,7 +52,7 @@ def test_elo_block_rejected_on_generate_task():
 def test_generate_requires_model_b_without_native_baseline():
     data = _base_generate()
     data["task"] = "no-baseline-task"  # task with no native baseline
-    data["model"] = {"path": "Dummy/a"}  # no path_b
+    data["model"] = {"name": "Dummy/a"}  # no path_b
     with pytest.raises(ValidationError):
         RunConfig(**data)
 
@@ -66,7 +66,7 @@ def test_unknown_elo_task_rejected():
 
 def test_generate_requires_model_path():
     data = _base_generate()
-    data["model"] = {"path_b": "Dummy/b"}  # no path
+    data["model"] = {"baseline": "Dummy/b"}  # no path
     with pytest.raises(ValidationError):
         RunConfig(**data)
 
@@ -78,8 +78,8 @@ def test_load_config_from_yaml(tmp_path):
     yaml_path.write_text(
         "task: alpaca-eval\n"
         "model:\n"
-        "  path: Dummy/a\n"
-        "  path_b: Dummy/b\n"
+        "  name: Dummy/a\n"
+        "  baseline: Dummy/b\n"
         "  max_out_tokens: 4096\n"
         "judge:\n"
         "  model: Dummy/j\n"
@@ -88,7 +88,7 @@ def test_load_config_from_yaml(tmp_path):
         "  n_instructions: 10\n"
     )
     cfg = load_config(yaml_path)
-    assert cfg.model.path == "Dummy/a"
+    assert cfg.model.name == "Dummy/a"
     assert cfg.model.max_out_tokens == 4096
     assert cfg.judge.provide_explanation is True
     assert cfg.generation.n_instructions == 10
@@ -98,13 +98,13 @@ def test_cli_yaml_equivalence_generate(tmp_path):
     from judgearena.config import build_run_config, load_config
 
     expected = build_run_config(
-        ["--task", "alpaca-eval", "--model.path", "Dummy/a",
-         "--model.path_b", "Dummy/b", "--judge.model", "Dummy/j"]
+        ["--task", "alpaca-eval", "--model.name", "Dummy/a",
+         "--model.baseline", "Dummy/b", "--judge.model", "Dummy/j"]
     )
     yaml_path = tmp_path / "g.yaml"
     yaml_path.write_text(
         "task: alpaca-eval\n"
-        "model: {path: Dummy/a, path_b: Dummy/b}\n"
+        "model: {name: Dummy/a, baseline: Dummy/b}\n"
         "judge: {model: Dummy/j}\n"
     )
     actual = load_config(yaml_path)
@@ -115,12 +115,12 @@ def test_cli_yaml_equivalence_elo(tmp_path):
     from judgearena.config import build_run_config, load_config
 
     expected = build_run_config(
-        ["--task", "elo-comparia", "--model.path", "Dummy/m", "--judge.model", "Dummy/j"]
+        ["--task", "elo-comparia", "--model.name", "Dummy/m", "--judge.model", "Dummy/j"]
     )
     yaml_path = tmp_path / "e.yaml"
     yaml_path.write_text(
         "task: elo-comparia\n"
-        "model: {path: Dummy/m}\n"
+        "model: {name: Dummy/m}\n"
         "judge: {model: Dummy/j}\n"
     )
     actual = load_config(yaml_path)
@@ -138,7 +138,7 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     )
     yaml_path = tmp_path / "e.yaml"
     yaml_path.write_text(
-        "task: elo-comparia\nmodel: {path: Dummy/m}\njudge: {model: Dummy/j}\n"
+        "task: elo-comparia\nmodel: {name: Dummy/m}\njudge: {model: Dummy/j}\n"
     )
     cli_module.cli(["--config_path", str(yaml_path)])
     assert "ge" not in captured
@@ -151,12 +151,12 @@ def test_build_run_config_cli_only():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "alpaca-eval", "--model.path", "Dummy/a",
-         "--model.path_b", "Dummy/b", "--judge.model", "Dummy/j"]
+        ["--task", "alpaca-eval", "--model.name", "Dummy/a",
+         "--model.baseline", "Dummy/b", "--judge.model", "Dummy/j"]
     )
     assert cfg.task == "alpaca-eval"
-    assert cfg.model.path == "Dummy/a"
-    assert cfg.model.path_b == "Dummy/b"
+    assert cfg.model.name == "Dummy/a"
+    assert cfg.model.baseline == "Dummy/b"
     assert cfg.judge.model == "Dummy/j"
 
 
@@ -166,7 +166,7 @@ def test_build_run_config_cli_overrides_yaml_partial(tmp_path):
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
         "task: alpaca-eval\n"
-        "model: {path: Dummy/a, path_b: Dummy/b}\n"
+        "model: {name: Dummy/a, baseline: Dummy/b}\n"
         "judge: {model: yaml-judge, swap_mode: both}\n"
     )
     cfg = build_run_config(
@@ -174,7 +174,7 @@ def test_build_run_config_cli_overrides_yaml_partial(tmp_path):
     )
     assert cfg.judge.model == "cli-judge"  # CLI overrides YAML
     assert cfg.judge.swap_mode == "both"  # preserved (partial update)
-    assert cfg.model.path == "Dummy/a"  # from YAML
+    assert cfg.model.name == "Dummy/a"  # from YAML
     assert cfg.generation.truncate_all_input_chars == 8192  # model default
 
 
@@ -182,7 +182,7 @@ def test_build_run_config_engine_kwargs_json():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "alpaca-eval", "--model.path", "Dummy/a", "--model.path_b", "Dummy/b",
+        ["--task", "alpaca-eval", "--model.name", "Dummy/a", "--model.baseline", "Dummy/b",
          "--judge.model", "Dummy/j", "--judge.engine_kwargs", '{"tensor_parallel_size": 4}']
     )
     assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
@@ -192,6 +192,6 @@ def test_build_run_config_elo_arena_derived():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "elo-comparia", "--model.path", "Dummy/m", "--judge.model", "Dummy/j"]
+        ["--task", "elo-comparia", "--model.name", "Dummy/m", "--judge.model", "Dummy/j"]
     )
     assert cfg.elo is not None and cfg.elo.arena == "ComparIA"

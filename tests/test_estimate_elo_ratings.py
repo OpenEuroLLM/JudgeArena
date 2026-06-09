@@ -89,7 +89,7 @@ def _default_args(**kwargs) -> RunConfig:
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     return RunConfig(
         task="elo-comparia",
-        model={"path": model},
+        model={"name": model},
         judge={"model": judge_model, "swap_mode": swap_mode},
         generation={"n_instructions": n_instructions},
         elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},

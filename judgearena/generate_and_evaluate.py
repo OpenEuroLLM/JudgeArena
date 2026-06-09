@@ -250,10 +250,10 @@ def main(cfg: "RunConfig"):
     from judgearena.config import dump_config
 
     if cfg.task == "mt-bench":
-        model_b = cfg.model.path_b or native_pairwise_baseline(cfg.task)
+        model_b = cfg.model.baseline or native_pairwise_baseline(cfg.task)
         if not isinstance(model_b, str):
             raise ValueError("MT-Bench requires a flat native baseline.")
-        name = f"{cfg.task}-{cfg.model.path}-{model_b}-{cfg.judge.model}"
+        name = f"{cfg.task}-{cfg.model.name}-{model_b}-{cfg.judge.model}"
         name += f"-{cfg.judge.swap_mode}"
         name = name.replace("/", "_")
         run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
@@ -289,10 +289,10 @@ def main(cfg: "RunConfig"):
         instructions = instructions.head(n_instructions)
 
     baseline_plan = _resolve_baseline_plan(
-        task=cfg.task, model_b=cfg.model.path_b, instructions_df=instructions_df
+        task=cfg.task, model_b=cfg.model.baseline, instructions_df=instructions_df
     )
 
-    name = f"{cfg.task}-{cfg.model.path}-{baseline_plan.display_name}-{cfg.judge.model}"
+    name = f"{cfg.task}-{cfg.model.name}-{baseline_plan.display_name}-{cfg.judge.model}"
     name += f"-{cfg.judge.swap_mode}"
     name = name.replace("/", "_")
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
@@ -305,7 +305,7 @@ def main(cfg: "RunConfig"):
     logger.info(
         "Using task %s and evaluating %s against baseline %s.",
         cfg.task,
-        cfg.model.path,
+        cfg.model.name,
         baseline_plan.display_name,
     )
 
@@ -313,7 +313,7 @@ def main(cfg: "RunConfig"):
         "Generating completions for task %s with model %s and baseline %s "
         "(or loading them directly if present)",
         cfg.task,
-        cfg.model.path,
+        cfg.model.name,
         baseline_plan.display_name,
     )
 
@@ -358,7 +358,7 @@ def main(cfg: "RunConfig"):
         )
         return _align_completion_series(generated)
 
-    completions_A = _load_or_generate_completions(cfg.model.path)
+    completions_A = _load_or_generate_completions(cfg.model.name)
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
     if baseline_plan.is_flat:
@@ -378,7 +378,7 @@ def main(cfg: "RunConfig"):
         )
 
     logger.debug("First instruction/context: %s", instructions.values[0])
-    logger.debug("First completion of %s:\n%s", cfg.model.path, completions_A.values[0])
+    logger.debug("First completion of %s:\n%s", cfg.model.name, completions_A.values[0])
     logger.debug(
         "First completion of %s:\n%s",
         baseline_plan.display_name,
@@ -433,7 +433,7 @@ def main(cfg: "RunConfig"):
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
-    df["model_A"] = cfg.model.path
+    df["model_A"] = cfg.model.name
     df["model_B"] = baseline_per_eval.tolist()
     df["judge"] = cfg.judge.model
 
@@ -441,7 +441,7 @@ def main(cfg: "RunConfig"):
         df_reversed = pd.DataFrame(annotations_reversed)
         df_reversed["instruction_index"] = eval_instruction_index
         df_reversed["model_A"] = baseline_per_eval.tolist()
-        df_reversed["model_B"] = cfg.model.path
+        df_reversed["model_B"] = cfg.model.name
         df_reversed["judge"] = cfg.judge.model
         df = pd.concat([df, df_reversed])
 
@@ -452,7 +452,7 @@ def main(cfg: "RunConfig"):
 
     results = {
         "task": cfg.task,
-        "model_A": cfg.model.path,
+        "model_A": cfg.model.name,
         "model_B": baseline_plan.display_name,
         "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
         "baseline_models": baseline_plan.unique_models,
@@ -464,7 +464,7 @@ def main(cfg: "RunConfig"):
     }
     logger.info(
         "%s vs %s judged by %s",
-        cfg.model.path,
+        cfg.model.name,
         baseline_plan.display_name,
         cfg.judge.model,
     )

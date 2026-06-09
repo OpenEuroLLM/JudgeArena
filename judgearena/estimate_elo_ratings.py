@@ -170,7 +170,7 @@ def main(cfg: "RunConfig") -> dict:
     logger.debug("First instruction:\n%s", instructions.iloc[0][:300])
 
     # Step 2: Generate completions for the model under evaluation
-    logger.info("Step 2: Generating completions with %s", cfg.model.path)
+    logger.info("Step 2: Generating completions with %s", cfg.model.name)
 
     # Only pass extra engine kwargs that are not None
     extra_kwargs = dict(cfg.model.engine_kwargs)
@@ -197,7 +197,7 @@ def main(cfg: "RunConfig") -> dict:
         else ""
     )
     cache_suffix = (
-        f"{cfg.elo.arena}_{replace_slash(cfg.model.path)}_"
+        f"{cfg.elo.arena}_{replace_slash(cfg.model.name)}_"
         f"{cfg.generation.n_instructions}_{cfg.elo.n_instructions_per_language}_"
         f"{languages_str}_{cfg.generation.truncate_all_input_chars}_"
         f"{cfg.model.max_out_tokens}"
@@ -213,7 +213,7 @@ def main(cfg: "RunConfig") -> dict:
         )
         cache_suffix = cache_hash
     completions_df = cache_function_dataframe(
-        lambda: gen_fun(instructions=instructions, model=cfg.model.path),
+        lambda: gen_fun(instructions=instructions, model=cfg.model.name),
         ignore_cache=cfg.run.ignore_cache,
         cache_name=f"elo/{cache_suffix}",
     ).set_index("instruction_index")
@@ -306,7 +306,7 @@ def main(cfg: "RunConfig") -> dict:
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results
-    model_name = cfg.model.path
+    model_name = cfg.model.name
     battle_results = []
     for pref, is_pos_a, opp_model in zip(
         prefs, our_model_is_position_a, opponent_models, strict=True

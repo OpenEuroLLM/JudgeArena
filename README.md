@@ -46,8 +46,8 @@ Compare two models head-to-head:
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model.path gpt4_1106_preview \
-  --model.path_b VLLM/utter-project/EuroLLM-9B \
+  --model.name gpt4_1106_preview \
+  --model.baseline VLLM/utter-project/EuroLLM-9B \
   --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
   --generation.n_instructions 10
 ```
@@ -77,7 +77,7 @@ It will then display the results of the battles:
 ### Run from a YAML config (`--config_path`)
 
 Every option can also come from a YAML file. The CLI flags mirror the config
-structure (`--model.path`, `--judge.model`, `--generation.n_instructions`, …),
+structure (`--model.name`, `--judge.model`, `--generation.n_instructions`, …),
 and **precedence is: CLI flags > `--config_path` YAML > built-in defaults**, so
 you can keep a base file and override single fields on the command line:
 
@@ -92,8 +92,8 @@ Example [`configs/alpaca_eval.yaml`](configs/alpaca_eval.yaml):
 ```yaml
 task: alpaca-eval
 model:
-  path: gpt4_1106_preview
-  path_b: VLLM/utter-project/EuroLLM-9B
+  name: gpt4_1106_preview
+  baseline: VLLM/utter-project/EuroLLM-9B
 judge:
   model: OpenRouter/deepseek/deepseek-chat-v3.1
 generation:
@@ -124,8 +124,8 @@ For instance, to run vLLM with tensor parallelism across multiple GPUs:
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model.path VLLM/Qwen/Qwen2.5-0.5B-Instruct \
-  --model.path_b VLLM/Qwen/Qwen2.5-1.5B-Instruct \
+  --model.name VLLM/Qwen/Qwen2.5-0.5B-Instruct \
+  --model.baseline VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge.model VLLM/Qwen/Qwen3.5-27B-FP8 \
   --generation.n_instructions 10 \
   --model.engine_kwargs '{"tensor_parallel_size": 2}'
@@ -152,8 +152,8 @@ For instance, to run everything locally with vLLM:
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model.path VLLM/Qwen/Qwen2.5-0.5B-Instruct \
-  --model.path_b VLLM/Qwen/Qwen2.5-1.5B-Instruct \
+  --model.name VLLM/Qwen/Qwen2.5-0.5B-Instruct \
+  --model.baseline VLLM/Qwen/Qwen2.5-1.5B-Instruct \
   --judge.model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
   --generation.n_instructions 10
 ```
@@ -196,8 +196,8 @@ Use separate `--judge.engine_kwargs` if the judge uses a different architecture 
 ```bash
 uv run judgearena \
   --task alpaca-eval \
-  --model.path LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
-  --model.path_b OpenRouter/qwen/qwen-2.5-7b-instruct \
+  --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  --model.baseline OpenRouter/qwen/qwen-2.5-7b-instruct \
   --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
   --generation.n_instructions 10 --model.max_out_tokens 16384 \
   --model.engine_kwargs '{"chat_format": "chatml"}'
@@ -208,8 +208,8 @@ uv run judgearena \
 ```bash
 uv run judgearena \
   --task alpaca-eval \
-  --model.path LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
-  --model.path_b LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
+  --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  --model.baseline LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --judge.model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --generation.n_instructions 5 --model.max_out_tokens 16384 \
   --model.engine_kwargs '{"chat_format": "chatml"}'
@@ -230,8 +230,8 @@ If you need to force a specific chat template (for example, a base model that yo
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model.path VLLM/swiss-ai/Apertus-8B-2509 \
-  --model.path_b VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
+  --model.name VLLM/swiss-ai/Apertus-8B-2509 \
+  --model.baseline VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
   --judge.model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
   --model.chat_template '{% for message in messages %}<|im_start|>{{ message["role"] }}\n{{ message["content"] }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}'
 ```
@@ -261,7 +261,7 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
 a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
-ship in the `lmsys/mt-bench` HF Space. Override per run with `--model.path_b`.
+ship in the `lmsys/mt-bench` HF Space. Override per run with `--model.baseline`.
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`
@@ -289,14 +289,14 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
 The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
 
-Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model.path` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model.path_b` is reserved for a future extension).
+Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model.name` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model.baseline` is reserved for a future extension).
 
 ### Quick start
 
 ```bash
 judgearena \
   --task elo-comparia \
-  --model.path Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --model.name Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
   --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
   --generation.n_instructions 200
 ```
@@ -306,7 +306,7 @@ judgearena \
 | Flag | Default | Description |
 |---|---|---|
 | `--task elo-<arena>` | *(required)* | Arena to sample opponents from: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
-| `--model.path` | *(required)* | Model under evaluation (same format as pairwise tasks) |
+| `--model.name` | *(required)* | Model under evaluation (same format as pairwise tasks) |
 | `--judge.model` | *(required)* | LLM judge (same format as pairwise tasks) |
 | `--generation.n_instructions` | all | Number of arena battles to use for evaluation |
 | `--elo.n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
