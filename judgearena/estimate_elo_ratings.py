@@ -1,16 +1,25 @@
 import hashlib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.battles import (
+    Battle,
+    EloReport,
+    summarize_bootstrap,
+    write_battles,
+)
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
+from judgearena.repro import write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 logger = get_logger(__name__)
@@ -148,6 +157,7 @@ def compute_bradley_terry(
 
 
 def main(args: CliEloArgs) -> dict:
+    run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
@@ -322,9 +332,14 @@ def main(args: CliEloArgs) -> dict:
 
     # Map preferences back to model-name-level battle results
     model_name = args.model
+    question_ids = (
+        df_battles["question_id"].tolist()
+        if "question_id" in df_battles.columns
+        else [None] * n
+    )
     battle_results = []
-    for pref, is_pos_a, opp_model in zip(
-        prefs, our_model_is_position_a, opponent_models, strict=True
+    for pref, is_pos_a, opp_model, qid in zip(
+        prefs, our_model_is_position_a, opponent_models, question_ids, strict=True
     ):
         if pref is None or pref == 0.5:
             winner = "tie"
@@ -333,14 +348,16 @@ def main(args: CliEloArgs) -> dict:
         else:
             winner = "model_b"
 
+        common = {
+            "winner": winner,
+            "source": "llm-judge",
+            "judge_model": args.judge_model,
+            "question_id": qid,
+        }
         if is_pos_a:
-            battle_results.append(
-                {"model_a": model_name, "model_b": opp_model, "winner": winner}
-            )
+            battle_results.append({"model_a": model_name, "model_b": opp_model, **common})
         else:
-            battle_results.append(
-                {"model_a": opp_model, "model_b": model_name, "winner": winner}
-            )
+            battle_results.append({"model_a": opp_model, "model_b": model_name, **common})
 
     # LLM-judge battle results for our model
     df_llm_judge = pd.DataFrame(battle_results)
@@ -364,7 +381,10 @@ def main(args: CliEloArgs) -> dict:
 
     # Combine LLM-judge battles with human-annotated arena battles,
     # keeping only arena models with at least 500 human battles
-    df_arena = df_arena_all.loc[:, ["model_a", "model_b", "winner"]]
+    arena_cols = ["model_a", "model_b", "winner"]
+    if "question_id" in df_arena_all.columns:
+        arena_cols.append("question_id")
+    df_arena = df_arena_all.loc[:, arena_cols]
     human_battle_counts = pd.concat(
         [df_arena["model_a"], df_arena["model_b"]]
     ).value_counts()
@@ -373,6 +393,7 @@ def main(args: CliEloArgs) -> dict:
         df_arena["model_a"].isin(well_represented)
         & df_arena["model_b"].isin(well_represented)
     ]
+    df_arena = df_arena.assign(source="human", judge_model=None)
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Bootstrap Bradley-Terry ELO ratings
@@ -419,8 +440,52 @@ def main(args: CliEloArgs) -> dict:
     else:
         print("  Not enough data to compute ELO ratings.")
 
+    # Persist artifacts: battles.jsonl is the source of truth (ELO is a pure
+    # function of it); elo_ratings.json + bootstrap_ratings.csv keep the leaderboard.
+    name = (
+        f"{args.arena}-{replace_slash(args.model)}-{replace_slash(args.judge_model)}"
+    )
+    res_folder = Path(args.result_folder) / f"{name}-{datetime.now():%Y%m%d_%H%M%S}"
+    res_folder.mkdir(parents=True, exist_ok=True)
+
+    records = df_results.astype(object).where(pd.notna(df_results), None).to_dict("records")
+    write_battles(res_folder / "battles.jsonl", [Battle.from_dict(r) for r in records])
+
+    if bootstrap_ratings:
+        pd.DataFrame(bootstrap_ratings).to_csv(
+            res_folder / "bootstrap_ratings.csv", index=False
+        )
+        EloReport(
+            arena=args.arena,
+            model=model_name,
+            judge_model=args.judge_model,
+            n_bootstraps=n_bootstraps,
+            seed=args.seed,
+            ratings=summarize_bootstrap(bootstrap_ratings, battle_counts, model_name),
+        ).write(res_folder / "elo_ratings.json")
+
+    # Reproducibility metadata: git hash, dependency versions, timings, and an
+    # artifacts manifest of the files we just wrote. The run args live under
+    # "run", so no separate config file is needed.
+    write_run_metadata(
+        output_dir=res_folder,
+        entrypoint="judgearena.estimate_elo_ratings.main",
+        run=asdict(args),
+        results={
+            **summary,
+            "n_llm_battles": n_llm,
+            "n_human_battles": n_human,
+            "result_folder": str(res_folder),
+        },
+        input_payloads={"instruction_index": question_ids},
+        started_at_utc=run_started_at,
+    )
+
+    print(f"\n📁 Results: {res_folder}")
+
     return {
         **summary,
         "bootstrap_ratings": bootstrap_ratings,
         "model_name": model_name,
+        "result_folder": str(res_folder),
     }
