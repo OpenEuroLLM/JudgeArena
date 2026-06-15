@@ -184,7 +184,7 @@ def _finalize_mt_bench_run(
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
         "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
         "preferences": prefs.tolist(),
-        "date": str(datetime.now().isoformat()),
+        "date": datetime.now(UTC).isoformat(),
         "user": os.getenv("USER", ""),
     }
     print_results(results)

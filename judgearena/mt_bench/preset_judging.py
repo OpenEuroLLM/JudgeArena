@@ -13,7 +13,6 @@ from judgearena.mt_bench.common import (
 )
 from judgearena.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
-    MTBenchSwapPolicy,
     build_mt_bench_pairwise_judge_items,
     infer_pairwise_judgments_by_prompt_groups,
 )
@@ -135,9 +134,6 @@ def _normalize_preference(preference: float | None, *, swapped: bool) -> float:
     return 1.0 - preference if swapped else float(preference)
 
 
-_PRESET_SWAP_POLICY = MTBenchSwapPolicy.APPEND_INVERTED_SCORE
-
-
 def judge_mt_bench_with_preset(
     *,
     judge_chat_model,
@@ -187,10 +183,7 @@ def judge_mt_bench_with_preset(
         used_prompt_kwargs: list[dict[str, str]],
         *,
         swapped: bool,
-        swap_policy: MTBenchSwapPolicy = _PRESET_SWAP_POLICY,
     ) -> None:
-        if swap_policy != MTBenchSwapPolicy.APPEND_INVERTED_SCORE:
-            raise ValueError(f"Unsupported preset MT-Bench swap policy: {swap_policy}")
         for item, raw_judgment, prompt_kwargs in zip(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
