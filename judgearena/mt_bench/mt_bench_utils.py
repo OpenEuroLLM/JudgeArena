@@ -172,24 +172,22 @@ def _run_mt_bench_preset(
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
 ) -> pd.Series:
-    prefs, annotations, combined_metadata, _num_inconsistent = (
-        judge_mt_bench_with_preset(
-            judge_chat_model=judge_chat_model,
-            judge_model=args.judge_model,
-            questions=questions_df,
-            completions_a=completions_a,
-            completions_b=completions_b,
-            model_a=args.model_A,
-            model_b=args.model_B,
-            turns_mode="both",
-            swap_mode=args.swap_mode,
-            truncate_input_chars=args.truncate_judge_input_chars,
-            use_tqdm=args.use_tqdm,
-            prompt_preset=args.judge_prompt_preset or resolved_prompt.preset_name,
-            provide_explanation=args.provide_explanation,
-            system_file=args.judge_system_prompt_file,
-            user_file=args.judge_user_prompt_file,
-        )
+    prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
+        judge_chat_model=judge_chat_model,
+        judge_model=args.judge_model,
+        questions=questions_df,
+        completions_a=completions_a,
+        completions_b=completions_b,
+        model_a=args.model_A,
+        model_b=args.model_B,
+        turns_mode="both",
+        swap_mode=args.swap_mode,
+        truncate_input_chars=args.truncate_judge_input_chars,
+        use_tqdm=args.use_tqdm,
+        prompt_preset=args.judge_prompt_preset or resolved_prompt.preset_name,
+        provide_explanation=args.provide_explanation,
+        system_file=args.judge_system_prompt_file,
+        user_file=args.judge_user_prompt_file,
     )
     stats = compute_pref_summary(prefs)
     results = {
