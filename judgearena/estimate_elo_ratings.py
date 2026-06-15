@@ -14,6 +14,7 @@ from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
+from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 logger = get_logger(__name__)
@@ -159,7 +160,7 @@ def _sample_fingerprint(sampled: pd.DataFrame) -> str:
                 "index": int(index)
                 if isinstance(index, int | np.integer)
                 else str(index),
-                "question_id": str(row.get("question_id", "")),
+                "question_id": str(row["question_id"]),
                 "model_a": str(row["model_a"]),
                 "model_b": str(row["model_b"]),
             }
@@ -215,20 +216,6 @@ def _slugify(value: str) -> str:
     return slug or "model"
 
 
-def _jsonable(value):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, tuple):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, float) and np.isnan(value):
-        return None
-    return value
-
-
 def write_elo_result(
     *,
     result_folder: str | Path,
@@ -244,7 +231,7 @@ def write_elo_result(
         "summary": summary,
         "bootstrap_ratings": bootstrap_ratings,
     }
-    path.write_text(json.dumps(_jsonable(payload), indent=2) + "\n")
+    path.write_text(json.dumps(_to_jsonable(payload), indent=2) + "\n")
     return path
 
 
@@ -397,6 +384,8 @@ def main(args: CliEloArgs) -> dict:
         judge_extra_kwargs["max_model_len"] = args.max_judge_model_len
     if args.chat_template is not None:
         judge_extra_kwargs["chat_template"] = args.chat_template
+    judge_extra_kwargs.update(args.engine_kwargs)
+    judge_extra_kwargs.update(args.judge_engine_kwargs)
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
