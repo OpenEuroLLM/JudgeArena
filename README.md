@@ -136,15 +136,28 @@ LlamaCpp allows you to run GGUF models locally with high efficiency across vario
 uv sync --extra llamacpp
 ```
 
-**Download GGUF models** using `huggingface-cli` (included via `huggingface-hub`):
+**Download GGUF models** using `hf` (included via `huggingface-hub`):
 
 ```bash
-huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q8_0.gguf --local-dir ./models
-huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF qwen2.5-1.5b-instruct-q8_0.gguf --local-dir ./models
+hf download Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q8_0.gguf --local-dir ./models
+hf download Qwen/Qwen2.5-1.5B-Instruct-GGUF qwen2.5-1.5b-instruct-q8_0.gguf --local-dir ./models
 ```
 
 The `LlamaCpp` provider expects a **file path** to a `.gguf` model after the `LlamaCpp/` prefix.
 For absolute paths, this results in a double slash (e.g., `LlamaCpp//home/user/models/model.gguf`).
+
+**Chat format:** LlamaCpp falls back to a generic template if the GGUF metadata does not embed a chat template. Pass the correct format for your model via `--engine_kwargs`:
+
+```bash
+# Llama-3.x models
+--engine_kwargs '{"chat_format": "llama-3"}'
+# Gemma models
+--engine_kwargs '{"chat_format": "gemma"}'
+# ChatML models (SmolLM, Qwen, Mistral, etc.)
+--engine_kwargs '{"chat_format": "chatml"}'
+```
+
+Use separate `--judge_engine_kwargs` if the judge uses a different architecture than the evaluated models.
 
 **Mixed example** — local LlamaCpp model with a remote judge:
 
@@ -154,7 +167,8 @@ uv run judgearena \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B OpenRouter/qwen/qwen-2.5-7b-instruct \
   --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10 --max_out_tokens_models 16384
+  --n_instructions 10 --max_out_tokens_models 16384 \
+  --engine_kwargs '{"chat_format": "chatml"}'
 ```
 
 **Fully local example** — no API keys required (useful for verifying your setup):
@@ -165,7 +179,8 @@ uv run judgearena \
   --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model_B LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --judge_model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
-  --n_instructions 5 --max_out_tokens_models 16384
+  --n_instructions 5 --max_out_tokens_models 16384 \
+  --engine_kwargs '{"chat_format": "chatml"}'
 ```
 
 **Note:** Ensure you have the required LangChain dependencies installed for your chosen provider.

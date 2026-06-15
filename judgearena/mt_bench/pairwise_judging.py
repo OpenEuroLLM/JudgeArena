@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Protocol
 
 import pandas as pd
@@ -31,11 +30,6 @@ class MTBenchJudgeItem:
     @property
     def prompt_name(self) -> str:
         return self.prompt.name
-
-
-class MTBenchSwapPolicy(StrEnum):
-    APPEND_INVERTED_SCORE = "append_inverted_score"
-    CONSERVATIVE_AGREEMENT = "conservative_agreement"
 
 
 def group_indices_by_prompt_key(items: list[MTBenchJudgeItem]) -> dict[str, list[int]]:
