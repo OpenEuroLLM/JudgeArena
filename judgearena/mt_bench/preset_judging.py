@@ -226,6 +226,8 @@ def judge_mt_bench_with_preset(
     _append_results(judgments, prompt_kwargs_used, swapped=False)
 
     if swap_mode == "both":
+        # swap_mode="both": append the inverted swapped-order scores as
+        # additional data points (see _normalize_preference(swapped=True)).
         swapped_judgments, swapped_prompt_kwargs = (
             infer_pairwise_judgments_by_prompt_groups(
                 judge_chat_model=judge_chat_model,
