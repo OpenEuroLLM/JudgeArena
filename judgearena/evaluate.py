@@ -462,18 +462,26 @@ def judge_and_parse_prefs(
         return float("nan") if x is None else x
 
     score_parser = PairScore(parser_mode=parser_mode)
-    prefs = pd.Series(
-        [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
-    )
+
+    def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
+        results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]
+        n_failed = sum(1 for r in results if r is None)
+        if n_failed:
+            logger.warning(
+                "%d/%d judge outputs could not be parsed (%s) — those battles are dropped from stats.",
+                n_failed,
+                len(results),
+                label,
+            )
+        return pd.Series(results)
+
+    prefs = _parse_and_warn(annotations, "direct")
 
     if swap_mode == "both":
         prefs = prefs.apply(_none_to_nan)
-        prefs_reversed = pd.Series(
-            [
-                score_parser.parse_model_raw(a.judge_completion)
-                for a in annotations_reversed
-            ]
-        ).apply(_none_to_nan)
+        prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(
+            _none_to_nan
+        )
         prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
 
     return annotations, annotations_reversed, prefs

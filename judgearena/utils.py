@@ -5,7 +5,6 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 from huggingface_hub import snapshot_download
@@ -238,37 +237,41 @@ def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
     return text, False
 
 
-def _extract_ai_message_metadata(result: object) -> dict[str, Any]:
-    """Extract provider finish metadata from LangChain-style message results."""
-    response_metadata = getattr(result, "response_metadata", None) or {}
-    finish_reason = response_metadata.get("finish_reason")
-    stop_reason = response_metadata.get("stop_reason")
-    if finish_reason is None and isinstance(result, dict):
-        finish_reason = result.get("finish_reason")
-        stop_reason = result.get("stop_reason", stop_reason)
-    return {"finish_reason": finish_reason, "stop_reason": stop_reason}
+def safe_parse_int(env_var: str) -> int | None:
+    """Parse an integer environment variable by name.
+
+    Returns ``None`` when the variable is unset, blank, or malformed (a warning
+    is logged for malformed values) so callers can fall back to a default
+    instead of crashing at import time.
+    """
+    raw = os.getenv(env_var)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring malformed %s=%r; expected an integer.", env_var, raw)
+        return None
 
 
-def do_inference(
-    chat_model,
-    inputs,
-    use_tqdm: bool = False,
-    return_metadata: bool = False,
-):
-    # Retries on rate-limit/server errors with exponential backoff.
-    # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
+def do_inference(chat_model, inputs, use_tqdm: bool = False):
+    """Run inference over *inputs*, returning a list of text completions.
+
+    Retries on rate-limit/server errors with exponential backoff. The async
+    path (``use_tqdm=True``) retries individual calls; the batch path splits
+    into ``4**attempt`` chunks on failure.
+    """
     invoke_kwargs = {
         # "stop": ["```"],
         # "max_tokens": 100,
     }
-    metadata: list[dict[str, Any]] | None = None
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
         # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
         # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
-        cap_raw = os.environ.get("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
-        cap = int(cap_raw) if cap_raw and int(cap_raw) > 0 else None
+        cap = safe_parse_int("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
+        cap = cap if cap and cap > 0 else None
 
         async def process_with_real_progress(chat_model, inputs, pbar):
             sem = asyncio.Semaphore(cap) if cap else None
@@ -308,7 +311,6 @@ def do_inference(
                     chat_model=chat_model, inputs=inputs, pbar=pbar
                 )
             )
-        metadata = [_extract_ai_message_metadata(r) for r in res]
     else:
 
         def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
@@ -321,26 +323,9 @@ def do_inference(
                 ]
                 try:
                     results = []
-                    results_metadata = []
                     for chunk in chunks:
-                        if return_metadata and hasattr(
-                            chat_model, "batch_with_metadata"
-                        ):
-                            chunk_results, chunk_metadata = (
-                                chat_model.batch_with_metadata(
-                                    inputs=chunk, **invoke_kwargs
-                                )
-                            )
-                        else:
-                            chunk_results = chat_model.batch(
-                                inputs=chunk, **invoke_kwargs
-                            )
-                            chunk_metadata = [
-                                _extract_ai_message_metadata(r) for r in chunk_results
-                            ]
-                        results.extend(chunk_results)
-                        results_metadata.extend(chunk_metadata)
-                    return results, results_metadata
+                        results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
+                    return results
                 except Exception as e:
                     if attempt == max_retries - 1 or not _is_retryable_error(e):
                         raise
@@ -356,14 +341,12 @@ def do_inference(
                     )
                     time.sleep(delay)
 
-        res, metadata = batch_with_retry(inputs)
+        res = batch_with_retry(inputs)
 
     # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
     # is it because of using Chat and barebones models?
     # when using OpenAI, the output is AIMessage not a string...
     res = [x.content if hasattr(x, "content") else x for x in res]
-    if return_metadata:
-        return res, (metadata or [{} for _ in res])
     return res
 
 
@@ -387,9 +370,9 @@ _VLLM_INIT_RETRY_SIGNATURES = (
     "CUDA-capable device(s) is/are busy or unavailable",
     "CUDA error: initialization error",
 )
-_VLLM_INIT_MAX_ATTEMPTS = int(os.getenv("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS", "4"))
-_VLLM_INIT_BACKOFF_SECONDS = int(
-    os.getenv("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS", "20")
+_VLLM_INIT_MAX_ATTEMPTS = safe_parse_int("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS") or 4
+_VLLM_INIT_BACKOFF_SECONDS = (
+    safe_parse_int("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS") or 20
 )
 
 
@@ -639,32 +622,10 @@ class ChatVLLM:
             )
         return outputs
 
-    def batch_with_metadata(
-        self, inputs: list, **invoke_kwargs
-    ) -> tuple[list[str], list[dict[str, Any]]]:
-        outputs = self._run_raw_batch(inputs)
-        texts: list[str] = []
-        metadata: list[dict[str, Any]] = []
-        marker = self._thinking_budget_marker
-        for out in outputs:
-            first_output = out.outputs[0]
-            text = first_output.text
-            texts.append(text)
-            row: dict[str, Any] = {
-                "finish_reason": getattr(first_output, "finish_reason", None),
-                "stop_reason": getattr(first_output, "stop_reason", None),
-            }
-            if marker is not None:
-                # vLLM emits the forced reasoning-end marker verbatim when the
-                # per-request thinking-token budget is exhausted.
-                row["thinking_budget_exhausted"] = marker in text
-                row["thinking_token_budget"] = self._thinking_budget_value
-            metadata.append(row)
-        return texts, metadata
-
     def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
-        texts, _metadata = self.batch_with_metadata(inputs, **invoke_kwargs)
-        return texts
+        """Return the text completion for each input in *inputs*."""
+        outputs = self._run_raw_batch(inputs)
+        return [out.outputs[0].text for out in outputs]
 
     def invoke(self, input_item, **invoke_kwargs) -> str:
         """Process a single input."""
