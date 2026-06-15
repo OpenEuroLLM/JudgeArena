@@ -151,7 +151,7 @@ def judge_mt_bench_with_preset(
     provide_explanation: bool = False,
     system_file: str | None = None,
     user_file: str | None = None,
-) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
+) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
 
@@ -238,4 +238,4 @@ def judge_mt_bench_with_preset(
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 
-    return pd.Series(preferences, dtype=float), annotations, metadata, 0
+    return pd.Series(preferences, dtype=float), annotations, metadata

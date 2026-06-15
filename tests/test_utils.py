@@ -1,3 +1,4 @@
+import judgearena.instruction_dataset.mt_bench as mt_bench_mod
 import judgearena.utils as utils
 from judgearena.utils import make_model
 
@@ -24,6 +25,11 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
         lambda **kwargs: calls.append(
             ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
         ),
+    )
+    monkeypatch.setattr(
+        mt_bench_mod,
+        "download_mt_bench",
+        lambda local_dir=None: None,
     )
 
     utils.download_all()
