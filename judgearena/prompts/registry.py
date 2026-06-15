@@ -185,6 +185,10 @@ def resolve_judge_prompt(
         )
 
     if preset is None:
+        # `provide_explanation` is a legacy alias for explicitly selecting the
+        # explanation preset. It intentionally takes precedence over the task
+        # default (so e.g. `--provide_explanation` on any task yields
+        # `default_with_explanation`); pass `--judge_prompt_preset` to opt out.
         preset = (
             DEFAULT_WITH_EXPLANATION_PRESET
             if provide_explanation

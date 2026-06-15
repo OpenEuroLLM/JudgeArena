@@ -13,7 +13,6 @@ from judgearena.mt_bench.common import (
 )
 from judgearena.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
-    MTBenchSwapPolicy,
     build_mt_bench_pairwise_judge_items,
     infer_pairwise_judgments_by_prompt_groups,
 )
@@ -137,9 +136,6 @@ def _normalize_preference(preference: float | None, *, swapped: bool) -> float:
     return 1.0 - preference if swapped else float(preference)
 
 
-_PRESET_SWAP_POLICY = MTBenchSwapPolicy.APPEND_INVERTED_SCORE
-
-
 def judge_mt_bench_with_preset(
     *,
     judge_chat_model,
@@ -158,7 +154,7 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
     strip_thinking_before_judging: bool = False,
-) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
+) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
 
@@ -191,10 +187,7 @@ def judge_mt_bench_with_preset(
         used_prompt_kwargs: list[dict[str, str]],
         *,
         swapped: bool,
-        swap_policy: MTBenchSwapPolicy = _PRESET_SWAP_POLICY,
     ) -> None:
-        if swap_policy != MTBenchSwapPolicy.APPEND_INVERTED_SCORE:
-            raise ValueError(f"Unsupported preset MT-Bench swap policy: {swap_policy}")
         for item, raw_judgment, prompt_kwargs in zip(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
@@ -237,6 +230,8 @@ def judge_mt_bench_with_preset(
     _append_results(judgments, prompt_kwargs_used, swapped=False)
 
     if swap_mode == "both":
+        # swap_mode="both": append the inverted swapped-order scores as
+        # additional data points (see _normalize_preference(swapped=True)).
         swapped_judgments, swapped_prompt_kwargs = (
             infer_pairwise_judgments_by_prompt_groups(
                 judge_chat_model=judge_chat_model,
@@ -247,4 +242,4 @@ def judge_mt_bench_with_preset(
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 
-    return pd.Series(preferences, dtype=float), annotations, metadata, 0
+    return pd.Series(preferences, dtype=float), annotations, metadata

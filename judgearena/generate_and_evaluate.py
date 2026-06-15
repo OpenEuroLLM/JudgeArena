@@ -195,14 +195,6 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
 
 
-def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
-    return build_default_judge_model_kwargs(
-        args.judge_model,
-        args.engine_kwargs,
-        judge_engine_kwargs_override=args.judge_engine_kwargs,
-    )
-
-
 def _build_generation_engine_kwargs(args: CliArgs, model_spec: str) -> dict[str, object]:
     """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
     generation_engine_kwargs = dict(args.engine_kwargs)
@@ -235,11 +227,26 @@ def print_results(results):
     )
     print(f"⚖️ Judge: {results['judge_model']}")
     print("📈 Results Summary:")
-    print(f"   Total Battles: {results['num_battles']}")
+    num_battles = results["num_battles"]
+    num_missing = results.get("num_missing", 0)
+    swap_mode = results.get("swap_mode", "fixed")
+    if num_missing > 0:
+        parsed = num_battles - num_missing
+        print(
+            f"   Total Battles: {num_battles}  ⚠️  {num_missing} unparseable (parsed: {parsed}/{num_battles})"
+        )
+    elif swap_mode == "both":
+        print(
+            f"   Total Battles: {num_battles} (2×{num_battles // 2} — each instruction judged in both orders to detect positional bias)"
+        )
+    else:
+        print(f"   Total Battles: {num_battles}")
     print(f"   Win Rate (A): {results['winrate']:.1%}")
     print(f"   ✅ Wins:   {results['num_wins']}")
     print(f"   ❌ Losses: {results['num_losses']}")
     print(f"   🤝 Ties:   {results['num_ties']}")
+    if results.get("result_folder"):
+        print(f"📁 Results: {results['result_folder']}")
     print("=" * 60 + "\n")
 
 
@@ -389,7 +396,11 @@ def main(args: CliArgs):
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
-        **_build_judge_engine_kwargs(args),
+        **build_default_judge_model_kwargs(
+            args.judge_model,
+            args.engine_kwargs,
+            judge_engine_kwargs_override=args.judge_engine_kwargs,
+        ),
     )
 
     # save argument for results analysis
@@ -446,6 +457,8 @@ def main(args: CliArgs):
         **resolved_prompt.metadata(),
         "strip_thinking_before_judging": args.strip_thinking_before_judging,
         "battle_thinking_token_budget": args.battle_thinking_token_budget,
+        "swap_mode": args.swap_mode,
+        "result_folder": str(res_folder),
         **summary,
         "preferences": prefs.tolist(),
     }

@@ -14,7 +14,6 @@ from judgearena.mt_bench.common import (
 )
 from judgearena.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
-    MTBenchSwapPolicy,
     build_mt_bench_pairwise_judge_items,
     infer_pairwise_judgments_by_prompt_groups,
     swap_pairwise_answer_kwargs,
@@ -274,10 +273,7 @@ def _resolve_fastchat_item_result(
     judge_model: str,
     model_a: str,
     model_b: str,
-    swap_policy: MTBenchSwapPolicy,
 ) -> tuple[dict[str, Any], dict[str, object], float, bool]:
-    if swap_policy != MTBenchSwapPolicy.CONSERVATIVE_AGREEMENT:
-        raise ValueError(f"Unsupported FastChat MT-Bench swap policy: {swap_policy}")
     prompt: FastChatPairwisePrompt = item.prompt
     kwargs = item.prompt_kwargs
     g1_user_prompt = prompt.user_prompt_template.format(**kwargs)
@@ -302,6 +298,8 @@ def _resolve_fastchat_item_result(
     }
 
     if g2_raw is not None:
+        # swap_mode="both": conservative agreement — keep a winner only if both
+        # orderings agree, otherwise tie (FastChat/MT-Bench consistency).
         g2_verdict = _parse_fastchat_verdict(g2_raw)
         g2_winner = _map_verdict_to_winner(g2_verdict, swapped=True)
         final_winner, inconsistent = _conservative_winner(g1_winner, g2_winner)
@@ -332,9 +330,6 @@ def _resolve_fastchat_item_result(
         "turn": item.turn,
     }
     return annotation_row, metadata, preference, inconsistent
-
-
-_FASTCHAT_SWAP_POLICY = MTBenchSwapPolicy.CONSERVATIVE_AGREEMENT
 
 
 def judge_mt_bench_pairwise_fastchat(
@@ -399,7 +394,6 @@ def judge_mt_bench_pairwise_fastchat(
                 judge_model=judge_model,
                 model_a=model_a,
                 model_b=model_b,
-                swap_policy=_FASTCHAT_SWAP_POLICY,
             )
         )
         if inconsistent:
