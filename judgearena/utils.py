@@ -470,8 +470,6 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
-        self._thinking_budget_marker: str | None = None
-        self._thinking_budget_value: int | None = None
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
@@ -479,8 +477,6 @@ class ChatVLLM:
                 self._sampling_params_kwargs["thinking_token_budget"] = int(
                     thinking_token_budget
                 )
-                self._thinking_budget_marker = VLLM_REASONING_END_STR
-                self._thinking_budget_value = int(thinking_token_budget)
             elif is_thinking_model(model):
                 reasoning_parser = _default_reasoning_parser_for_model(model)
                 assert reasoning_parser is not None  # guarded by is_thinking_model()
@@ -488,10 +484,10 @@ class ChatVLLM:
                     "reasoning_config",
                     ReasoningConfig(
                         reasoning_start_str=VLLM_REASONING_START_STR,
-                        # Keep the shared forced end marker for offline
-                        # `LLM.chat()` thinking-budget exhaustion detection.
-                        # The parser itself still varies by model family
-                        # (e.g. OLMo uses `olmo3`) on vLLM's OpenAI server.
+                        # Shared forced end marker so vLLM can enforce the
+                        # thinking-token budget for offline `LLM.chat()`. The
+                        # parser itself still varies by model family (e.g. OLMo
+                        # uses `olmo3`) on vLLM's OpenAI server.
                         reasoning_end_str=VLLM_REASONING_END_STR,
                     ),
                 )
@@ -499,8 +495,6 @@ class ChatVLLM:
                 self._sampling_params_kwargs["thinking_token_budget"] = int(
                     thinking_token_budget
                 )
-                self._thinking_budget_marker = VLLM_REASONING_END_STR
-                self._thinking_budget_value = int(thinking_token_budget)
             else:
                 warnings.warn(
                     f"Model '{model}' is not in JudgeArena's built-in thinking-model "
