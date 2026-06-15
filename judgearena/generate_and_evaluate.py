@@ -194,14 +194,6 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
 
 
-def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
-    return build_default_judge_model_kwargs(
-        args.judge_model,
-        args.engine_kwargs,
-        judge_engine_kwargs_override=args.judge_engine_kwargs,
-    )
-
-
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
@@ -372,7 +364,11 @@ def main(args: CliArgs):
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
-        **_build_judge_engine_kwargs(args),
+        **build_default_judge_model_kwargs(
+            args.judge_model,
+            args.engine_kwargs,
+            judge_engine_kwargs_override=args.judge_engine_kwargs,
+        ),
     )
 
     # save argument for results analysis
