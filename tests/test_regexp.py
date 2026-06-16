@@ -1,4 +1,5 @@
 from judgearena.evaluate import PairScore
+from judgearena.prompts.registry import resolve_judge_prompt
 
 
 def test_pair_score():
@@ -38,3 +39,13 @@ def test_regexp():
     assert pref == 0.5744425168116589
 
     print(pref)
+
+
+def test_default_prompt_preset_renders_answer_labels():
+    resolved = resolve_judge_prompt(
+        preset="default",
+        provide_explanation=False,
+    )
+
+    assert resolved.parser_mode == "score"
+    assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
