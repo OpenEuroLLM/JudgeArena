@@ -2,10 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 import pandas as pd
 
 
-def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
+@dataclass
+class PrefSummary:
+    """Win/loss/tie statistics for a preference series (0=A, 0.5=tie, 1=B)."""
+
+    num_battles: int
+    winrate: float
+    num_wins: int
+    num_losses: int
+    num_ties: int
+    num_missing: int
+
+    def to_dict(self) -> dict[str, float | int]:
+        return asdict(self)
+
+
+def compute_pref_summary(prefs: pd.Series) -> PrefSummary:
     """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B)."""
     prefs = pd.Series(prefs, dtype="float64")
     valid = prefs.dropna()
@@ -15,14 +32,14 @@ def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
     num_battles = int(len(prefs))
     denom = num_wins + num_losses + num_ties
     winrate = float((num_wins + 0.5 * num_ties) / denom) if denom > 0 else float("nan")
-    return {
-        "num_battles": num_battles,
-        "winrate": winrate,
-        "num_wins": num_wins,
-        "num_losses": num_losses,
-        "num_ties": num_ties,
-        "num_missing": int(num_battles - denom),
-    }
+    return PrefSummary(
+        num_battles=num_battles,
+        winrate=winrate,
+        num_wins=num_wins,
+        num_losses=num_losses,
+        num_ties=num_ties,
+        num_missing=int(num_battles - denom),
+    )
 
 
 def print_results(results):
@@ -78,4 +95,4 @@ def _compute_grouped_stats(
         if key is None:
             continue
         grouped.setdefault(key, []).append(pref)
-    return {key: compute_pref_summary(pd.Series(vals)) for key, vals in grouped.items()}
+    return {key: compute_pref_summary(pd.Series(vals)).to_dict() for key, vals in grouped.items()}

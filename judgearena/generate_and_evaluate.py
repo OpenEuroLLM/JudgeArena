@@ -459,7 +459,7 @@ def main(cfg: "RunConfig"):
         "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
         "swap_mode": cfg.judge.swap_mode,
         "result_folder": str(res_folder),
-        **summary,
+        **summary.to_dict(),
         "preferences": prefs.tolist(),
     }
     logger.info(

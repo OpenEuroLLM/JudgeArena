@@ -302,7 +302,7 @@ def evaluate_completions(
         ]
     )
     results = {
-        **compute_pref_summary(prefs),
+        **compute_pref_summary(prefs).to_dict(),
         **resolved_prompt.metadata(),
     }
     pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)

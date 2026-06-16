@@ -198,7 +198,7 @@ def _finalize_mt_bench_run(
         "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
         "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
         **(extra_result_fields or {}),
-        **stats,
+        **stats.to_dict(),
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
         "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
         "preferences": prefs.tolist(),

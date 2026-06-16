@@ -473,10 +473,10 @@ def main(cfg: "RunConfig") -> dict:
         ]
     )
     summary = compute_pref_summary(prefs_normalized)
-    our_wins = summary["num_wins"]
-    our_losses = summary["num_losses"]
-    our_ties = summary["num_ties"]
-    winrate = summary["winrate"]
+    our_wins = summary.num_wins
+    our_losses = summary.num_losses
+    our_ties = summary.num_ties
+    winrate = summary.winrate
 
     print(f"\n=== Results for {model_name} ===")
     print(
@@ -695,7 +695,7 @@ def main(cfg: "RunConfig") -> dict:
         float(np.std(model_rating_values)) if model_rating_values else float("nan")
     )
     result_summary = {
-        **summary,
+        **summary.to_dict(),
         "arena": cfg.elo.arena,
         "model_A": model_name,
         "judge_model": cfg.judge.model,
