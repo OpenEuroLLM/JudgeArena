@@ -109,6 +109,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="[elo] Model anchored at 1000 ELO (ratings are reported relative to it).",
     )
+    parser.add_argument(
+        "--elo_random_battles",
+        type=int,
+        default=None,
+        help="[elo] Sample N arena rows uniformly at random using --seed.",
+    )
     add_common_arguments(parser)
     return parser
 
@@ -171,6 +177,7 @@ def _build_elo_args(
         n_bootstraps=args.n_bootstraps,
         seed=args.seed,
         baseline_model=args.baseline_model,
+        elo_random_battles=args.elo_random_battles,
         judge_model=args.judge_model,
         n_instructions=args.n_instructions,
         provide_explanation=args.provide_explanation,
