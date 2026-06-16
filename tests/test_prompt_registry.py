@@ -19,9 +19,9 @@ from judgearena.prompts.registry import (
 
 @dataclass
 class FakeCliArgs:
-    judge_prompt_preset: str | None = None
-    judge_system_prompt_file: str | None = None
-    judge_user_prompt_file: str | None = None
+    prompt_preset: str | None = None
+    system_prompt_file: str | None = None
+    user_prompt_file: str | None = None
     provide_explanation: bool = False
 
 
@@ -139,7 +139,7 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
     resolved_default = resolve_run_judge_prompt("alpaca-eval", FakeCliArgs())
     resolved_explain = resolve_run_judge_prompt(
         "alpaca-eval",
-        FakeCliArgs(judge_prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
+        FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
     )
     resolved_legacy = resolve_run_judge_prompt(
         "alpaca-eval",

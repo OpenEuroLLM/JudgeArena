@@ -5,8 +5,8 @@ import pandas as pd
 import pytest
 
 import judgearena.estimate_elo_ratings as estimate_elo_ratings
+from judgearena.config import RunConfig
 from judgearena.estimate_elo_ratings import (
-    CliEloArgs,
     _winner_to_pref,
     fit_bradley_terry,
     main,
@@ -82,16 +82,22 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
     )
 
 
-def _default_args(**kwargs) -> CliEloArgs:
-    defaults = dict(
-        arena="ComparIA",
-        model="Dummy/my model",
-        judge_model="Dummy/score A: 0 score B: 10",
-        n_instructions=10,
-        n_bootstraps=3,
+def _default_args(**kwargs) -> RunConfig:
+    arena = kwargs.pop("arena", "ComparIA")
+    model = kwargs.pop("model", "Dummy/my model")
+    judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
+    n_instructions = kwargs.pop("n_instructions", 10)
+    n_bootstraps = kwargs.pop("n_bootstraps", 3)
+    languages = kwargs.pop("languages", None)
+    swap_mode = kwargs.pop("swap_mode", "fixed")
+    assert not kwargs, f"unexpected kwargs: {kwargs}"
+    return RunConfig(
+        task="elo-comparia",
+        model={"name": model},
+        judge={"model": judge_model, "swap_mode": swap_mode},
+        generation={"n_instructions": n_instructions},
+        elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
     )
-    defaults.update(kwargs)
-    return CliEloArgs(**defaults)
 
 
 # --- fit_bradley_terry unit tests ---
@@ -215,7 +221,7 @@ def test_main_n_instructions_limits_battles():
 
 
 def test_main_swap_mode_forwarded_to_judge(monkeypatch):
-    """swap_mode from CliEloArgs must be forwarded to judge_and_parse_prefs.
+    """swap_mode from the run config must be forwarded to judge_and_parse_prefs.
 
     Regression test: previously run_judge() called judge_and_parse_prefs without
     swap_mode, so --swap_mode both was silently ignored.

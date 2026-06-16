@@ -2,15 +2,46 @@ import pandas as pd
 import pytest
 
 import judgearena.generate_and_evaluate as generate_and_evaluate
+from judgearena.config import RunConfig
 from judgearena.generate_and_evaluate import (
     BaselinePlan,
-    CliArgs,
     _resolve_baseline_plan,
     native_pairwise_baseline,
 )
 from judgearena.generate_and_evaluate import (
     main as main_generate_and_eval,
 )
+
+
+def _cfg(
+    *,
+    task: str,
+    model_A: str,
+    model_B: str | None = None,
+    judge_model: str,
+    n_instructions: int | None = None,
+    swap_mode: str = "fixed",
+    result_folder: str = "results",
+    truncate_judge_input_chars: int | None = None,
+    max_judge_model_len: int | None = None,
+    engine_kwargs: dict | None = None,
+    judge_engine_kwargs: dict | None = None,
+) -> RunConfig:
+    return RunConfig(
+        task=task,
+        model={"name": model_A, "baseline": model_B, "engine_kwargs": engine_kwargs or {}},
+        judge={
+            "model": judge_model,
+            "swap_mode": swap_mode,
+            "max_model_len": max_judge_model_len,
+            "engine_kwargs": judge_engine_kwargs or {},
+        },
+        generation={
+            "n_instructions": n_instructions,
+            "truncate_judge_input_chars": truncate_judge_input_chars,
+        },
+        run={"result_folder": result_folder},
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -51,15 +82,6 @@ def mock_external_data_and_cache(monkeypatch):
     )
 
 
-def _make_args(task: str, model_b: str | None = None) -> CliArgs:
-    return CliArgs(
-        task=task,
-        model_A="A",
-        model_B=model_b,
-        judge_model="J",
-    )
-
-
 def _instructions(ids: list[str], categories: list[str] | None = None) -> pd.DataFrame:
     data = {"instruction": list(ids)}
     if categories is not None:
@@ -69,7 +91,8 @@ def _instructions(ids: list[str], categories: list[str] | None = None) -> pd.Dat
 
 def test_resolve_plan_v01_flat_default():
     plan = _resolve_baseline_plan(
-        args=_make_args("arena-hard-v0.1"),
+        task="arena-hard-v0.1",
+        model_b=None,
         instructions_df=_instructions(["q1", "q2"]),
     )
     assert plan.is_flat
@@ -78,7 +101,8 @@ def test_resolve_plan_v01_flat_default():
 
 def test_resolve_plan_v20_routes_per_category():
     plan = _resolve_baseline_plan(
-        args=_make_args("arena-hard-v2.0"),
+        task="arena-hard-v2.0",
+        model_b=None,
         instructions_df=_instructions(
             ["qh", "qc"],
             categories=["hard_prompt", "creative_writing"],
@@ -91,7 +115,8 @@ def test_resolve_plan_v20_routes_per_category():
 
 def test_resolve_plan_alpaca_eval_uses_native_baseline():
     plan = _resolve_baseline_plan(
-        args=_make_args("alpaca-eval"),
+        task="alpaca-eval",
+        model_b=None,
         instructions_df=_instructions(["q1", "q2"]),
     )
     assert plan.is_flat
@@ -100,7 +125,8 @@ def test_resolve_plan_alpaca_eval_uses_native_baseline():
 
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
-        args=_make_args("arena-hard-v2.0", model_b="override"),
+        task="arena-hard-v2.0",
+        model_b="override",
         instructions_df=_instructions(
             ["q1", "q2"],
             categories=["hard_prompt", "creative_writing"],
@@ -124,9 +150,10 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
-    with pytest.raises(ValueError, match="model_B"):
+    with pytest.raises(ValueError, match="baseline"):
         _resolve_baseline_plan(
-            args=_make_args("fluency-french"),
+            task="fluency-french",
+            model_b=None,
             instructions_df=_instructions(["q1"]),
         )
 
@@ -134,7 +161,8 @@ def test_resolve_plan_task_without_native_baseline_requires_model_b():
 def test_resolve_plan_v20_missing_category_raises():
     with pytest.raises(ValueError, match="category"):
         _resolve_baseline_plan(
-            args=_make_args("arena-hard-v2.0"),
+            task="arena-hard-v2.0",
+            model_b=None,
             instructions_df=_instructions(["q1"]),
         )
 
@@ -142,7 +170,8 @@ def test_resolve_plan_v20_missing_category_raises():
 def test_resolve_plan_v20_unknown_category_raises():
     with pytest.raises(ValueError, match="brand_new"):
         _resolve_baseline_plan(
-            args=_make_args("arena-hard-v2.0"),
+            task="arena-hard-v2.0",
+            model_b=None,
             instructions_df=_instructions(["q1"], categories=["brand_new"]),
         )
 
@@ -173,7 +202,7 @@ def test_baseline_plan_per_row_preserves_order():
 )
 def test_generate_and_evaluate_context_completion(task: str, tmp_path):
     prefs = main_generate_and_eval(
-        CliArgs(
+        _cfg(
             task=task,
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
@@ -196,7 +225,7 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
     preference should be 0.5.
     """
     prefs = main_generate_and_eval(
-        CliArgs(
+        _cfg(
             task="alpaca-eval",
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
@@ -226,7 +255,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
     monkeypatch.setattr(generate_and_evaluate, "make_model", fake_make_model)
 
     prefs = main_generate_and_eval(
-        CliArgs(
+        _cfg(
             task="alpaca-eval",
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
@@ -243,3 +272,23 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
     assert len(prefs) == 2
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
+
+
+def test_run_writes_roundtrippable_config(tmp_path):
+    from judgearena.config import load_config
+
+    main_generate_and_eval(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/no answer",
+            model_B="Dummy/x",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
+    written = list(tmp_path.glob("*/config.yaml"))
+    assert written, "config.yaml not written"
+    reloaded = load_config(written[0])
+    assert reloaded.task == "alpaca-eval"
+    assert reloaded.model.name == "Dummy/no answer"
