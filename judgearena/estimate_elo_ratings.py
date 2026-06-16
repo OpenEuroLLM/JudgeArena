@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ from judgearena.log import get_logger
 from judgearena.models import make_model
 from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
+from judgearena.utils.eval import PrefSummary, Report
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -179,23 +181,108 @@ def _slugify(value: str) -> str:
     return slug or "model"
 
 
-def write_elo_result(
-    *,
-    result_folder: str | Path,
-    summary: dict[str, object],
-    bootstrap_ratings: list[dict[str, float]],
-) -> Path:
-    model = str(summary["model_A"])
-    arena = str(summary["arena"])
-    output_dir = Path(result_folder) / f"elo-{_slugify(arena)}-{_slugify(model)}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"results-{_slugify(model)}.json"
-    payload = {
-        "summary": summary,
-        "bootstrap_ratings": bootstrap_ratings,
-    }
-    path.write_text(json.dumps(_to_jsonable(payload), indent=2) + "\n")
-    return path
+@dataclass
+class EloReport(Report):
+    """Bradley-Terry / Soft-ELO ratings for one focal model against an arena."""
+
+    arena: str
+    model_a: str
+    judge_model: str
+    summary: PrefSummary
+    num_battles: int
+    llm_judged_battles: int
+    human_anchor_battles: int
+    elo_mean: float
+    elo_std: float
+    elo_num_bootstraps: int
+    mae_vs_human: float
+    method: str
+    calibrated_temperature: float
+    n_bootstraps: int
+    model_name: str
+    mean_ratings: dict[str, float]
+    battle_counts: dict[str, int]
+    human_elo: dict[str, float]
+    bootstrap_ratings: list[dict[str, float]]
+    sampling_metadata: dict[str, object]
+    source_battle_counts: dict[str, int]
+
+    def to_dict(self) -> dict:
+        return {
+            **self.summary.to_dict(),
+            "arena": self.arena,
+            "model_A": self.model_a,
+            "judge_model": self.judge_model,
+            "num_battles": self.num_battles,
+            "llm_judged_battles": self.llm_judged_battles,
+            "human_anchor_battles": self.human_anchor_battles,
+            "sampling_metadata": self.sampling_metadata,
+            "elo_mean": self.elo_mean,
+            "elo_std": self.elo_std,
+            "elo_num_bootstraps": self.elo_num_bootstraps,
+            "source_battle_counts": self.source_battle_counts,
+        }
+
+    def save(self, result_folder: str | Path) -> Path:
+        output_dir = (
+            Path(result_folder)
+            / f"elo-{_slugify(self.arena)}-{_slugify(self.model_name)}"
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / f"results-{_slugify(self.model_name)}.json"
+        payload = {
+            "summary": self.to_dict(),
+            "bootstrap_ratings": self.bootstrap_ratings,
+        }
+        path.write_text(json.dumps(_to_jsonable(payload), indent=2) + "\n")
+        return path
+
+    def render(self) -> None:
+        s = self.summary
+        print(f"\n=== Results for {self.model_name} ===")
+        print(
+            f"Battles: {self.llm_judged_battles} | Wins: {s.num_wins} | "
+            f"Losses: {s.num_losses} | Ties: {s.num_ties}"
+        )
+        print(f"Win rate: {s.winrate:.2%}")
+
+        print(
+            f"\n=== {self.method} Ratings (Bradley-Terry, "
+            f"{self.n_bootstraps} bootstraps) ==="
+        )
+        print(
+            f"Estimating {self.method} Ratings with {self.llm_judged_battles} "
+            f"LLM-judges for model {self.model_name} and {self.human_anchor_battles} "
+            "human annotations for other models. Number of battles is indicated in "
+            "parenthesis and confidence intervals are reported by computing ELO on "
+            f"{self.n_bootstraps} samples of instructions."
+        )
+
+        if not self.mean_ratings:
+            print("  Not enough data to compute ELO ratings.")
+            return
+
+        for m in sorted(self.mean_ratings, key=lambda x: -self.mean_ratings[x]):
+            vals = [r[m] for r in self.bootstrap_ratings if m in r]
+            suffix = " <-----" if m == self.model_name else ""
+            count = self.battle_counts.get(m, 0)
+            print(
+                f"  {m}  ({count}){suffix}: "
+                f"{np.mean(vals):.1f} ± {np.std(vals):.1f}"
+            )
+
+        overlap = [
+            m
+            for m in self.mean_ratings
+            if m in self.human_elo and m != self.model_name
+        ]
+        if overlap:
+            print(
+                f"\n  MAE vs Human-ELO ({len(overlap)} arena models): "
+                f"{self.mae_vs_human:.1f}"
+            )
+        else:
+            print("\n  No overlapping arena models to compute MAE.")
 
 
 def _prefs_to_battle_results(
@@ -473,17 +560,6 @@ def main(cfg: "RunConfig") -> dict:
         ]
     )
     summary = compute_pref_summary(prefs_normalized)
-    our_wins = summary.num_wins
-    our_losses = summary.num_losses
-    our_ties = summary.num_ties
-    winrate = summary.winrate
-
-    print(f"\n=== Results for {model_name} ===")
-    print(
-        f"Battles: {len(df_llm_judge)} | Wins: {our_wins} | "
-        f"Losses: {our_losses} | Ties: {our_ties}"
-    )
-    print(f"Win rate: {winrate:.2%}")
 
     # Combine LLM-judge battles with human-annotated arena battles,
     # keeping only arena models with at least 500 human battles
@@ -632,14 +708,6 @@ def main(cfg: "RunConfig") -> dict:
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
     method_label = "Soft-ELO" if use_soft else "ELO"
-    print(
-        f"\n=== {method_label} Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ==="
-    )
-    print(
-        f"Estimating {method_label} Ratings with {n_llm} LLM-judges for model {model_name} "
-        f"and {n_human} human annotations for other models. Number of battles is indicated in parenthesis and "
-        f"confidence intervals are reported by computing ELO on {n_bootstraps} samples of instructions."
-    )
 
     # Count battles per model across the combined results
     battle_counts: dict[str, int] = {}
@@ -658,6 +726,8 @@ def main(cfg: "RunConfig") -> dict:
         )
         bootstrap_ratings.append(ratings)
 
+    mean_ratings: dict[str, float] = {}
+    mae = np.nan
     if bootstrap_ratings:
         all_model_names = sorted(
             set(df_results["model_a"]) | set(df_results["model_b"])
@@ -666,24 +736,10 @@ def main(cfg: "RunConfig") -> dict:
             m: np.nanmean([r.get(m, np.nan) for r in bootstrap_ratings])
             for m in all_model_names
         }
-        for m in sorted(all_model_names, key=lambda x: -mean_ratings[x]):
-            vals = [r[m] for r in bootstrap_ratings if m in r]
-            suffix = " <-----" if m == model_name else ""
-            count = battle_counts.get(m, 0)
-            print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")
-
-        # MAE vs human-only ELO for overlapping arena models
         overlap = [m for m in all_model_names if m in human_elo and m != model_name]
         if overlap:
             abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
             mae = np.mean(abs_errors)
-            print(f"\n  MAE vs Human-ELO ({len(overlap)} arena models): {mae:.1f}")
-        else:
-            mae = np.nan
-            print("\n  No overlapping arena models to compute MAE.")
-    else:
-        print("  Not enough data to compute ELO ratings.")
-        mae = np.nan
 
     model_rating_values = [
         rating[model_name] for rating in bootstrap_ratings if model_name in rating
@@ -694,28 +750,35 @@ def main(cfg: "RunConfig") -> dict:
     elo_std = (
         float(np.std(model_rating_values)) if model_rating_values else float("nan")
     )
-    result_summary = {
-        **summary.to_dict(),
-        "arena": cfg.elo.arena,
-        "model_A": model_name,
-        "judge_model": cfg.judge.model,
-        "num_battles": n,
-        "llm_judged_battles": n_llm,
-        "human_anchor_battles": n_human,
-        "sampling_metadata": sampling_metadata,
-        "elo_mean": elo_mean,
-        "elo_std": elo_std,
-        "elo_num_bootstraps": len(model_rating_values),
-        "source_battle_counts": battle_counts,
-    }
-    result_path = write_elo_result(
-        result_folder=cfg.run.result_folder,
-        summary=result_summary,
+
+    report = EloReport(
+        arena=cfg.elo.arena,
+        model_a=model_name,
+        judge_model=cfg.judge.model,
+        summary=summary,
+        num_battles=n,
+        llm_judged_battles=n_llm,
+        human_anchor_battles=n_human,
+        elo_mean=elo_mean,
+        elo_std=elo_std,
+        elo_num_bootstraps=len(model_rating_values),
+        mae_vs_human=mae,
+        method=method_label,
+        calibrated_temperature=calibrated_temperature,
+        n_bootstraps=n_bootstraps,
+        model_name=model_name,
+        mean_ratings=mean_ratings,
+        battle_counts=battle_counts,
+        human_elo=human_elo,
         bootstrap_ratings=bootstrap_ratings,
+        sampling_metadata=sampling_metadata,
+        source_battle_counts=battle_counts,
     )
+    report.render()
+    result_path = report.save(cfg.run.result_folder)
 
     return {
-        **result_summary,
+        **report.to_dict(),
         "bootstrap_ratings": bootstrap_ratings,
         "human_elo": human_elo,
         "mae_vs_human": mae,
