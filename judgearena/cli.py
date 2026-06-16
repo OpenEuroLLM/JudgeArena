@@ -115,6 +115,34 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="[elo] Sample N arena rows uniformly at random using --seed.",
     )
+    parser.add_argument(
+        "--no-soft-elo",
+        dest="soft_elo",
+        action="store_false",
+        default=True,
+        help="[elo] Disable soft Bradley-Terry (default on) and use hard "
+        "win/loss/tie labels instead.",
+    )
+    parser.add_argument(
+        "--soft-elo-temperature",
+        type=float,
+        default=0.3,
+        help="[elo] Initial PairScore temperature for soft-ELO. "
+        "Overridden by --calibrate-temperature if calibration succeeds.",
+    )
+    parser.add_argument(
+        "--calibrate-temperature",
+        action="store_true",
+        help="[elo] MLE-fit the PairScore temperature against human-labeled arena "
+        "battles before the main run. Ignored with --no-soft-elo.",
+    )
+    parser.add_argument(
+        "--calibration-size",
+        type=int,
+        default=None,
+        help="[elo] Number of human arena battles to sample for temperature "
+        "calibration. Defaults to all. Requires --calibrate-temperature.",
+    )
     add_common_arguments(parser)
     return parser
 
@@ -178,6 +206,10 @@ def _build_elo_args(
         seed=args.seed,
         baseline_model=args.baseline_model,
         elo_random_battles=args.elo_random_battles,
+        soft_elo=args.soft_elo,
+        soft_elo_temperature=args.soft_elo_temperature,
+        calibrate_temperature=args.calibrate_temperature,
+        calibration_size=args.calibration_size,
         judge_model=args.judge_model,
         n_instructions=args.n_instructions,
         provide_explanation=args.provide_explanation,
