@@ -1,7 +1,7 @@
 import sys
 from types import SimpleNamespace
 
-import judgearena.utils as utils
+import judgearena.models as models
 
 
 def _install_fake_vllm(monkeypatch):
@@ -50,7 +50,7 @@ def _install_fake_vllm(monkeypatch):
 def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatch):
     captured, fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
-    utils.ChatVLLM(
+    models.ChatVLLM(
         model="Qwen/Qwen3.5-9B",
         max_tokens=128,
         thinking_token_budget=64,
@@ -60,8 +60,8 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert "structured_outputs" not in captured["sampling_kwargs"]
     assert captured["reasoning_config_kwargs"] == {
-        "reasoning_start_str": utils.VLLM_REASONING_START_STR,
-        "reasoning_end_str": utils.VLLM_REASONING_END_STR,
+        "reasoning_start_str": models.VLLM_REASONING_START_STR,
+        "reasoning_end_str": models.VLLM_REASONING_END_STR,
     }
     llm_kwargs = captured["llm_init"]["kwargs"]
     assert llm_kwargs["reasoning_parser"] == "qwen3"
@@ -71,7 +71,7 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
 def test_chat_vllm_enables_reasoning_support_for_smollm3_thinking_budget(monkeypatch):
     captured, fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
-    utils.ChatVLLM(
+    models.ChatVLLM(
         model="HuggingFaceTB/SmolLM3-3B",
         max_tokens=128,
         thinking_token_budget=64,
@@ -80,8 +80,8 @@ def test_chat_vllm_enables_reasoning_support_for_smollm3_thinking_budget(monkeyp
 
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert captured["reasoning_config_kwargs"] == {
-        "reasoning_start_str": utils.VLLM_REASONING_START_STR,
-        "reasoning_end_str": utils.VLLM_REASONING_END_STR,
+        "reasoning_start_str": models.VLLM_REASONING_START_STR,
+        "reasoning_end_str": models.VLLM_REASONING_END_STR,
     }
     llm_kwargs = captured["llm_init"]["kwargs"]
     assert llm_kwargs["reasoning_parser"] == "qwen3"
@@ -91,7 +91,7 @@ def test_chat_vllm_enables_reasoning_support_for_smollm3_thinking_budget(monkeyp
 def test_chat_vllm_uses_olmo3_reasoning_parser_for_olmo_think(monkeypatch):
     captured, fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
-    utils.ChatVLLM(
+    models.ChatVLLM(
         model="allenai/Olmo-3-7B-Think",
         max_tokens=128,
         thinking_token_budget=64,
@@ -100,8 +100,8 @@ def test_chat_vllm_uses_olmo3_reasoning_parser_for_olmo_think(monkeypatch):
 
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert captured["reasoning_config_kwargs"] == {
-        "reasoning_start_str": utils.VLLM_REASONING_START_STR,
-        "reasoning_end_str": utils.VLLM_REASONING_END_STR,
+        "reasoning_start_str": models.VLLM_REASONING_START_STR,
+        "reasoning_end_str": models.VLLM_REASONING_END_STR,
     }
     llm_kwargs = captured["llm_init"]["kwargs"]
     assert llm_kwargs["reasoning_parser"] == "olmo3"
@@ -111,7 +111,7 @@ def test_chat_vllm_uses_olmo3_reasoning_parser_for_olmo_think(monkeypatch):
 def test_chat_vllm_clamps_thinking_budget_to_total_max_tokens(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
 
-    utils.ChatVLLM(
+    models.ChatVLLM(
         model="Qwen/Qwen3.5-9B",
         max_tokens=32,
         thinking_token_budget=64,
@@ -123,7 +123,7 @@ def test_chat_vllm_clamps_thinking_budget_to_total_max_tokens(monkeypatch):
 
 def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
-    chat_model = utils.ChatVLLM(
+    chat_model = models.ChatVLLM(
         model="Qwen/Qwen3.5-9B",
         max_tokens=16,
         disable_thinking=True,
@@ -139,33 +139,33 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
 
 
 def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():
-    assert utils.build_default_judge_model_kwargs(
+    assert models.build_default_judge_model_kwargs(
         "VLLM/Qwen/Qwen3.5-9B",
         {"gpu_memory_utilization": 0.7},
     ) == {
         "gpu_memory_utilization": 0.7,
         "thinking_token_budget": 512,
     }
-    assert utils.build_default_judge_model_kwargs(
+    assert models.build_default_judge_model_kwargs(
         "VLLM/allenai/Olmo-3-7B-Think",
         {"gpu_memory_utilization": 0.7},
     ) == {
         "gpu_memory_utilization": 0.7,
         "thinking_token_budget": 512,
     }
-    assert utils.build_default_judge_model_kwargs(
+    assert models.build_default_judge_model_kwargs(
         "VLLM/meta-llama/Llama-3.3-70B-Instruct",
         {"gpu_memory_utilization": 0.7},
     ) == {"gpu_memory_utilization": 0.7}
     assert (
-        utils.build_default_judge_model_kwargs(
+        models.build_default_judge_model_kwargs(
             "OpenRouter/qwen/qwen3-32b",
             {},
         )
         == {}
     )
     assert (
-        utils.build_default_judge_model_kwargs(
+        models.build_default_judge_model_kwargs(
             "OpenRouter/google/gemma-4-31b-it",
             {
                 "language_model_only": True,
@@ -178,7 +178,7 @@ def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():
 
 
 def test_build_default_judge_model_kwargs_sets_fp8_kv_cache_for_fp8_judges():
-    fp8_defaults = utils.build_default_judge_model_kwargs(
+    fp8_defaults = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",
         {"gpu_memory_utilization": 0.9},
     )
@@ -186,13 +186,13 @@ def test_build_default_judge_model_kwargs_sets_fp8_kv_cache_for_fp8_judges():
     # FP8 Skywork judge is not Qwen3/SmolLM3 so no thinking-token default.
     assert "thinking_token_budget" not in fp8_defaults
 
-    bf16_defaults = utils.build_default_judge_model_kwargs(
+    bf16_defaults = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
         {"gpu_memory_utilization": 0.9},
     )
     assert "kv_cache_dtype" not in bf16_defaults
 
-    explicit_override = utils.build_default_judge_model_kwargs(
+    explicit_override = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",
         {"gpu_memory_utilization": 0.9, "kv_cache_dtype": "bfloat16"},
     )
@@ -200,14 +200,14 @@ def test_build_default_judge_model_kwargs_sets_fp8_kv_cache_for_fp8_judges():
 
     # Non-VLLM providers never receive the FP8 KV default even if the name
     # happens to contain "fp8".
-    non_vllm = utils.build_default_judge_model_kwargs("OpenRouter/some/Model-fp8", {})
+    non_vllm = models.build_default_judge_model_kwargs("OpenRouter/some/Model-fp8", {})
     assert "kv_cache_dtype" not in non_vllm
 
 
 def test_build_default_judge_model_kwargs_overlays_judge_override():
     """Judge-scoped overrides must win over shared ``engine_kwargs`` so the
     battle engine can stay on TP=1 while the 70B FP8 judge pins TP=2."""
-    merged = utils.build_default_judge_model_kwargs(
+    merged = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",
         {"gpu_memory_utilization": 0.9},
         judge_engine_kwargs_override={"tensor_parallel_size": 2},
@@ -216,7 +216,7 @@ def test_build_default_judge_model_kwargs_overlays_judge_override():
     assert merged["gpu_memory_utilization"] == 0.9
     assert merged["kv_cache_dtype"] == "fp8"
 
-    overridden = utils.build_default_judge_model_kwargs(
+    overridden = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",
         {"tensor_parallel_size": 1, "gpu_memory_utilization": 0.9},
         judge_engine_kwargs_override={"tensor_parallel_size": 4},
@@ -227,7 +227,7 @@ def test_build_default_judge_model_kwargs_overlays_judge_override():
     # 70B FP8 judge on TP=2 and TP=4 interchangeably depending on the cell.
     assert overridden["kv_cache_dtype"] == "fp8"
 
-    empty_override = utils.build_default_judge_model_kwargs(
+    empty_override = models.build_default_judge_model_kwargs(
         "VLLM/Skywork/Skywork-Critic-Llama-3.1-70B-FP8",
         {"tensor_parallel_size": 1},
         judge_engine_kwargs_override={},
@@ -236,22 +236,22 @@ def test_build_default_judge_model_kwargs_overlays_judge_override():
 
 
 def test_is_thinking_model_matches_qwen3_and_smollm3_repo_ids():
-    assert utils.is_thinking_model("Qwen/Qwen3.5-9B")
-    assert utils.is_thinking_model("HuggingFaceTB/SmolLM3-3B")
-    assert utils.is_thinking_model("Qwen/Qwen3-7B")
-    assert utils.is_thinking_model("allenai/Olmo-3-7B-Think")
-    assert not utils.is_thinking_model("Qwen/Qwen2.5-7B")
-    assert not utils.is_thinking_model("allenai/Olmo-3-7B-Instruct")
-    assert not utils.is_thinking_model("CohereLabs/tiny-aya-global")
-    assert not utils.is_thinking_model("utter-project/EuroLLM-9B-Instruct")
-    assert not utils.is_thinking_model("meta-llama/Llama-3.1-8B")
+    assert models.is_thinking_model("Qwen/Qwen3.5-9B")
+    assert models.is_thinking_model("HuggingFaceTB/SmolLM3-3B")
+    assert models.is_thinking_model("Qwen/Qwen3-7B")
+    assert models.is_thinking_model("allenai/Olmo-3-7B-Think")
+    assert not models.is_thinking_model("Qwen/Qwen2.5-7B")
+    assert not models.is_thinking_model("allenai/Olmo-3-7B-Instruct")
+    assert not models.is_thinking_model("CohereLabs/tiny-aya-global")
+    assert not models.is_thinking_model("utter-project/EuroLLM-9B-Instruct")
+    assert not models.is_thinking_model("meta-llama/Llama-3.1-8B")
 
 
 def test_chat_vllm_preserves_explicit_reasoning_settings_for_non_qwen(monkeypatch):
     captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
     explicit_reasoning_config = object()
 
-    utils.ChatVLLM(
+    models.ChatVLLM(
         model="meta-llama/Llama-3.3-70B-Instruct",
         max_tokens=16,
         thinking_token_budget=32,

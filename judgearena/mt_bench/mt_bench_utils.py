@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.mt_bench import (
@@ -22,6 +21,7 @@ from judgearena.instruction_dataset.mt_bench import (
     mt_bench_native_baseline,
 )
 from judgearena.log import get_logger
+from judgearena.models import is_thinking_model, make_model
 from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
@@ -33,12 +33,8 @@ from judgearena.prompts.registry import (
     resolve_run_judge_prompt,
 )
 from judgearena.repro import _to_jsonable, write_run_metadata
-from judgearena.utils import (
-    cache_function_dataframe,
-    compute_pref_summary,
-    is_thinking_model,
-    make_model,
-)
+from judgearena.utils import cache_function_dataframe, compute_pref_summary
+from judgearena.utils.eval import _compute_grouped_stats, print_results
 
 logger = get_logger(__name__)
 

@@ -12,7 +12,7 @@ from judgearena.estimate_elo_ratings import (
     main,
 )
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
-from judgearena.utils import make_model
+from judgearena.models import make_model
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]

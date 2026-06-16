@@ -16,6 +16,7 @@ from judgearena.instruction_dataset.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.log import get_logger
+from judgearena.models import do_inference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -28,7 +29,6 @@ from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
     data_root,
-    do_inference,
     download_hf,
     read_df,
     strip_thinking_tags,

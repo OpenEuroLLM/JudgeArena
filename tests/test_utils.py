@@ -1,8 +1,11 @@
 import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench_mod
+import judgearena.models as utils_models
 import judgearena.utils as utils
-from judgearena.utils import make_model, safe_parse_int
+import judgearena.utils.io as utils_io
+from judgearena.models import make_model
+from judgearena.utils import safe_parse_int
 
 
 @pytest.mark.parametrize(
@@ -30,21 +33,21 @@ def test_safe_parse_int(monkeypatch, raw, expected):
 def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
     calls: list[tuple[str, str, object]] = []
 
-    monkeypatch.setattr(utils, "data_root", tmp_path)
+    monkeypatch.setattr(utils_io, "data_root", tmp_path)
     monkeypatch.setattr(
-        utils,
+        utils_io,
         "download_hf",
         lambda name, local_path: calls.append(("hf", name, local_path)),
     )
     monkeypatch.setattr(
-        utils,
+        utils_io,
         "download_arena_hard",
         lambda dataset, local_tables_path: calls.append(
             ("arena", dataset, local_tables_path)
         ),
     )
     monkeypatch.setattr(
-        utils,
+        utils_io,
         "snapshot_download",
         lambda **kwargs: calls.append(
             ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
@@ -56,7 +59,7 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
         lambda local_dir=None: None,
     )
 
-    utils.download_all()
+    utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
     assert calls[:5] == [
@@ -136,9 +139,9 @@ def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
 
 
 def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):
-    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 3)
-    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
-    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils_models.time, "sleep", lambda *_a, **_k: None)
 
     calls: list[dict] = []
 
@@ -151,26 +154,26 @@ def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):
             )
         return "llm"
 
-    result = utils._init_llm_with_retry(fake_llm, model="m", trust_remote_code=True)
+    result = utils_models._init_llm_with_retry(fake_llm, model="m", trust_remote_code=True)
     assert result == "llm"
     assert len(calls) == 3
 
 
 def test_init_llm_with_retry_gives_up_after_max_attempts(monkeypatch):
-    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 2)
-    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
-    monkeypatch.setattr(utils.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils_models.time, "sleep", lambda *_a, **_k: None)
 
     def always_fails(**_kwargs):
         raise RuntimeError("cudaErrorDevicesUnavailable")
 
     with pytest.raises(RuntimeError, match="cudaErrorDevicesUnavailable"):
-        utils._init_llm_with_retry(always_fails, model="m")
+        utils_models._init_llm_with_retry(always_fails, model="m")
 
 
 def test_init_llm_with_retry_reraises_non_matching_errors_immediately(monkeypatch):
-    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 4)
-    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
 
     call_count = 0
 
@@ -180,7 +183,7 @@ def test_init_llm_with_retry_reraises_non_matching_errors_immediately(monkeypatc
         raise ValueError("bad config")
 
     with pytest.raises(ValueError, match="bad config"):
-        utils._init_llm_with_retry(fails_once, model="m")
+        utils_models._init_llm_with_retry(fails_once, model="m")
     assert call_count == 1
 
 
@@ -192,8 +195,8 @@ def test_init_llm_with_retry_reraises_non_matching_errors_immediately(monkeypatc
     ],
 )
 def test_init_llm_with_retry_does_not_retry_broad_runtime_errors(monkeypatch, message):
-    monkeypatch.setattr(utils, "_VLLM_INIT_MAX_ATTEMPTS", 4)
-    monkeypatch.setattr(utils, "_VLLM_INIT_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 4)
+    monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
 
     call_count = 0
 
@@ -203,5 +206,5 @@ def test_init_llm_with_retry_does_not_retry_broad_runtime_errors(monkeypatch, me
         raise RuntimeError(message)
 
     with pytest.raises(RuntimeError, match=message):
-        utils._init_llm_with_retry(fails_once, model="m")
+        utils_models._init_llm_with_retry(fails_once, model="m")
     assert call_count == 1
