@@ -1,4 +1,7 @@
+from datetime import UTC, datetime
+
 import pandas as pd
+import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
@@ -165,6 +168,82 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
 
 
+def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1", "Q2"], "turn_2": ["Q1b", "Q2b"]},
+        index=pd.Index([1, 2], name="instruction_index"),
+    )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["Base A1"],
+                "completion_turn_2": ["Base B1"],
+            }
+        ),
+    )
+
+    args = CliArgs(
+        task="mt-bench",
+        model_A="gpt-4",
+        model_B="gpt-4",
+        judge_model="Dummy/J",
+        n_instructions=2,
+    )
+
+    with pytest.raises(ValueError, match="missing 1 question"):
+        mt_bench_utils._generate_mt_bench_completions(
+            args=args,
+            questions_df=questions_df,
+            ignore_cache=False,
+        )
+
+
+def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_write_run_metadata(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "run-metadata.v1.json"
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "write_run_metadata",
+        fake_write_run_metadata,
+    )
+    args = CliArgs(
+        task="mt-bench",
+        model_A="model-a",
+        model_B="model-b",
+        judge_model="judge",
+    )
+    started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+
+    mt_bench_utils._save_mt_bench_results(
+        args=args,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+        results={"win_rate": 0.5, "preferences": [1.0]},
+        annotations_df=pd.DataFrame([{"preference": 1.0}]),
+        started_at_utc=started_at,
+        input_payloads={"instruction_index": [1]},
+        judge_system_prompt="system",
+        judge_user_prompt_template="user",
+    )
+
+    assert (tmp_path / "args-mt-bench-test.json").exists()
+    assert (tmp_path / "mt-bench-test-annotations.csv").exists()
+    assert (tmp_path / "results-mt-bench-test.json").exists()
+    assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
+    assert captured["input_payloads"] == {"instruction_index": [1]}
+    assert captured["judge_system_prompt"] == "system"
+    assert captured["judge_user_prompt_template"] == "user"
+    assert captured["started_at_utc"] == started_at
+
+
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch, tmp_path
 ):
@@ -266,7 +345,12 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
+
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
@@ -276,6 +360,11 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         mt_bench_utils,
         "_run_mt_bench_fastchat",
         fake_run_mt_bench_fastchat,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        lambda **_kwargs: pytest.fail("preset path should not run"),
     )
 
     args = CliArgs(
@@ -295,6 +384,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     )
 
     assert args.model_B == "gpt-4"
+    assert captured["make_model"]["temperature"] == 0.0
     assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
     assert captured["fastchat"]["resolved_prompt"].preset_name == (
         FASTCHAT_PAIRWISE_PROMPT_PRESET
@@ -326,17 +416,26 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
 
     def fake_run_mt_bench_preset(**kwargs):
         captured["preset"] = kwargs
         return pd.Series([0.0], dtype=float)
 
     captured = {}
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
     monkeypatch.setattr(
         mt_bench_utils,
         "_run_mt_bench_preset",
         fake_run_mt_bench_preset,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        lambda **_kwargs: pytest.fail("fastchat path should not run"),
     )
 
     args = CliArgs(
@@ -359,3 +458,4 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     assert captured["preset"]["resolved_prompt"].preset_name == (
         "default_with_explanation"
     )
+    assert "temperature" not in captured["make_model"]

@@ -5,12 +5,16 @@ from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.evaluate import PairScore
 from judgearena.mt_bench.common import (
-    MT_BENCH_REFERENCE_CATEGORIES,
-    iter_mt_bench_pairwise_rows,
+    is_reference_based_category,
+    resolve_mt_bench_turn_flags,
+)
+from judgearena.mt_bench.pairwise_judging import (
+    MTBenchJudgeItem,
+    build_mt_bench_pairwise_judge_items,
+    infer_pairwise_judgments_by_prompt_groups,
 )
 from judgearena.mt_bench.prompt_templates import build_mt_bench_user_prompt_template
 from judgearena.prompts.registry import (
@@ -18,7 +22,6 @@ from judgearena.prompts.registry import (
     ResolvedJudgePrompt,
     resolve_judge_prompt,
 )
-from judgearena.utils import do_inference
 
 
 @dataclass(frozen=True)
@@ -40,14 +43,6 @@ def _extract_output_section(user_prompt_template: str) -> str:
     return user_prompt_template[marker_index:].lstrip()
 
 
-def _extract_user_preamble(user_prompt_template: str) -> str:
-    marker = "[User Question]"
-    marker_index = user_prompt_template.find(marker)
-    if marker_index < 0:
-        raise ValueError("Could not find '[User Question]' section in preset template.")
-    return user_prompt_template[:marker_index].rstrip()
-
-
 def _build_mt_bench_preset_user_prompt_template(
     *,
     resolved_prompt: ResolvedJudgePrompt,
@@ -58,9 +53,6 @@ def _build_mt_bench_preset_user_prompt_template(
         multi_turn=multi_turn,
         ref_based=ref_based,
     )
-    if resolved_prompt.system_prompt is None:
-        user_preamble = _extract_user_preamble(resolved_prompt.user_prompt_template)
-        return f"{user_preamble}\n\n{base_template}"
     output_section = _extract_output_section(resolved_prompt.user_prompt_template)
     return f"{base_template}\n\n{output_section}"
 
@@ -74,7 +66,7 @@ def _select_preset_prompt(
     system_file: str | None = None,
     user_file: str | None = None,
 ) -> MTBenchPresetPrompt:
-    ref_based = (category or "") in MT_BENCH_REFERENCE_CATEGORIES
+    ref_based = is_reference_based_category(category)
     resolved_prompt = resolve_judge_prompt(
         preset=prompt_preset,
         system_file=system_file,
@@ -105,72 +97,6 @@ def _select_preset_prompt(
     )
 
 
-def _group_indices_by_prompt(items: list[dict[str, Any]]) -> dict[str, list[int]]:
-    grouped: dict[str, list[int]] = {}
-    for idx, item in enumerate(items):
-        grouped.setdefault(item["prompt_name"], []).append(idx)
-    return grouped
-
-
-def _swap_prompt_kwargs(kwargs: dict[str, str], *, multi_turn: bool) -> dict[str, str]:
-    swapped = dict(kwargs)
-    if multi_turn:
-        swapped["answer_a_1"], swapped["answer_b_1"] = (
-            swapped["answer_b_1"],
-            swapped["answer_a_1"],
-        )
-        swapped["answer_a_2"], swapped["answer_b_2"] = (
-            swapped["answer_b_2"],
-            swapped["answer_a_2"],
-        )
-        return swapped
-    swapped["answer_a"], swapped["answer_b"] = swapped["answer_b"], swapped["answer_a"]
-    return swapped
-
-
-def _build_chat_prompt_template(prompt: MTBenchPresetPrompt) -> ChatPromptTemplate:
-    message_templates: list[tuple[str, str]] = []
-    if prompt.system_prompt is not None:
-        message_templates.append(("system", prompt.system_prompt))
-    message_templates.append(("user", prompt.user_prompt_template))
-    return ChatPromptTemplate.from_messages(message_templates)
-
-
-def _infer_by_prompt_groups(
-    *,
-    judge_chat_model,
-    items: list[dict[str, Any]],
-    use_tqdm: bool,
-    swap_answers: bool,
-) -> tuple[list[str], list[dict[str, str]]]:
-    judgments: list[str] = [""] * len(items)
-    used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
-    for idxs in _group_indices_by_prompt(items).values():
-        prompt: MTBenchPresetPrompt = items[idxs[0]]["prompt"]
-        prompt_template = _build_chat_prompt_template(prompt)
-        batch_kwargs: list[dict[str, str]] = []
-        for item_index in idxs:
-            prompt_kwargs = dict(items[item_index]["prompt_kwargs"])
-            if swap_answers:
-                prompt_kwargs = _swap_prompt_kwargs(
-                    prompt_kwargs,
-                    multi_turn=prompt.multi_turn,
-                )
-            batch_kwargs.append(prompt_kwargs)
-        prompt_inputs = prompt_template.batch(batch_kwargs)
-        outputs = do_inference(
-            chat_model=judge_chat_model,
-            inputs=prompt_inputs,
-            use_tqdm=use_tqdm,
-        )
-        for item_index, output, prompt_kwargs in zip(
-            idxs, outputs, batch_kwargs, strict=True
-        ):
-            judgments[item_index] = str(output)
-            used_prompt_kwargs[item_index] = prompt_kwargs
-    return judgments, used_prompt_kwargs
-
-
 def _build_mt_bench_preset_items(
     *,
     questions: pd.DataFrame,
@@ -183,77 +109,23 @@ def _build_mt_bench_preset_items(
     provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for pair_row in iter_mt_bench_pairwise_rows(
+) -> list[MTBenchJudgeItem]:
+    return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
         completions_b=completions_b,
+        eval_single=eval_single,
+        eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
-    ):
-        category = pair_row.category
-        if eval_single:
-            case_id = f"{pair_row.question_id}:turn1"
-            prompt = _select_preset_prompt(
-                category,
-                multi_turn=False,
-                prompt_preset=prompt_preset,
-                provide_explanation=provide_explanation,
-                system_file=system_file,
-                user_file=user_file,
-            )
-            prompt_kwargs: dict[str, str] = {
-                "question": pair_row.turn_1_question,
-                "answer_a": pair_row.answer_a_1,
-                "answer_b": pair_row.answer_b_1,
-            }
-            if prompt.ref_based:
-                prompt_kwargs["ref_answer_1"] = pair_row.ref_1
-            items.append(
-                {
-                    "case_id": case_id,
-                    "question_id": pair_row.question_id,
-                    "category": category,
-                    "turn": 1,
-                    "prompt": prompt,
-                    "prompt_name": prompt.name,
-                    "prompt_kwargs": prompt_kwargs,
-                }
-            )
-
-        if eval_multi and pair_row.turn_2_question:
-            case_id = f"{pair_row.question_id}:turn2"
-            prompt = _select_preset_prompt(
-                category,
-                multi_turn=True,
-                prompt_preset=prompt_preset,
-                provide_explanation=provide_explanation,
-                system_file=system_file,
-                user_file=user_file,
-            )
-            prompt_kwargs = {
-                "question_1": pair_row.turn_1_question,
-                "question_2": pair_row.turn_2_question,
-                "answer_a_1": pair_row.answer_a_1,
-                "answer_a_2": pair_row.answer_a_2,
-                "answer_b_1": pair_row.answer_b_1,
-                "answer_b_2": pair_row.answer_b_2,
-            }
-            if prompt.ref_based:
-                prompt_kwargs["ref_answer_1"] = pair_row.ref_1
-                prompt_kwargs["ref_answer_2"] = pair_row.ref_2
-            items.append(
-                {
-                    "case_id": case_id,
-                    "question_id": pair_row.question_id,
-                    "category": category,
-                    "turn": 2,
-                    "prompt": prompt,
-                    "prompt_name": prompt.name,
-                    "prompt_kwargs": prompt_kwargs,
-                }
-            )
-    return items
+        select_prompt=lambda category, multi_turn: _select_preset_prompt(
+            category,
+            multi_turn=multi_turn,
+            prompt_preset=prompt_preset,
+            provide_explanation=provide_explanation,
+            system_file=system_file,
+            user_file=user_file,
+        ),
+    )
 
 
 def _normalize_preference(preference: float | None, *, swapped: bool) -> float:
@@ -280,22 +152,22 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
-    assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
+    eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
 
     items = _build_mt_bench_preset_items(
         questions=questions,
         completions_a=completions_a,
         completions_b=completions_b,
-        eval_single=turns_mode in ("both", "single"),
-        eval_multi=turns_mode in ("both", "multi"),
+        eval_single=eval_single,
+        eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         prompt_preset=prompt_preset,
         provide_explanation=provide_explanation,
         system_file=system_file,
         user_file=user_file,
     )
-    judgments, prompt_kwargs_used = _infer_by_prompt_groups(
+    judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
         use_tqdm=use_tqdm,
@@ -315,7 +187,7 @@ def judge_mt_bench_with_preset(
         for item, raw_judgment, prompt_kwargs in zip(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
-            prompt: MTBenchPresetPrompt = item["prompt"]
+            prompt: MTBenchPresetPrompt = item.prompt
             parsed_preference = PairScore(
                 parser_mode=prompt.parser_mode
             ).parse_model_raw(raw_judgment)
@@ -325,9 +197,9 @@ def judge_mt_bench_with_preset(
             )
             annotations.append(
                 {
-                    "question_id": item["question_id"],
-                    "category": item["category"],
-                    "turn": item["turn"],
+                    "question_id": item.question_id,
+                    "category": item.category,
+                    "turn": item.turn,
                     "model_A": model_b if swapped else model_a,
                     "model_B": model_a if swapped else model_b,
                     "judge": judge_model,
@@ -344,9 +216,9 @@ def judge_mt_bench_with_preset(
             )
             metadata.append(
                 {
-                    "question_id": item["question_id"],
-                    "category": item["category"],
-                    "turn": item["turn"],
+                    "question_id": item.question_id,
+                    "category": item.category,
+                    "turn": item.turn,
                 }
             )
             preferences.append(normalized_preference)
@@ -354,11 +226,15 @@ def judge_mt_bench_with_preset(
     _append_results(judgments, prompt_kwargs_used, swapped=False)
 
     if swap_mode == "both":
-        swapped_judgments, swapped_prompt_kwargs = _infer_by_prompt_groups(
-            judge_chat_model=judge_chat_model,
-            items=items,
-            use_tqdm=use_tqdm,
-            swap_answers=True,
+        # swap_mode="both": append the inverted swapped-order scores as
+        # additional data points (see _normalize_preference(swapped=True)).
+        swapped_judgments, swapped_prompt_kwargs = (
+            infer_pairwise_judgments_by_prompt_groups(
+                judge_chat_model=judge_chat_model,
+                items=items,
+                use_tqdm=use_tqdm,
+                swap_answers=True,
+            )
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 
