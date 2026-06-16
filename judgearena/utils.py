@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 import warnings
 from collections.abc import Callable
@@ -32,12 +33,43 @@ def _data_root_path() -> Path:
 
 data_root = _data_root_path()
 
+DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
+VLLM_REASONING_START_STR = "<think>"
+VLLM_REASONING_END_STR = (
+    "I have to give the solution based on the thinking directly now.</think>"
+)
+_THINKING_MODEL_PARSER_BY_SUBSTRING = (
+    ("qwen3", "qwen3"),
+    ("smollm3", "qwen3"),
+    ("olmo-3-7b-think", "olmo3"),
+)
+
 
 def _split_model_spec(model_spec: str) -> tuple[str, str]:
     provider, sep, model_name = model_spec.partition("/")
     if not sep:
         return model_spec, ""
     return provider, model_name
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """Return True for reasoning models that emit `<think>...</think>` traces.
+
+    Covers the Qwen3 family (e.g. `Qwen/Qwen3.5-9B`) and SmolLM3 (e.g.
+    `HuggingFaceTB/SmolLM3-3B`) plus `allenai/Olmo-3-7B-Think`; all emit
+    `<think>`/`</think>` traces so vLLM's budget enforcement and our
+    tag-stripping apply uniformly. Matching is case-insensitive to tolerate
+    mixed-case HF repo ids like `HuggingFaceTB/SmolLM3-3B`.
+    """
+    return _default_reasoning_parser_for_model(model_name) is not None
+
+
+def _default_reasoning_parser_for_model(model_name: str) -> str | None:
+    lowered = model_name.lower()
+    for token, reasoning_parser in _THINKING_MODEL_PARSER_BY_SUBSTRING:
+        if token in lowered:
+            return reasoning_parser
+    return None
 
 
 def build_default_judge_model_kwargs(
@@ -51,20 +83,30 @@ def build_default_judge_model_kwargs(
     judge_model_kwargs = dict(engine_kwargs) if provider == "VLLM" else {}
     if judge_engine_kwargs_override:
         judge_model_kwargs.update(judge_engine_kwargs_override)
-    if (
-        provider == "VLLM"
-        and "kv_cache_dtype" not in judge_model_kwargs
-        and "fp8" in model_name.lower()
-    ):
-        judge_model_kwargs["kv_cache_dtype"] = "fp8"
+    if provider == "VLLM":
+        if "thinking_token_budget" not in judge_model_kwargs and is_thinking_model(
+            model_name
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
+        # FP8 weights leave little KV headroom on consumer-class GPUs; default
+        # to FP8 KV cache so judges like Skywork-70B-FP8 fit comfortably on
+        # 2x L40S at 32k context. Explicit caller overrides still win.
+        if "kv_cache_dtype" not in judge_model_kwargs and "fp8" in model_name.lower():
+            judge_model_kwargs["kv_cache_dtype"] = "fp8"
     return judge_model_kwargs
 
 
 def _resolve_chat_template_kwargs(
     *,
     explicit_chat_template_kwargs: dict[str, object] | None,
+    disable_thinking: bool,
 ) -> dict[str, object] | None:
     chat_template_kwargs = dict(explicit_chat_template_kwargs or {})
+    if disable_thinking and "enable_thinking" not in chat_template_kwargs:
+        chat_template_kwargs["enable_thinking"] = False
+
     return chat_template_kwargs or None
 
 
@@ -160,6 +202,39 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     if isinstance(is_missing, bool) and is_missing:
         return ""
     return truncate(str(value), max_len=truncate_chars)
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+
+def strip_thinking_tags(text: str | None) -> str:
+    """Remove full `<think>...</think>` blocks from raw model output."""
+    return strip_thinking_tags_with_metadata(text)[0]
+
+
+def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
+    """Remove visible reasoning spans from raw model output."""
+    if not isinstance(text, str):
+        return "", False
+
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    if cleaned != text:
+        return cleaned.lstrip(), True
+
+    lowered = text.lower()
+    closing_tag = "</think>"
+    closing_idx = lowered.find(closing_tag)
+    if closing_idx != -1 and "<think>" not in lowered[:closing_idx]:
+        return text[closing_idx + len(closing_tag) :].lstrip(), True
+
+    forced_end_idx = text.find(VLLM_REASONING_END_STR)
+    if forced_end_idx != -1:
+        return (
+            text[forced_end_idx + len(VLLM_REASONING_END_STR) :].lstrip(),
+            True,
+        )
+
+    return text, False
 
 
 def safe_parse_int(env_var: str) -> int | None:
@@ -350,12 +425,19 @@ class ChatVLLM:
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
+        from vllm.config.reasoning import ReasoningConfig
 
         self.model_path = model
         self.max_tokens = max_tokens
+        disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
+        thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
         explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
+        explicit_reasoning_settings = (
+            "reasoning_parser" in vllm_kwargs or "reasoning_config" in vllm_kwargs
+        )
         self._chat_template_kwargs = _resolve_chat_template_kwargs(
             explicit_chat_template_kwargs=explicit_chat_template_kwargs,
+            disable_thinking=disable_thinking,
         )
 
         # Cap max_model_len to the model's max_position_embeddings so that
@@ -388,6 +470,39 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
+        if thinking_token_budget is not None:
+            if max_tokens is not None:
+                thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
+            if explicit_reasoning_settings:
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+            elif is_thinking_model(model):
+                reasoning_parser = _default_reasoning_parser_for_model(model)
+                assert reasoning_parser is not None  # guarded by is_thinking_model()
+                vllm_kwargs.setdefault(
+                    "reasoning_config",
+                    ReasoningConfig(
+                        reasoning_start_str=VLLM_REASONING_START_STR,
+                        # Shared forced end marker so vLLM can enforce the
+                        # thinking-token budget for offline `LLM.chat()`. The
+                        # parser itself still varies by model family (e.g. OLMo
+                        # uses `olmo3`) on vLLM's OpenAI server.
+                        reasoning_end_str=VLLM_REASONING_END_STR,
+                    ),
+                )
+                vllm_kwargs.setdefault("reasoning_parser", reasoning_parser)
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+            else:
+                warnings.warn(
+                    f"Model '{model}' is not in JudgeArena's built-in thinking-model "
+                    "defaults (Qwen3/SmolLM3/Olmo-3-7B-Think). Ignoring "
+                    "thinking_token_budget unless reasoning_parser or "
+                    "reasoning_config is provided explicitly.",
+                    stacklevel=2,
+                )
         self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
         self.llm = _init_llm_with_retry(
@@ -413,6 +528,12 @@ class ChatVLLM:
                 )
                 self.chat_template = None
                 self._use_generate = True
+                if disable_thinking:
+                    warnings.warn(
+                        f"Model '{model}' has no chat template, so disable_thinking "
+                        "cannot be applied when falling back to llm.generate().",
+                        stacklevel=2,
+                    )
             else:
                 self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False

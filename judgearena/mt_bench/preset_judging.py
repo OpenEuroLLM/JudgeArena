@@ -109,6 +109,7 @@ def _build_mt_bench_preset_items(
     provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
+    strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
@@ -125,6 +126,7 @@ def _build_mt_bench_preset_items(
             system_file=system_file,
             user_file=user_file,
         ),
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
 
@@ -151,6 +153,7 @@ def judge_mt_bench_with_preset(
     provide_explanation: bool = False,
     system_file: str | None = None,
     user_file: str | None = None,
+    strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
@@ -166,6 +169,7 @@ def judge_mt_bench_with_preset(
         provide_explanation=provide_explanation,
         system_file=system_file,
         user_file=user_file,
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
     judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(
         judge_chat_model=judge_chat_model,

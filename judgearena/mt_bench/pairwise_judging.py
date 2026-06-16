@@ -8,7 +8,7 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.utils import do_inference
+from judgearena.utils import do_inference, strip_thinking_tags
 
 
 class MTBenchPairwisePrompt(Protocol):
@@ -113,7 +113,11 @@ def build_mt_bench_pairwise_judge_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     select_prompt: Callable[[str | None, bool], MTBenchPairwisePrompt],
+    strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
+    def _answer(text: str) -> str:
+        return strip_thinking_tags(text) if strip_thinking_before_judging else text
+
     items: list[MTBenchJudgeItem] = []
     for pair_row in iter_mt_bench_pairwise_rows(
         questions=questions,
@@ -126,8 +130,8 @@ def build_mt_bench_pairwise_judge_items(
             prompt = select_prompt(category, False)
             prompt_kwargs: dict[str, str] = {
                 "question": pair_row.turn_1_question,
-                "answer_a": pair_row.answer_a_1,
-                "answer_b": pair_row.answer_b_1,
+                "answer_a": _answer(pair_row.answer_a_1),
+                "answer_b": _answer(pair_row.answer_b_1),
             }
             if prompt.ref_based:
                 prompt_kwargs["ref_answer_1"] = pair_row.ref_1
@@ -146,10 +150,10 @@ def build_mt_bench_pairwise_judge_items(
             prompt_kwargs = {
                 "question_1": pair_row.turn_1_question,
                 "question_2": pair_row.turn_2_question,
-                "answer_a_1": pair_row.answer_a_1,
-                "answer_a_2": pair_row.answer_a_2,
-                "answer_b_1": pair_row.answer_b_1,
-                "answer_b_2": pair_row.answer_b_2,
+                "answer_a_1": _answer(pair_row.answer_a_1),
+                "answer_a_2": _answer(pair_row.answer_a_2),
+                "answer_b_1": _answer(pair_row.answer_b_1),
+                "answer_b_2": _answer(pair_row.answer_b_2),
             }
             if prompt.ref_based:
                 prompt_kwargs["ref_answer_1"] = pair_row.ref_1
