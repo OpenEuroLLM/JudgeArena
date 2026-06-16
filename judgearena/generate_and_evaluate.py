@@ -195,7 +195,9 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
 
 
-def _build_generation_engine_kwargs(args: CliArgs, model_spec: str) -> dict[str, object]:
+def _build_generation_engine_kwargs(
+    args: CliArgs, model_spec: str
+) -> dict[str, object]:
     """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
     generation_engine_kwargs = dict(args.engine_kwargs)
     provider, _, model_name = model_spec.partition("/")
