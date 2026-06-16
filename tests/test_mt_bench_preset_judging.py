@@ -124,7 +124,7 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         ]
     )
 
-    prefs, annotations, metadata, num_inconsistent = judge_mt_bench_with_preset(
+    prefs, annotations, metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge,
         judge_model="judge",
         questions=_questions_df(category="writing"),
@@ -139,7 +139,6 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         prompt_preset="default",
     )
 
-    assert num_inconsistent == 0
     assert len(judge.calls) == 2
     assert len(prefs) == 2
     assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
