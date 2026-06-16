@@ -8,7 +8,6 @@ layer lives in :mod:`judgearena.models` (it is a core component, not a utility).
 
 from judgearena.utils.eval import (
     compute_pref_summary,
-    print_results,
 )
 from judgearena.utils.io import (
     Timeblock,
@@ -33,7 +32,6 @@ __all__ = [
     "data_root",
     "download_all",
     "download_hf",
-    "print_results",
     "read_df",
     "safe_parse_int",
     "safe_text",

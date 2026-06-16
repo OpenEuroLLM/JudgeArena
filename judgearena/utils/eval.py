@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from abc import ABC, abstractmethod
+from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
@@ -42,46 +43,103 @@ def compute_pref_summary(prefs: pd.Series) -> PrefSummary:
     )
 
 
-def print_results(results):
-    """Print battle results in a readable format."""
-    print("\n" + "=" * 60)
-    print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Task: {results['task']}")
-    print(
-        f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
-    )
-    print(f"⚖️ Judge: {results['judge_model']}")
-    print("📈 Results Summary:")
-    print(f"   Total Battles: {results['num_battles']}")
-    print(f"   Win Rate (A): {results['winrate']:.1%}")
-    print(f"   ✅ Wins:   {results['num_wins']}")
-    print(f"   ❌ Losses: {results['num_losses']}")
-    print(f"   🤝 Ties:   {results['num_ties']}")
-    if results.get("num_missing", 0) > 0:
-        print(f"   ❓ Missing: {results['num_missing']}")
+class Report(ABC):
+    """A reportable result that can print itself and serialize to a dict."""
 
-    per_category = results.get("per_category")
-    if per_category:
-        print("\nPer-Category Breakdown:")
-        print(
-            f"  {'Category':<14} | {'Win Rate(A)':>11} | {'Wins':>4} | {'Losses':>6} | {'Ties':>4}"
-        )
-        print(f"  {'-' * 14}-+-{'-' * 11}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 4}")
-        for cat, stats in sorted(per_category.items()):
-            print(
-                f"  {cat:<14} | {stats['winrate']:>11.1%} | "
-                f"{stats['num_wins']:>4} | {stats['num_losses']:>6} | {stats['num_ties']:>4}"
-            )
+    @abstractmethod
+    def render(self) -> None: ...
 
-    per_turn = results.get("per_turn")
-    if per_turn:
-        print("\nPer-Turn Breakdown:")
-        for turn, stats in sorted(per_turn.items()):
+    @abstractmethod
+    def to_dict(self) -> dict: ...
+
+
+@dataclass
+class BattleReport(Report):
+    """Pairwise battle results for the arena and MT-Bench pipelines."""
+
+    task: str
+    model_a: str
+    model_b: str
+    judge_model: str
+    summary: PrefSummary
+    swap_mode: str | None = None
+    result_folder: str | None = None
+    per_category: dict | None = None
+    per_turn: dict | None = None
+    preferences: list = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        out: dict = {
+            "task": self.task,
+            "model_A": self.model_a,
+            "model_B": self.model_b,
+            "judge_model": self.judge_model,
+            **self.summary.to_dict(),
+        }
+        if self.swap_mode is not None:
+            out["swap_mode"] = self.swap_mode
+        if self.result_folder is not None:
+            out["result_folder"] = self.result_folder
+        if self.per_category is not None:
+            out["per_category"] = self.per_category
+        if self.per_turn is not None:
+            out["per_turn"] = self.per_turn
+        out.update(self.metadata)
+        out["preferences"] = self.preferences
+        return out
+
+    def render(self) -> None:
+        s = self.summary
+        print("\n" + "=" * 60)
+        print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
+        print(f"📊 Task: {self.task}")
+        print(f"🤖 Competitors: Model A: {self.model_a} vs Model B: {self.model_b}")
+        print(f"⚖️ Judge: {self.judge_model}")
+        print("📈 Results Summary:")
+        if s.num_missing > 0:
+            parsed = s.num_battles - s.num_missing
             print(
-                f"  Turn {turn} Win Rate(A): {stats['winrate']:.1%} "
-                f"(W:{stats['num_wins']} L:{stats['num_losses']} T:{stats['num_ties']})"
+                f"   Total Battles: {s.num_battles}  ⚠️  {s.num_missing} unparseable "
+                f"(parsed: {parsed}/{s.num_battles})"
             )
-    print("=" * 60 + "\n")
+        elif self.swap_mode == "both":
+            print(
+                f"   Total Battles: {s.num_battles} (2×{s.num_battles // 2} — each "
+                f"instruction judged in both orders to detect positional bias)"
+            )
+        else:
+            print(f"   Total Battles: {s.num_battles}")
+        print(f"   Win Rate (A): {s.winrate:.1%}")
+        print(f"   ✅ Wins:   {s.num_wins}")
+        print(f"   ❌ Losses: {s.num_losses}")
+        print(f"   🤝 Ties:   {s.num_ties}")
+
+        if self.per_category:
+            print("\nPer-Category Breakdown:")
+            print(
+                f"  {'Category':<14} | {'Win Rate(A)':>11} | "
+                f"{'Wins':>4} | {'Losses':>6} | {'Ties':>4}"
+            )
+            print(f"  {'-' * 14}-+-{'-' * 11}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 4}")
+            for cat, stats in sorted(self.per_category.items()):
+                print(
+                    f"  {cat:<14} | {stats['winrate']:>11.1%} | "
+                    f"{stats['num_wins']:>4} | {stats['num_losses']:>6} | "
+                    f"{stats['num_ties']:>4}"
+                )
+
+        if self.per_turn:
+            print("\nPer-Turn Breakdown:")
+            for turn, stats in sorted(self.per_turn.items()):
+                print(
+                    f"  Turn {turn} Win Rate(A): {stats['winrate']:.1%} "
+                    f"(W:{stats['num_wins']} L:{stats['num_losses']} T:{stats['num_ties']})"
+                )
+
+        if self.result_folder:
+            print(f"📁 Results: {self.result_folder}")
+        print("=" * 60 + "\n")
 
 
 def _compute_grouped_stats(

@@ -44,6 +44,7 @@ from judgearena.utils import (
     download_hf,
     read_df,
 )
+from judgearena.utils.eval import BattleReport
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -211,40 +212,6 @@ def _build_generation_engine_kwargs(
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
-
-
-def print_results(results):
-    """Print battle results in a nice formatted way"""
-
-    print("\n" + "=" * 60)
-    print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Task: {results['task']}")
-    print(
-        f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
-    )
-    print(f"⚖️ Judge: {results['judge_model']}")
-    print("📈 Results Summary:")
-    num_battles = results["num_battles"]
-    num_missing = results.get("num_missing", 0)
-    swap_mode = results.get("swap_mode", "fixed")
-    if num_missing > 0:
-        parsed = num_battles - num_missing
-        print(
-            f"   Total Battles: {num_battles}  ⚠️  {num_missing} unparseable (parsed: {parsed}/{num_battles})"
-        )
-    elif swap_mode == "both":
-        print(
-            f"   Total Battles: {num_battles} (2×{num_battles // 2} — each instruction judged in both orders to detect positional bias)"
-        )
-    else:
-        print(f"   Total Battles: {num_battles}")
-    print(f"   Win Rate (A): {results['winrate']:.1%}")
-    print(f"   ✅ Wins:   {results['num_wins']}")
-    print(f"   ❌ Losses: {results['num_losses']}")
-    print(f"   🤝 Ties:   {results['num_ties']}")
-    if results.get("result_folder"):
-        print(f"📁 Results: {results['result_folder']}")
-    print("=" * 60 + "\n")
 
 
 def main(cfg: "RunConfig"):
@@ -447,28 +414,31 @@ def main(cfg: "RunConfig"):
     # compute and report statistics
     summary = compute_pref_summary(prefs)
 
-    results = {
-        "task": cfg.task,
-        "model_A": cfg.model.name,
-        "model_B": baseline_plan.display_name,
-        "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
-        "baseline_models": baseline_plan.unique_models,
-        "judge_model": cfg.judge.model,
-        **resolved_prompt.metadata(),
-        "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
-        "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
-        "swap_mode": cfg.judge.swap_mode,
-        "result_folder": str(res_folder),
-        **summary.to_dict(),
-        "preferences": prefs.tolist(),
-    }
+    report = BattleReport(
+        task=cfg.task,
+        model_a=cfg.model.name,
+        model_b=baseline_plan.display_name,
+        judge_model=cfg.judge.model,
+        summary=summary,
+        swap_mode=cfg.judge.swap_mode,
+        result_folder=str(res_folder),
+        preferences=prefs.tolist(),
+        metadata={
+            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_models": baseline_plan.unique_models,
+            **resolved_prompt.metadata(),
+            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
+            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+        },
+    )
+    results = report.to_dict()
     logger.info(
         "%s vs %s judged by %s",
         cfg.model.name,
         baseline_plan.display_name,
         cfg.judge.model,
     )
-    print_results(results)
+    report.render()
 
     with open(res_folder / f"results-{name}.json", "w") as f:
         json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)

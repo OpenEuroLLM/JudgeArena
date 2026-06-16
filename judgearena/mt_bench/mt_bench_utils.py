@@ -34,7 +34,7 @@ from judgearena.prompts.registry import (
 )
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
-from judgearena.utils.eval import _compute_grouped_stats, print_results
+from judgearena.utils.eval import BattleReport, _compute_grouped_stats
 
 logger = get_logger(__name__)
 
@@ -189,23 +189,26 @@ def _finalize_mt_bench_run(
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
     stats = compute_pref_summary(prefs)
-    results = {
-        "task": cfg.task,
-        "model_A": cfg.model.name,
-        "model_B": cfg.model.baseline,
-        "judge_model": cfg.judge.model,
-        **resolved_prompt.metadata(),
-        "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
-        "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
-        **(extra_result_fields or {}),
-        **stats.to_dict(),
-        "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
-        "per_turn": _compute_grouped_stats(prefs, combined_metadata, "turn"),
-        "preferences": prefs.tolist(),
-        "date": datetime.now(UTC).isoformat(),
-        "user": os.getenv("USER", ""),
-    }
-    print_results(results)
+    report = BattleReport(
+        task=cfg.task,
+        model_a=cfg.model.name,
+        model_b=cfg.model.baseline,
+        judge_model=cfg.judge.model,
+        summary=stats,
+        per_category=_compute_grouped_stats(prefs, combined_metadata, "category"),
+        per_turn=_compute_grouped_stats(prefs, combined_metadata, "turn"),
+        preferences=prefs.tolist(),
+        metadata={
+            **resolved_prompt.metadata(),
+            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
+            **(extra_result_fields or {}),
+            "date": datetime.now(UTC).isoformat(),
+            "user": os.getenv("USER", ""),
+        },
+    )
+    results = report.to_dict()
+    report.render()
     _save_mt_bench_results(
         cfg=cfg,
         res_folder=res_folder,
