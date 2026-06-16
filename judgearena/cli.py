@@ -176,6 +176,11 @@ def _build_elo_args(
         provide_explanation=args.provide_explanation,
         swap_mode=args.swap_mode,
         ignore_cache=args.ignore_cache,
+        judge_prompt_preset=args.judge_prompt_preset,
+        judge_system_prompt_file=args.judge_system_prompt_file,
+        judge_user_prompt_file=args.judge_user_prompt_file,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
         truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
@@ -209,6 +214,11 @@ def _build_generate_and_evaluate_args(
         provide_explanation=args.provide_explanation,
         swap_mode=args.swap_mode,
         ignore_cache=args.ignore_cache,
+        judge_prompt_preset=args.judge_prompt_preset,
+        judge_system_prompt_file=args.judge_system_prompt_file,
+        judge_user_prompt_file=args.judge_user_prompt_file,
+        battle_thinking_token_budget=args.battle_thinking_token_budget,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
         truncate_all_input_chars=args.truncate_all_input_chars,
         truncate_judge_input_chars=args.truncate_judge_input_chars,
         max_out_tokens_models=args.max_out_tokens_models,
@@ -230,20 +240,17 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
+    model_a = args.model_A
     if task.startswith(ELO_TASK_PREFIX):
         if task not in ELO_TASK_TO_ARENA:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(
-            args, arena=ELO_TASK_TO_ARENA[task], model_a=args.model_A
-        )
+        elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
         logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:
-        ge_args = _build_generate_and_evaluate_args(
-            args, task=task, model_a=args.model_A
-        )
+        ge_args = _build_generate_and_evaluate_args(args, task=task, model_a=model_a)
         logger.debug("Running with CLI args: %s", ge_args.__dict__)
         main_generate_and_evaluate(ge_args)
 

@@ -11,6 +11,8 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
+from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
+
 
 @dataclass
 class BaseCliArgs:
@@ -22,6 +24,11 @@ class BaseCliArgs:
     provide_explanation: bool = False
     swap_mode: str = "fixed"
     ignore_cache: bool = False
+    judge_prompt_preset: str | None = None
+    judge_system_prompt_file: str | None = None
+    judge_user_prompt_file: str | None = None
+    battle_thinking_token_budget: int | None = None
+    strip_thinking_before_judging: bool = False
     truncate_all_input_chars: int = 8192
     truncate_judge_input_chars: int | None = None
     max_out_tokens_models: int = 32768
@@ -66,6 +73,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--provide_explanation",
         action="store_true",
         help=(
+            "Equivalent to --judge_prompt_preset default_with_explanation. "
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
             "but enables some result interpretation."
@@ -87,6 +95,52 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--ignore_cache",
         action="store_true",
         help="If specified, ignore cache of previous completions.",
+    )
+    parser.add_argument(
+        "--judge_prompt_preset",
+        type=str,
+        choices=JUDGE_PROMPT_PRESETS,
+        default=None,
+        help=(
+            "Judge prompt preset to use. When omitted, JudgeArena selects a "
+            "per-task default."
+        ),
+    )
+    parser.add_argument(
+        "--judge_system_prompt_file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a custom judge system prompt. Must be combined with "
+            "--judge_user_prompt_file and takes precedence over presets."
+        ),
+    )
+    parser.add_argument(
+        "--judge_user_prompt_file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a custom judge user-prompt template. Must be combined "
+            "with --judge_system_prompt_file and takes precedence over presets."
+        ),
+    )
+    parser.add_argument(
+        "--battle_thinking_token_budget",
+        type=int,
+        required=False,
+        default=None,
+        help=(
+            "Optional reasoning-token sub-budget for battle-model generation. "
+            "This stays inside --max_out_tokens_models."
+        ),
+    )
+    parser.add_argument(
+        "--strip_thinking_before_judging",
+        action="store_true",
+        help=(
+            "If specified, strip visible reasoning traces from model completions "
+            "before sending them to the judge."
+        ),
     )
     parser.add_argument(
         "--result_folder",

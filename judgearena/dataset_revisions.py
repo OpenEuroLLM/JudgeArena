@@ -25,10 +25,10 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
     # m-ArenaHard (Cohere release)
     "CohereLabs/m-ArenaHard": "ab393a96cd0b134a1acfa96e080af31e5e73a393",
     "CohereLabs/m-ArenaHard-v2.0": "24c65eff42cec85e30dd5db99d1a702c7ebaa8ab",
-    # AlpacaEval instructions / model_outputs (geoalgo redistribution; the
-    # repo now redirects to ``judge-arena/judge-arena-dataset`` upstream, but
-    # ``snapshot_download`` follows the redirect transparently).
-    "geoalgo/llmjudge": "004c4a992956eeefffd36b63ade470f32fd0a582",
+    # AlpacaEval instructions / model_outputs. Originally ``geoalgo/llmjudge``,
+    # since renamed to ``judge-arena/judge-arena-dataset`` upstream (the old id
+    # still redirects, and the commit SHA is shared across the rename).
+    "judge-arena/judge-arena-dataset": "004c4a992956eeefffd36b63ade470f32fd0a582",
     # MT-Bench questions (LMSYS Space).
     "lmsys/mt-bench": "a4b674ca573c24143824ac7f60d9173e7081e37d",
     # Multilingual fluency contexts.

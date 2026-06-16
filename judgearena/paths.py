@@ -34,7 +34,7 @@ data_root: Path = _data_root_path()
 def download_hf(name: str, local_path: Path) -> None:
     """Download AlpacaEval-style instruction/output tables into ``local_path``."""
     local_path.mkdir(exist_ok=True, parents=True)
-    repo_id = "geoalgo/llmjudge"
+    repo_id = "judge-arena/judge-arena-dataset"
     snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
