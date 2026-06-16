@@ -89,6 +89,15 @@ def test_resolve_plan_v20_routes_per_category():
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
 
 
+def test_resolve_plan_alpaca_eval_uses_native_baseline():
+    plan = _resolve_baseline_plan(
+        args=_make_args("alpaca-eval"),
+        instructions_df=_instructions(["q1", "q2"]),
+    )
+    assert plan.is_flat
+    assert plan.single_model == "gpt4_1106_preview"
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         args=_make_args("arena-hard-v2.0", model_b="override"),
@@ -128,6 +137,20 @@ def test_resolve_plan_v20_missing_category_raises():
             args=_make_args("arena-hard-v2.0"),
             instructions_df=_instructions(["q1"]),
         )
+
+
+def test_resolve_plan_v20_unknown_category_raises():
+    with pytest.raises(ValueError, match="brand_new"):
+        _resolve_baseline_plan(
+            args=_make_args("arena-hard-v2.0"),
+            instructions_df=_instructions(["q1"], categories=["brand_new"]),
+        )
+
+
+def test_baseline_plan_flat_repeats_model():
+    plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
+    assert plan.is_flat
+    assert plan.baseline_by_index.tolist() == ["b", "b"]
 
 
 def test_baseline_plan_per_row_preserves_order():
@@ -207,7 +230,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
             task="alpaca-eval",
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
-            judge_model="Dummy/score A: 0 score B: 10",
+            judge_model="VLLM/score A: 0 score B: 10",
             n_instructions=2,
             truncate_judge_input_chars=12,
             max_judge_model_len=65536,

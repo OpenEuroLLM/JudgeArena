@@ -7,7 +7,6 @@ import json
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -34,6 +33,7 @@ from judgearena.log import (
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
+    build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
@@ -110,7 +110,7 @@ class CliArgs(BaseCliArgs):
 
 @dataclass(frozen=True)
 class BaselinePlan:
-    """Row-aligned baseline assignment for native pairwise baselines."""
+    """Row-aligned baseline assignment for `--model_B`."""
 
     baseline_by_index: pd.Series
 
@@ -135,7 +135,9 @@ class BaselinePlan:
     @property
     def single_model(self) -> str:
         if not self.is_flat:
-            raise ValueError("BaselinePlan has more than one model.")
+            raise ValueError(
+                "BaselinePlan is per-row; use baseline_by_index for row-level lookups."
+            )
         return self.unique_models[0]
 
     @property
@@ -160,6 +162,7 @@ def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
 def _resolve_baseline_plan(
     args: CliArgs, instructions_df: pd.DataFrame
 ) -> BaselinePlan:
+    """Resolve explicit or dataset-native baseline assignment."""
     if args.model_B is not None:
         return BaselinePlan.flat(args.model_B, index=instructions_df.index)
 
@@ -175,7 +178,8 @@ def _resolve_baseline_plan(
         if "category" not in instructions_df.columns:
             raise ValueError(
                 f"{args.task} requires a 'category' column for per-category "
-                "baseline routing."
+                "baseline routing; re-run dataset download to regenerate the "
+                "instructions table."
             )
         per_row = instructions_df["category"].map(native)
         if per_row.isna().any():
@@ -188,12 +192,6 @@ def _resolve_baseline_plan(
             )
         return BaselinePlan.per_row(per_row)
     raise ValueError(f"Unsupported baseline shape for dataset '{args.task}'.")
-
-
-def _build_judge_engine_kwargs(args: CliArgs) -> dict[str, object]:
-    judge_kwargs = dict(args.engine_kwargs)
-    judge_kwargs.update(args.judge_engine_kwargs)
-    return judge_kwargs
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -280,7 +278,8 @@ def main(args: CliArgs):
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
         lang = args.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
-        instructions_df = pd.DataFrame({"instruction": instructions})
+        instructions_df = pd.DataFrame({"instruction": instructions.values})
+        instructions_df.index = instructions.index
     else:
         instructions_df = load_instructions(
             dataset=args.task, n_instructions=args.n_instructions
@@ -319,9 +318,12 @@ def main(args: CliArgs):
     )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    gen_fun = (
-        partial(
-            generate_base,
+    generation_function = generate_base if is_fluency_task else generate_instructions
+
+    def _run_generation(model_spec: str) -> pd.DataFrame:
+        return generation_function(
+            instructions=instructions,
+            model=model_spec,
             truncate_input_chars=args.truncate_all_input_chars,
             max_tokens=args.max_out_tokens_models,
             max_model_len=args.max_model_len,
@@ -329,17 +331,6 @@ def main(args: CliArgs):
             use_tqdm=args.use_tqdm,
             **args.engine_kwargs,
         )
-        if is_fluency_task
-        else partial(
-            generate_instructions,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-    )
 
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
@@ -349,11 +340,7 @@ def main(args: CliArgs):
         if preloaded is not None:
             return _align_completion_series(preloaded)
         generated = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=model_spec,
-                use_tqdm=args.use_tqdm,
-            ),
+            lambda: _run_generation(model_spec),
             ignore_cache=ignore_cache,
             cache_name=f"{args.task}_{model_spec}_{args.n_instructions}",
         )
@@ -392,7 +379,11 @@ def main(args: CliArgs):
         max_tokens=args.max_out_tokens_judge,
         max_model_len=args.max_judge_model_len,
         chat_template=args.chat_template,
-        **_build_judge_engine_kwargs(args),
+        **build_default_judge_model_kwargs(
+            args.judge_model,
+            args.engine_kwargs,
+            judge_engine_kwargs_override=args.judge_engine_kwargs,
+        ),
     )
 
     # save argument for results analysis
@@ -412,6 +403,7 @@ def main(args: CliArgs):
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
         prompt_preset=resolved_prompt.preset_name,
+        parser_mode=resolved_prompt.parser_mode,
         truncate_input_chars=args.truncate_judge_input_chars,
         use_tqdm=args.use_tqdm,
     )

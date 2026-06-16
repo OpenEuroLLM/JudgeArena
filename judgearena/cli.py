@@ -236,20 +236,17 @@ def cli(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
+    model_a = args.model_A
     if task.startswith(ELO_TASK_PREFIX):
         if task not in ELO_TASK_TO_ARENA:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."
             )
-        elo_args = _build_elo_args(
-            args, arena=ELO_TASK_TO_ARENA[task], model_a=args.model_A
-        )
+        elo_args = _build_elo_args(args, arena=ELO_TASK_TO_ARENA[task], model_a=model_a)
         logger.debug("Running with CLI args: %s", elo_args.__dict__)
         main_elo(elo_args)
     else:
-        ge_args = _build_generate_and_evaluate_args(
-            args, task=task, model_a=args.model_A
-        )
+        ge_args = _build_generate_and_evaluate_args(args, task=task, model_a=model_a)
         logger.debug("Running with CLI args: %s", ge_args.__dict__)
         main_generate_and_evaluate(ge_args)
 

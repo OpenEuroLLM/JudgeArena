@@ -396,6 +396,7 @@ def judge_and_parse_prefs(
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    parser_mode: str = "score",
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
@@ -416,22 +417,15 @@ def judge_and_parse_prefs(
             judge_chat_model,
         )
 
-    resolved_prompt = resolve_judge_prompts(
-        provide_explanation=provide_explanation,
-        prompt_preset=prompt_preset,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
-    )
-
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
         completions_A=completions_A,
         completions_B=completions_B,
         provide_explanation=provide_explanation,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        prompt_preset=prompt_preset,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
     )
@@ -444,9 +438,9 @@ def judge_and_parse_prefs(
             completions_A=completions_B,
             completions_B=completions_A,
             provide_explanation=provide_explanation,
-            system_prompt=resolved_prompt.system_prompt,
-            user_prompt_template=resolved_prompt.user_prompt_template,
-            prompt_preset=resolved_prompt.preset_name,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            prompt_preset=prompt_preset,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
         )
@@ -454,7 +448,7 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
+    score_parser = PairScore(parser_mode=parser_mode)
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
         results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]
