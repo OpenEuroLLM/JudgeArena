@@ -346,3 +346,16 @@ def test_score_record_shape_and_provenance(_patch_score):
     assert rec.n_battles == 2
     assert len(rec.battles) == 2
     assert "judge_completion" in rec.battles.columns
+
+
+def test_build_panel_empty_when_all_languages_fail_kappa(_patch_curate, tmp_path):
+    panel_args = PanelArgs(roster_models=["m1", "m2"], kappa_threshold=1.0, n_per_language=4)
+    elo_args = EloArgs(languages=["en", "xx"], elo_method="soft")
+    panel = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
+    assert len(panel.battles) == 0
+    assert list(panel.battles.columns) == list(PANEL_BATTLE_COLUMNS)
+    assert panel.meta["languages_kept"] == []
+    # must not raise (regression: panel_hash needs the battle_id column)
+    out = save_panel(panel, tmp_path / "empty-panel")
+    reloaded = load_panel(out)
+    assert list(reloaded.battles.columns) == list(PANEL_BATTLE_COLUMNS)

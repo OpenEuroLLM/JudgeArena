@@ -158,7 +158,9 @@ def build_panel(
         kept_frames.append(frame)
 
     battles = (
-        pd.concat(kept_frames, ignore_index=True) if kept_frames else pd.DataFrame()
+        pd.concat(kept_frames, ignore_index=True)
+        if kept_frames
+        else pd.DataFrame(columns=list(PANEL_BATTLE_COLUMNS))
     )
 
     # Global temperature calibration (once, across all kept battles) for
