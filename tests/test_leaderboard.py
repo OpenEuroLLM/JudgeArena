@@ -20,6 +20,7 @@ from judgearena.leaderboard.panel import (
     save_panel,
 )
 from judgearena.leaderboard.record import ResultRecord
+from judgearena.leaderboard.score import score_against_panel
 
 
 def test_language_kappa_perfect_agreement():
@@ -263,3 +264,85 @@ def test_resultrecord_save_writes_both_files(tmp_path):
     reloaded = json.loads((out / "result.json").read_text())
     assert reloaded["elo_overall"] == 1050.0
     assert pd.read_parquet(out / "battles.parquet")["battle_id"].tolist() == ["b1"]
+
+
+def _score_panel():
+    battles = pd.DataFrame(
+        {
+            "battle_id": ["b1", "b2"],
+            "lang": ["en", "en"],
+            "model_a": ["m1", "m2"],
+            "model_b": ["m2", "m1"],
+            "instruction": ["q1", "q2"],
+            "completion_a": ["5", "5"],
+            "completion_b": ["5", "5"],
+            "human_winner": ["model_a", "model_b"],
+            "judge_pref": [0.0, 1.0],
+            "judge_pref_hard": [0.0, 1.0],
+            "challenger_opponent": ["m1", "m1"],
+            "challenger_position": ["A", "A"],
+        }
+    )
+    meta = {
+        "panel_version": "panel-v1",
+        "panel_hash": panel_hash(battles),
+        "judge_model": "mock",
+        "kappa_per_language": {"en": 1.0},
+        "languages_kept": ["en"],
+        "baseline_model": "m1",
+        "scorer": {"method": "soft", "temperature": 0.3, "calibrated": False},
+    }
+    return Panel(meta=meta, battles=battles)
+
+
+def _numeric_judge(judge_chat_model, instructions, completions_A, completions_B, **kwargs):
+    prefs = []
+    for a, b in zip(completions_A, completions_B, strict=True):
+        va, vb = float(a), float(b)
+        prefs.append(0.0 if va > vb else (1.0 if vb > va else 0.5))
+    annotations = [SimpleNamespace(judge_completion=f"score a: {a} score b: {b}")
+                   for a, b in zip(completions_A, completions_B, strict=True)]
+    return annotations, None, pd.Series(prefs)
+
+
+@pytest.fixture
+def _patch_score(monkeypatch):
+    import judgearena.leaderboard.score as sc
+    monkeypatch.setattr(sc, "make_model", lambda **kwargs: SimpleNamespace())
+    monkeypatch.setattr(sc, "judge_and_parse_prefs", _numeric_judge)
+    monkeypatch.setattr(
+        sc, "resolve_run_judge_prompt",
+        lambda task, judge_cfg: SimpleNamespace(
+            system_prompt=None, user_prompt_template=None, preset_name="x", parser_mode="score"
+        ),
+    )
+    return sc
+
+
+def test_score_stronger_challenger_outranks_weaker(_patch_score):
+    from judgearena.config import JudgeArgs
+    panel = _score_panel()
+    strong = score_against_panel(
+        panel, completions=["9", "9"], model="cand", judge_cfg=JudgeArgs(model="mock"),
+        n_bootstraps=5, seed=0,
+    )
+    weak = score_against_panel(
+        panel, completions=["1", "1"], model="cand", judge_cfg=JudgeArgs(model="mock"),
+        n_bootstraps=5, seed=0,
+    )
+    assert strong.elo_overall > weak.elo_overall
+
+
+def test_score_record_shape_and_provenance(_patch_score):
+    from judgearena.config import JudgeArgs
+    panel = _score_panel()
+    rec = score_against_panel(
+        panel, completions=["9", "9"], model="cand", judge_cfg=JudgeArgs(model="mock"),
+        n_bootstraps=5, seed=0,
+    )
+    assert rec.panel_hash == panel.meta["panel_hash"]
+    assert rec.kappa_per_lang == {"en": 1.0}
+    assert "en" in rec.elo_per_lang
+    assert rec.n_battles == 2
+    assert len(rec.battles) == 2
+    assert "judge_completion" in rec.battles.columns
