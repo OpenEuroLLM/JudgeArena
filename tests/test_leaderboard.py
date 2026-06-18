@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from judgearena.leaderboard.panel import (
     panel_hash,
     save_panel,
 )
+from judgearena.leaderboard.record import ResultRecord
 
 
 def test_language_kappa_perfect_agreement():
@@ -228,3 +230,36 @@ def test_build_panel_is_deterministic(_patch_curate):
     pd.testing.assert_frame_equal(
         p1.battles.reset_index(drop=True), p2.battles.reset_index(drop=True)
     )
+
+
+def _toy_record():
+    return ResultRecord(
+        model="cand", panel_version="panel-v1", panel_hash="abc", judge_model="mock",
+        elo_overall=1050.0, elo_std=12.0, elo_ci=[1030.0, 1075.0],
+        elo_per_lang={"en": 1051.0}, winrate_overall=0.6, winrate_per_lang={"en": 0.6},
+        n_battles=4, n_battles_per_lang={"en": 4}, kappa_per_lang={"en": 1.0},
+        mae_vs_human=8.0, scorer={"mode": "pair_score", "temperature": 0.3},
+        generation_params={"max_out_tokens": 32768}, seed=0,
+        battles=pd.DataFrame({"battle_id": ["b1"], "judge_pref": [0.2]}),
+    )
+
+
+def test_resultrecord_to_dict_keys():
+    d = _toy_record().to_dict()
+    assert "battles" not in d
+    assert set(d) == {
+        "model", "panel_version", "panel_hash", "judge_model", "elo_overall",
+        "elo_std", "elo_ci", "elo_per_lang", "winrate_overall", "winrate_per_lang",
+        "n_battles", "n_battles_per_lang", "kappa_per_lang", "mae_vs_human",
+        "scorer", "generation_params", "seed", "schema_version", "submitter",
+        "created_utc",
+    }
+
+
+def test_resultrecord_save_writes_both_files(tmp_path):
+    out = _toy_record().save(tmp_path / "cand")
+    assert (out / "result.json").exists()
+    assert (out / "battles.parquet").exists()
+    reloaded = json.loads((out / "result.json").read_text())
+    assert reloaded["elo_overall"] == 1050.0
+    assert pd.read_parquet(out / "battles.parquet")["battle_id"].tolist() == ["b1"]
