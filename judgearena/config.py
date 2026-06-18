@@ -124,6 +124,11 @@ class EloArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
+    elo_method: Literal["calibrated_soft", "soft", "hard"] = "soft"
+    """Rating algorithm. ``calibrated_soft``: MLE-fit the PairScore temperature
+    on human labels, then soft Bradley-Terry. ``soft``: soft BT at the static
+    ``soft_elo_temperature``. ``hard``: hard win/loss/tie Bradley-Terry."""
+
     arena: str | None = None
     """Arena identifier whose battles supply the opponents. Derived from the
     ``elo-*`` task when left unset."""
@@ -146,21 +151,54 @@ class EloArgs(BaseModel):
     of taking the first N. Mutually exclusive with the ``n_instructions*``
     caps."""
 
-    soft_elo: bool = True
-    """Use soft (continuous-preference) Bradley-Terry. When False, fall back to
-    hard win/loss/tie labels."""
-
     soft_elo_temperature: float = 0.3
     """Initial PairScore temperature for soft-ELO. Overridden by
     ``calibrate_temperature`` when calibration succeeds."""
 
-    calibrate_temperature: bool = False
-    """MLE-fit the PairScore temperature against human-labeled arena battles
-    before the main run. Ignored when ``soft_elo`` is False."""
-
     calibration_size: int | None = None
     """Number of human arena battles to sample for temperature calibration.
     Defaults to all. Requires ``calibrate_temperature``."""
+
+    @property
+    def soft_elo(self) -> bool:
+        """Soft (continuous) Bradley-Terry unless the method is ``hard``."""
+        return self.elo_method != "hard"
+
+    @property
+    def calibrate_temperature(self) -> bool:
+        """Calibrate the PairScore temperature only for ``calibrated_soft``."""
+        return self.elo_method == "calibrated_soft"
+
+
+class PanelArgs(BaseModel):
+    """Curation knobs for building/refreshing a frozen leaderboard panel."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    roster_models: list[str] | None = None
+    """Explicit anchor roster. When unset, the roster is selected from the data
+    by the coverage heuristic in curate.py."""
+
+    roster_min_annotations: int = 100
+    """Minimum total arena battles a model must have to qualify for the roster."""
+
+    roster_min_languages: int = 15
+    """Minimum distinct languages a model must appear in to qualify."""
+
+    roster_max_models: int | None = 20
+    """Keep at most this many roster models (top by annotation count)."""
+
+    kappa_threshold: float = 0.0
+    """Keep a language only if judge-vs-human Cohen's kappa exceeds this."""
+
+    n_per_language: int = 100
+    """Cap kept battles per language."""
+
+    panel_dir: str = "panels"
+    """Directory the frozen panel is read from (scoring) and written to (curation)."""
+
+    panel_version: str = "panel-v1"
+    """Panel version label; also the subdirectory name under ``panel_dir``."""
 
 
 class RunArgs(BaseModel):
@@ -219,6 +257,9 @@ class RunConfig(BaseSettings):
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
+
+    panel: PanelArgs | None = None
+    """Leaderboard curation settings; ``None`` outside the curation flow."""
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
