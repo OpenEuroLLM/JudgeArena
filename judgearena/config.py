@@ -124,7 +124,7 @@ class EloArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    elo_method: Literal["calibrated_soft", "soft", "hard"] = "soft"
+    method: Literal["calibrated_soft", "soft", "hard"] = "soft"
     """Rating algorithm. ``calibrated_soft``: MLE-fit the PairScore temperature
     on human labels, then soft Bradley-Terry. ``soft``: soft BT at the static
     ``soft_elo_temperature``. ``hard``: hard win/loss/tie Bradley-Terry."""
@@ -162,12 +162,12 @@ class EloArgs(BaseModel):
     @property
     def soft_elo(self) -> bool:
         """Soft (continuous) Bradley-Terry unless the method is ``hard``."""
-        return self.elo_method != "hard"
+        return self.method != "hard"
 
     @property
     def calibrate_temperature(self) -> bool:
         """Calibrate the PairScore temperature only for ``calibrated_soft``."""
-        return self.elo_method == "calibrated_soft"
+        return self.method == "calibrated_soft"
 
 
 class PanelArgs(BaseModel):

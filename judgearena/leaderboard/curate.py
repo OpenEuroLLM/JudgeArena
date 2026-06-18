@@ -165,7 +165,7 @@ def build_panel(
 
     # Global temperature calibration (once, across all kept battles) for
     # calibrated_soft; then re-derive the soft judge_pref at T and freeze.
-    method = elo_args.elo_method
+    method = elo_args.method
     temperature = elo_args.soft_elo_temperature
     calibrated = False
     mae_vs_human = float("nan")

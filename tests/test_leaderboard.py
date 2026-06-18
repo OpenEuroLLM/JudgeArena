@@ -94,7 +94,7 @@ def test_save_load_panel_round_trip(tmp_path):
 
 def test_eloargs_elo_method_and_compat_properties():
     e = EloArgs()
-    assert e.elo_method == "soft"          # matches old soft_elo=True, calibrate=False
+    assert e.method == "soft"          # matches old soft_elo=True, calibrate=False
     assert e.soft_elo is True              # derived property
     assert e.calibrate_temperature is False
     assert e.soft_elo_temperature == 0.3
@@ -105,14 +105,14 @@ def test_eloargs_elo_method_and_compat_properties():
 
 
 def test_eloargs_method_drives_properties():
-    assert EloArgs(elo_method="hard").soft_elo is False
-    cs = EloArgs(elo_method="calibrated_soft")
+    assert EloArgs(method="hard").soft_elo is False
+    cs = EloArgs(method="calibrated_soft")
     assert cs.soft_elo is True
     assert cs.calibrate_temperature is True
     # soft_elo / calibrate_temperature are no longer config fields
     assert "soft_elo" not in EloArgs.model_fields
     assert "calibrate_temperature" not in EloArgs.model_fields
-    assert "elo_method" in EloArgs.model_fields
+    assert "method" in EloArgs.model_fields
 
 
 def test_panel_args_defaults_and_runconfig_field():
@@ -208,7 +208,7 @@ def _patch_curate(monkeypatch):
 
 def test_build_panel_gates_languages_and_caps(_patch_curate):
     panel_args = PanelArgs(roster_models=["m1", "m2"], kappa_threshold=0.0, n_per_language=4)
-    elo_args = EloArgs(arena=None, languages=["en", "xx"], elo_method="soft")
+    elo_args = EloArgs(arena=None, languages=["en", "xx"], method="soft")
     panel = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
     assert set(panel.battles["lang"]) == {"en"}      # xx dropped (kappa <= 0)
     assert len(panel.battles) == 4                    # capped at n_per_language
@@ -225,7 +225,7 @@ def test_build_panel_gates_languages_and_caps(_patch_curate):
 
 def test_build_panel_is_deterministic(_patch_curate):
     panel_args = PanelArgs(roster_models=["m1", "m2"], n_per_language=4)
-    elo_args = EloArgs(languages=["en"], elo_method="soft")
+    elo_args = EloArgs(languages=["en"], method="soft")
     p1 = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
     p2 = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
     pd.testing.assert_frame_equal(
@@ -350,7 +350,7 @@ def test_score_record_shape_and_provenance(_patch_score):
 
 def test_build_panel_empty_when_all_languages_fail_kappa(_patch_curate, tmp_path):
     panel_args = PanelArgs(roster_models=["m1", "m2"], kappa_threshold=1.0, n_per_language=4)
-    elo_args = EloArgs(languages=["en", "xx"], elo_method="soft")
+    elo_args = EloArgs(languages=["en", "xx"], method="soft")
     panel = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
     assert len(panel.battles) == 0
     assert list(panel.battles.columns) == list(PANEL_BATTLE_COLUMNS)
