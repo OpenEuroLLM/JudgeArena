@@ -7,6 +7,7 @@ import json
 import pandas as pd
 
 from judgearena.estimate_elo_ratings import _slugify
+from judgearena.leaderboard.board import build_board, render_board
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
 from judgearena.leaderboard.record import ResultRecord
 
@@ -61,3 +62,65 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
     assert captured["judge"] == "OpenRouter/judge"        # panel's frozen judge
     assert captured["gen"]["max_out_tokens"] == 256       # panel's frozen generation
     assert captured["n_bootstraps"] == 7
+
+
+def _board_panel():
+    battles = pd.DataFrame(
+        {
+            "battle_id": ["b1", "b2", "b3"],
+            "lang": ["en", "en", "fr"],
+            "model_a": ["strong", "strong", "strong"],
+            "model_b": ["weak", "weak", "weak"],
+            "instruction": ["q1", "q2", "q3"],
+            "completion_a": ["a", "a", "a"],
+            "completion_b": ["b", "b", "b"],
+            "human_winner": ["model_a", "model_a", "model_a"],
+            "judge_pref": [0.0, 0.0, 0.0],          # strong (A) always wins
+            "judge_pref_hard": [0.0, 0.0, 0.0],
+            "challenger_opponent": ["strong", "strong", "strong"],
+            "challenger_position": ["A", "A", "A"],
+        }
+    )
+    meta = {
+        "panel_version": "pv1", "panel_hash": "H", "baseline_model": "weak",
+        "scorer": {"method": "soft", "temperature": 0.3, "calibrated": False},
+    }
+    return Panel(meta=meta, battles=battles)
+
+
+def _record(model, elo, panel_hash="H"):
+    return {
+        "model": model, "panel_hash": panel_hash, "elo_overall": elo,
+        "elo_ci": [elo - 10, elo + 10], "n_battles": 3,
+        "elo_per_lang": {"en": elo + 1, "fr": elo - 1},
+    }
+
+
+def test_build_board_merges_anchors_and_submissions_sorted():
+    panel = _board_panel()
+    records = [_record("cand-mid", 1050.0), _record("cand-other-panel", 9999.0, panel_hash="X")]
+    board = build_board(panel, records)
+    # anchors present, matching submission present, mismatched submission excluded
+    models = list(board["model"])
+    assert "strong" in models and "weak" in models and "cand-mid" in models
+    assert "cand-other-panel" not in models
+    # sorted by elo descending with ranks 1..n
+    assert list(board["rank"]) == list(range(1, len(board) + 1))
+    assert board["elo"].is_monotonic_decreasing
+    # the submission flag is set only on the submitted model
+    assert bool(board.loc[board["model"] == "cand-mid", "is_submission"].iloc[0]) is True
+    assert bool(board.loc[board["model"] == "strong", "is_submission"].iloc[0]) is False
+
+
+def test_build_board_lang_uses_per_language_values():
+    panel = _board_panel()
+    board = build_board(panel, [_record("cand-mid", 1050.0)], lang="en")
+    assert board.loc[board["model"] == "cand-mid", "elo"].iloc[0] == 1051.0  # elo_per_lang["en"]
+
+
+def test_render_board_formats():
+    panel = _board_panel()
+    board = build_board(panel, [_record("cand-mid", 1050.0)])
+    assert "cand-mid" in render_board(board, "table")
+    assert "| Rank |" in render_board(board, "markdown")
+    assert "rank,model,elo" in render_board(board, "csv").splitlines()[0]
