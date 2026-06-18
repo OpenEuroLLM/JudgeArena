@@ -1,8 +1,10 @@
 import io
+import json
 from contextlib import redirect_stdout
 
 import pandas as pd
 
+from judgearena.estimate_elo_ratings import EloReport
 from judgearena.utils.eval import BattleReport, PrefSummary, compute_pref_summary
 
 
@@ -131,3 +133,61 @@ def test_battlereport_render_mtbench_breakdowns():
     assert "Per-Category Breakdown:" in out
     assert "writing" in out
     assert "Per-Turn Breakdown:" in out
+
+
+def _elo_report():
+    return EloReport(
+        arena="LMArena-100k",
+        model_a="my/model",
+        judge_model="judge",
+        summary=_summary(num_battles=10, winrate=0.6, num_wins=6, num_losses=3, num_ties=1),
+        num_battles=10,
+        llm_judged_battles=10,
+        human_anchor_battles=500,
+        elo_mean=1050.0,
+        elo_std=12.0,
+        elo_num_bootstraps=100,
+        mae_vs_human=8.0,
+        method="Soft-ELO",
+        calibrated_temperature=1.0,
+        n_bootstraps=100,
+        model_name="my/model",
+        mean_ratings={"my/model": 1050.0, "gpt4": 1100.0},
+        battle_counts={"my/model": 10, "gpt4": 8},
+        human_elo={"gpt4": 1092.0},
+        bootstrap_ratings=[{"my/model": 1050.0, "gpt4": 1100.0}],
+        sampling_metadata={"strategy": "head"},
+        source_battle_counts={"my/model": 10, "gpt4": 8},
+    )
+
+
+def test_eloreport_to_dict_shape():
+    d = _elo_report().to_dict()
+    assert d["arena"] == "LMArena-100k"
+    assert d["model_A"] == "my/model"
+    assert d["judge_model"] == "judge"
+    assert d["num_battles"] == 10
+    assert d["elo_mean"] == 1050.0
+    assert d["llm_judged_battles"] == 10
+    assert d["source_battle_counts"] == {"my/model": 10, "gpt4": 8}
+    assert d["num_wins"] == 6  # PrefSummary core spread in
+
+
+def test_eloreport_render_smoke():
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        _elo_report().render()
+    out = buf.getvalue()
+    assert "Results for my/model" in out
+    assert "Soft-ELO" in out
+    assert "gpt4" in out
+    assert "<-----" in out  # focal-model marker
+    assert "MAE vs Human-ELO" in out
+
+
+def test_eloreport_save_payload(tmp_path):
+    path = _elo_report().save(tmp_path)
+    payload = json.loads(path.read_text())
+    assert set(payload.keys()) == {"summary", "bootstrap_ratings"}
+    assert payload["summary"]["model_A"] == "my/model"
+    assert payload["bootstrap_ratings"] == [{"my/model": 1050.0, "gpt4": 1100.0}]
