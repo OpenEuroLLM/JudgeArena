@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+from pathlib import Path
+
 import pandas as pd
 
 from judgearena.estimate_elo_ratings import fit_bradley_terry
-from judgearena.leaderboard.panel import Panel
+from judgearena.leaderboard.panel import Panel, load_panel
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -109,3 +113,27 @@ def render_board(board: pd.DataFrame, fmt: str = "table") -> str:
             f"{row['elo']:>7.1f}  {row['n']:>6}"
         )
     return "\n".join(lines)
+
+
+def main_board(argv: list[str] | None = None) -> None:
+    """Print the leaderboard ladder for a panel from its local result records."""
+    ap = argparse.ArgumentParser(prog="judgearena-board")
+    ap.add_argument("--panel-dir", required=True)
+    ap.add_argument("--results-dir", default="results")
+    ap.add_argument("--format", choices=["table", "markdown", "csv"], default="table")
+    ap.add_argument("--lang", default=None)
+    args = ap.parse_args(argv)
+
+    panel = load_panel(args.panel_dir)
+    panel_version = panel.meta.get("panel_version", "")
+    results_root = Path(args.results_dir) / panel_version
+    records = [
+        json.loads(path.read_text())
+        for path in sorted(results_root.glob("*/result.json"))
+    ]
+    board = build_board(panel, records, lang=args.lang)
+    print(render_board(board, args.format))
+
+
+if __name__ == "__main__":
+    main_board()

@@ -7,7 +7,7 @@ import json
 import pandas as pd
 
 from judgearena.estimate_elo_ratings import _slugify
-from judgearena.leaderboard.board import build_board, render_board
+from judgearena.leaderboard.board import build_board, main_board, render_board
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
 from judgearena.leaderboard.record import ResultRecord
 
@@ -124,3 +124,26 @@ def test_render_board_formats():
     assert "cand-mid" in render_board(board, "table")
     assert "| Rank |" in render_board(board, "markdown")
     assert "rank,model,elo" in render_board(board, "csv").splitlines()[0]
+
+
+def test_main_board_reads_records_and_prints(tmp_path, capsys):
+    # a panel on disk (real panel_hash) + one matching record under results/<pv>/<slug>/
+    panel_dir = _save_tiny_panel(tmp_path / "panel")  # empty-battles panel is fine here
+    from judgearena.leaderboard.panel import load_panel
+    ph = load_panel(panel_dir).meta["panel_hash"]
+
+    rec_dir = tmp_path / "results" / "pv1" / "cand-mid"
+    rec_dir.mkdir(parents=True)
+    (rec_dir / "result.json").write_text(json.dumps({
+        "model": "cand-mid", "panel_hash": ph, "elo_overall": 1050.0,
+        "elo_ci": [1040.0, 1060.0], "n_battles": 3, "elo_per_lang": {},
+    }))
+
+    main_board([
+        "--panel-dir", str(panel_dir),
+        "--results-dir", str(tmp_path / "results"),
+        "--format", "markdown",
+    ])
+    out = capsys.readouterr().out
+    assert "cand-mid" in out
+    assert "| Rank |" in out
