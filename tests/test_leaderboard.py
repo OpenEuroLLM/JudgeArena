@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-from judgearena.config import EloArgs, PanelArgs, RunConfig
-from judgearena.leaderboard.curate import select_roster
+from judgearena.config import EloArgs, JudgeArgs, PanelArgs, RunConfig
+from judgearena.leaderboard.curate import build_panel, select_roster
 from judgearena.leaderboard.kappa import language_kappa
-from judgearena.leaderboard.panel import Panel, load_panel, panel_hash, save_panel
+from judgearena.leaderboard.panel import (
+    PANEL_BATTLE_COLUMNS,
+    Panel,
+    load_panel,
+    panel_hash,
+    save_panel,
+)
 
 
 def test_language_kappa_perfect_agreement():
@@ -144,3 +151,80 @@ def test_select_roster_respects_max_models_and_explicit_override():
 
     explicit = PanelArgs(roster_models=["x", "y"])
     assert select_roster(_roster_df(), explicit) == ["x", "y"]
+
+
+def _curate_arena_df():
+    # en: judge agrees with humans (kappa=1 -> kept). xx: judge disagrees (kappa<0 -> dropped).
+    rows = []
+    for i in range(5):  # 5 en battles, cap trims to n_per_language
+        winner = "model_a" if i % 2 == 0 else "model_b"
+        comp_a = "WIN" if winner == "model_a" else "LOSE"
+        rows.append({
+            "question_id": f"en{i}", "lang": "en", "model_a": "m1", "model_b": "m2",
+            "winner": winner,
+            "conversation_a": [{"role": "user", "content": f"en-q{i}"}, {"role": "assistant", "content": comp_a}],
+            "conversation_b": [{"role": "user", "content": f"en-q{i}"}, {"role": "assistant", "content": "OPP"}],
+        })
+    for i in range(4):  # xx: judge says opposite of humans -> disagreement
+        rows.append({
+            "question_id": f"xx{i}", "lang": "xx", "model_a": "m1", "model_b": "m2",
+            "winner": "model_a" if i % 2 == 1 else "model_b",
+            "conversation_a": [{"role": "user", "content": f"xx-q{i}"}, {"role": "assistant", "content": "WIN" if i % 2 == 0 else "LOSE"}],
+            "conversation_b": [{"role": "user", "content": f"xx-q{i}"}, {"role": "assistant", "content": "OPP"}],
+        })
+    return pd.DataFrame(rows)
+
+
+def _fake_judge_prefs(judge_chat_model, instructions, completions_A, completions_B, **kwargs):
+    # A wins (pref 0.0) iff completion_A is "WIN"; raw judge text encodes matching scores.
+    prefs, annotations = [], []
+    for c in completions_A:
+        if c == "WIN":
+            prefs.append(0.0)
+            annotations.append(SimpleNamespace(judge_completion="score a: 9 score b: 1"))
+        else:
+            prefs.append(1.0)
+            annotations.append(SimpleNamespace(judge_completion="score a: 1 score b: 9"))
+    return annotations, None, pd.Series(prefs)
+
+
+@pytest.fixture
+def _patch_curate(monkeypatch):
+    import judgearena.leaderboard.curate as cur
+    monkeypatch.setattr(cur, "load_arena_dataframe", lambda arena: _curate_arena_df())
+    monkeypatch.setattr(cur, "make_model", lambda **kwargs: SimpleNamespace())
+    monkeypatch.setattr(cur, "judge_and_parse_prefs", _fake_judge_prefs)
+    monkeypatch.setattr(
+        cur, "resolve_run_judge_prompt",
+        lambda task, judge_cfg: SimpleNamespace(
+            system_prompt=None, user_prompt_template=None, preset_name="x", parser_mode="score"
+        ),
+    )
+    return cur
+
+
+def test_build_panel_gates_languages_and_caps(_patch_curate):
+    panel_args = PanelArgs(roster_models=["m1", "m2"], kappa_threshold=0.0, n_per_language=4)
+    elo_args = EloArgs(arena=None, languages=["en", "xx"], elo_method="soft")
+    panel = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
+    assert set(panel.battles["lang"]) == {"en"}      # xx dropped (kappa <= 0)
+    assert len(panel.battles) == 4                    # capped at n_per_language
+    assert panel.meta["kappa_per_language"]["en"] == pytest.approx(1.0)
+    assert "xx" not in panel.meta["languages_kept"]
+    assert set(panel.battles["challenger_position"]) <= {"A", "B"}
+    assert panel.battles["challenger_opponent"].isin(["m1", "m2"]).all()
+    assert panel.meta["scorer"]["method"] == "soft"
+    assert panel.meta["scorer"]["calibrated"] is False     # <10 pairs -> static T
+    assert panel.meta["scorer"]["temperature"] == 0.3
+    assert "mae_vs_human" in panel.meta
+    assert list(panel.battles.columns) == list(PANEL_BATTLE_COLUMNS)
+
+
+def test_build_panel_is_deterministic(_patch_curate):
+    panel_args = PanelArgs(roster_models=["m1", "m2"], n_per_language=4)
+    elo_args = EloArgs(languages=["en"], elo_method="soft")
+    p1 = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
+    p2 = build_panel(panel_args, elo_args, judge_cfg=JudgeArgs(model="mock"), seed=0)
+    pd.testing.assert_frame_equal(
+        p1.battles.reset_index(drop=True), p2.battles.reset_index(drop=True)
+    )
