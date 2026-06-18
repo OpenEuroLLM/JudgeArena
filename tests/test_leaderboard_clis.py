@@ -147,3 +147,53 @@ def test_main_board_reads_records_and_prints(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "cand-mid" in out
     assert "| Rank |" in out
+
+
+def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
+    import judgearena.leaderboard.submit as sub
+    from judgearena.estimate_elo_ratings import _slugify
+
+    panel_dir = _save_tiny_panel(tmp_path / "panel")
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: ["c"])
+
+    saved = {}
+
+    def fake_score(panel, completions, *, model, judge_cfg, n_bootstraps, seed,
+                   generation_params, scorer=None):
+        from judgearena.leaderboard.record import ResultRecord
+        rec = ResultRecord(
+            model=model, panel_version=panel.meta["panel_version"],
+            panel_hash=panel.meta["panel_hash"], judge_model=judge_cfg.model,
+            elo_overall=1000.0, elo_std=0.0, elo_ci=[1000.0, 1000.0],
+            elo_per_lang={}, winrate_overall=0.5, winrate_per_lang={},
+            n_battles=1, n_battles_per_lang={}, kappa_per_lang={},
+            mae_vs_human=float("nan"), scorer={}, generation_params=generation_params,
+            seed=seed,
+        )
+        saved["rec"] = rec
+        return rec
+
+    monkeypatch.setattr(sub, "score_against_panel", fake_score)
+
+    model = "OpenRouter/deepseek/deepseek-v3.2"
+    out = sub.main_submit([
+        "--panel-dir", str(panel_dir), "--model", model,
+        "--out", str(tmp_path / "results"), "--tag", "seed-1",
+    ])
+    assert out.name == f"{_slugify(model)}__{_slugify('seed-1')}"
+    assert (out / "result.json").exists()
+    assert saved["rec"].tag == "seed-1"
+
+
+def test_build_board_distinguishes_same_model_by_tag():
+    from judgearena.leaderboard.board import build_board
+    panel = _board_panel()
+    ph = panel.meta["panel_hash"]
+    rec_a = {"model": "deepseek", "tag": "seed-1", "panel_hash": ph,
+             "elo_overall": 1010.0, "elo_ci": [1000.0, 1020.0], "n_battles": 3, "elo_per_lang": {}}
+    rec_b = {"model": "deepseek", "tag": "seed-2", "panel_hash": ph,
+             "elo_overall": 1005.0, "elo_ci": [995.0, 1015.0], "n_battles": 3, "elo_per_lang": {}}
+    board = build_board(panel, [rec_a, rec_b])
+    labels = list(board["model"])
+    assert "deepseek #seed-1" in labels
+    assert "deepseek #seed-2" in labels

@@ -253,7 +253,7 @@ def test_resultrecord_to_dict_keys():
         "elo_std", "elo_ci", "elo_per_lang", "winrate_overall", "winrate_per_lang",
         "n_battles", "n_battles_per_lang", "kappa_per_lang", "mae_vs_human",
         "scorer", "generation_params", "seed", "schema_version", "submitter",
-        "created_utc",
+        "tag", "created_utc",
     }
 
 

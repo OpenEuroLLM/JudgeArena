@@ -33,6 +33,7 @@ class ResultRecord:
     seed: int
     schema_version: str = "1"
     submitter: str | None = None
+    tag: str | None = None
     created_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     battles: pd.DataFrame = field(default_factory=pd.DataFrame)
 

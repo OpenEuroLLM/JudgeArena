@@ -23,6 +23,7 @@ def main_submit(argv: list[str] | None = None) -> Path:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-bootstraps", type=int, default=100)
     ap.add_argument("--submitter", default=None)
+    ap.add_argument("--tag", default=None, help="Optional run tag to distinguish repeated submissions of the same model.")
     args = ap.parse_args(argv)
 
     panel = load_panel(args.panel_dir)
@@ -43,7 +44,11 @@ def main_submit(argv: list[str] | None = None) -> Path:
         generation_params=gen,
     )
     record.submitter = args.submitter
-    out_dir = Path(args.out) / panel.meta["panel_version"] / _slugify(args.model)
+    record.tag = args.tag
+    slug = _slugify(args.model)
+    if args.tag:
+        slug = f"{slug}__{_slugify(args.tag)}"
+    out_dir = Path(args.out) / panel.meta["panel_version"] / slug
     record.save(out_dir)
     logger.info("Wrote result to %s (ELO %.1f)", out_dir, record.elo_overall)
     return out_dir

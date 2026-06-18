@@ -71,7 +71,12 @@ def build_board(
             ci = [float("nan"), float("nan")]
         rows.append(
             {
-                "model": rec.get("model"), "elo": float(elo),
+                "model": (
+                    f"{rec.get('model')} #{rec['tag']}"
+                    if rec.get("tag")
+                    else rec.get("model")
+                ),
+                "elo": float(elo),
                 "ci_low": float(ci[0]), "ci_high": float(ci[1]),
                 "n": int(rec.get("n_battles", 0)), "is_submission": True,
             }
