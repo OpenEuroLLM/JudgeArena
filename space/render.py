@@ -154,6 +154,32 @@ def winrate_heatmap(bundle: dict) -> go.Figure:
     return fig
 
 
+def head_to_head_heatmap(bundle: dict) -> go.Figure:
+    hh = bundle.get("head_to_head", {})
+    models = hh.get("models", [])
+    if not models:
+        return go.Figure().update_layout(title="No head-to-head data", template=TEMPLATE)
+    fig = go.Figure(
+        go.Heatmap(
+            z=hh.get("winrate", []),
+            x=models,
+            y=models,
+            zmin=0,
+            zmax=1,
+            colorscale="RdYlGn",
+            customdata=hh.get("counts", []),
+            hovertemplate="%{y} vs %{x}<br>win rate %{z:.0%}<br>n=%{customdata}<extra></extra>",
+            colorbar=dict(title="win rate"),
+        )
+    )
+    fig.update_layout(
+        title="Head-to-head win rate (row vs column)",
+        template=TEMPLATE,
+        yaxis=dict(autorange="reversed"),
+    )
+    return fig
+
+
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 _TABLE_CSS = (
     # Self-contained colors with !important so Gradio's theme CSS (which colors

@@ -143,3 +143,23 @@ def test_overview_table_html():
     # per-language variant pulls from by_language
     html_en = overview_table_html(_bundle_4a(), lang="en")
     assert "strong" in html_en
+
+
+def test_head_to_head_heatmap():
+    from space.render import head_to_head_heatmap
+    bundle = {
+        "head_to_head": {
+            "models": ["a", "b", "cand #seed-1"],
+            "winrate": [[None, 0.6, None], [0.4, None, 0.5], [None, 0.5, None]],
+            "counts": [[0, 10, 0], [10, 0, 4], [0, 4, 0]],
+        }
+    }
+    fig = head_to_head_heatmap(bundle)
+    assert len(fig.data) == 1
+    assert list(fig.data[0].x) == ["a", "b", "cand #seed-1"]
+
+
+def test_head_to_head_heatmap_empty():
+    from space.render import head_to_head_heatmap
+    fig = head_to_head_heatmap({"head_to_head": {"models": [], "winrate": [], "counts": []}})
+    assert fig is not None  # no crash

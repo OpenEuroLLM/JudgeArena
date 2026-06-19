@@ -17,6 +17,7 @@ try:
         available_languages,
         calibration_fig,
         distribution_fig,
+        head_to_head_heatmap,
         header_html,
         kappa_bar,
         language_bar,
@@ -29,6 +30,7 @@ except ModuleNotFoundError:
         available_languages,
         calibration_fig,
         distribution_fig,
+        head_to_head_heatmap,
         header_html,
         kappa_bar,
         language_bar,
@@ -85,6 +87,8 @@ def build_demo(bundle: dict, scores: pd.DataFrame):  # -> gr.Blocks
                 wb = gr.Plot(language_bar(bundle, langs[0]))
                 wl.change(lambda lg: (language_table(bundle, lg), language_bar(bundle, lg)),
                           wl, [wt, wb])
+        with gr.Tab("Head-to-head"):
+            gr.Plot(head_to_head_heatmap(bundle))
         with gr.Tab("Distributions"):
             if models:
                 default = models[: min(3, len(models))]
