@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pandas as pd
 
-from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel
+from judgearena.leaderboard import publish
+from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
 from judgearena.leaderboard.publish import build_bundle, build_scores_frame
 
 
@@ -88,3 +92,69 @@ def test_build_scores_frame_empty():
     df = build_scores_frame([])
     assert list(df.columns) == ["model", "tag", "lang", "judge_pref"]
     assert len(df) == 0
+
+
+def _write_submission(results_dir, panel_version, rec, battles):
+    d = results_dir / panel_version / rec["model"].replace("/", "_")
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps(rec))
+    battles.to_parquet(d / "battles.parquet", index=False)
+
+
+def test_main_publish_writes_bundle_and_opens_pr(tmp_path, monkeypatch):
+    panel = _panel()
+    panel_dir = save_panel(panel, tmp_path / "panels" / "pv1")
+    # Get the computed panel_hash from the saved panel
+    saved_panel_meta = json.loads((Path(panel_dir) / "panel.json").read_text())
+    panel_hash_computed = saved_panel_meta["panel_hash"]
+
+    results = tmp_path / "results"
+    _write_submission(
+        results, "pv1", _record("cand", 1050.0, panel_hash=panel_hash_computed),
+        pd.DataFrame({"lang": ["en", "fr"], "judge_pref": [0.3, 0.7]}),
+    )
+
+    captured = {}
+
+    def fake_upload(repo, bundle_dir, *, token, create_pr):
+        captured["repo"] = repo
+        captured["create_pr"] = create_pr
+        captured["files"] = sorted(p.name for p in Path(bundle_dir).iterdir())
+        return "https://hf.co/datasets/x/pr/1"
+
+    monkeypatch.setattr(publish, "_upload_bundle", fake_upload)
+
+    out = publish.main_publish([
+        "--panel-dir", str(panel_dir), "--repo", "user/leaderboard",
+        "--results-dir", str(results), "--out", str(tmp_path / "bundle"),
+    ])
+
+    assert (out / "leaderboard.json").exists()
+    assert (out / "scores.parquet").exists()
+    bundle = json.loads((out / "leaderboard.json").read_text())
+    assert any(r["model"] == "cand" for r in bundle["rows"])
+    assert captured["repo"] == "user/leaderboard"
+    assert captured["create_pr"] is True                  # PR by default
+    assert set(captured["files"]) == {"leaderboard.json", "scores.parquet"}
+
+
+def test_main_publish_push_commits_directly(tmp_path, monkeypatch):
+    panel = _panel()
+    panel_dir = save_panel(panel, tmp_path / "panels" / "pv1")
+    # Get the computed panel_hash from the saved panel
+    saved_panel_meta = json.loads((Path(panel_dir) / "panel.json").read_text())
+    panel_hash_computed = saved_panel_meta["panel_hash"]
+
+    results = tmp_path / "results"
+    _write_submission(
+        results, "pv1", _record("cand", 1050.0, panel_hash=panel_hash_computed),
+        pd.DataFrame({"lang": ["en"], "judge_pref": [0.3]}),
+    )
+    seen = {}
+    monkeypatch.setattr(publish, "_upload_bundle",
+                        lambda repo, bundle_dir, *, token, create_pr: seen.setdefault("pr", create_pr) or "url")
+    publish.main_publish([
+        "--panel-dir", str(panel_dir), "--repo", "user/lb",
+        "--results-dir", str(results), "--out", str(tmp_path / "b2"), "--push",
+    ])
+    assert seen["pr"] is False
