@@ -158,3 +158,25 @@ def test_main_publish_push_commits_directly(tmp_path, monkeypatch):
         "--results-dir", str(results), "--out", str(tmp_path / "b2"), "--push",
     ])
     assert seen["pr"] is False
+
+
+def test_main_publish_dry_run_skips_upload(tmp_path, monkeypatch):
+    panel = _panel()
+    panel_dir = save_panel(panel, tmp_path / "panels" / "pv1")
+    results = tmp_path / "results"
+    _write_submission(
+        results, "pv1", _record("cand", 1050.0),
+        pd.DataFrame({"lang": ["en"], "judge_pref": [0.3]}),
+    )
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_upload_bundle must not be called on --dry-run")
+
+    monkeypatch.setattr(publish, "_upload_bundle", _boom)
+
+    out = publish.main_publish([
+        "--panel-dir", str(panel_dir), "--results-dir", str(results),
+        "--out", str(tmp_path / "bundle"), "--dry-run",
+    ])  # no --repo needed
+    assert (out / "leaderboard.json").exists()
+    assert (out / "scores.parquet").exists()

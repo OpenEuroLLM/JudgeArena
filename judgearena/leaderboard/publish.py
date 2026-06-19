@@ -125,12 +125,15 @@ def main_publish(argv: list[str] | None = None) -> Path:
     """Assemble the bundle from local results and upload it to a HF dataset."""
     ap = argparse.ArgumentParser(prog="judgearena-publish")
     ap.add_argument("--panel-dir", required=True)
-    ap.add_argument("--repo", required=True, help="HF dataset repo id, e.g. user/leaderboard.")
+    ap.add_argument("--repo", default=None, help="HF dataset repo id, e.g. user/leaderboard (required unless --dry-run).")
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--out", default=None, help="Local bundle dir (default: a temp dir).")
     ap.add_argument("--push", action="store_true", help="Commit directly instead of a PR.")
+    ap.add_argument("--dry-run", action="store_true", help="Build the bundle locally only; skip the HF upload.")
     ap.add_argument("--token-env", default="HF_TOKEN")
     args = ap.parse_args(argv)
+    if not args.dry_run and not args.repo:
+        ap.error("--repo is required unless --dry-run is given.")
 
     panel = load_panel(args.panel_dir)
     panel_version = panel.meta.get("panel_version", "")
@@ -152,6 +155,10 @@ def main_publish(argv: list[str] | None = None) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "leaderboard.json").write_text(json.dumps(bundle, indent=2) + "\n")
     scores.to_parquet(out_dir / "scores.parquet", index=False)
+
+    if args.dry_run:
+        logger.info("Dry run: wrote bundle to %s (no upload).", out_dir)
+        return out_dir
 
     token = os.environ.get(args.token_env)
     url = _upload_bundle(args.repo, out_dir, token=token, create_pr=not args.push)
