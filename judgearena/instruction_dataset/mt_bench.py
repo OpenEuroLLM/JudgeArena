@@ -5,15 +5,25 @@ from urllib.request import urlretrieve
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.utils import data_root
+from judgearena.dataset_revisions import RAW_URL_REVISIONS, hf_revision
+from judgearena.paths import data_root
 
 MT_BENCH_SPACE_ID = "lmsys/mt-bench"
 MT_BENCH_QUESTION_PATTERN = "data/mt_bench/question.jsonl"
 MT_BENCH_MODEL_ANSWER_DIR = Path("data") / "mt_bench" / "model_answer"
-FASTCHAT_GPT4_REFERENCE_URL = (
-    "https://raw.githubusercontent.com/lm-sys/FastChat/main/"
-    "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
-)
+
+
+def _fastchat_reference_url() -> str:
+    """URL for FastChat MT-Bench GPT-4 references, pinned when available."""
+    revision = RAW_URL_REVISIONS.get("lm-sys/FastChat")
+    rev = revision if revision else "main"
+    return (
+        f"https://raw.githubusercontent.com/lm-sys/FastChat/{rev}/"
+        "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
+    )
+
+
+FASTCHAT_GPT4_REFERENCE_URL = _fastchat_reference_url()
 
 # Mirrors ``ARENA_HARD_BASELINES`` / ``M_ARENA_HARD_BASELINES``: dataset name ->
 # dataset-native pairwise baseline. MT-Bench ships only one variant today, and
@@ -54,6 +64,7 @@ def _snapshot_mt_bench_files(
             allow_patterns=allow_patterns,
             local_dir=local_dir,
             force_download=False,
+            revision=hf_revision(MT_BENCH_SPACE_ID),
         )
     except Exception as e:
         raise RuntimeError(
