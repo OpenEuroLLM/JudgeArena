@@ -29,12 +29,26 @@ def capture_mains(monkeypatch):
 
 @pytest.mark.parametrize(
     "task",
-    ["alpaca-eval", "arena-hard-v2.0", "m-arena-hard-v2.0-EU", "fluency-french", "mt-bench"],
+    [
+        "alpaca-eval",
+        "arena-hard-v2.0",
+        "m-arena-hard-v2.0-EU",
+        "fluency-french",
+        "mt-bench",
+    ],
 )
 def test_task_dispatches_to_generate_and_evaluate(capture_mains, task: str):
     cli_module.cli(
-        ["--task", task, "--model.name", "Dummy/A",
-         "--model.baseline", "Dummy/B", "--judge.model", "Dummy/J"]
+        [
+            "--task",
+            task,
+            "--model.name",
+            "Dummy/A",
+            "--model.baseline",
+            "Dummy/B",
+            "--judge.model",
+            "Dummy/J",
+        ]
     )
     assert capture_mains["module"] == "generate_and_evaluate"
     cfg = capture_mains["cfg"]
@@ -86,8 +100,16 @@ def test_missing_task_errors(capture_mains):
 
 def test_missing_judge_errors(capture_mains):
     with pytest.raises(SystemExit):
-        cli_module.cli(["--task", "alpaca-eval", "--model.name", "Dummy/A",
-                        "--model.baseline", "Dummy/B"])
+        cli_module.cli(
+            [
+                "--task",
+                "alpaca-eval",
+                "--model.name",
+                "Dummy/A",
+                "--model.baseline",
+                "Dummy/B",
+            ]
+        )
 
 
 def test_elo_requires_model_path(capture_mains):
@@ -97,27 +119,48 @@ def test_elo_requires_model_path(capture_mains):
 
 def test_elo_rejects_model_path_b(capture_mains):
     with pytest.raises(SystemExit, match="model.baseline is not supported for elo"):
-        cli_module.cli(["--task", "elo-comparia", "--model.name", "Dummy/X",
-                        "--model.baseline", "Dummy/B", "--judge.model", "Dummy/J"])
+        cli_module.cli(
+            [
+                "--task",
+                "elo-comparia",
+                "--model.name",
+                "Dummy/X",
+                "--model.baseline",
+                "Dummy/B",
+                "--judge.model",
+                "Dummy/J",
+            ]
+        )
 
 
 def test_unknown_elo_task_errors(capture_mains):
     with pytest.raises(SystemExit, match="Unknown elo task"):
-        cli_module.cli(["--task", "elo-foo", "--model.name", "Dummy/X",
-                        "--judge.model", "Dummy/J"])
+        cli_module.cli(
+            ["--task", "elo-foo", "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
+        )
 
 
 def test_pairwise_without_native_baseline_requires_model_path_b(capture_mains):
     with pytest.raises(SystemExit, match="model.baseline is required"):
-        cli_module.cli(["--task", "fluency-french", "--model.name", "Dummy/A",
-                        "--judge.model", "Dummy/J"])
+        cli_module.cli(
+            [
+                "--task",
+                "fluency-french",
+                "--model.name",
+                "Dummy/A",
+                "--judge.model",
+                "Dummy/J",
+            ]
+        )
 
 
 @pytest.mark.parametrize(
     "task", ["alpaca-eval", "arena-hard-v0.1", "m-arena-hard-v2.0-EU", "mt-bench"]
 )
 def test_pairwise_allows_missing_model_path_b_with_native_baseline(capture_mains, task):
-    cli_module.cli(["--task", task, "--model.name", "Dummy/A", "--judge.model", "Dummy/J"])
+    cli_module.cli(
+        ["--task", task, "--model.name", "Dummy/A", "--judge.model", "Dummy/J"]
+    )
     cfg = capture_mains["cfg"]
     assert cfg.task == task
     assert cfg.model.baseline is None
@@ -125,11 +168,30 @@ def test_pairwise_allows_missing_model_path_b_with_native_baseline(capture_mains
 
 def test_elo_forwards_optional_flags(capture_mains):
     cli_module.cli(
-        ["--task", "elo-lmarena-140k", "--model.name", "Dummy/X", "--judge.model", "Dummy/J",
-         "--elo.languages", '["en", "fr"]', "--elo.n_instructions_per_language", "50",
-         "--elo.n_bootstraps", "5", "--run.seed", "7", "--elo.baseline_model", "gpt-4o",
-         "--elo.soft_elo_temperature", "0.5", "--elo.elo_random_battles", "100",
-         "--judge.prompt_preset", "default_with_explanation"]
+        [
+            "--task",
+            "elo-lmarena-140k",
+            "--model.name",
+            "Dummy/X",
+            "--judge.model",
+            "Dummy/J",
+            "--elo.languages",
+            '["en", "fr"]',
+            "--elo.n_instructions_per_language",
+            "50",
+            "--elo.n_bootstraps",
+            "5",
+            "--run.seed",
+            "7",
+            "--elo.baseline_model",
+            "gpt-4o",
+            "--elo.soft_elo_temperature",
+            "0.5",
+            "--elo.elo_random_battles",
+            "100",
+            "--judge.prompt_preset",
+            "default_with_explanation",
+        ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.elo is not None
@@ -145,8 +207,18 @@ def test_elo_forwards_optional_flags(capture_mains):
 
 def test_engine_kwargs_parsed_as_json(capture_mains):
     cli_module.cli(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/A", "--model.baseline", "Dummy/B",
-         "--judge.model", "Dummy/J", "--model.engine_kwargs", '{"tensor_parallel_size": 4}']
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/A",
+            "--model.baseline",
+            "Dummy/B",
+            "--judge.model",
+            "Dummy/J",
+            "--model.engine_kwargs",
+            '{"tensor_parallel_size": 4}',
+        ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.model.engine_kwargs == {"tensor_parallel_size": 4}
@@ -154,8 +226,18 @@ def test_engine_kwargs_parsed_as_json(capture_mains):
 
 def test_judge_prompt_preset_is_forwarded(capture_mains):
     cli_module.cli(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/A", "--model.baseline", "Dummy/B",
-         "--judge.model", "Dummy/J", "--judge.prompt_preset", "default_with_explanation"]
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/A",
+            "--model.baseline",
+            "Dummy/B",
+            "--judge.model",
+            "Dummy/J",
+            "--judge.prompt_preset",
+            "default_with_explanation",
+        ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.judge.prompt_preset == "default_with_explanation"
@@ -163,9 +245,20 @@ def test_judge_prompt_preset_is_forwarded(capture_mains):
 
 def test_custom_judge_prompt_files_are_forwarded(capture_mains):
     cli_module.cli(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/A", "--model.baseline", "Dummy/B",
-         "--judge.model", "Dummy/J", "--judge.system_prompt_file", "system.txt",
-         "--judge.user_prompt_file", "user.txt"]
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/A",
+            "--model.baseline",
+            "Dummy/B",
+            "--judge.model",
+            "Dummy/J",
+            "--judge.system_prompt_file",
+            "system.txt",
+            "--judge.user_prompt_file",
+            "user.txt",
+        ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.judge.system_prompt_file == "system.txt"
@@ -182,11 +275,24 @@ def test_mt_bench_omits_prompt_preset_for_task_default(capture_mains):
 
 def test_judge_side_kwargs_parsed_separately(capture_mains):
     cli_module.cli(
-        ["--task", "arena-hard-v2.0", "--model.name", "Dummy/A", "--judge.model", "Dummy/J",
-         "--generation.truncate_judge_input_chars", "80000",
-         "--model.max_model_len", "32768", "--judge.max_model_len", "65536",
-         "--model.engine_kwargs", '{"tensor_parallel_size": 1}',
-         "--judge.engine_kwargs", '{"tensor_parallel_size": 4}']
+        [
+            "--task",
+            "arena-hard-v2.0",
+            "--model.name",
+            "Dummy/A",
+            "--judge.model",
+            "Dummy/J",
+            "--generation.truncate_judge_input_chars",
+            "80000",
+            "--model.max_model_len",
+            "32768",
+            "--judge.max_model_len",
+            "65536",
+            "--model.engine_kwargs",
+            '{"tensor_parallel_size": 1}',
+            "--judge.engine_kwargs",
+            '{"tensor_parallel_size": 4}',
+        ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.model.baseline is None

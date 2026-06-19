@@ -6,8 +6,11 @@ task: elo-comparia
 model:
   name: Together/meta-llama/Llama-3.3-70B-Instruct-Turbo
 judge:
-  model: OpenRouter/deepseek/deepseek-chat-v3.1
+  model: OpenRouter/google/gemma-4-26b-a4b-it
 generation:
   n_instructions: 200
 elo:
   n_bootstraps: 20
+  # Restrict the arena to these language codes. Defaults to English here; add
+  # more to evaluate multilingually, e.g. languages: ["en", "fr", "de"].
+  languages: ["en"]

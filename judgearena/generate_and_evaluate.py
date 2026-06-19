@@ -267,7 +267,11 @@ def main(cfg: "RunConfig"):
         )
         instructions = instructions_df.loc[:, "instruction"]
 
-    n_instructions = cfg.generation.n_instructions if cfg.generation.n_instructions else len(instructions)
+    n_instructions = (
+        cfg.generation.n_instructions
+        if cfg.generation.n_instructions
+        else len(instructions)
+    )
     if cfg.generation.n_instructions is not None:
         instructions_df = instructions_df.head(n_instructions)
         instructions = instructions.head(n_instructions)
