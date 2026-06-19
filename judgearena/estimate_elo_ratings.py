@@ -207,7 +207,7 @@ class EloReport(Report):
     sampling_metadata: dict[str, object]
     source_battle_counts: dict[str, int]
 
-    def to_dict(self) -> dict:
+    def _payload(self) -> dict:
         return {
             **self.summary.to_dict(),
             "arena": self.arena,

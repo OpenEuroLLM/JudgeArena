@@ -6,7 +6,6 @@ and result saving for the MT-Bench benchmark.
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,7 +31,7 @@ from judgearena.prompts.registry import (
     ResolvedJudgePrompt,
     resolve_run_judge_prompt,
 )
-from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.repro import write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import BattleReport, _compute_grouped_stats
 
@@ -158,9 +157,6 @@ def _save_mt_bench_results(
 
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
-    with open(res_folder / f"results-{result_name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
-
     write_run_metadata(
         output_dir=res_folder,
         entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
@@ -209,6 +205,7 @@ def _finalize_mt_bench_run(
     )
     results = report.to_dict()
     report.render()
+    report.save(res_folder / f"results-{result_name}.json")
     _save_mt_bench_results(
         cfg=cfg,
         res_folder=res_folder,

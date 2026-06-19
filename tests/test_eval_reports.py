@@ -1,4 +1,5 @@
 import io
+import json
 from contextlib import redirect_stdout
 
 import pandas as pd
@@ -56,14 +57,16 @@ def test_battlereport_to_dict_arena_shape():
         metadata={"baseline_assignment": "flat", "prompt_preset": "default"},
     )
     d = report.to_dict()
+    assert d["schema_version"] == "1"
+    assert d["report_type"] == "BattleReport"
     assert d["task"] == "alpaca-eval"
     assert d["model_A"] == "my-model"
     assert d["model_B"] == "gpt4"
     assert d["judge_model"] == "judge"
     assert d["swap_mode"] == "fixed"
     assert d["result_folder"] == "/tmp/run"
-    assert d["baseline_assignment"] == "flat"
-    assert d["prompt_preset"] == "default"
+    assert d["metadata"]["baseline_assignment"] == "flat"
+    assert d["metadata"]["prompt_preset"] == "default"
     assert d["num_wins"] == 2
     assert d["preferences"] == [0.0, 1.0, 0.5, None]
     assert "per_category" not in d
@@ -83,9 +86,11 @@ def test_battlereport_to_dict_mtbench_shape():
         metadata={"date": "2026-06-16", "user": "tester"},
     )
     d = report.to_dict()
+    assert d["schema_version"] == "1"
+    assert d["report_type"] == "BattleReport"
     assert d["per_category"]["writing"]["winrate"] == 0.6
     assert d["per_turn"][1]["winrate"] == 0.5
-    assert d["date"] == "2026-06-16"
+    assert d["metadata"]["date"] == "2026-06-16"
     assert "swap_mode" not in d
     assert "result_folder" not in d
 
@@ -131,3 +136,56 @@ def test_battlereport_render_mtbench_breakdowns():
     assert "Per-Category Breakdown:" in out
     assert "writing" in out
     assert "Per-Turn Breakdown:" in out
+
+
+def test_battlereport_save_round_trip(tmp_path):
+    report = BattleReport(
+        task="alpaca-eval",
+        model_a="my-model",
+        model_b="gpt4",
+        judge_model="judge",
+        summary=_summary(),
+        swap_mode="fixed",
+        result_folder="/tmp/run",
+        preferences=[0.0, 1.0, 0.5],
+        metadata={"baseline_assignment": "flat"},
+    )
+    path = report.save(tmp_path / "r.json")
+    assert path.exists()
+    loaded = json.loads(path.read_text())
+    assert loaded == report.to_dict()
+    assert loaded["schema_version"] == "1"
+    assert loaded["report_type"] == "BattleReport"
+
+
+def test_eloreport_to_dict_envelope():
+    from judgearena.estimate_elo_ratings import EloReport
+
+    report = EloReport(
+        arena="chatbot-arena",
+        model_a="my-model",
+        judge_model="judge",
+        summary=_summary(),
+        num_battles=10,
+        llm_judged_battles=10,
+        human_anchor_battles=5,
+        elo_mean=1000.0,
+        elo_std=10.0,
+        elo_num_bootstraps=100,
+        mae_vs_human=5.0,
+        method="Soft-ELO",
+        calibrated_temperature=0.3,
+        n_bootstraps=100,
+        model_name="my-model",
+        mean_ratings={"my-model": 1000.0},
+        battle_counts={"my-model": 10},
+        human_elo={"gpt4": 1100.0},
+        bootstrap_ratings=[{"my-model": 1000.0}],
+        sampling_metadata={"sampling_mode": "head"},
+        source_battle_counts={"my-model": 10},
+    )
+    d = report.to_dict()
+    assert d["schema_version"] == "1"
+    assert d["report_type"] == "EloReport"
+    assert d["arena"] == "chatbot-arena"
+    assert d["model_A"] == "my-model"

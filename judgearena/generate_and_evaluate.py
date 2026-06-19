@@ -3,7 +3,6 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -36,7 +35,7 @@ from judgearena.models import (
     make_model,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.repro import write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -443,9 +442,7 @@ def main(cfg: "RunConfig"):
         cfg.judge.model,
     )
     report.render()
-
-    with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
+    report.save(res_folder / f"results-{name}.json")
 
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()
