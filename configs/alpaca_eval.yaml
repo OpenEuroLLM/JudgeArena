@@ -7,6 +7,6 @@ model:
   name: gpt4_1106_preview
   baseline: VLLM/utter-project/EuroLLM-9B
 judge:
-  model: OpenRouter/deepseek/deepseek-chat-v3.1
+  model: OpenRouter/google/gemma-4-26b-a4b-it
 generation:
   n_instructions: 10

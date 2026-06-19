@@ -331,7 +331,9 @@ def run_mt_bench(
             f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
-    questions_df = load_instructions("mt-bench", n_instructions=cfg.generation.n_instructions)
+    questions_df = load_instructions(
+        "mt-bench", n_instructions=cfg.generation.n_instructions
+    )
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
         cfg.model.name,

@@ -98,8 +98,16 @@ def test_cli_yaml_equivalence_generate(tmp_path):
     from judgearena.config import build_run_config, load_config
 
     expected = build_run_config(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/a",
-         "--model.baseline", "Dummy/b", "--judge.model", "Dummy/j"]
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/a",
+            "--model.baseline",
+            "Dummy/b",
+            "--judge.model",
+            "Dummy/j",
+        ]
     )
     yaml_path = tmp_path / "g.yaml"
     yaml_path.write_text(
@@ -115,13 +123,18 @@ def test_cli_yaml_equivalence_elo(tmp_path):
     from judgearena.config import build_run_config, load_config
 
     expected = build_run_config(
-        ["--task", "elo-comparia", "--model.name", "Dummy/m", "--judge.model", "Dummy/j"]
+        [
+            "--task",
+            "elo-comparia",
+            "--model.name",
+            "Dummy/m",
+            "--judge.model",
+            "Dummy/j",
+        ]
     )
     yaml_path = tmp_path / "e.yaml"
     yaml_path.write_text(
-        "task: elo-comparia\n"
-        "model: {name: Dummy/m}\n"
-        "judge: {model: Dummy/j}\n"
+        "task: elo-comparia\nmodel: {name: Dummy/m}\njudge: {model: Dummy/j}\n"
     )
     actual = load_config(yaml_path)
     assert actual == expected
@@ -151,8 +164,16 @@ def test_build_run_config_cli_only():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/a",
-         "--model.baseline", "Dummy/b", "--judge.model", "Dummy/j"]
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/a",
+            "--model.baseline",
+            "Dummy/b",
+            "--judge.model",
+            "Dummy/j",
+        ]
     )
     assert cfg.task == "alpaca-eval"
     assert cfg.model.name == "Dummy/a"
@@ -182,8 +203,18 @@ def test_build_run_config_engine_kwargs_json():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "alpaca-eval", "--model.name", "Dummy/a", "--model.baseline", "Dummy/b",
-         "--judge.model", "Dummy/j", "--judge.engine_kwargs", '{"tensor_parallel_size": 4}']
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/a",
+            "--model.baseline",
+            "Dummy/b",
+            "--judge.model",
+            "Dummy/j",
+            "--judge.engine_kwargs",
+            '{"tensor_parallel_size": 4}',
+        ]
     )
     assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
 
@@ -192,6 +223,13 @@ def test_build_run_config_elo_arena_derived():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
-        ["--task", "elo-comparia", "--model.name", "Dummy/m", "--judge.model", "Dummy/j"]
+        [
+            "--task",
+            "elo-comparia",
+            "--model.name",
+            "Dummy/m",
+            "--judge.model",
+            "Dummy/j",
+        ]
     )
     assert cfg.elo is not None and cfg.elo.arena == "ComparIA"
