@@ -156,11 +156,18 @@ def winrate_heatmap(bundle: dict) -> go.Figure:
 
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 _TABLE_CSS = (
-    "<style>table.lb{border-collapse:collapse;width:100%;font-size:14px}"
-    "table.lb th,table.lb td{padding:6px 10px;border-bottom:1px solid #eee;text-align:left}"
-    "table.lb thead th{position:sticky;top:0;background:#f8fafc}"
+    # Self-contained colors with !important so Gradio's theme CSS (which colors
+    # td/th text by the page light/dark mode) can't override them — the table
+    # must stay dark-on-light regardless of the surrounding theme.
+    "<style>table.lb{border-collapse:collapse;width:100%;font-size:14px;"
+    "color:#1e293b !important;background:#ffffff !important}"
+    "table.lb th,table.lb td{padding:6px 10px;border-bottom:1px solid #e5e7eb;"
+    "text-align:left;color:#1e293b !important;background:transparent}"
+    "table.lb thead th{position:sticky;top:0;background:#f1f5f9 !important;"
+    "color:#1e293b !important}"
+    "table.lb tr.sub td{background:#fff7ed !important}"
     ".chip{display:inline-block;padding:4px 10px;margin:2px;border-radius:999px;"
-    "background:#eef2ff;font-size:13px;color:#1e293b}</style>"
+    "background:#eef2ff !important;font-size:13px;color:#1e293b !important}</style>"
 )
 
 
@@ -180,7 +187,7 @@ def header_html(bundle: dict) -> str:
         f'<span class="chip">judge: {p.get("judge_model", "?")}</span>',
         f'<span class="chip">panel: {p.get("panel_version", "?")}</span>',
         f'<span class="chip">MAE vs Human-ELO: {mae_txt}</span>',
-        f'<span class="chip" style="background:{_kappa_color(kmean)};color:#fff">'
+        f'<span class="chip" style="background:{_kappa_color(kmean)} !important;color:#1e293b">'
         f'judge trust: {ktxt}</span>',
         f'<span class="chip">updated: {updated}</span>',
     ]
@@ -198,7 +205,7 @@ def overview_table_html(bundle: dict, lang: str | None = None) -> str:
     body = []
     for r in rows:
         medal = _MEDALS.get(r["rank"], "")
-        hi = ' style="font-weight:600;background:#fff7ed"' if r.get("is_submission") else ""
+        hi = ' class="sub" style="font-weight:600"' if r.get("is_submission") else ""
         if lang is not None:
             body.append(
                 f'<tr{hi}><td>{medal} {r["rank"]}</td><td>{r["model"]}</td>'
