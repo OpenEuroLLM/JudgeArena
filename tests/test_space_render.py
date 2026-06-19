@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import plotly.graph_objects as go
 
+from space.app import load_bundle
 from space.render import (
     available_languages,
     distribution_fig,
@@ -71,3 +74,13 @@ def test_distribution_fig_per_model():
     fig = distribution_fig(scores, ["a", "b"])
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 2  # one histogram trace per model
+
+
+def test_load_bundle_local(tmp_path):
+    (tmp_path / "leaderboard.json").write_text(json.dumps({"rows": [], "languages": []}))
+    pd.DataFrame({"model": ["a"], "tag": [None], "lang": ["en"], "judge_pref": [0.5]}).to_parquet(
+        tmp_path / "scores.parquet", index=False
+    )
+    bundle, scores = load_bundle(local_dir=str(tmp_path))
+    assert bundle == {"rows": [], "languages": []}
+    assert list(scores.columns) == ["model", "tag", "lang", "judge_pref"]
