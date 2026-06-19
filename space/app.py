@@ -15,18 +15,26 @@ import pandas as pd
 try:
     from render import (
         available_languages,
+        calibration_fig,
         distribution_fig,
+        header_html,
+        kappa_bar,
         language_bar,
         language_table,
-        overview_table,
+        overview_table_html,
+        winrate_heatmap,
     )
 except ModuleNotFoundError:
     from space.render import (
         available_languages,
+        calibration_fig,
         distribution_fig,
+        header_html,
+        kappa_bar,
         language_bar,
         language_table,
-        overview_table,
+        overview_table_html,
+        winrate_heatmap,
     )
 
 _DATASET_REPO = "OpenEuroLLM/judgearena-leaderboard"  # default published dataset
@@ -49,40 +57,40 @@ def load_bundle(local_dir: str | None = None, repo: str | None = None) -> tuple[
 
 
 def build_demo(bundle: dict, scores: pd.DataFrame):  # -> gr.Blocks
-    import gradio as gr  # lazy: only needed when actually launching the Space
+    import gradio as gr
 
-    panel = bundle.get("panel", {})
     langs = available_languages(bundle)
     models = sorted(scores["model"].unique().tolist()) if len(scores) else []
+    theme = gr.themes.Soft(font=gr.themes.GoogleFont("Inter"))
 
-    header = (
-        f"### JudgeArena Leaderboard\n"
-        f"Judge: `{panel.get('judge_model', '?')}` · panel `{panel.get('panel_version', '?')}` · "
-        f"MAE vs Human-ELO: {panel.get('mae_vs_human', float('nan')):.1f}"
-    )
-
-    with gr.Blocks(theme=gr.themes.Soft(), title="JudgeArena Leaderboard") as demo:
-        gr.Markdown(header)
+    with gr.Blocks(theme=theme, title="JudgeArena Leaderboard") as demo:
+        gr.HTML(header_html(bundle))
         with gr.Tab("Overview"):
-            gr.Dataframe(value=overview_table(bundle), interactive=False, wrap=True)
-        with gr.Tab("By language"):
+            gr.Plot(kappa_bar(bundle))
+            lang_choices = ["All", *langs]
+            lang_dd = gr.Dropdown(lang_choices, value="All", label="Language")
+            table = gr.HTML(overview_table_html(bundle, None))
+
+            def _on_lang(choice):
+                return overview_table_html(bundle, None if choice == "All" else choice)
+
+            lang_dd.change(_on_lang, lang_dd, table)
+        with gr.Tab("Calibration"):
+            gr.Plot(calibration_fig(bundle))
+        with gr.Tab("Win rates"):
+            gr.Plot(winrate_heatmap(bundle))
             if langs:
-                lang_dd = gr.Dropdown(langs, value=langs[0], label="Language")
-                lang_tbl = gr.Dataframe(value=language_table(bundle, langs[0]), interactive=False)
-                lang_plot = gr.Plot(value=language_bar(bundle, langs[0]))
-
-                def _on_lang(lang):
-                    return language_table(bundle, lang), language_bar(bundle, lang)
-
-                lang_dd.change(_on_lang, lang_dd, [lang_tbl, lang_plot])
-            else:
-                gr.Markdown("_No per-language data in this panel._")
+                wl = gr.Dropdown(langs, value=langs[0], label="Language")
+                wt = gr.Dataframe(value=language_table(bundle, langs[0]), interactive=False)
+                wb = gr.Plot(language_bar(bundle, langs[0]))
+                wl.change(lambda lg: (language_table(bundle, lg), language_bar(bundle, lg)),
+                          wl, [wt, wb])
         with gr.Tab("Distributions"):
             if models:
-                model_sel = gr.Dropdown(models, value=models[: min(3, len(models))],
-                                        multiselect=True, label="Models")
-                dist_plot = gr.Plot(value=distribution_fig(scores, models[: min(3, len(models))]))
-                model_sel.change(lambda ms: distribution_fig(scores, ms), model_sel, dist_plot)
+                default = models[: min(3, len(models))]
+                ms = gr.Dropdown(models, value=default, multiselect=True, label="Models")
+                dp = gr.Plot(distribution_fig(scores, default))
+                ms.change(lambda sel: distribution_fig(scores, sel), ms, dp)
             else:
                 gr.Markdown("_No per-battle scores published yet._")
     return demo
