@@ -9,7 +9,11 @@ import pandas as pd
 
 from judgearena.leaderboard import publish
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
-from judgearena.leaderboard.publish import build_bundle, build_scores_frame
+from judgearena.leaderboard.publish import (
+    build_bundle,
+    build_head_to_head,
+    build_scores_frame,
+)
 
 
 def _panel():
@@ -200,3 +204,27 @@ def test_build_bundle_calibration_and_winrate_per_lang():
     assert sub["winrate_per_lang"] == {"en": 0.6, "fr": 0.4}
     anchor = next(r for r in bundle["rows"] if r["model"] == "strong")
     assert anchor["winrate_per_lang"] == {}
+
+
+def test_build_head_to_head():
+    panel = _panel()  # anchors strong/weak, judge_pref favors strong (0.0)
+    rec = _record("cand", 1050.0, tag="seed-1")
+    battles = pd.DataFrame({
+        "opponent": ["strong", "strong", "weak"],
+        "position": ["A", "A", "A"],          # cand is A
+        "judge_pref": [0.0, 0.0, 1.0],        # cand beats strong twice, loses to weak once
+    })
+    hh = build_head_to_head(panel, [(rec, battles)])
+
+    models = hh["models"]
+    assert "strong" in models and "weak" in models and "cand #seed-1" in models
+    i = {m: k for k, m in enumerate(models)}
+
+    # cand vs strong: cand won both -> 1.0 ; reverse is 0.0
+    assert hh["winrate"][i["cand #seed-1"]][i["strong"]] == 1.0
+    assert hh["winrate"][i["strong"]][i["cand #seed-1"]] == 0.0
+    assert hh["counts"][i["cand #seed-1"]][i["strong"]] == 2
+    # anchors fought (panel) -> not None
+    assert hh["winrate"][i["strong"]][i["weak"]] is not None
+    # cand never fought... itself -> diagonal None
+    assert hh["winrate"][i["cand #seed-1"]][i["cand #seed-1"]] is None

@@ -94,6 +94,62 @@ def _anchor_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
     return {"mae": mae, "spearman": spearman, "points": points}
 
 
+def _h2h_win(pref: float) -> float | None:
+    if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+        return None
+    return 1.0 if pref < 0.5 else (0.0 if pref > 0.5 else 0.5)
+
+
+def build_head_to_head(
+    panel: Panel, items: list[tuple[dict, pd.DataFrame | None]]
+) -> dict:
+    """Pairwise win-rate + battle counts (row beats column) across all models."""
+    from collections import defaultdict
+
+    wins: dict[tuple[str, str], float] = defaultdict(float)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    def _add(row: str, col: str, win: float) -> None:
+        wins[(row, col)] += win
+        counts[(row, col)] += 1
+        wins[(col, row)] += 1.0 - win
+        counts[(col, row)] += 1
+
+    battles = panel.battles
+    if battles is not None and len(battles):
+        for _, b in battles.iterrows():
+            win_a = _h2h_win(b["judge_pref"])
+            if win_a is not None:
+                _add(str(b["model_a"]), str(b["model_b"]), win_a)
+
+    for rec, sub_battles in items:
+        if sub_battles is None or len(sub_battles) == 0:
+            continue
+        model = _record_label(rec)
+        # Skip if required columns are missing
+        if "opponent" not in sub_battles.columns or "position" not in sub_battles.columns:
+            continue
+        for _, b in sub_battles.iterrows():
+            pref = b["judge_pref"]
+            if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+                continue
+            if pref == 0.5:
+                sub_win = 0.5
+            elif (pref < 0.5 and b["position"] == "A") or (pref > 0.5 and b["position"] == "B"):
+                sub_win = 1.0
+            else:
+                sub_win = 0.0
+            _add(model, str(b["opponent"]), sub_win)
+
+    models = sorted({m for pair in counts for m in pair})
+    winrate = [
+        [(wins[(r, c)] / counts[(r, c)]) if counts[(r, c)] else None for c in models]
+        for r in models
+    ]
+    count_matrix = [[counts[(r, c)] for c in models] for r in models]
+    return {"models": models, "winrate": winrate, "counts": count_matrix}
+
+
 def build_bundle(panel: Panel, records: list[dict]) -> dict:
     """Assemble the published leaderboard bundle dict from a panel + records."""
     overall = build_board(panel, records)
@@ -220,6 +276,7 @@ def main_publish(argv: list[str] | None = None) -> Path:
 
     records = [rec for rec, _ in items]
     bundle = build_bundle(panel, records)
+    bundle["head_to_head"] = build_head_to_head(panel, items)
     scores = build_scores_frame(items)
 
     out_dir = Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix="lb-bundle-"))
