@@ -7,6 +7,6 @@ model:
   name: gpt4_1106_preview
   baseline: VLLM/utter-project/EuroLLM-9B
 judge:
-  model: OpenRouter/google/gemma-4-26b-a4b-it
+  model: OpenRouter/google/gemma-4-31b-it
 generation:
   n_instructions: 10
