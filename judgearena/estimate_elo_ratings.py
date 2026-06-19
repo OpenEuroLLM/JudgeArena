@@ -28,6 +28,9 @@ from judgearena.utils.eval import PrefSummary, Report
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
+
 logger = get_logger(__name__)
 
 
