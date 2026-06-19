@@ -152,3 +152,64 @@ def winrate_heatmap(bundle: dict) -> go.Figure:
     )
     fig.update_layout(title="Win rate by language", template=TEMPLATE)
     return fig
+
+
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+_TABLE_CSS = (
+    "<style>table.lb{border-collapse:collapse;width:100%;font-size:14px}"
+    "table.lb th,table.lb td{padding:6px 10px;border-bottom:1px solid #eee;text-align:left}"
+    "table.lb thead th{position:sticky;top:0;background:#f8fafc}"
+    ".chip{display:inline-block;padding:4px 10px;margin:2px;border-radius:999px;"
+    "background:#eef2ff;font-size:13px;color:#1e293b}</style>"
+)
+
+
+def header_html(bundle: dict) -> str:
+    p = bundle.get("panel", {})
+    mae = p.get("mae_vs_human")
+    mae_txt = f"{mae:.1f}" if isinstance(mae, int | float) and not pd.isna(mae) else "n/a"
+    kp = p.get("kappa_per_language", {})
+    kmean = sum(kp.values()) / len(kp) if kp else None
+    ktxt = (
+        "high" if kmean is not None and kmean >= 0.6
+        else "medium" if kmean is not None and kmean >= 0.4
+        else "low" if kmean is not None else "n/a"
+    )
+    updated = str(p.get("generated_utc", ""))[:10] or "?"
+    chips = [
+        f'<span class="chip">judge: {p.get("judge_model", "?")}</span>',
+        f'<span class="chip">panel: {p.get("panel_version", "?")}</span>',
+        f'<span class="chip">MAE vs Human-ELO: {mae_txt}</span>',
+        f'<span class="chip" style="background:{_kappa_color(kmean)};color:#fff">'
+        f'judge trust: {ktxt}</span>',
+        f'<span class="chip">updated: {updated}</span>',
+    ]
+    return _TABLE_CSS + "<div>" + "".join(chips) + "</div>"
+
+
+def overview_table_html(bundle: dict, lang: str | None = None) -> str:
+    if lang is not None:
+        rows = bundle.get("by_language", {}).get(lang, [])
+        head = "<tr><th>Rank</th><th>Model</th><th>ELO</th><th>n</th></tr>"
+    else:
+        rows = bundle.get("rows", [])
+        head = ("<tr><th>Rank</th><th>Model</th><th>ELO</th><th>CI</th>"
+                "<th>Win rate</th><th>n</th></tr>")
+    body = []
+    for r in rows:
+        medal = _MEDALS.get(r["rank"], "")
+        hi = ' style="font-weight:600;background:#fff7ed"' if r.get("is_submission") else ""
+        if lang is not None:
+            body.append(
+                f'<tr{hi}><td>{medal} {r["rank"]}</td><td>{r["model"]}</td>'
+                f'<td>{r["elo"]:.1f}</td><td>{r["n"]}</td></tr>'
+            )
+        else:
+            ci = (f'[{r["ci_low"]:.0f}, {r["ci_high"]:.0f}]'
+                  if r.get("ci_low") is not None else "")
+            wr = f'{r["winrate"]:.1%}' if r.get("winrate") is not None else ""
+            body.append(
+                f'<tr{hi}><td>{medal} {r["rank"]}</td><td>{r["model"]}</td>'
+                f'<td>{r["elo"]:.1f}</td><td>{ci}</td><td>{wr}</td><td>{r["n"]}</td></tr>'
+            )
+    return _TABLE_CSS + f'<table class="lb"><thead>{head}</thead><tbody>{"".join(body)}</tbody></table>'

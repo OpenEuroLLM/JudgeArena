@@ -124,3 +124,22 @@ def test_winrate_heatmap():
 def test_existing_figs_use_white_template():
     from space.render import TEMPLATE
     assert TEMPLATE == "plotly_white"
+
+
+def test_header_html_handles_missing_mae():
+    from space.render import header_html
+    b = _bundle_4a()
+    b["panel"]["mae_vs_human"] = None  # must not crash (the #3 latent bug)
+    html = header_html(b)
+    assert "judge" in html.lower()
+    assert "n/a" in html.lower()
+
+
+def test_overview_table_html():
+    from space.render import overview_table_html
+    html = overview_table_html(_bundle_4a())
+    assert "cand #seed-1" in html
+    assert "<table" in html
+    # per-language variant pulls from by_language
+    html_en = overview_table_html(_bundle_4a(), lang="en")
+    assert "strong" in html_en
