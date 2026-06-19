@@ -6,7 +6,7 @@ task: elo-comparia
 model:
   name: Together/meta-llama/Llama-3.3-70B-Instruct-Turbo
 judge:
-  model: OpenRouter/google/gemma-4-26b-a4b-it
+  model: OpenRouter/google/gemma-4-31b-it
 generation:
   n_instructions: 200
 elo:
