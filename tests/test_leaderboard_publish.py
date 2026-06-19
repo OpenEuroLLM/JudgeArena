@@ -180,3 +180,23 @@ def test_main_publish_dry_run_skips_upload(tmp_path, monkeypatch):
     ])  # no --repo needed
     assert (out / "leaderboard.json").exists()
     assert (out / "scores.parquet").exists()
+
+
+def test_build_bundle_calibration_and_winrate_per_lang():
+    panel = _panel()  # anchors strong/weak, langs en+fr, has human_winner + judge_pref
+    rec = _record("cand", 1050.0, tag="seed-1")
+    rec["winrate_per_lang"] = {"en": 0.6, "fr": 0.4}
+    bundle = build_bundle(panel, [rec])
+
+    cal = bundle["calibration"]
+    assert {"mae", "spearman", "points"} <= set(cal)
+    models = {p["model"] for p in cal["points"]}
+    assert {"strong", "weak"} <= models
+    p0 = cal["points"][0]
+    assert {"model", "human_elo", "judge_elo", "judge_ci"} <= set(p0)
+    assert len(p0["judge_ci"]) == 2
+
+    sub = next(r for r in bundle["rows"] if r["model"] == "cand #seed-1")
+    assert sub["winrate_per_lang"] == {"en": 0.6, "fr": 0.4}
+    anchor = next(r for r in bundle["rows"] if r["model"] == "strong")
+    assert anchor["winrate_per_lang"] == {}

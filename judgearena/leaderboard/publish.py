@@ -9,8 +9,10 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
+from judgearena.estimate_elo_ratings import _winner_to_pref, fit_bradley_terry
 from judgearena.leaderboard.board import build_board
 from judgearena.leaderboard.panel import Panel, load_panel
 from judgearena.log import get_logger
@@ -24,6 +26,72 @@ def _record_label(rec: dict) -> str:
 
 def _opt(value: float) -> float | None:
     return None if value is None or (isinstance(value, float) and pd.isna(value)) else float(value)
+
+
+def _anchor_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) -> dict:
+    """Human-ELO vs Judge-ELO for the anchor models (judge-side bootstrap CIs)."""
+    battles = panel.battles
+    if battles is None or len(battles) == 0:
+        return {"mae": float("nan"), "spearman": float("nan"), "points": []}
+
+    baseline = panel.meta.get("baseline_model")
+    method = panel.meta.get("scorer", {}).get("method", "soft")
+    judge_col = "judge_pref_hard" if method == "hard" else "judge_pref"
+
+    human_df = pd.DataFrame(
+        {
+            "model_a": battles["model_a"],
+            "model_b": battles["model_b"],
+            "pref_hard": battles["human_winner"].map(_winner_to_pref),
+        }
+    )
+    judge_df = pd.DataFrame(
+        {
+            "model_a": battles["model_a"],
+            "model_b": battles["model_b"],
+            "pref": battles[judge_col],
+        }
+    )
+    human_elo = fit_bradley_terry(human_df, pref_col="pref_hard", baseline_model=baseline)
+    judge_elo = fit_bradley_terry(judge_df, pref_col="pref", baseline_model=baseline)
+
+    rng = np.random.default_rng(seed)
+    boot: dict[str, list[float]] = {}
+    for _ in range(n_bootstrap):
+        sample = judge_df.sample(
+            n=len(judge_df), replace=True, random_state=int(rng.integers(0, 2**31))
+        )
+        ratings = fit_bradley_terry(sample, pref_col="pref", baseline_model=baseline)
+        for model, value in ratings.items():
+            boot.setdefault(model, []).append(value)
+
+    points = []
+    for model in sorted(m for m in human_elo if m in judge_elo):
+        vals = boot.get(model, [])
+        ci = (
+            [float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))]
+            if vals else [float("nan"), float("nan")]
+        )
+        points.append(
+            {
+                "model": model,
+                "human_elo": float(human_elo[model]),
+                "judge_elo": float(judge_elo[model]),
+                "judge_ci": ci,
+            }
+        )
+
+    mae = (
+        float(np.mean([abs(p["human_elo"] - p["judge_elo"]) for p in points]))
+        if points else float("nan")
+    )
+    if len(points) >= 2:
+        h = pd.Series([p["human_elo"] for p in points])
+        j = pd.Series([p["judge_elo"] for p in points])
+        spearman = float(h.rank().corr(j.rank()))
+    else:
+        spearman = float("nan")
+    return {"mae": mae, "spearman": spearman, "points": points}
 
 
 def build_bundle(panel: Panel, records: list[dict]) -> dict:
@@ -42,11 +110,13 @@ def build_bundle(panel: Panel, records: list[dict]) -> dict:
             "n": int(row["n"]),
             "is_submission": bool(row["is_submission"]),
             "winrate": None,
+            "winrate_per_lang": {},
         }
         if row["is_submission"]:
             rec = by_label.get(row["model"])
             if rec is not None:
                 entry["winrate"] = rec.get("winrate_overall")
+                entry["winrate_per_lang"] = rec.get("winrate_per_lang", {})
         rows.append(entry)
 
     languages = sorted((panel.meta.get("kappa_per_language") or {}).keys())
@@ -79,6 +149,7 @@ def build_bundle(panel: Panel, records: list[dict]) -> dict:
         "languages": languages,
         "rows": rows,
         "by_language": by_language,
+        "calibration": _anchor_calibration(panel),
     }
 
 
