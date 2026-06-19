@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -44,7 +43,7 @@ from judgearena.utils import (
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from judgearena.generate_and_evaluate import CliArgs
+    from judgearena.config import RunConfig
 
 
 def _align_mt_bench_completions(
@@ -63,25 +62,25 @@ def _align_mt_bench_completions(
 
 
 def _build_mt_bench_generation_kwargs(
-    *, args: CliArgs, model_spec: str
+    *, cfg: RunConfig, model_spec: str
 ) -> dict[str, object]:
     """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
-    generation_engine_kwargs = dict(args.engine_kwargs)
+    generation_engine_kwargs = dict(cfg.model.engine_kwargs)
     provider, _, model_name = model_spec.partition("/")
     if (
-        args.battle_thinking_token_budget is not None
+        cfg.judge.battle_thinking_token_budget is not None
         and provider == "VLLM"
         and is_thinking_model(model_name)
     ):
         generation_engine_kwargs["thinking_token_budget"] = min(
-            int(args.battle_thinking_token_budget),
-            int(args.max_out_tokens_models),
+            int(cfg.judge.battle_thinking_token_budget),
+            int(cfg.model.max_out_tokens),
         )
     return generation_engine_kwargs
 
 
 def _generate_mt_bench_completions(
-    args: CliArgs,
+    cfg: RunConfig,
     questions_df: pd.DataFrame,
     ignore_cache: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -91,19 +90,19 @@ def _generate_mt_bench_completions(
         return generate_multiturn(
             questions=questions_df,
             model=model_name,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            use_tqdm=args.use_tqdm,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            max_tokens=cfg.model.max_out_tokens,
+            use_tqdm=cfg.run.use_tqdm,
+            max_model_len=cfg.model.max_model_len,
+            chat_template=cfg.model.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
-            strip_thinking_before_turn_2_prompt=args.strip_thinking_before_judging,
-            **_build_mt_bench_generation_kwargs(args=args, model_spec=model_name),
+            strip_thinking_before_turn_2_prompt=cfg.judge.strip_thinking_before_judging,
+            **_build_mt_bench_generation_kwargs(cfg=cfg, model_spec=model_name),
         )
 
     def _load_or_generate(model_name: str) -> pd.DataFrame:
         loaded_answers = load_mt_bench_model_answers(
-            model_name, n_instructions=args.n_instructions
+            model_name, n_instructions=cfg.generation.n_instructions
         )
         if loaded_answers is not None:
             return _align_mt_bench_completions(
@@ -114,7 +113,7 @@ def _generate_mt_bench_completions(
         generated_answers = cache_function_dataframe(
             lambda: _run_generation(model_name),
             ignore_cache=ignore_cache,
-            cache_name=f"{cache_prefix}_{model_name}_{args.n_instructions}",
+            cache_name=f"{cache_prefix}_{model_name}_{cfg.generation.n_instructions}",
         )
         return _align_mt_bench_completions(
             questions_df=questions_df,
@@ -122,7 +121,7 @@ def _generate_mt_bench_completions(
             model_name=model_name,
         )
 
-    return _load_or_generate(args.model_A), _load_or_generate(args.model_B)
+    return _load_or_generate(cfg.model.name), _load_or_generate(cfg.model.baseline)
 
 
 def _build_mt_bench_input_payloads(
@@ -144,7 +143,7 @@ def _build_mt_bench_input_payloads(
 
 def _save_mt_bench_results(
     *,
-    args: CliArgs,
+    cfg: RunConfig,
     res_folder: Path,
     result_name: str,
     results: dict[str, object],
@@ -157,8 +156,9 @@ def _save_mt_bench_results(
     """Persist MT-Bench arguments, annotations, aggregate results, and metadata."""
     res_folder.mkdir(parents=True, exist_ok=True)
 
-    with open(res_folder / f"args-{result_name}.json", "w") as f:
-        json.dump(_to_jsonable(asdict(args)), f, indent=2, allow_nan=False)
+    from judgearena.config import dump_config
+
+    dump_config(cfg, res_folder / "config.yaml")
 
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
@@ -168,7 +168,7 @@ def _save_mt_bench_results(
     write_run_metadata(
         output_dir=res_folder,
         entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
-        run=asdict(args),
+        run=cfg.model_dump(),
         results=results,
         input_payloads=input_payloads,
         judge_system_prompt=judge_system_prompt,
@@ -179,7 +179,7 @@ def _save_mt_bench_results(
 
 def _finalize_mt_bench_run(
     *,
-    args: CliArgs,
+    cfg: RunConfig,
     res_folder: Path,
     result_name: str,
     prefs: pd.Series,
@@ -194,13 +194,13 @@ def _finalize_mt_bench_run(
 ) -> pd.Series:
     stats = compute_pref_summary(prefs)
     results = {
-        "task": args.task,
-        "model_A": args.model_A,
-        "model_B": args.model_B,
-        "judge_model": args.judge_model,
+        "task": cfg.task,
+        "model_A": cfg.model.name,
+        "model_B": cfg.model.baseline,
+        "judge_model": cfg.judge.model,
         **resolved_prompt.metadata(),
-        "battle_thinking_token_budget": args.battle_thinking_token_budget,
-        "strip_thinking_before_judging": args.strip_thinking_before_judging,
+        "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+        "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
         **(extra_result_fields or {}),
         **stats,
         "per_category": _compute_grouped_stats(prefs, combined_metadata, "category"),
@@ -211,7 +211,7 @@ def _finalize_mt_bench_run(
     }
     print_results(results)
     _save_mt_bench_results(
-        args=args,
+        cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
         results=results,
@@ -230,7 +230,7 @@ def _finalize_mt_bench_run(
 
 def _run_mt_bench_fastchat(
     *,
-    args: CliArgs,
+    cfg: RunConfig,
     res_folder: Path,
     result_name: str,
     questions_df: pd.DataFrame,
@@ -244,22 +244,22 @@ def _run_mt_bench_fastchat(
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
             judge_chat_model=judge_chat_model,
-            judge_model=args.judge_model,
+            judge_model=cfg.judge.model,
             questions=questions_df,
             completions_a=completions_a,
             completions_b=completions_b,
-            model_a=args.model_A,
-            model_b=args.model_B,
+            model_a=cfg.model.name,
+            model_b=cfg.model.baseline,
             turns_mode="both",
-            swap_mode=args.swap_mode,
-            truncate_input_chars=args.truncate_judge_input_chars,
-            use_tqdm=args.use_tqdm,
+            swap_mode=cfg.judge.swap_mode,
+            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
             prompt_preset=fastchat_prompt_preset,
-            strip_thinking_before_judging=args.strip_thinking_before_judging,
+            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         )
     )
     return _finalize_mt_bench_run(
-        args=args,
+        cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
         prefs=prefs,
@@ -276,7 +276,7 @@ def _run_mt_bench_fastchat(
 
 def _run_mt_bench_preset(
     *,
-    args: CliArgs,
+    cfg: RunConfig,
     res_folder: Path,
     result_name: str,
     questions_df: pd.DataFrame,
@@ -288,24 +288,24 @@ def _run_mt_bench_preset(
 ) -> pd.Series:
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
-        judge_model=args.judge_model,
+        judge_model=cfg.judge.model,
         questions=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,
-        model_a=args.model_A,
-        model_b=args.model_B,
+        model_a=cfg.model.name,
+        model_b=cfg.model.baseline,
         turns_mode="both",
-        swap_mode=args.swap_mode,
-        truncate_input_chars=args.truncate_judge_input_chars,
-        use_tqdm=args.use_tqdm,
-        prompt_preset=args.judge_prompt_preset or resolved_prompt.preset_name,
-        provide_explanation=args.provide_explanation,
-        system_file=args.judge_system_prompt_file,
-        user_file=args.judge_user_prompt_file,
-        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        swap_mode=cfg.judge.swap_mode,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=cfg.run.use_tqdm,
+        prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
+        provide_explanation=cfg.judge.provide_explanation,
+        system_file=cfg.judge.system_prompt_file,
+        user_file=cfg.judge.user_prompt_file,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
-        args=args,
+        cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
         prefs=prefs,
@@ -320,7 +320,7 @@ def _run_mt_bench_preset(
 
 
 def run_mt_bench(
-    args: CliArgs,
+    cfg: RunConfig,
     ignore_cache: bool,
     *,
     res_folder: Path,
@@ -328,43 +328,45 @@ def run_mt_bench(
 ):
     """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
-    if args.model_B is None:
-        args.model_B = mt_bench_native_baseline(args.task)
-    if args.model_B is None:
+    if cfg.model.baseline is None:
+        cfg.model.baseline = mt_bench_native_baseline(cfg.task)
+    if cfg.model.baseline is None:
         raise ValueError(
-            f"--model_B is required for dataset '{args.task}'; "
+            f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
-    questions_df = load_instructions("mt-bench", n_instructions=args.n_instructions)
+    questions_df = load_instructions(
+        "mt-bench", n_instructions=cfg.generation.n_instructions
+    )
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
-        args.model_A,
-        args.model_B,
+        cfg.model.name,
+        cfg.model.baseline,
     )
     completions_a, completions_b = _generate_mt_bench_completions(
-        args=args,
+        cfg=cfg,
         questions_df=questions_df,
         ignore_cache=ignore_cache,
     )
-    resolved_prompt = resolve_run_judge_prompt(args.task, args, multi_turn=True)
-    if resolved_prompt.delegated and not args.provide_explanation:
+    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+    if resolved_prompt.delegated and not cfg.judge.provide_explanation:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."
         )
     judge_model_kwargs = {
-        "model": args.judge_model,
-        "max_tokens": args.max_out_tokens_judge,
-        "max_model_len": args.max_judge_model_len,
-        "chat_template": args.chat_template,
-        **{**args.engine_kwargs, **args.judge_engine_kwargs},
+        "model": cfg.judge.model,
+        "max_tokens": cfg.judge.max_out_tokens,
+        "max_model_len": cfg.judge.max_model_len,
+        "chat_template": cfg.model.chat_template,
+        **{**cfg.model.engine_kwargs, **cfg.judge.engine_kwargs},
     }
     if resolved_prompt.delegated:
         judge_model_kwargs["temperature"] = 0.0
     judge_chat_model = make_model(**judge_model_kwargs)
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
-            args=args,
+            cfg=cfg,
             res_folder=res_folder,
             result_name=result_name,
             questions_df=questions_df,
@@ -376,7 +378,7 @@ def run_mt_bench(
             started_at_utc=run_started_at,
         )
     return _run_mt_bench_preset(
-        args=args,
+        cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
         questions_df=questions_df,
