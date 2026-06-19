@@ -84,3 +84,43 @@ def test_load_bundle_local(tmp_path):
     bundle, scores = load_bundle(local_dir=str(tmp_path))
     assert bundle == {"rows": [], "languages": []}
     assert list(scores.columns) == ["model", "tag", "lang", "judge_pref"]
+
+
+def _bundle_4a():
+    b = _bundle()  # has rows (strong anchor, cand #seed-1 submission), languages en/fr, by_language
+    b["rows"][1]["winrate_per_lang"] = {"en": 0.6, "fr": 0.4}
+    b["rows"][0]["winrate_per_lang"] = {}
+    b["panel"]["kappa_per_language"] = {"en": 0.8, "fr": 0.3}
+    b["calibration"] = {
+        "mae": 12.3, "spearman": 0.9,
+        "points": [
+            {"model": "strong", "human_elo": 1200.0, "judge_elo": 1190.0, "judge_ci": [1180.0, 1200.0]},
+            {"model": "weak", "human_elo": 1000.0, "judge_elo": 1010.0, "judge_ci": [1000.0, 1020.0]},
+        ],
+    }
+    return b
+
+
+def test_calibration_fig():
+    from space.render import calibration_fig
+    fig = calibration_fig(_bundle_4a())
+    assert len(fig.data) >= 2  # points + y=x (and regression line)
+
+
+def test_kappa_bar():
+    from space.render import kappa_bar
+    fig = kappa_bar(_bundle_4a())
+    assert len(fig.data) == 1
+    assert list(fig.data[0].y) == ["en", "fr"]
+
+
+def test_winrate_heatmap():
+    from space.render import winrate_heatmap
+    fig = winrate_heatmap(_bundle_4a())
+    assert len(fig.data) == 1
+    assert list(fig.data[0].y) == ["cand #seed-1"]  # submissions only
+
+
+def test_existing_figs_use_white_template():
+    from space.render import TEMPLATE
+    assert TEMPLATE == "plotly_white"
