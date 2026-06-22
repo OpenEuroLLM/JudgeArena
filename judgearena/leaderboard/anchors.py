@@ -162,11 +162,3 @@ def save_anchor_caches(panel: Panel, directory: str | Path) -> None:
     (directory / "anchor_h2h.json").write_text(
         json.dumps(compute_anchor_h2h(panel), indent=2) + "\n"
     )
-
-
-def load_anchor_caches(directory: str | Path) -> tuple[dict, dict, dict]:
-    directory = Path(directory)
-    ratings = json.loads((directory / "anchor_ratings.json").read_text())
-    calibration = json.loads((directory / "calibration.json").read_text())
-    h2h = json.loads((directory / "anchor_h2h.json").read_text())
-    return ratings, calibration, h2h

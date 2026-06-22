@@ -230,10 +230,21 @@ def load_records(records_root: str | Path) -> tuple[list[dict], dict]:
     return records, record_battles
 
 
+def load_anchor_caches(directory: str | Path) -> tuple[dict, dict, dict]:
+    """Read the precomputed (anchor_ratings, calibration, anchor_h2h) caches.
+
+    Pure JSON I/O — lives here (not in anchors.py) so the render Space never
+    imports the curate-time Bradley-Terry stack just to read these files.
+    """
+    directory = Path(directory)
+    ratings = json.loads((directory / "anchor_ratings.json").read_text())
+    calibration = json.loads((directory / "calibration.json").read_text())
+    h2h = json.loads((directory / "anchor_h2h.json").read_text())
+    return ratings, calibration, h2h
+
+
 def assemble_from_dirs(panel_dir: str | Path, records_root: str | Path) -> tuple[dict, pd.DataFrame]:
     """Build (bundle, scores) from a panel cache dir + a records/{version} dir."""
-    from judgearena.leaderboard.anchors import load_anchor_caches
-
     panel_dir = Path(panel_dir)
     panel_meta = json.loads((panel_dir / "panel.json").read_text())
     anchor_ratings, calibration, anchor_h2h = load_anchor_caches(panel_dir)

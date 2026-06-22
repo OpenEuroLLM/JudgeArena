@@ -6,9 +6,9 @@ from judgearena.leaderboard.anchors import (
     compute_anchor_h2h,
     compute_anchor_ratings,
     compute_calibration,
-    load_anchor_caches,
     save_anchor_caches,
 )
+from judgearena.leaderboard.assemble import load_anchor_caches
 from judgearena.leaderboard.panel import Panel, panel_hash
 
 
