@@ -1,0 +1,241 @@
+"""Read-time assembly of the leaderboard bundle from records + cached anchors.
+
+No Bradley-Terry, no inference stack: submission ELO is read from each record,
+anchor ELO/calibration/h2h are read from the panel caches. This is what the
+render Space imports.
+"""
+
+from __future__ import annotations
+
+import json
+from collections import defaultdict
+from datetime import UTC, datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+_BOARD_COLUMNS = ["model", "elo", "ci_low", "ci_high", "n", "is_submission"]
+
+
+def _record_label(rec: dict) -> str:
+    return f"{rec['model']} #{rec['tag']}" if rec.get("tag") else rec["model"]
+
+
+def _opt(value) -> float | None:
+    return None if value is None or (isinstance(value, float) and pd.isna(value)) else float(value)
+
+
+def _h2h_win(pref) -> float | None:
+    if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+        return None
+    return 1.0 if pref < 0.5 else (0.0 if pref > 0.5 else 0.5)
+
+
+def _board_rows(
+    anchor_elo: dict[str, float],
+    anchor_counts: dict[str, int],
+    records: list[dict],
+    panel_hash: str | None,
+    *,
+    lang: str | None = None,
+) -> pd.DataFrame:
+    rows: list[dict] = []
+    for model, elo in anchor_elo.items():
+        rows.append(
+            {
+                "model": model,
+                "elo": float(elo),
+                "ci_low": float("nan"),
+                "ci_high": float("nan"),
+                "n": int(anchor_counts.get(model, 0)),
+                "is_submission": False,
+            }
+        )
+    for rec in records:
+        if rec.get("panel_hash") != panel_hash:
+            continue
+        if lang is None:
+            elo = rec.get("elo_overall", float("nan"))
+            ci = rec.get("elo_ci", [float("nan"), float("nan")])
+            n = int(rec.get("n_battles", 0))
+        else:
+            elo = rec.get("elo_per_lang", {}).get(lang, float("nan"))
+            ci = [float("nan"), float("nan")]
+            n = int(rec.get("n_battles_per_lang", {}).get(lang, 0))
+        rows.append(
+            {
+                "model": _record_label(rec),
+                "elo": float(elo),
+                "ci_low": float(ci[0]),
+                "ci_high": float(ci[1]),
+                "n": n,
+                "is_submission": True,
+            }
+        )
+    board = pd.DataFrame(rows, columns=_BOARD_COLUMNS)
+    board = board.sort_values("elo", ascending=False, na_position="last").reset_index(drop=True)
+    board.insert(0, "rank", range(1, len(board) + 1))
+    return board
+
+
+def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict) -> dict:
+    wins: dict[tuple[str, str], float] = defaultdict(float)
+    counts: dict[tuple[str, str], int] = defaultdict(int)
+    for r, cols in anchor_h2h.get("pairwise", {}).items():
+        for c, (w, n) in cols.items():
+            wins[(r, c)] += float(w)
+            counts[(r, c)] += int(n)
+    for rec in records:
+        battles = record_battles.get(_record_label(rec))
+        if battles is None or len(battles) == 0:
+            continue
+        if "opponent" not in battles.columns or "position" not in battles.columns:
+            continue
+        model = _record_label(rec)
+        for _, b in battles.iterrows():
+            pref = b["judge_pref"]
+            if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+                continue
+            if pref == 0.5:
+                sub_win = 0.5
+            elif (pref < 0.5 and b["position"] == "A") or (pref > 0.5 and b["position"] == "B"):
+                sub_win = 1.0
+            else:
+                sub_win = 0.0
+            opp = str(b["opponent"])
+            wins[(model, opp)] += sub_win
+            counts[(model, opp)] += 1
+            wins[(opp, model)] += 1.0 - sub_win
+            counts[(opp, model)] += 1
+    models = sorted({m for pair in counts for m in pair})
+    winrate = [
+        [(wins[(r, c)] / counts[(r, c)]) if counts[(r, c)] else None for c in models]
+        for r in models
+    ]
+    count_matrix = [[counts[(r, c)] for c in models] for r in models]
+    return {"models": models, "winrate": winrate, "counts": count_matrix}
+
+
+def assemble_bundle(
+    panel_meta: dict,
+    anchor_ratings: dict,
+    calibration: dict,
+    anchor_h2h: dict,
+    records: list[dict],
+    record_battles: dict,
+) -> dict:
+    panel_hash = panel_meta.get("panel_hash")
+    overall = _board_rows(
+        anchor_ratings["overall"], anchor_ratings["counts_overall"], records, panel_hash
+    )
+    by_label = {_record_label(r): r for r in records}
+
+    rows = []
+    for _, row in overall.iterrows():
+        entry = {
+            "rank": int(row["rank"]),
+            "model": row["model"],
+            "elo": float(row["elo"]),
+            "ci_low": _opt(row["ci_low"]),
+            "ci_high": _opt(row["ci_high"]),
+            "n": int(row["n"]),
+            "is_submission": bool(row["is_submission"]),
+            "winrate": None,
+            "winrate_per_lang": {},
+        }
+        if row["is_submission"]:
+            rec = by_label.get(row["model"])
+            if rec is not None:
+                entry["winrate"] = rec.get("winrate_overall")
+                entry["winrate_per_lang"] = rec.get("winrate_per_lang", {})
+        rows.append(entry)
+
+    languages = sorted((panel_meta.get("kappa_per_language") or {}).keys())
+    by_language: dict[str, list[dict]] = {}
+    for lang in languages:
+        lb = _board_rows(
+            anchor_ratings["per_lang"].get(lang, {}),
+            anchor_ratings["counts_per_lang"].get(lang, {}),
+            records,
+            panel_hash,
+            lang=lang,
+        )
+        by_language[lang] = [
+            {
+                "rank": int(r["rank"]),
+                "model": r["model"],
+                "elo": float(r["elo"]),
+                "n": int(r["n"]),
+                "is_submission": bool(r["is_submission"]),
+            }
+            for _, r in lb.iterrows()
+        ]
+
+    return {
+        "panel": {
+            "panel_version": panel_meta.get("panel_version"),
+            "panel_hash": panel_hash,
+            "judge_model": panel_meta.get("judge_model"),
+            "baseline_model": panel_meta.get("baseline_model"),
+            "mae_vs_human": panel_meta.get("mae_vs_human"),
+            "kappa_per_language": panel_meta.get("kappa_per_language", {}),
+            "scorer": panel_meta.get("scorer", {}),
+            "generated_utc": datetime.now(UTC).isoformat(),
+        },
+        "languages": languages,
+        "rows": rows,
+        "by_language": by_language,
+        "calibration": calibration,
+        "head_to_head": _assemble_h2h(anchor_h2h, records, record_battles),
+    }
+
+
+def assemble_scores(records: list[dict], record_battles: dict) -> pd.DataFrame:
+    cols = ["model", "tag", "lang", "judge_pref"]
+    frames = []
+    for rec in records:
+        battles = record_battles.get(_record_label(rec))
+        if battles is None or len(battles) == 0:
+            continue
+        frames.append(
+            pd.DataFrame(
+                {
+                    "model": rec["model"],
+                    "tag": rec.get("tag"),
+                    "lang": battles["lang"].to_numpy(),
+                    "judge_pref": battles["judge_pref"].to_numpy(),
+                }
+            )
+        )
+    if not frames:
+        return pd.DataFrame(columns=cols)
+    return pd.concat(frames, ignore_index=True)[cols]
+
+
+def load_records(records_root: str | Path) -> tuple[list[dict], dict]:
+    records: list[dict] = []
+    record_battles: dict = {}
+    for result_path in sorted(Path(records_root).glob("*/result.json")):
+        rec = json.loads(result_path.read_text())
+        battles_path = result_path.parent / "battles.parquet"
+        record_battles[_record_label(rec)] = (
+            pd.read_parquet(battles_path) if battles_path.exists() else None
+        )
+        records.append(rec)
+    return records, record_battles
+
+
+def assemble_from_dirs(panel_dir: str | Path, records_root: str | Path) -> tuple[dict, pd.DataFrame]:
+    """Build (bundle, scores) from a panel cache dir + a records/{version} dir."""
+    from judgearena.leaderboard.anchors import load_anchor_caches
+
+    panel_dir = Path(panel_dir)
+    panel_meta = json.loads((panel_dir / "panel.json").read_text())
+    anchor_ratings, calibration, anchor_h2h = load_anchor_caches(panel_dir)
+    records, record_battles = load_records(records_root)
+    bundle = assemble_bundle(
+        panel_meta, anchor_ratings, calibration, anchor_h2h, records, record_battles
+    )
+    scores = assemble_scores(records, record_battles)
+    return bundle, scores
