@@ -156,8 +156,6 @@ def test_head_to_head_heatmap_empty():
 
 
 def test_app_load_bundle_from_local(tmp_path):
-    import json
-    import pandas as pd
     from space.app import load_bundle
 
     panel_dir = tmp_path / "panel" / "v1"

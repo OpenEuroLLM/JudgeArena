@@ -1,6 +1,4 @@
 # tests/test_leaderboard_anchors.py
-import json
-import numpy as np
 import pandas as pd
 import pytest
 

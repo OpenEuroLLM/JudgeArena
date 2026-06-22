@@ -208,9 +208,11 @@ def test_build_board_distinguishes_same_model_by_tag():
 def test_curate_writes_anchor_caches(tmp_path, monkeypatch):
     # Build a tiny panel and drive only the cache-writing + save path.
     import json
+
     import pandas as pd
-    from judgearena.leaderboard.panel import Panel, panel_hash, save_panel
+
     from judgearena.leaderboard.anchors import save_anchor_caches
+    from judgearena.leaderboard.panel import Panel, panel_hash, save_panel
 
     battles = pd.DataFrame(
         {
@@ -254,9 +256,10 @@ def test_submit_resolve_latest_panel_version():
 
 
 def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
+    import pandas as pd
+
     import judgearena.leaderboard.submit as sub
     from judgearena.leaderboard.record import ResultRecord
-    import pandas as pd
 
     # Stub the panel download + scoring so the test stays offline.
     fake_panel_dir = tmp_path / "panel" / "v1"

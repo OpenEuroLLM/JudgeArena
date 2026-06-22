@@ -79,7 +79,7 @@ def _board_rows(
     return board
 
 
-def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict) -> dict:
+def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict, panel_hash: str | None) -> dict:
     wins: dict[tuple[str, str], float] = defaultdict(float)
     counts: dict[tuple[str, str], int] = defaultdict(int)
     for r, cols in anchor_h2h.get("pairwise", {}).items():
@@ -87,6 +87,8 @@ def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict) -
             wins[(r, c)] += float(w)
             counts[(r, c)] += int(n)
     for rec in records:
+        if rec.get("panel_hash") != panel_hash:
+            continue
         battles = record_battles.get(_record_label(rec))
         if battles is None or len(battles) == 0:
             continue
@@ -187,14 +189,16 @@ def assemble_bundle(
         "rows": rows,
         "by_language": by_language,
         "calibration": calibration,
-        "head_to_head": _assemble_h2h(anchor_h2h, records, record_battles),
+        "head_to_head": _assemble_h2h(anchor_h2h, records, record_battles, panel_hash),
     }
 
 
-def assemble_scores(records: list[dict], record_battles: dict) -> pd.DataFrame:
+def assemble_scores(records: list[dict], record_battles: dict, panel_hash: str | None) -> pd.DataFrame:
     cols = ["model", "tag", "lang", "judge_pref"]
     frames = []
     for rec in records:
+        if rec.get("panel_hash") != panel_hash:
+            continue
         battles = record_battles.get(_record_label(rec))
         if battles is None or len(battles) == 0:
             continue
@@ -237,5 +241,5 @@ def assemble_from_dirs(panel_dir: str | Path, records_root: str | Path) -> tuple
     bundle = assemble_bundle(
         panel_meta, anchor_ratings, calibration, anchor_h2h, records, record_battles
     )
-    scores = assemble_scores(records, record_battles)
+    scores = assemble_scores(records, record_battles, panel_meta.get("panel_hash"))
     return bundle, scores

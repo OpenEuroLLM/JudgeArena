@@ -1,9 +1,9 @@
 # tests/test_leaderboard_assemble.py
-import numpy as np
+import inspect
+
 import pandas as pd
 
 from judgearena.leaderboard.assemble import (
-    _record_label,
     assemble_bundle,
     assemble_scores,
 )
@@ -93,14 +93,30 @@ def test_panel_hash_mismatch_skipped():
 
 
 def test_assemble_scores_longform():
-    scores = assemble_scores([_record()], {"sub": _record_battles()})
+    scores = assemble_scores([_record()], {"sub": _record_battles()}, "abc")
     assert list(scores.columns) == ["model", "tag", "lang", "judge_pref"]
     assert len(scores) == 2
     assert set(scores["model"]) == {"sub"}
 
 
+def test_assemble_scores_skips_panel_hash_mismatch():
+    rec = _record()
+    rec["panel_hash"] = "WRONG"
+    scores = assemble_scores([rec], {"sub": _record_battles()}, "abc")
+    assert len(scores) == 0
+
+
+def test_assemble_h2h_skips_panel_hash_mismatch():
+    rec = _record()
+    rec["panel_hash"] = "WRONG"
+    bundle = assemble_bundle(
+        PANEL_META, ANCHOR_RATINGS, CALIBRATION, ANCHOR_H2H,
+        [rec], {"sub": _record_battles()},
+    )
+    assert "sub" not in bundle["head_to_head"]["models"]
+
+
 def test_no_bradley_terry_import():
     import judgearena.leaderboard.assemble as a
-    import inspect
     src = inspect.getsource(a)
     assert "fit_bradley_terry" not in src
