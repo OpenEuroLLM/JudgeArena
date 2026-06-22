@@ -7,7 +7,6 @@ judgearena = "judgearena.cli:cli"
 judgearena-curate = "judgearena.leaderboard.curate:main_curate"
 judgearena-submit = "judgearena.leaderboard.submit:main_submit"
 judgearena-board = "judgearena.leaderboard.board:main_board"
-judgearena-publish = "judgearena.leaderboard.publish:main_publish"
 
 [project]
 name = "judgearena"

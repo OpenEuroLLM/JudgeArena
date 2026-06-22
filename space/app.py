@@ -41,7 +41,7 @@ except ModuleNotFoundError:
 _DATASET_REPO = "OpenEuroLLM/judgearena-leaderboard"  # default published dataset
 
 
-def _resolve_local_version(base: "Path") -> str:
+def _resolve_local_version(base: Path) -> str:
     versions = sorted(
         p.name for p in (base / "panel").iterdir() if p.is_dir()
     )
