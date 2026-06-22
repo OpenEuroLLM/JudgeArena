@@ -18,6 +18,7 @@ from judgearena.evaluate import (
     judge_and_parse_prefs,
     resolve_run_judge_prompt,
 )
+from judgearena.leaderboard.anchors import save_anchor_caches
 from judgearena.leaderboard.kappa import language_kappa
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
 from judgearena.log import get_logger
@@ -272,7 +273,21 @@ def main_curate(argv: list[str] | None = None) -> None:
         generation_params=generation_params,
     )
     out = save_panel(panel, f"{panel_args.panel_dir}/{panel_args.panel_version}")
-    logger.info("Wrote panel to %s (%d battles)", out, len(panel.battles))
+    save_anchor_caches(panel, out)
+    logger.info("Wrote panel + anchor caches to %s (%d battles)", out, len(panel.battles))
+
+    repo = data.get("run", {}).get("dataset_repo")
+    if repo:
+        from huggingface_hub import upload_folder
+
+        url = upload_folder(
+            repo_id=repo,
+            repo_type="dataset",
+            folder_path=str(out),
+            path_in_repo=f"panel/{panel_args.panel_version}",
+            commit_message=f"Add panel {panel_args.panel_version}",
+        )
+        logger.info("Uploaded panel to %s (%s)", repo, url)
 
 
 if __name__ == "__main__":

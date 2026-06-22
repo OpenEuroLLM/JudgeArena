@@ -197,3 +197,38 @@ def test_build_board_distinguishes_same_model_by_tag():
     labels = list(board["model"])
     assert "deepseek #seed-1" in labels
     assert "deepseek #seed-2" in labels
+
+
+def test_curate_writes_anchor_caches(tmp_path, monkeypatch):
+    # Build a tiny panel and drive only the cache-writing + save path.
+    import json
+    import pandas as pd
+    from judgearena.leaderboard.panel import Panel, panel_hash, save_panel
+    from judgearena.leaderboard.anchors import save_anchor_caches
+
+    battles = pd.DataFrame(
+        {
+            "battle_id": ["a", "b"],
+            "lang": ["en", "en"],
+            "model_a": ["m1", "m2"],
+            "model_b": ["m2", "m1"],
+            "instruction": ["q", "q"],
+            "completion_a": ["x", "x"],
+            "completion_b": ["y", "y"],
+            "human_winner": ["model_a", "model_a"],
+            "judge_pref": [0.2, 0.3],
+            "judge_pref_hard": [0.0, 0.0],
+            "challenger_opponent": ["m2", "m1"],
+            "challenger_position": ["A", "A"],
+        }
+    )
+    meta = {"panel_version": "v1", "panel_hash": panel_hash(battles),
+            "baseline_model": "m1", "scorer": {"method": "soft"},
+            "kappa_per_language": {"en": 0.7}}
+    panel = Panel(meta=meta, battles=battles)
+    out = tmp_path / "v1"
+    save_panel(panel, out)
+    save_anchor_caches(panel, out)
+    for name in ("anchor_ratings.json", "calibration.json", "anchor_h2h.json"):
+        assert (out / name).exists()
+    assert "overall" in json.loads((out / "anchor_ratings.json").read_text())
