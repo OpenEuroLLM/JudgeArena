@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -153,6 +154,77 @@ def test_head_to_head_heatmap_empty():
     from space.render import head_to_head_heatmap
     fig = head_to_head_heatmap({"head_to_head": {"models": [], "winrate": [], "counts": []}})
     assert fig is not None  # no crash
+
+
+def _viz_bundle():
+    return {
+        "languages": ["en", "fr"],
+        "rows": [
+            {"rank": 1, "model": "m1", "elo": 1050.0, "ci_low": 1030.0,
+             "ci_high": 1070.0, "n": 100, "is_submission": False,
+             "winrate": None, "winrate_per_lang": {}},
+            {"rank": 2, "model": "sub", "elo": 1000.0, "ci_low": 980.0,
+             "ci_high": 1020.0, "n": 50, "is_submission": True,
+             "winrate": 0.55, "winrate_per_lang": {"en": 0.6, "fr": 0.5}},
+        ],
+        "by_language": {
+            "en": [
+                {"rank": 1, "model": "m1", "elo": 1060.0, "n": 50, "is_submission": False},
+                {"rank": 2, "model": "sub", "elo": 1010.0, "n": 25, "is_submission": True},
+            ],
+            "fr": [
+                {"rank": 1, "model": "m1", "elo": 1040.0, "n": 50, "is_submission": False},
+                # "sub" intentionally absent in fr -> NaN in the table
+            ],
+        },
+        "panel": {"kappa_per_language": {"en": 0.5, "fr": 0.4}},
+    }
+
+
+def test_leaderboard_dataframe_wide_shape():
+    from space.render import LEADERBOARD_DEFAULT_COLUMNS, leaderboard_dataframe
+
+    df = leaderboard_dataframe(_viz_bundle())
+    assert len(df) == 2
+    assert list(df.columns) == ["Rank", "Model", "ELO", "CI", "Win rate", "n", "Submission", "en", "fr"]
+    assert all(c in df.columns for c in LEADERBOARD_DEFAULT_COLUMNS)
+
+
+def test_leaderboard_dataframe_submission_and_language_values():
+    from space.render import leaderboard_dataframe
+
+    df = leaderboard_dataframe(_viz_bundle())
+    sub = df[df["Model"] == "sub"].iloc[0]
+    assert sub["Submission"] == "★"
+    assert sub["ELO"] == 1000.0
+    assert sub["en"] == 1010.0
+    assert math.isnan(sub["fr"])  # sub has no fr battles
+    m1 = df[df["Model"] == "m1"].iloc[0]
+    assert m1["Submission"] == ""
+    assert m1["CI"] == "[1030, 1070]"
+
+
+def test_elo_by_language_fig_one_trace_per_model():
+    from space.render import elo_by_language_fig
+
+    fig = elo_by_language_fig(_viz_bundle())
+    assert len(fig.data) == 2
+    assert list(fig.data[0].x) == ["en", "fr"]
+
+
+def test_elo_by_language_fig_filters_models():
+    from space.render import elo_by_language_fig
+
+    fig = elo_by_language_fig(_viz_bundle(), models=["sub"])
+    assert len(fig.data) == 1
+    assert fig.data[0].name == "sub"
+
+
+def test_elo_by_language_fig_empty_when_no_languages():
+    from space.render import elo_by_language_fig
+
+    fig = elo_by_language_fig({"languages": [], "rows": [], "by_language": {}})
+    assert len(fig.data) == 0
 
 
 def test_app_load_bundle_from_local(tmp_path):

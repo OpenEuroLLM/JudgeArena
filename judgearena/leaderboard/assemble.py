@@ -132,6 +132,8 @@ def assemble_bundle(
         anchor_ratings["overall"], anchor_ratings["counts_overall"], records, panel_hash
     )
     by_label = {_record_label(r): r for r in records}
+    anchor_ci = {p["model"]: p.get("judge_ci") for p in calibration.get("points", [])}
+    anchor_winrate = anchor_ratings.get("winrate_overall", {})
 
     rows = []
     for _, row in overall.iterrows():
@@ -151,6 +153,12 @@ def assemble_bundle(
             if rec is not None:
                 entry["winrate"] = rec.get("winrate_overall")
                 entry["winrate_per_lang"] = rec.get("winrate_per_lang", {})
+        else:
+            ci = anchor_ci.get(row["model"])
+            if ci and len(ci) == 2:
+                entry["ci_low"] = _opt(ci[0])
+                entry["ci_high"] = _opt(ci[1])
+            entry["winrate"] = anchor_winrate.get(row["model"])
         rows.append(entry)
 
     languages = sorted((panel_meta.get("kappa_per_language") or {}).keys())

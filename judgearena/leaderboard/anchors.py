@@ -42,6 +42,23 @@ def _ratings_and_counts(
     )
 
 
+def _winrate_overall(battles: pd.DataFrame, pref_col: str) -> dict[str, float]:
+    """Per-model overall win rate within the pool (pref thresholded at 0.5, ties=0.5)."""
+    wins: dict[str, float] = defaultdict(float)
+    counts: dict[str, int] = defaultdict(int)
+    for _, b in battles.iterrows():
+        pref = b[pref_col]
+        if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+            continue
+        a, bb = str(b["model_a"]), str(b["model_b"])
+        win_a = 1.0 if pref < 0.5 else (0.0 if pref > 0.5 else 0.5)
+        wins[a] += win_a
+        counts[a] += 1
+        wins[bb] += 1.0 - win_a
+        counts[bb] += 1
+    return {m: wins[m] / counts[m] for m in counts if counts[m]}
+
+
 def compute_anchor_ratings(panel: Panel) -> dict:
     baseline = panel.meta.get("baseline_model")
     col = _anchor_pref_col(panel)
@@ -50,16 +67,19 @@ def compute_anchor_ratings(panel: Panel) -> dict:
     counts_overall: dict[str, int] = {}
     per_lang: dict[str, dict[str, float]] = {}
     counts_per_lang: dict[str, dict[str, int]] = {}
+    winrate_overall: dict[str, float] = {}
     if battles is not None and len(battles):
         overall, counts_overall = _ratings_and_counts(battles, col, baseline)
         for lang in sorted(battles["lang"].unique()):
             sub = battles[battles["lang"] == lang]
             per_lang[lang], counts_per_lang[lang] = _ratings_and_counts(sub, col, baseline)
+        winrate_overall = _winrate_overall(battles, col)
     return {
         "overall": overall,
         "per_lang": per_lang,
         "counts_overall": counts_overall,
         "counts_per_lang": counts_per_lang,
+        "winrate_overall": winrate_overall,
     }
 
 

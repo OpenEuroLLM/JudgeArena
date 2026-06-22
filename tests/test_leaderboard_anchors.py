@@ -50,7 +50,7 @@ def _panel() -> Panel:
 
 def test_anchor_ratings_shape_and_counts():
     ratings = compute_anchor_ratings(_panel())
-    assert set(ratings) == {"overall", "per_lang", "counts_overall", "counts_per_lang"}
+    assert set(ratings) == {"overall", "per_lang", "counts_overall", "counts_per_lang", "winrate_overall"}
     assert set(ratings["overall"]) == {"m1", "m2", "m3"}
     # each model appears in 2 battles per lang -> 4 overall
     assert ratings["counts_overall"]["m1"] == 4
@@ -73,6 +73,18 @@ def test_anchor_h2h_is_symmetric():
     # judge_pref 0.1 < 0.5 => model_a (m1) wins both -> wins == 2.0
     assert h2h["m1"]["m2"][0] == pytest.approx(2.0)
     assert h2h["m2"]["m1"][0] == pytest.approx(0.0)
+
+
+def test_anchor_winrate_overall():
+    ratings = compute_anchor_ratings(_panel())
+    wr = ratings["winrate_overall"]
+    assert set(wr) == {"m1", "m2", "m3"}
+    # In _panel(), every battle has judge_pref < 0.5 (model_a always wins).
+    # m1 is model_a in all its battles -> wins all -> 1.0.
+    assert wr["m1"] == pytest.approx(1.0)
+    # m3 is model_b in all its battles -> loses all -> 0.0.
+    assert wr["m3"] == pytest.approx(0.0)
+    assert 0.0 <= wr["m2"] <= 1.0
 
 
 def test_save_and_load_roundtrip(tmp_path):

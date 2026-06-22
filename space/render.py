@@ -180,6 +180,82 @@ def head_to_head_heatmap(bundle: dict) -> go.Figure:
     return fig
 
 
+LEADERBOARD_DEFAULT_COLUMNS = ["Rank", "Model", "ELO", "CI", "Win rate", "n", "Submission"]
+
+
+def leaderboard_dataframe(bundle: dict) -> pd.DataFrame:
+    """Wide one-row-per-model table: default columns + one per-language ELO column.
+
+    Language columns are named by the language code and hold per-language ELO
+    (NaN where a model has no battles in that language). The default-visible
+    set is ``LEADERBOARD_DEFAULT_COLUMNS``; language columns are toggled on
+    demand by the Space, so the table stays clean at ~30 languages.
+    """
+    langs = bundle.get("languages", [])
+    per_lang = {
+        lang: {e["model"]: e["elo"] for e in bundle.get("by_language", {}).get(lang, [])}
+        for lang in langs
+    }
+    rows = []
+    for r in bundle.get("rows", []):
+        model = r["model"]
+        ci = (
+            f"[{r['ci_low']:.0f}, {r['ci_high']:.0f}]"
+            if r.get("ci_low") is not None and r.get("ci_high") is not None
+            else ""
+        )
+        row = {
+            "Rank": r["rank"],
+            "Model": model,
+            "ELO": round(r["elo"], 1),
+            "CI": ci,
+            "Win rate": round(r["winrate"], 4) if r.get("winrate") is not None else float("nan"),
+            "n": r["n"],
+            "Submission": "★" if r.get("is_submission") else "",
+        }
+        for lang in langs:
+            val = per_lang[lang].get(model)
+            row[lang] = round(val, 1) if val is not None else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows, columns=[*LEADERBOARD_DEFAULT_COLUMNS, *langs])
+
+
+def elo_by_language_fig(bundle: dict, models: list[str] | None = None) -> go.Figure:
+    """ELO across languages, one line per model (legend-click toggles a model)."""
+    langs = bundle.get("languages", [])
+    if not langs:
+        return go.Figure().update_layout(title="No language data", template=TEMPLATE)
+    per_lang = {
+        lang: {e["model"]: e["elo"] for e in bundle.get("by_language", {}).get(lang, [])}
+        for lang in langs
+    }
+    subs = {r["model"] for r in bundle.get("rows", []) if r.get("is_submission")}
+    chosen = [
+        r["model"]
+        for r in bundle.get("rows", [])
+        if models is None or r["model"] in models
+    ]
+    fig = go.Figure()
+    for model in chosen:
+        fig.add_trace(
+            go.Scatter(
+                x=langs,
+                y=[per_lang[lang].get(model) for lang in langs],
+                mode="lines+markers",
+                name=model,
+                line=dict(width=3 if model in subs else 1.5),
+            )
+        )
+    fig.update_layout(
+        title="ELO across languages",
+        xaxis_title="language",
+        yaxis_title="ELO",
+        legend_title="model (click to toggle)",
+        template=TEMPLATE,
+    )
+    return fig
+
+
 _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
 _TABLE_CSS = (
     # Self-contained colors with !important so Gradio's theme CSS (which colors

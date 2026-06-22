@@ -120,3 +120,28 @@ def test_no_bradley_terry_import():
     import judgearena.leaderboard.assemble as a
     src = inspect.getsource(a)
     assert "fit_bradley_terry" not in src
+
+
+def test_anchor_rows_get_ci_from_calibration():
+    # CALIBRATION has a point for "m1" with judge_ci [0.0, 2.0]; ANCHOR_RATINGS overall has m1, m2.
+    bundle = assemble_bundle(PANEL_META, ANCHOR_RATINGS, CALIBRATION, ANCHOR_H2H, [], {})
+    by_model = {r["model"]: r for r in bundle["rows"]}
+    assert by_model["m1"]["ci_low"] == 0.0
+    assert by_model["m1"]["ci_high"] == 2.0
+    # m2 has no calibration point -> CI stays blank (None)
+    assert by_model["m2"]["ci_low"] is None
+
+
+def test_anchor_rows_get_winrate_when_present():
+    ratings = {**ANCHOR_RATINGS, "winrate_overall": {"m1": 0.7, "m2": 0.3}}
+    bundle = assemble_bundle(PANEL_META, ratings, CALIBRATION, ANCHOR_H2H, [], {})
+    by_model = {r["model"]: r for r in bundle["rows"]}
+    assert by_model["m1"]["winrate"] == 0.7
+    assert by_model["m2"]["winrate"] == 0.3
+
+
+def test_anchor_winrate_absent_is_backward_compatible():
+    # ANCHOR_RATINGS has no winrate_overall key -> anchor winrate is None, no crash
+    bundle = assemble_bundle(PANEL_META, ANCHOR_RATINGS, CALIBRATION, ANCHOR_H2H, [], {})
+    by_model = {r["model"]: r for r in bundle["rows"]}
+    assert by_model["m1"]["winrate"] is None
