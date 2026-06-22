@@ -37,7 +37,7 @@ def generate_panel_completions(
         model=model,
         truncate_input_chars=truncate_all_input_chars,
         max_tokens=max_out_tokens,
-        use_tqdm=False,
+        use_tqdm=True,
         **engine_kwargs,
     ).set_index("instruction_index")
     return df.loc[:, "completion"].tolist()
@@ -95,6 +95,7 @@ def score_against_panel(
         user_prompt_template=resolved.user_prompt_template,
         prompt_preset=resolved.preset_name,
         score_parser=scorer,
+        use_tqdm=True,
     )
     prefs = pd.Series(prefs).reset_index(drop=True)
 

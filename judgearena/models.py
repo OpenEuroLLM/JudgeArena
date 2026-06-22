@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import warnings
@@ -112,15 +113,22 @@ def _is_retryable_error(e: Exception) -> bool:
     # langchain-openai raises ValueError(response_dict.get("error")) where the
     # error value is a dict like {'message': '...', 'code': 408}
     _RETRYABLE_CODES = {408, 429, 502, 503, 504}
+    # A provider hiccup (rate-limit page, truncated/HTML body) makes langchain
+    # fail to parse the HTTP response as JSON. Treat that as transient.
+    if isinstance(e, json.JSONDecodeError):
+        return True
     if isinstance(e, ValueError) and e.args:
         arg = e.args[0]
         if isinstance(arg, dict) and arg.get("code") in _RETRYABLE_CODES:
             return True
 
     error_str = str(e)
+    type_name = type(e).__name__.lower()
     return (
         any(str(code) in error_str for code in _RETRYABLE_CODES)
         or "rate" in error_str.lower()
+        # transient transport failures (httpx/openai) by class name, no extra imports
+        or any(s in type_name for s in ("connection", "timeout", "protocol"))
     )
 
 
