@@ -30,6 +30,8 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
     panel_dir = _save_tiny_panel(tmp_path / "panel")
     captured = {}
 
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: panel_dir)
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
     monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: ["c1", "c2"])
 
     def fake_score(panel, completions, *, model, judge_cfg, n_bootstraps, seed,
@@ -51,8 +53,9 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
 
     model = "VLLM/openeurollm/OLMo-3-7B-Dolci-Translated-A-75EN"
     out = sub.main_submit([
-        "--panel-dir", str(panel_dir), "--model", model,
+        "--repo", "u/lb", "--model", model,
         "--out", str(tmp_path / "results"), "--n-bootstraps", "7",
+        "--panel-version", "pv1", "--dry-run",
     ])
 
     assert out == tmp_path / "results" / "pv1" / _slugify(model)
@@ -154,6 +157,8 @@ def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
     from judgearena.estimate_elo_ratings import _slugify
 
     panel_dir = _save_tiny_panel(tmp_path / "panel")
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: panel_dir)
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
     monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: ["c"])
 
     saved = {}
@@ -177,8 +182,9 @@ def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
 
     model = "OpenRouter/deepseek/deepseek-v3.2"
     out = sub.main_submit([
-        "--panel-dir", str(panel_dir), "--model", model,
+        "--repo", "u/lb", "--model", model,
         "--out", str(tmp_path / "results"), "--tag", "seed-1",
+        "--panel-version", "pv1", "--dry-run",
     ])
     assert out.name == f"{_slugify(model)}__{_slugify('seed-1')}"
     assert (out / "result.json").exists()
@@ -232,3 +238,68 @@ def test_curate_writes_anchor_caches(tmp_path, monkeypatch):
     for name in ("anchor_ratings.json", "calibration.json", "anchor_h2h.json"):
         assert (out / name).exists()
     assert "overall" in json.loads((out / "anchor_ratings.json").read_text())
+
+
+def test_submit_resolve_latest_panel_version():
+    from judgearena.leaderboard.submit import _resolve_panel_version
+
+    files = [
+        "panel/v1/panel.json",
+        "panel/v2/panel.json",
+        "panel/v10/panel.json",
+        "records/v2/x/result.json",
+        "README.md",
+    ]
+    assert _resolve_panel_version(files) == "v10"
+
+
+def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
+    import judgearena.leaderboard.submit as sub
+    from judgearena.leaderboard.record import ResultRecord
+    import pandas as pd
+
+    # Stub the panel download + scoring so the test stays offline.
+    fake_panel_dir = tmp_path / "panel" / "v1"
+    fake_panel_dir.mkdir(parents=True)
+    import json
+    (fake_panel_dir / "panel.json").write_text(json.dumps(
+        {"panel_version": "v1", "panel_hash": "h", "judge_model": "j",
+         "generation_params": {}, "scorer": {"method": "soft"}}))
+    (fake_panel_dir / "battles.parquet").write_bytes(b"")  # not read in this stub path
+
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
+
+    def _fake_load_panel(_dir):
+        from judgearena.leaderboard.panel import Panel
+        return Panel(meta=json.loads((fake_panel_dir / "panel.json").read_text()),
+                     battles=pd.DataFrame())
+
+    monkeypatch.setattr(sub, "load_panel", _fake_load_panel)
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: [])
+
+    def _fake_score(*a, **k):
+        return ResultRecord(
+            model="sub", panel_version="v1", panel_hash="h", judge_model="j",
+            elo_overall=1.0, elo_std=0.0, elo_ci=[0.0, 2.0], elo_per_lang={},
+            winrate_overall=0.5, winrate_per_lang={}, n_battles=0,
+            n_battles_per_lang={}, kappa_per_lang={}, mae_vs_human=0.0,
+            scorer={}, generation_params={}, seed=0,
+        )
+
+    monkeypatch.setattr(sub, "score_against_panel", _fake_score)
+
+    called = {"upload": False}
+
+    def _fake_upload(**kwargs):
+        called["upload"] = True
+        return "pr-url"
+
+    monkeypatch.setattr(sub, "upload_folder", _fake_upload, raising=False)
+
+    out = sub.main_submit(
+        ["--repo", "u/lb", "--model", "sub", "--out", str(tmp_path / "results"),
+         "--panel-version", "v1", "--dry-run"]
+    )
+    assert (out / "result.json").exists()
+    assert called["upload"] is False
