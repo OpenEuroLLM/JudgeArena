@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -42,20 +41,48 @@ except ModuleNotFoundError:
 _DATASET_REPO = "OpenEuroLLM/judgearena-leaderboard"  # default published dataset
 
 
-def load_bundle(local_dir: str | None = None, repo: str | None = None) -> tuple[dict, pd.DataFrame]:
-    """Load (bundle, scores) from a local dir or a HF dataset repo."""
+def _resolve_local_version(base: "Path") -> str:
+    versions = sorted(
+        p.name for p in (base / "panel").iterdir() if p.is_dir()
+    )
+    if not versions:
+        raise SystemExit("space: no panel/* under the local dir.")
+    return versions[-1]
+
+
+def load_bundle(
+    local_dir: str | None = None, repo: str | None = None, panel_version: str | None = None
+) -> tuple[dict, pd.DataFrame]:
+    """Assemble (bundle, scores) from a local dir or a HF dataset repo."""
+    try:
+        from assemble import assemble_from_dirs
+    except ModuleNotFoundError:
+        from judgearena.leaderboard.assemble import assemble_from_dirs
+
     if local_dir:
         base = Path(local_dir)
-        bundle = json.loads((base / "leaderboard.json").read_text())
-        scores = pd.read_parquet(base / "scores.parquet")
-        return bundle, scores
+        version = panel_version or _resolve_local_version(base)
+        return assemble_from_dirs(base / "panel" / version, base / "records" / version)
 
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import HfApi, snapshot_download
 
     repo = repo or _DATASET_REPO
-    lb = hf_hub_download(repo_id=repo, repo_type="dataset", filename="leaderboard.json")
-    sc = hf_hub_download(repo_id=repo, repo_type="dataset", filename="scores.parquet")
-    return json.loads(Path(lb).read_text()), pd.read_parquet(sc)
+    version = panel_version
+    if version is None:
+        files = HfApi().list_repo_files(repo_id=repo, repo_type="dataset")
+        versions = sorted(
+            {f.split("/")[1] for f in files if f.startswith("panel/") and "/" in f[6:]}
+        )
+        if not versions:
+            raise SystemExit("space: no panel/* in the dataset repo.")
+        version = versions[-1]
+    local = snapshot_download(
+        repo_id=repo,
+        repo_type="dataset",
+        allow_patterns=[f"panel/{version}/*.json", f"records/{version}/**"],
+    )
+    base = Path(local)
+    return assemble_from_dirs(base / "panel" / version, base / "records" / version)
 
 
 def build_demo(bundle: dict, scores: pd.DataFrame):  # -> gr.Blocks
@@ -102,10 +129,13 @@ def build_demo(bundle: dict, scores: pd.DataFrame):  # -> gr.Blocks
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="judgearena-space")
-    ap.add_argument("--local", default=None, help="Local bundle dir (skips HF download).")
+    ap.add_argument("--local", default=None, help="Local dataset dir (panel/ + records/).")
     ap.add_argument("--repo", default=None, help="HF dataset repo id.")
+    ap.add_argument("--panel-version", default=None, help="Panel version (latest if omitted).")
     args = ap.parse_args(argv)
-    bundle, scores = load_bundle(local_dir=args.local, repo=args.repo)
+    bundle, scores = load_bundle(
+        local_dir=args.local, repo=args.repo, panel_version=args.panel_version
+    )
     build_demo(bundle, scores).launch()
 
 

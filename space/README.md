@@ -15,4 +15,6 @@ from the JudgeArena results dataset.
 
 Local preview:
 
-    python space/app.py --local <bundle-dir>     # e.g. the dir judgearena-publish wrote
+    python space/app.py --local <dataset-dir>    # dir containing panel/ and records/
+
+**Deployment note:** the deployed Space must have `assemble.py` (and its `anchors` dependency) available next to `app.py` — either copy `judgearena/leaderboard/assemble.py` and `judgearena/leaderboard/anchors.py` into the Space, or ship the `judgearena` package as a Space dependency.

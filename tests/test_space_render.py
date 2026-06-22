@@ -7,7 +7,6 @@ import json
 import pandas as pd
 import plotly.graph_objects as go
 
-from space.app import load_bundle
 from space.render import (
     available_languages,
     distribution_fig,
@@ -75,15 +74,6 @@ def test_distribution_fig_per_model():
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 2  # one histogram trace per model
 
-
-def test_load_bundle_local(tmp_path):
-    (tmp_path / "leaderboard.json").write_text(json.dumps({"rows": [], "languages": []}))
-    pd.DataFrame({"model": ["a"], "tag": [None], "lang": ["en"], "judge_pref": [0.5]}).to_parquet(
-        tmp_path / "scores.parquet", index=False
-    )
-    bundle, scores = load_bundle(local_dir=str(tmp_path))
-    assert bundle == {"rows": [], "languages": []}
-    assert list(scores.columns) == ["model", "tag", "lang", "judge_pref"]
 
 
 def _bundle_4a():
@@ -163,3 +153,30 @@ def test_head_to_head_heatmap_empty():
     from space.render import head_to_head_heatmap
     fig = head_to_head_heatmap({"head_to_head": {"models": [], "winrate": [], "counts": []}})
     assert fig is not None  # no crash
+
+
+def test_app_load_bundle_from_local(tmp_path):
+    import json
+    import pandas as pd
+    from space.app import load_bundle
+
+    panel_dir = tmp_path / "panel" / "v1"
+    panel_dir.mkdir(parents=True)
+    (panel_dir / "panel.json").write_text(json.dumps(
+        {"panel_version": "v1", "panel_hash": "h", "judge_model": "j",
+         "baseline_model": "m1", "mae_vs_human": 1.0,
+         "kappa_per_language": {"en": 0.7}, "scorer": {"method": "soft"}}))
+    (panel_dir / "anchor_ratings.json").write_text(json.dumps(
+        {"overall": {"m1": 0.0}, "per_lang": {"en": {"m1": 0.0}},
+         "counts_overall": {"m1": 4}, "counts_per_lang": {"en": {"m1": 4}}}))
+    (panel_dir / "calibration.json").write_text(json.dumps(
+        {"mae": 1.0, "spearman": 0.9, "points": []}))
+    (panel_dir / "anchor_h2h.json").write_text(json.dumps({"pairwise": {}}))
+
+    records_dir = tmp_path / "records" / "v1"
+    records_dir.mkdir(parents=True)
+
+    bundle, scores = load_bundle(local_dir=str(tmp_path), panel_version="v1")
+    assert bundle["panel"]["panel_version"] == "v1"
+    assert [r["model"] for r in bundle["rows"]] == ["m1"]
+    assert list(scores.columns) == ["model", "tag", "lang", "judge_pref"]
