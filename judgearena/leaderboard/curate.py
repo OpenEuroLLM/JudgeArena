@@ -1,4 +1,8 @@
-"""Flow A: curate and freeze the leaderboard panel."""
+"""Build and freeze a leaderboard panel from a human-labeled arena.
+
+Pairs with ``leaderboard/score.py``, which scores a new model against the
+frozen panel this module produces.
+"""
 
 from __future__ import annotations
 
@@ -11,20 +15,27 @@ import yaml
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.config import EloArgs, JudgeArgs, PanelArgs
-from judgearena.estimate_elo_ratings import _winner_to_pref, fit_bradley_terry
+from judgearena.estimate_elo_ratings import _winner_to_pref
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
     judge_and_parse_prefs,
     resolve_run_judge_prompt,
 )
-from judgearena.leaderboard.anchors import save_anchor_caches
+from judgearena.leaderboard.anchors import (
+    human_elo_from_battles,
+    judge_elo_from_battles,
+    save_anchor_caches,
+)
+from judgearena.leaderboard.assemble import RNG_SEED_MAX
 from judgearena.leaderboard.kappa import language_kappa
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
 from judgearena.log import get_logger
 from judgearena.models import make_model
 
 logger = get_logger(__name__)
+
+MIN_CALIBRATION_PAIRS = 10
 
 
 def select_roster(df: pd.DataFrame, args: PanelArgs) -> list[str]:
@@ -56,6 +67,10 @@ def select_roster(df: pd.DataFrame, args: PanelArgs) -> list[str]:
 
 
 def _quantize_pref(pref: float | None) -> float:
+    """Quantize a soft judge preference to {0.0, 0.5, 1.0} in PREFERENCE space
+    (0.0 = model_a preferred), matching ``judge_pref``'s direction. This is the
+    hardened preference used for ``judge_pref_hard`` and the κ gate — NOT
+    ``pref_to_win_a`` (which is win-for-model_a, the opposite convention)."""
     if pref is None or (isinstance(pref, float) and np.isnan(pref)):
         return float("nan")
     if pref < 0.5:
@@ -74,11 +89,11 @@ def build_panel(
     panel_args: PanelArgs,
     elo_args: EloArgs,
     *,
-    judge_cfg,
+    judge_cfg: JudgeArgs,
     seed: int = 0,
     generation_params: dict | None = None,
 ) -> Panel:
-    """Flow A: select roster, judge κ-gated roster battles per language, freeze."""
+    """Select the roster, judge κ-gated roster battles per language, and freeze the panel."""
     rng = np.random.default_rng(seed)
     df = load_arena_dataframe(arena=elo_args.arena)
     if elo_args.languages:
@@ -99,7 +114,7 @@ def build_panel(
         group = df[df["lang"] == lang]
         if len(group) > panel_args.n_per_language:
             group = group.sample(
-                n=panel_args.n_per_language, random_state=int(rng.integers(0, 2**31))
+                n=panel_args.n_per_language, random_state=int(rng.integers(0, RNG_SEED_MAX))
             )
         group = group.reset_index(drop=True)
 
@@ -112,8 +127,8 @@ def build_panel(
             instructions=instructions,
             completions_A=completions_a,
             completions_B=completions_b,
-            swap_mode=getattr(judge_cfg, "swap_mode", "fixed"),
-            provide_explanation=getattr(judge_cfg, "provide_explanation", False),
+            swap_mode=judge_cfg.swap_mode,
+            provide_explanation=judge_cfg.provide_explanation,
             system_prompt=resolved.system_prompt,
             user_prompt_template=resolved.user_prompt_template,
             prompt_preset=resolved.preset_name,
@@ -183,15 +198,16 @@ def build_panel(
                     continue
                 delta_s.append(sa - sb)
                 y.append(1.0 - hp)  # pref=0 (A wins) -> y=1
-            if len(delta_s) >= 10:
+            if len(delta_s) >= MIN_CALIBRATION_PAIRS:
                 temperature = float(
                     calibrate_temperature(np.array(delta_s), np.array(y))
                 )
                 calibrated = True
             else:
                 logger.info(
-                    "Only %d calibration pairs (<10); using static temperature.",
+                    "Only %d calibration pairs (<%d); using static temperature.",
                     len(delta_s),
+                    MIN_CALIBRATION_PAIRS,
                 )
 
         soft_scorer = PairScore(temperature=temperature)
@@ -201,27 +217,9 @@ def build_panel(
         battles["judge_pref_hard"] = judge_pref.map(_quantize_pref).to_numpy()
 
         # MAE diagnostic: judge-ELO vs human-ELO over the anchor models.
-        df_h = pd.DataFrame(
-            {
-                "model_a": battles["model_a"],
-                "model_b": battles["model_b"],
-                "pref_hard": battles["human_winner"].map(_winner_to_pref),
-            }
-        )
-        human_elo = fit_bradley_terry(
-            df_h, pref_col="pref_hard", baseline_model=elo_args.baseline_model
-        )
+        human_elo = human_elo_from_battles(battles, elo_args.baseline_model)
         judge_col = "judge_pref" if method != "hard" else "judge_pref_hard"
-        df_j = pd.DataFrame(
-            {
-                "model_a": battles["model_a"],
-                "model_b": battles["model_b"],
-                "pref": battles[judge_col],
-            }
-        )
-        judge_elo = fit_bradley_terry(
-            df_j, pref_col="pref", baseline_model=elo_args.baseline_model
-        )
+        judge_elo = judge_elo_from_battles(battles, judge_col, elo_args.baseline_model)
         overlap = [m for m in judge_elo if m in human_elo]
         if overlap:
             mae_vs_human = float(
@@ -235,7 +233,7 @@ def build_panel(
         "panel_version": panel_args.panel_version,
         "arena": elo_args.arena,
         "judge_model": judge_cfg.model,
-        "swap_mode": getattr(judge_cfg, "swap_mode", "fixed"),
+        "swap_mode": judge_cfg.swap_mode,
         "baseline_model": elo_args.baseline_model,
         "roster": roster,
         "languages_kept": sorted(kappa_per_language),

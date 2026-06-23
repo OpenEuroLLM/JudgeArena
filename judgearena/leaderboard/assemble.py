@@ -8,17 +8,64 @@ render Space imports.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 import pandas as pd
 
+RNG_SEED_MAX = 2**31
+CI_PERCENTILES = (2.5, 97.5)
+
 _BOARD_COLUMNS = ["model", "elo", "ci_low", "ci_high", "n", "is_submission"]
 
 
-def _record_label(rec: dict) -> str:
+class CalibrationPoint(TypedDict):
+    model: str
+    human_elo: float
+    judge_elo: float
+    judge_ci: list[float]
+
+
+class CalibrationResult(TypedDict):
+    mae: float
+    spearman: float
+    points: list[CalibrationPoint]
+
+
+class AnchorRatings(TypedDict, total=False):
+    overall: dict[str, float]
+    per_lang: dict[str, dict[str, float]]
+    counts_overall: dict[str, int]
+    counts_per_lang: dict[str, dict[str, int]]
+    winrate_overall: dict[str, float]
+
+
+class Bundle(TypedDict):
+    panel: dict
+    languages: list[str]
+    rows: list[dict]
+    by_language: dict[str, list[dict]]
+    calibration: CalibrationResult
+    head_to_head: dict
+
+
+def latest_panel_version(versions: list[str]) -> str:
+    """Latest version, ordered by trailing integer then lexicographically (v10 > v9)."""
+    if not versions:
+        raise SystemExit("no panel versions found")
+
+    def _key(v: str) -> tuple[int, str]:
+        m = re.search(r"(\d+)$", v)
+        return (int(m.group(1)) if m else -1, v)
+
+    return sorted(versions, key=_key)[-1]
+
+
+def record_label(rec: dict) -> str:
     return f"{rec['model']} #{rec['tag']}" if rec.get("tag") else rec["model"]
 
 
@@ -26,13 +73,14 @@ def _opt(value) -> float | None:
     return None if value is None or (isinstance(value, float) and pd.isna(value)) else float(value)
 
 
-def _h2h_win(pref) -> float | None:
+def pref_to_win_a(pref) -> float | None:
+    """Soft pref → win for model_a: <0.5 win (1.0), >0.5 loss (0.0), ==0.5 tie (0.5), NaN/None → None."""
     if pref is None or (isinstance(pref, float) and np.isnan(pref)):
         return None
     return 1.0 if pref < 0.5 else (0.0 if pref > 0.5 else 0.5)
 
 
-def _board_rows(
+def board_rows(
     anchor_elo: dict[str, float],
     anchor_counts: dict[str, int],
     records: list[dict],
@@ -65,7 +113,7 @@ def _board_rows(
             n = int(rec.get("n_battles_per_lang", {}).get(lang, 0))
         rows.append(
             {
-                "model": _record_label(rec),
+                "model": record_label(rec),
                 "elo": float(elo),
                 "ci_low": float(ci[0]),
                 "ci_high": float(ci[1]),
@@ -82,26 +130,27 @@ def _board_rows(
 def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict, panel_hash: str | None) -> dict:
     wins: dict[tuple[str, str], float] = defaultdict(float)
     counts: dict[tuple[str, str], int] = defaultdict(int)
-    for r, cols in anchor_h2h.get("pairwise", {}).items():
-        for c, (w, n) in cols.items():
-            wins[(r, c)] += float(w)
-            counts[(r, c)] += int(n)
+    for row_model, cols in anchor_h2h.get("pairwise", {}).items():
+        for col_model, (w, n) in cols.items():
+            wins[(row_model, col_model)] += float(w)
+            counts[(row_model, col_model)] += int(n)
     for rec in records:
         if rec.get("panel_hash") != panel_hash:
             continue
-        battles = record_battles.get(_record_label(rec))
+        battles = record_battles.get(record_label(rec))
         if battles is None or len(battles) == 0:
             continue
         if "opponent" not in battles.columns or "position" not in battles.columns:
             continue
-        model = _record_label(rec)
+        model = record_label(rec)
         for _, b in battles.iterrows():
             pref = b["judge_pref"]
-            if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+            sub_win_a = pref_to_win_a(pref)
+            if sub_win_a is None:
                 continue
-            if pref == 0.5:
+            if sub_win_a == 0.5:
                 sub_win = 0.5
-            elif (pref < 0.5 and b["position"] == "A") or (pref > 0.5 and b["position"] == "B"):
+            elif (sub_win_a == 1.0 and b["position"] == "A") or (sub_win_a == 0.0 and b["position"] == "B"):
                 sub_win = 1.0
             else:
                 sub_win = 0.0
@@ -112,10 +161,10 @@ def _assemble_h2h(anchor_h2h: dict, records: list[dict], record_battles: dict, p
             counts[(opp, model)] += 1
     models = sorted({m for pair in counts for m in pair})
     winrate = [
-        [(wins[(r, c)] / counts[(r, c)]) if counts[(r, c)] else None for c in models]
-        for r in models
+        [(wins[(row_model, col_model)] / counts[(row_model, col_model)]) if counts[(row_model, col_model)] else None for col_model in models]
+        for row_model in models
     ]
-    count_matrix = [[counts[(r, c)] for c in models] for r in models]
+    count_matrix = [[counts[(row_model, col_model)] for col_model in models] for row_model in models]
     return {"models": models, "winrate": winrate, "counts": count_matrix}
 
 
@@ -126,12 +175,12 @@ def assemble_bundle(
     anchor_h2h: dict,
     records: list[dict],
     record_battles: dict,
-) -> dict:
+) -> Bundle:
     panel_hash = panel_meta.get("panel_hash")
-    overall = _board_rows(
+    overall = board_rows(
         anchor_ratings["overall"], anchor_ratings["counts_overall"], records, panel_hash
     )
-    by_label = {_record_label(r): r for r in records}
+    by_label = {record_label(r): r for r in records}
     anchor_ci = {p["model"]: p.get("judge_ci") for p in calibration.get("points", [])}
     anchor_winrate = anchor_ratings.get("winrate_overall", {})
 
@@ -164,7 +213,7 @@ def assemble_bundle(
     languages = sorted((panel_meta.get("kappa_per_language") or {}).keys())
     by_language: dict[str, list[dict]] = {}
     for lang in languages:
-        lb = _board_rows(
+        lb = board_rows(
             anchor_ratings["per_lang"].get(lang, {}),
             anchor_ratings["counts_per_lang"].get(lang, {}),
             records,
@@ -207,7 +256,7 @@ def assemble_scores(records: list[dict], record_battles: dict, panel_hash: str |
     for rec in records:
         if rec.get("panel_hash") != panel_hash:
             continue
-        battles = record_battles.get(_record_label(rec))
+        battles = record_battles.get(record_label(rec))
         if battles is None or len(battles) == 0:
             continue
         frames.append(
@@ -231,7 +280,7 @@ def load_records(records_root: str | Path) -> tuple[list[dict], dict]:
     for result_path in sorted(Path(records_root).glob("*/result.json")):
         rec = json.loads(result_path.read_text())
         battles_path = result_path.parent / "battles.parquet"
-        record_battles[_record_label(rec)] = (
+        record_battles[record_label(rec)] = (
             pd.read_parquet(battles_path) if battles_path.exists() else None
         )
         records.append(rec)

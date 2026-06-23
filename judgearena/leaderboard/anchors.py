@@ -15,13 +15,42 @@ import numpy as np
 import pandas as pd
 
 from judgearena.estimate_elo_ratings import _winner_to_pref, fit_bradley_terry
-from judgearena.leaderboard.assemble import _h2h_win
+from judgearena.leaderboard.assemble import (
+    CI_PERCENTILES,
+    RNG_SEED_MAX,
+    AnchorRatings,
+    pref_to_win_a,
+)
 from judgearena.leaderboard.panel import Panel
 
 
 def _anchor_pref_col(panel: Panel) -> str:
     method = panel.meta.get("scorer", {}).get("method", "soft")
     return "judge_pref_hard" if method == "hard" else "judge_pref"
+
+
+def human_elo_from_battles(battles: pd.DataFrame, baseline: str | None) -> dict[str, float]:
+    df = pd.DataFrame(
+        {
+            "model_a": battles["model_a"],
+            "model_b": battles["model_b"],
+            "pref_hard": battles["human_winner"].map(_winner_to_pref),
+        }
+    )
+    return fit_bradley_terry(df, pref_col="pref_hard", baseline_model=baseline)
+
+
+def judge_elo_from_battles(
+    battles: pd.DataFrame, pref_col: str, baseline: str | None
+) -> dict[str, float]:
+    df = pd.DataFrame(
+        {
+            "model_a": battles["model_a"],
+            "model_b": battles["model_b"],
+            "pref": battles[pref_col],
+        }
+    )
+    return fit_bradley_terry(df, pref_col="pref", baseline_model=baseline)
 
 
 def _ratings_and_counts(
@@ -46,20 +75,19 @@ def _winrate_overall(battles: pd.DataFrame, pref_col: str) -> dict[str, float]:
     """Per-model overall win rate within the pool (pref thresholded at 0.5, ties=0.5)."""
     wins: dict[str, float] = defaultdict(float)
     counts: dict[str, int] = defaultdict(int)
-    for _, b in battles.iterrows():
-        pref = b[pref_col]
-        if pref is None or (isinstance(pref, float) and np.isnan(pref)):
+    for _, battle in battles.iterrows():
+        win_a = pref_to_win_a(battle[pref_col])
+        if win_a is None:
             continue
-        a, bb = str(b["model_a"]), str(b["model_b"])
-        win_a = 1.0 if pref < 0.5 else (0.0 if pref > 0.5 else 0.5)
-        wins[a] += win_a
-        counts[a] += 1
-        wins[bb] += 1.0 - win_a
-        counts[bb] += 1
+        model_a, model_b = str(battle["model_a"]), str(battle["model_b"])
+        wins[model_a] += win_a
+        counts[model_a] += 1
+        wins[model_b] += 1.0 - win_a
+        counts[model_b] += 1
     return {m: wins[m] / counts[m] for m in counts if counts[m]}
 
 
-def compute_anchor_ratings(panel: Panel) -> dict:
+def compute_anchor_ratings(panel: Panel) -> AnchorRatings:
     baseline = panel.meta.get("baseline_model")
     col = _anchor_pref_col(panel)
     battles = panel.battles
@@ -92,13 +120,8 @@ def compute_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
     baseline = panel.meta.get("baseline_model")
     judge_col = _anchor_pref_col(panel)
 
-    human_df = pd.DataFrame(
-        {
-            "model_a": battles["model_a"],
-            "model_b": battles["model_b"],
-            "pref_hard": battles["human_winner"].map(_winner_to_pref),
-        }
-    )
+    human_elo = human_elo_from_battles(battles, baseline)
+    judge_elo = judge_elo_from_battles(battles, judge_col, baseline)
     judge_df = pd.DataFrame(
         {
             "model_a": battles["model_a"],
@@ -106,14 +129,12 @@ def compute_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
             "pref": battles[judge_col],
         }
     )
-    human_elo = fit_bradley_terry(human_df, pref_col="pref_hard", baseline_model=baseline)
-    judge_elo = fit_bradley_terry(judge_df, pref_col="pref", baseline_model=baseline)
 
     rng = np.random.default_rng(seed)
     boot: dict[str, list[float]] = {}
     for _ in range(n_bootstrap):
         sample = judge_df.sample(
-            n=len(judge_df), replace=True, random_state=int(rng.integers(0, 2**31))
+            n=len(judge_df), replace=True, random_state=int(rng.integers(0, RNG_SEED_MAX))
         )
         ratings = fit_bradley_terry(sample, pref_col="pref", baseline_model=baseline)
         for model, value in ratings.items():
@@ -123,7 +144,7 @@ def compute_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
     for model in sorted(m for m in human_elo if m in judge_elo):
         vals = boot.get(model, [])
         ci = (
-            [float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))]
+            [float(np.percentile(vals, CI_PERCENTILES[0])), float(np.percentile(vals, CI_PERCENTILES[1]))]
             if vals
             else [float("nan"), float("nan")]
         )
@@ -155,18 +176,18 @@ def compute_anchor_h2h(panel: Panel) -> dict:
     counts: dict[tuple[str, str], int] = defaultdict(int)
     battles = panel.battles
     if battles is not None and len(battles):
-        for _, b in battles.iterrows():
-            win_a = _h2h_win(b["judge_pref"])
+        for _, battle in battles.iterrows():
+            win_a = pref_to_win_a(battle["judge_pref"])
             if win_a is None:
                 continue
-            a, bb = str(b["model_a"]), str(b["model_b"])
-            wins[(a, bb)] += win_a
-            counts[(a, bb)] += 1
-            wins[(bb, a)] += 1.0 - win_a
-            counts[(bb, a)] += 1
+            model_a, model_b = str(battle["model_a"]), str(battle["model_b"])
+            wins[(model_a, model_b)] += win_a
+            counts[(model_a, model_b)] += 1
+            wins[(model_b, model_a)] += 1.0 - win_a
+            counts[(model_b, model_a)] += 1
     pairwise: dict[str, dict[str, list]] = {}
-    for (r, c), w in wins.items():
-        pairwise.setdefault(r, {})[c] = [float(w), int(counts[(r, c)])]
+    for (row_model, col_model), w in wins.items():
+        pairwise.setdefault(row_model, {})[col_model] = [float(w), int(counts[(row_model, col_model)])]
     return {"pairwise": pairwise}
 
 

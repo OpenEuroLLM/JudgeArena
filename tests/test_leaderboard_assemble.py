@@ -145,3 +145,21 @@ def test_anchor_winrate_absent_is_backward_compatible():
     bundle = assemble_bundle(PANEL_META, ANCHOR_RATINGS, CALIBRATION, ANCHOR_H2H, [], {})
     by_model = {r["model"]: r for r in bundle["rows"]}
     assert by_model["m1"]["winrate"] is None
+
+
+def test_pref_to_win_a():
+    from judgearena.leaderboard.assemble import pref_to_win_a
+
+    assert pref_to_win_a(0.1) == 1.0
+    assert pref_to_win_a(0.9) == 0.0
+    assert pref_to_win_a(0.5) == 0.5
+    assert pref_to_win_a(None) is None
+    assert pref_to_win_a(float("nan")) is None
+
+
+def test_latest_panel_version_numeric_aware():
+    from judgearena.leaderboard.assemble import latest_panel_version
+
+    assert latest_panel_version(["v1", "v2", "v10"]) == "v10"
+    assert latest_panel_version(["panel-v1", "panel-v10", "panel-v2"]) == "panel-v10"
+    assert latest_panel_version(["smoke-10lang-v1"]) == "smoke-10lang-v1"

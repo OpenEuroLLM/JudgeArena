@@ -87,6 +87,24 @@ def test_anchor_winrate_overall():
     assert 0.0 <= wr["m2"] <= 1.0
 
 
+def test_human_and_judge_elo_helpers():
+    from judgearena.leaderboard.anchors import (
+        human_elo_from_battles,
+        judge_elo_from_battles,
+    )
+
+    panel = _panel()
+    he = human_elo_from_battles(panel.battles, "m1")
+    je = judge_elo_from_battles(panel.battles, "judge_pref", "m1")
+    assert set(he) == {"m1", "m2", "m3"}
+    assert set(je) == {"m1", "m2", "m3"}
+    # m1 wins all its battles, m3 loses all -> m1 highest, m3 lowest (any centering)
+    assert he["m1"] == max(he.values())
+    assert he["m3"] == min(he.values())
+    assert je["m1"] == max(je.values())
+    assert je["m3"] == min(je.values())
+
+
 def test_save_and_load_roundtrip(tmp_path):
     panel = _panel()
     save_anchor_caches(panel, tmp_path)

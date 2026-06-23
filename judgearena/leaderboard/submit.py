@@ -18,13 +18,10 @@ logger = get_logger(__name__)
 
 def _resolve_panel_version(repo_files: list[str]) -> str:
     """Latest panel version present in the dataset (numeric-aware on the suffix)."""
-    versions = sorted(
-        {f.split("/")[1] for f in repo_files if f.startswith("panel/") and "/" in f[6:]},
-        key=lambda v: (int(v[1:]) if v[1:].isdigit() else -1, v),
-    )
-    if not versions:
-        raise SystemExit("submit: no panel/* found in the dataset repo.")
-    return versions[-1]
+    from judgearena.leaderboard.assemble import latest_panel_version
+
+    versions = {f.split("/")[1] for f in repo_files if f.startswith("panel/") and "/" in f[6:]}
+    return latest_panel_version(sorted(versions))
 
 
 def _download_panel(repo: str, version: str) -> Path:

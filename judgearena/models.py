@@ -20,6 +20,12 @@ from judgearena.utils.io import safe_parse_int
 logger = get_logger(__name__)
 
 
+def message_text(x) -> str:
+    """LangChain returns an AIMessage for chat models and a str for raw models;
+    normalize either to its text."""
+    return x.content if hasattr(x, "content") else x
+
+
 DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
 _THINKING_MODEL_PARSER_BY_SUBSTRING = (
     ("qwen3", "qwen3"),
@@ -414,10 +420,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     path (``use_tqdm=True``) retries individual calls; the batch path splits
     into ``4**attempt`` chunks on failure.
     """
-    invoke_kwargs = {
-        # "stop": ["```"],
-        # "max_tokens": 100,
-    }
+    invoke_kwargs = {}
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
@@ -496,10 +499,7 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
         res = batch_with_retry(inputs)
 
-    # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
-    # is it because of using Chat and barebones models?
-    # when using OpenAI, the output is AIMessage not a string...
-    res = [x.content if hasattr(x, "content") else x for x in res]
+    res = [message_text(x) for x in res]
     return res
 
 

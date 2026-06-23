@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.leaderboard.anchors import compute_anchor_ratings
-from judgearena.leaderboard.assemble import _board_rows
+from judgearena.leaderboard.assemble import board_rows
 from judgearena.leaderboard.panel import Panel, load_panel
 from judgearena.log import get_logger
 
@@ -32,7 +32,7 @@ def build_board(
     else:
         anchor_elo = ratings["per_lang"].get(lang, {})
         anchor_counts = ratings["counts_per_lang"].get(lang, {})
-    return _board_rows(
+    return board_rows(
         anchor_elo, anchor_counts, records, panel.meta.get("panel_hash"), lang=lang
     )
 

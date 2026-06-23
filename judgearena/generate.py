@@ -1,8 +1,10 @@
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.models import do_inference, make_model
+from judgearena.models import do_inference, make_model, message_text
 from judgearena.utils import strip_thinking_tags, truncate
+
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 def generate_instructions(
@@ -16,11 +18,8 @@ def generate_instructions(
 ) -> pd.DataFrame:
     chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
 
-    # TODO improve prompt to generate instructions
     if system_prompt is None:
-        system_prompt = (
-            "You are an helpful assistant that answer queries asked by users."
-        )
+        system_prompt = DEFAULT_SYSTEM_PROMPT
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", "{user_prompt}")]
     )
@@ -117,7 +116,7 @@ def generate_multiturn(
     else:
         chat_model = make_model(model, max_tokens=max_tokens, **model_kwargs)
 
-    system_prompt = "You are a helpful assistant."
+    system_prompt = DEFAULT_SYSTEM_PROMPT
     idxs = questions.index.tolist()
     temperatures: list[float] = []
     if use_category_temperatures:
@@ -236,7 +235,7 @@ def generate_base(
         inputs=inputs,
         max_tokens=max_tokens,
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
+    completions = [message_text(x) for x in completions]
 
     df_outputs = pd.DataFrame(
         data={

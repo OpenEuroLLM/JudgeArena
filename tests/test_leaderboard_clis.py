@@ -306,3 +306,21 @@ def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
     )
     assert (out / "result.json").exists()
     assert called["upload"] is False
+
+
+# ---------------------------------------------------------------------------
+# Regression: _quantize_pref must be in PREFERENCE space (same direction as
+# judge_pref), NOT win-for-model_a (which is the opposite convention used by
+# pref_to_win_a).  A score < 0.5 means model_a is preferred → hard label 0.0.
+# ---------------------------------------------------------------------------
+
+def test_quantize_pref_preference_space_direction():
+    import math
+
+    from judgearena.leaderboard.curate import _quantize_pref
+
+    assert _quantize_pref(0.1) == 0.0   # model_a preferred → 0.0, NOT 1.0
+    assert _quantize_pref(0.9) == 1.0   # model_b preferred → 1.0, NOT 0.0
+    assert _quantize_pref(0.5) == 0.5   # tie → 0.5
+    assert math.isnan(_quantize_pref(float("nan")))  # NaN propagates
+    assert math.isnan(_quantize_pref(None))          # None propagates as NaN
