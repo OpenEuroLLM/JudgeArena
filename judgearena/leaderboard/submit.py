@@ -6,10 +6,12 @@ import argparse
 import re
 from pathlib import Path
 
+import pandas as pd
 from huggingface_hub import HfApi, snapshot_download, upload_folder
 
 from judgearena.config import JudgeArgs
 from judgearena.estimate_elo_ratings import _slugify
+from judgearena.evaluate import PairScore
 from judgearena.leaderboard.anchors import save_anchor_caches
 from judgearena.leaderboard.battles import judge_pool_battles, sample_pool_battles
 from judgearena.leaderboard.pool import load_pool, save_pool
@@ -73,21 +75,38 @@ def main_submit(argv: list[str] | None = None) -> Path:
     panel, pool_completions = load_pool(panel_dir)
 
     gen = panel.meta.get("generation_params", {})
-    new_completions = generate_panel_completions(
+    completions = generate_panel_completions(
         panel,
         args.model,
         max_out_tokens=gen.get("max_out_tokens", 32768),
         truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
     )
+    # generate_panel_completions returns one completion per battle row (in order);
+    # build the per-(model, instruction) completions frame, one row per instruction.
+    new_completions = (
+        pd.DataFrame(
+            {
+                "model": args.model,
+                "instruction": panel.battles["instruction"].to_numpy(),
+                "lang": panel.battles["lang"].to_numpy(),
+                "completion": completions,
+            }
+        )
+        .drop_duplicates(subset=["instruction"])
+        .reset_index(drop=True)
+    )
 
     judge_cfg = JudgeArgs(model=panel.meta["judge_model"])
-    scorer = panel.meta.get("scorer", {})
+    scorer = PairScore(temperature=panel.meta.get("scorer", {}).get("temperature", 0.3))
 
     specs = sample_pool_battles(
         args.model, new_completions, panel, pool_completions,
         n_per_pair=args.n_per_pair, seed=args.seed,
     )
-    new_battles = judge_pool_battles(specs, args.model, judge_cfg=judge_cfg, scorer=scorer)
+    new_battles = judge_pool_battles(
+        specs, args.model, judge_cfg=judge_cfg, scorer=scorer,
+        arena=panel.meta.get("arena"),
+    )
 
     if args.into_pool:
         return _submit_into_pool(args, panel, pool_completions, new_completions, new_battles, version)

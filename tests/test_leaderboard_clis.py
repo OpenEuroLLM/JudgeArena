@@ -26,12 +26,21 @@ def _save_tiny_panel(directory):
 
 def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
     import judgearena.leaderboard.submit as sub
+    from judgearena.evaluate import PairScore
 
     panel_dir = _save_tiny_panel(tmp_path / "panel")
     captured = {}
 
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: panel_dir)
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
+
+    # Realistic battles: 2 rows over 1 instruction (will dedup to 1 new_completion row).
+    _pool_battles = pd.DataFrame({
+        "instruction": ["q1", "q1"],
+        "lang": ["en", "en"],
+        "model_a": ["anchor1", "anchor2"],
+        "model_b": ["anchor2", "anchor1"],
+    })
 
     def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
@@ -42,22 +51,39 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
                     "judge_model": "OpenRouter/judge", "baseline_model": None,
                     "generation_params": {"max_out_tokens": 256, "truncate_all_input_chars": 1000},
                     "scorer": {"method": "soft", "temperature": 0.3, "calibrated": False},
-                    "pool_models": [],
+                    "pool_models": [], "arena": "test-arena",
                 },
-                battles=pd.DataFrame(),
+                battles=_pool_battles,
             ),
             pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
         )
 
     monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
 
-    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: completions_df)
-    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
-    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
+    # generate_panel_completions must return a list of len(panel.battles) == 2.
+    monkeypatch.setattr(sub, "generate_panel_completions",
+                        lambda panel, model, **kw: ["comp1", "comp1"])
+
+    # Regression guard: capture new_completions and scorer passed to sample_pool_battles
+    # and judge_pool_battles to verify their types.
+    _sampled_battles = pd.DataFrame({
         "model_a": [], "model_b": [], "instruction": [], "lang": [],
-        "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
-    }))
+    })
+
+    def _capturing_sample(new_model, new_completions, panel, pool_completions, **kw):
+        captured["new_completions"] = new_completions
+        return _sampled_battles
+
+    monkeypatch.setattr(sub, "sample_pool_battles", _capturing_sample)
+
+    def _capturing_judge(specs, new_model, *, judge_cfg, scorer, arena=None):
+        captured["scorer"] = scorer
+        return pd.DataFrame({
+            "model_a": [], "model_b": [], "instruction": [], "lang": [],
+            "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
+        })
+
+    monkeypatch.setattr(sub, "judge_pool_battles", _capturing_judge)
 
     def fake_place(panel, new_model, new_battles, *, n_bootstraps, seed):
         captured["judge"] = panel.meta["judge_model"]
@@ -89,6 +115,14 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
     assert captured["judge"] == "OpenRouter/judge"        # panel's frozen judge
     assert captured["gen"]["max_out_tokens"] == 256       # panel's frozen generation
     assert captured["n_bootstraps"] == 7
+
+    # Regression guard: new_completions must be a DataFrame with the right columns.
+    nc = captured["new_completions"]
+    assert isinstance(nc, pd.DataFrame), "new_completions must be a DataFrame, not a list"
+    assert list(nc.columns) == ["model", "instruction", "lang", "completion"]
+    # Regression guard: scorer must be a PairScore instance.
+    assert isinstance(captured["scorer"], PairScore), \
+        "scorer passed to judge_pool_battles must be a PairScore instance"
 
 
 def _board_panel():
@@ -183,6 +217,14 @@ def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: tmp_path / "panel" / "pv1")
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
 
+    # Realistic battles: 2 rows, 2 instructions (will produce 2 new_completion rows).
+    _pool_battles = pd.DataFrame({
+        "instruction": ["q1", "q2"],
+        "lang": ["en", "fr"],
+        "model_a": ["anchor1", "anchor1"],
+        "model_b": ["anchor2", "anchor2"],
+    })
+
     def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
         return (
@@ -190,16 +232,16 @@ def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
                 meta={
                     "panel_version": "pv1", "panel_hash": "ph",
                     "judge_model": "j", "baseline_model": None,
-                    "generation_params": {}, "scorer": {}, "pool_models": [],
+                    "generation_params": {}, "scorer": {"temperature": 0.3}, "pool_models": [],
                 },
-                battles=pd.DataFrame(),
+                battles=_pool_battles,
             ),
             pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
         )
 
     monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
-    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: completions_df)
+    # generate_panel_completions must return a list of len(panel.battles) == 2.
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: ["c1", "c2"])
     monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
         "model_a": [], "model_b": [], "instruction": [], "lang": [],
@@ -308,20 +350,29 @@ def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: tmp_path / "panel" / "v1")
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
 
+    # Realistic battles: 3 rows over 2 instructions.
+    _pool_battles_dry = pd.DataFrame({
+        "instruction": ["q1", "q1", "q2"],
+        "lang": ["en", "en", "fr"],
+        "model_a": ["anchor1", "anchor2", "anchor1"],
+        "model_b": ["anchor2", "anchor1", "anchor2"],
+    })
+
     def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
         return (
             Panel(
                 meta={"panel_version": "v1", "panel_hash": "h", "judge_model": "j",
-                      "generation_params": {}, "scorer": {"method": "soft"}, "pool_models": []},
-                battles=pd.DataFrame(),
+                      "generation_params": {}, "scorer": {"method": "soft", "temperature": 0.3},
+                      "pool_models": []},
+                battles=_pool_battles_dry,
             ),
             pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
         )
 
     monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
-    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: completions_df)
+    # generate_panel_completions must return a list of len(panel.battles) == 3.
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: ["c1", "c1", "c2"])
     monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
     monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
         "model_a": [], "model_b": [], "instruction": [], "lang": [],
@@ -389,20 +440,26 @@ def test_submit_into_pool_extends_and_bumps_version(tmp_path, monkeypatch):
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
 
+    # Realistic battles: 2 rows over 2 instructions.
+    _into_pool_battles = pd.DataFrame({
+        "instruction": ["q1", "q2"],
+        "lang": ["en", "fr"],
+        "model_a": ["anchor1", "anchor1"],
+        "model_b": ["anchor2", "anchor2"],
+    })
+
     def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
+        meta = json.loads((fake_panel_dir / "panel.json").read_text())
+        meta["scorer"] = {"method": "soft", "temperature": 0.3}
         return (
-            Panel(
-                meta=json.loads((fake_panel_dir / "panel.json").read_text()),
-                battles=pd.DataFrame(),
-            ),
+            Panel(meta=meta, battles=_into_pool_battles),
             pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
         )
 
     monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: pd.DataFrame(
-        columns=["model", "instruction", "lang", "completion"]
-    ))
+    # generate_panel_completions must return a list of len(panel.battles) == 2.
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: ["c1", "c2"])
 
     new_battles_df = pd.DataFrame({
         "model_a": ["new"], "model_b": ["anchor1"],
@@ -484,20 +541,26 @@ def test_submit_place_against_pool_default(tmp_path, monkeypatch):
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
 
+    # Realistic battles: 2 rows over 2 instructions.
+    _place_battles = pd.DataFrame({
+        "instruction": ["q1", "q2"],
+        "lang": ["en", "fr"],
+        "model_a": ["anchor1", "anchor1"],
+        "model_b": ["anchor2", "anchor2"],
+    })
+
     def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
+        meta = json.loads((fake_panel_dir / "panel.json").read_text())
+        meta["scorer"] = {"method": "soft", "temperature": 0.3}
         return (
-            Panel(
-                meta=json.loads((fake_panel_dir / "panel.json").read_text()),
-                battles=pd.DataFrame(),
-            ),
+            Panel(meta=meta, battles=_place_battles),
             pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
         )
 
     monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: pd.DataFrame(
-        columns=["model", "instruction", "lang", "completion"]
-    ))
+    # generate_panel_completions must return a list of len(panel.battles) == 2.
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: ["c1", "c2"])
 
     new_battles_df = pd.DataFrame({
         "model_a": ["new_model"], "model_b": ["anchor1"],
