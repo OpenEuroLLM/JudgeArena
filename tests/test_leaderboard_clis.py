@@ -32,24 +32,48 @@ def test_main_submit_uses_panel_judge_and_writes_record(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sub, "_download_panel", lambda repo, version: panel_dir)
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: ["c1", "c2"])
 
-    def fake_score(panel, completions, *, model, judge_cfg, n_bootstraps, seed,
-                   generation_params, scorer=None):
-        captured["judge"] = judge_cfg.model
-        captured["gen"] = generation_params
+    def _fake_load_pool(_dir):
+        from judgearena.leaderboard.panel import Panel
+        return (
+            Panel(
+                meta={
+                    "panel_version": "pv1", "panel_hash": "ph",
+                    "judge_model": "OpenRouter/judge", "baseline_model": None,
+                    "generation_params": {"max_out_tokens": 256, "truncate_all_input_chars": 1000},
+                    "scorer": {"method": "soft", "temperature": 0.3, "calibrated": False},
+                    "pool_models": [],
+                },
+                battles=pd.DataFrame(),
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
+
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+
+    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: completions_df)
+    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
+        "model_a": [], "model_b": [], "instruction": [], "lang": [],
+        "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
+    }))
+
+    def fake_place(panel, new_model, new_battles, *, n_bootstraps, seed):
+        captured["judge"] = panel.meta["judge_model"]
+        captured["gen"] = panel.meta["generation_params"]
         captured["n_bootstraps"] = n_bootstraps
         return ResultRecord(
-            model=model, panel_version=panel.meta["panel_version"],
-            panel_hash=panel.meta["panel_hash"], judge_model=judge_cfg.model,
+            model=new_model, panel_version=panel.meta["panel_version"],
+            panel_hash=panel.meta["panel_hash"], judge_model=panel.meta["judge_model"],
             elo_overall=1010.0, elo_std=5.0, elo_ci=[1000.0, 1020.0],
             elo_per_lang={}, winrate_overall=0.5, winrate_per_lang={},
             n_battles=2, n_battles_per_lang={}, kappa_per_lang={},
             mae_vs_human=float("nan"), scorer=panel.meta["scorer"],
-            generation_params=generation_params, seed=seed,
+            generation_params={}, seed=seed,
         )
 
-    monkeypatch.setattr(sub, "score_against_panel", fake_score)
+    monkeypatch.setattr(sub, "place_against_pool", fake_place)
 
     model = "VLLM/openeurollm/OLMo-3-7B-Dolci-Translated-A-75EN"
     out = sub.main_submit([
@@ -156,29 +180,48 @@ def test_main_submit_tag_suffixes_dir_and_sets_record(tmp_path, monkeypatch):
     import judgearena.leaderboard.submit as sub
     from judgearena.estimate_elo_ratings import _slugify
 
-    panel_dir = _save_tiny_panel(tmp_path / "panel")
-    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: panel_dir)
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: tmp_path / "panel" / "pv1")
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda panel, model, **kw: ["c"])
+
+    def _fake_load_pool(_dir):
+        from judgearena.leaderboard.panel import Panel
+        return (
+            Panel(
+                meta={
+                    "panel_version": "pv1", "panel_hash": "ph",
+                    "judge_model": "j", "baseline_model": None,
+                    "generation_params": {}, "scorer": {}, "pool_models": [],
+                },
+                battles=pd.DataFrame(),
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
+
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: completions_df)
+    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
+        "model_a": [], "model_b": [], "instruction": [], "lang": [],
+        "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
+    }))
 
     saved = {}
 
-    def fake_score(panel, completions, *, model, judge_cfg, n_bootstraps, seed,
-                   generation_params, scorer=None):
+    def fake_place(panel, new_model, new_battles, *, n_bootstraps, seed):
         from judgearena.leaderboard.record import ResultRecord
         rec = ResultRecord(
-            model=model, panel_version=panel.meta["panel_version"],
-            panel_hash=panel.meta["panel_hash"], judge_model=judge_cfg.model,
+            model=new_model, panel_version=panel.meta["panel_version"],
+            panel_hash=panel.meta["panel_hash"], judge_model=panel.meta["judge_model"],
             elo_overall=1000.0, elo_std=0.0, elo_ci=[1000.0, 1000.0],
             elo_per_lang={}, winrate_overall=0.5, winrate_per_lang={},
             n_battles=1, n_battles_per_lang={}, kappa_per_lang={},
-            mae_vs_human=float("nan"), scorer={}, generation_params=generation_params,
-            seed=seed,
+            mae_vs_human=float("nan"), scorer={}, generation_params={}, seed=seed,
         )
         saved["rec"] = rec
         return rec
 
-    monkeypatch.setattr(sub, "score_against_panel", fake_score)
+    monkeypatch.setattr(sub, "place_against_pool", fake_place)
 
     model = "OpenRouter/deepseek/deepseek-v3.2"
     out = sub.main_submit([
@@ -261,27 +304,31 @@ def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
     import judgearena.leaderboard.submit as sub
     from judgearena.leaderboard.record import ResultRecord
 
-    # Stub the panel download + scoring so the test stays offline.
-    fake_panel_dir = tmp_path / "panel" / "v1"
-    fake_panel_dir.mkdir(parents=True)
-    import json
-    (fake_panel_dir / "panel.json").write_text(json.dumps(
-        {"panel_version": "v1", "panel_hash": "h", "judge_model": "j",
-         "generation_params": {}, "scorer": {"method": "soft"}}))
-    (fake_panel_dir / "battles.parquet").write_bytes(b"")  # not read in this stub path
-
-    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
+    # Stub the pool download + scoring so the test stays offline.
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: tmp_path / "panel" / "v1")
     monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
 
-    def _fake_load_panel(_dir):
+    def _fake_load_pool(_dir):
         from judgearena.leaderboard.panel import Panel
-        return Panel(meta=json.loads((fake_panel_dir / "panel.json").read_text()),
-                     battles=pd.DataFrame())
+        return (
+            Panel(
+                meta={"panel_version": "v1", "panel_hash": "h", "judge_model": "j",
+                      "generation_params": {}, "scorer": {"method": "soft"}, "pool_models": []},
+                battles=pd.DataFrame(),
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
 
-    monkeypatch.setattr(sub, "load_panel", _fake_load_panel)
-    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: [])
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+    completions_df = pd.DataFrame(columns=["model", "instruction", "lang", "completion"])
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: completions_df)
+    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
+        "model_a": [], "model_b": [], "instruction": [], "lang": [],
+        "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
+    }))
 
-    def _fake_score(*a, **k):
+    def _fake_place(*a, **k):
         return ResultRecord(
             model="sub", panel_version="v1", panel_hash="h", judge_model="j",
             elo_overall=1.0, elo_std=0.0, elo_ci=[0.0, 2.0], elo_per_lang={},
@@ -290,7 +337,7 @@ def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
             scorer={}, generation_params={}, seed=0,
         )
 
-    monkeypatch.setattr(sub, "score_against_panel", _fake_score)
+    monkeypatch.setattr(sub, "place_against_pool", _fake_place)
 
     called = {"upload": False}
 
@@ -306,6 +353,202 @@ def test_submit_dry_run_skips_upload(tmp_path, monkeypatch):
     )
     assert (out / "result.json").exists()
     assert called["upload"] is False
+
+
+def _fake_pool_panel_and_dir(tmp_path):
+    """Shared helper: write a minimal panel.json + battles.parquet for pool tests."""
+    import json
+
+    import pandas as pd
+
+    fake_panel_dir = tmp_path / "pool" / "v1"
+    fake_panel_dir.mkdir(parents=True)
+    (fake_panel_dir / "panel.json").write_text(json.dumps({
+        "panel_version": "v1", "panel_hash": "h", "judge_model": "j",
+        "generation_params": {}, "scorer": {"method": "soft"},
+        "pool_models": ["anchor1"],
+    }))
+    # completions.parquet must exist for load_pool
+    pd.DataFrame(columns=["model", "instruction", "lang", "completion"]).to_parquet(
+        fake_panel_dir / "completions.parquet", index=False
+    )
+    pd.DataFrame().to_parquet(fake_panel_dir / "battles.parquet", index=False)
+    return fake_panel_dir
+
+
+def test_submit_into_pool_extends_and_bumps_version(tmp_path, monkeypatch):
+    """--into-pool: extend_pool + save_pool are called, version is bumped, no record PR."""
+    import json
+
+    import pandas as pd
+
+    import judgearena.leaderboard.submit as sub
+
+    fake_panel_dir = _fake_pool_panel_and_dir(tmp_path)
+
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
+
+    def _fake_load_pool(_dir):
+        from judgearena.leaderboard.panel import Panel
+        return (
+            Panel(
+                meta=json.loads((fake_panel_dir / "panel.json").read_text()),
+                battles=pd.DataFrame(),
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
+
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: pd.DataFrame(
+        columns=["model", "instruction", "lang", "completion"]
+    ))
+
+    new_battles_df = pd.DataFrame({
+        "model_a": ["new"], "model_b": ["anchor1"],
+        "instruction": ["q1"], "lang": ["en"],
+        "judge_pref": [0.3], "judge_pref_hard": [0.0],
+        "position": ["A"], "opponent": ["anchor1"],
+    })
+
+    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: new_battles_df)
+
+    called = {}
+
+    def _fake_extend_pool(panel, completions, new_model, new_completions, new_battles, *, bump_version):
+        called["extend_pool"] = {"bump_version": bump_version}
+        from judgearena.leaderboard.panel import Panel
+        new_meta = dict(panel.meta)
+        new_meta["panel_version"] = bump_version
+        return Panel(meta=new_meta, battles=new_battles), completions
+
+    monkeypatch.setattr(sub, "extend_pool", _fake_extend_pool)
+
+    def _fake_save_pool(panel, completions, directory):
+        called["save_pool"] = {"version": panel.meta["panel_version"], "directory": directory}
+        return directory
+
+    monkeypatch.setattr(sub, "save_pool", _fake_save_pool)
+
+    def _fake_save_anchor_caches(panel, directory):
+        called["save_anchor_caches"] = True
+
+    monkeypatch.setattr(sub, "save_anchor_caches", _fake_save_anchor_caches)
+
+    upload_calls = []
+
+    def _fake_upload(**kwargs):
+        upload_calls.append(kwargs)
+        return "upload-url"
+
+    monkeypatch.setattr(sub, "upload_folder", _fake_upload, raising=False)
+
+    out = sub.main_submit([
+        "--repo", "u/lb", "--model", "new_model",
+        "--out", str(tmp_path / "results"),
+        "--panel-version", "v1",
+        "--into-pool",
+        "--dry-run",
+    ])
+
+    # extend_pool must have been called with a bumped version
+    assert "extend_pool" in called
+    assert called["extend_pool"]["bump_version"] == "v2"
+
+    # save_pool must have been called with the bumped version
+    assert "save_pool" in called
+    assert called["save_pool"]["version"] == "v2"
+
+    # anchor caches must be recomputed
+    assert called.get("save_anchor_caches") is True
+
+    # dry-run: no upload
+    assert upload_calls == []
+
+    # returned path is the pool dir with the bumped version
+    assert out.name == "v2"
+
+
+def test_submit_place_against_pool_default(tmp_path, monkeypatch):
+    """Default mode + --dry-run: place_against_pool is called, record is saved, no PR."""
+    import json
+
+    import pandas as pd
+
+    import judgearena.leaderboard.submit as sub
+    from judgearena.leaderboard.record import ResultRecord
+
+    fake_panel_dir = _fake_pool_panel_and_dir(tmp_path)
+
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: fake_panel_dir)
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "v1")
+
+    def _fake_load_pool(_dir):
+        from judgearena.leaderboard.panel import Panel
+        return (
+            Panel(
+                meta=json.loads((fake_panel_dir / "panel.json").read_text()),
+                battles=pd.DataFrame(),
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
+
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+    monkeypatch.setattr(sub, "generate_panel_completions", lambda *a, **k: pd.DataFrame(
+        columns=["model", "instruction", "lang", "completion"]
+    ))
+
+    new_battles_df = pd.DataFrame({
+        "model_a": ["new_model"], "model_b": ["anchor1"],
+        "instruction": ["q1"], "lang": ["en"],
+        "judge_pref": [0.3], "judge_pref_hard": [0.0],
+        "position": ["A"], "opponent": ["anchor1"],
+    })
+
+    monkeypatch.setattr(sub, "sample_pool_battles", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: new_battles_df)
+
+    called = {}
+
+    def _fake_place_against_pool(panel, new_model, new_battles, *, n_bootstraps, seed):
+        called["place_against_pool"] = {"new_model": new_model}
+        return ResultRecord(
+            model=new_model, panel_version=panel.meta["panel_version"],
+            panel_hash=panel.meta["panel_hash"], judge_model=panel.meta["judge_model"],
+            elo_overall=1000.0, elo_std=0.0, elo_ci=[990.0, 1010.0], elo_per_lang={},
+            winrate_overall=0.5, winrate_per_lang={}, n_battles=1,
+            n_battles_per_lang={}, kappa_per_lang={}, mae_vs_human=float("nan"),
+            scorer={}, generation_params={}, seed=seed,
+        )
+
+    monkeypatch.setattr(sub, "place_against_pool", _fake_place_against_pool)
+
+    upload_calls = []
+
+    def _fake_upload(**kwargs):
+        upload_calls.append(kwargs)
+        return "pr-url"
+
+    monkeypatch.setattr(sub, "upload_folder", _fake_upload, raising=False)
+
+    out = sub.main_submit([
+        "--repo", "u/lb", "--model", "new_model",
+        "--out", str(tmp_path / "results"),
+        "--panel-version", "v1",
+        "--dry-run",
+        "--n-per-pair", "50",
+    ])
+
+    # place_against_pool must have been called
+    assert "place_against_pool" in called
+    assert called["place_against_pool"]["new_model"] == "new_model"
+
+    # record must have been saved
+    assert (out / "result.json").exists()
+
+    # dry-run: no PR upload
+    assert upload_calls == []
 
 
 # ---------------------------------------------------------------------------
