@@ -48,3 +48,6 @@ def test_place_against_pool_returns_record_without_mutating_pool():
     assert rec.model == "new"
     assert isinstance(rec.elo_overall, float)
     assert len(panel.battles) == before  # pool not mutated
+    # Regression: battles artifact must be populated so h2h/scores tabs see the record.
+    assert len(rec.battles) == len(new_battles)
+    assert {"opponent", "position", "judge_pref", "lang"}.issubset(rec.battles.columns)

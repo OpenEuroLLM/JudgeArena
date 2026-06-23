@@ -90,6 +90,8 @@ def place_against_pool(
     # MAE vs human-ELO using the pool's human labels.
     mae_vs_human = _mae_vs_human(df_results, panel.battles, new_model, pref_col, baseline_model)
 
+    battles_out = new_battles.reset_index(drop=True)
+
     return ResultRecord(
         model=new_model,
         panel_version=panel.meta.get("panel_version", ""),
@@ -108,4 +110,5 @@ def place_against_pool(
         scorer=dict(panel.meta.get("scorer", {})),
         generation_params={},
         seed=seed,
+        battles=battles_out,
     )

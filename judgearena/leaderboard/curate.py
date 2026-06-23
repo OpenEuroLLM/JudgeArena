@@ -29,7 +29,8 @@ from judgearena.leaderboard.anchors import (
 )
 from judgearena.leaderboard.assemble import RNG_SEED_MAX
 from judgearena.leaderboard.kappa import language_kappa
-from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel, save_panel
+from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel
+from judgearena.leaderboard.pool import completions_from_battles, save_pool
 from judgearena.log import get_logger
 from judgearena.models import make_model
 
@@ -270,7 +271,11 @@ def main_curate(argv: list[str] | None = None) -> None:
         panel_args, elo_args, judge_cfg=judge_cfg, seed=seed,
         generation_params=generation_params,
     )
-    out = save_panel(panel, f"{panel_args.panel_dir}/{panel_args.panel_version}")
+    models = sorted(set(panel.battles["model_a"]) | set(panel.battles["model_b"])) if not panel.battles.empty else []
+    panel.meta["pool_models"] = models
+    panel.meta["anchor_models"] = models
+    completions = completions_from_battles(panel.battles)
+    out = save_pool(panel, completions, f"{panel_args.panel_dir}/{panel_args.panel_version}")
     save_anchor_caches(panel, out)
     logger.info("Wrote panel + anchor caches to %s (%d battles)", out, len(panel.battles))
 

@@ -40,3 +40,18 @@ def anchor_models(panel: Panel) -> list[str]:
 def pool_completion(completions: pd.DataFrame, model: str, instruction: str) -> str | None:
     hit = completions[(completions["model"] == model) & (completions["instruction"] == instruction)]
     return None if hit.empty else str(hit.iloc[0]["completion"])
+
+
+def completions_from_battles(battles: pd.DataFrame) -> pd.DataFrame:
+    """Per-(model, instruction) completions unpacked from a battles table's inline columns."""
+    if battles.empty:
+        return pd.DataFrame(columns=POOL_COMPLETION_COLUMNS)
+    a = battles[["model_a", "instruction", "lang", "completion_a"]].rename(
+        columns={"model_a": "model", "completion_a": "completion"}
+    )
+    b = battles[["model_b", "instruction", "lang", "completion_b"]].rename(
+        columns={"model_b": "model", "completion_b": "completion"}
+    )
+    out = pd.concat([a, b], ignore_index=True)
+    out = out.drop_duplicates(subset=["model", "instruction"]).reset_index(drop=True)
+    return out[POOL_COMPLETION_COLUMNS]

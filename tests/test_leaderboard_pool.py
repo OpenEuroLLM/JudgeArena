@@ -2,7 +2,7 @@ import pandas as pd
 from judgearena.leaderboard.panel import Panel
 from judgearena.leaderboard.pool import (
     POOL_COMPLETION_COLUMNS, save_pool, load_pool, pool_completion,
-    pool_models, anchor_models,
+    pool_models, anchor_models, completions_from_battles,
 )
 
 
@@ -20,6 +20,39 @@ def _panel_and_completions(tmp):
         "completion": ["a1", "a2"],
     })
     return Panel(meta=meta, battles=battles), comps
+
+
+def _make_battles(*rows):
+    """Build a minimal battles DataFrame from (model_a, model_b, instruction, completion_a, completion_b, lang) tuples."""
+    return pd.DataFrame(rows, columns=["model_a", "model_b", "instruction", "completion_a", "completion_b", "lang"])
+
+
+def test_completions_from_battles_basic():
+    battles = _make_battles(("m1", "m2", "q", "a1", "a2", "en"))
+    out = completions_from_battles(battles)
+    assert list(out.columns) == POOL_COMPLETION_COLUMNS
+    assert len(out) == 2
+    assert pool_completion(out, "m1", "q") == "a1"
+    assert pool_completion(out, "m2", "q") == "a2"
+
+
+def test_completions_from_battles_deduplication():
+    # Two battle rows sharing the same (model, instruction) pair → deduplicated to one.
+    battles = _make_battles(
+        ("m1", "m2", "q", "a1", "a2", "en"),
+        ("m1", "m3", "q", "a1", "a3", "en"),
+    )
+    out = completions_from_battles(battles)
+    assert len(out[out["model"] == "m1"]) == 1
+
+
+def test_completions_from_battles_empty():
+    battles = pd.DataFrame(
+        columns=["model_a", "model_b", "instruction", "completion_a", "completion_b", "lang"]
+    )
+    out = completions_from_battles(battles)
+    assert list(out.columns) == POOL_COMPLETION_COLUMNS
+    assert len(out) == 0
 
 
 def test_save_load_pool_roundtrip(tmp_path):
