@@ -60,7 +60,7 @@ def test_anchor_ratings_shape_and_counts():
 
 def test_calibration_points_and_mae():
     cal = compute_calibration(_panel(), n_bootstrap=5, seed=0)
-    assert set(cal) == {"mae", "spearman", "points"}
+    assert set(cal) == {"mae", "spearman", "points", "ci"}
     assert {p["model"] for p in cal["points"]} == {"m1", "m2", "m3"}
     assert all(len(p["judge_ci"]) == 2 for p in cal["points"])
 
@@ -114,3 +114,15 @@ def test_save_and_load_roundtrip(tmp_path):
     assert ratings["overall"].keys() == compute_anchor_ratings(panel)["overall"].keys()
     assert "points" in cal
     assert "pairwise" in h2h
+
+
+def test_calibration_ci_covers_all_boot_models():
+    cal = compute_calibration(_panel(), n_bootstrap=5, seed=0)
+    assert "ci" in cal
+    ci = cal["ci"]
+    # _panel() has m1, m2, m3 — all should appear in ci
+    assert set(ci.keys()) == {"m1", "m2", "m3"}
+    for model, bounds in ci.items():
+        assert isinstance(bounds, list) and len(bounds) == 2, f"ci[{model!r}] is not a 2-element list"
+        lo, hi = bounds
+        assert lo <= hi, f"ci[{model!r}] lo > hi"

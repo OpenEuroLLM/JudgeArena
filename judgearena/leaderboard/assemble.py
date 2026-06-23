@@ -181,7 +181,9 @@ def assemble_bundle(
         anchor_ratings["overall"], anchor_ratings["counts_overall"], records, panel_hash
     )
     by_label = {record_label(r): r for r in records}
-    anchor_ci = {p["model"]: p.get("judge_ci") for p in calibration.get("points", [])}
+    anchor_ci = calibration.get("ci") or {
+        p["model"]: p.get("judge_ci") for p in calibration.get("points", [])
+    }
     anchor_winrate = anchor_ratings.get("winrate_overall", {})
 
     rows = []

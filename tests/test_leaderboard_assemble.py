@@ -163,3 +163,39 @@ def test_latest_panel_version_numeric_aware():
     assert latest_panel_version(["v1", "v2", "v10"]) == "v10"
     assert latest_panel_version(["panel-v1", "panel-v10", "panel-v2"]) == "panel-v10"
     assert latest_panel_version(["smoke-10lang-v1"]) == "smoke-10lang-v1"
+
+
+def test_assemble_ci_from_new_ci_map_for_pool_model():
+    """calibration has a top-level 'ci' key covering a model not in 'points' (pool member)."""
+    calibration = {
+        "mae": 1.0,
+        "spearman": 0.9,
+        "points": [{"model": "m1", "human_elo": 0.0, "judge_elo": 1.0, "judge_ci": [0.0, 2.0]}],
+        "ci": {
+            "m1": [-1.0, 3.0],   # anchor — ci map overrides points
+            "m2": [10.0, 20.0],  # pool-only model, NOT in points
+        },
+    }
+    bundle = assemble_bundle(PANEL_META, ANCHOR_RATINGS, calibration, ANCHOR_H2H, [], {})
+    by_model = {r["model"]: r for r in bundle["rows"]}
+    # m2 is a pool member only in ci — must now get CI
+    assert by_model["m2"]["ci_low"] == 10.0
+    assert by_model["m2"]["ci_high"] == 20.0
+    # m1's CI comes from the ci map (not from points)
+    assert by_model["m1"]["ci_low"] == -1.0
+    assert by_model["m1"]["ci_high"] == 3.0
+
+
+def test_assemble_ci_back_compat_no_ci_key():
+    """Old calibration cache with no 'ci' key still fills CI from 'points'."""
+    calibration_old = {
+        "mae": 1.0,
+        "spearman": 0.9,
+        "points": [{"model": "m1", "human_elo": 0.0, "judge_elo": 1.0, "judge_ci": [0.0, 2.0]}],
+        # no "ci" key
+    }
+    bundle = assemble_bundle(PANEL_META, ANCHOR_RATINGS, calibration_old, ANCHOR_H2H, [], {})
+    by_model = {r["model"]: r for r in bundle["rows"]}
+    assert by_model["m1"]["ci_low"] == 0.0
+    assert by_model["m1"]["ci_high"] == 2.0
+    assert by_model["m2"]["ci_low"] is None

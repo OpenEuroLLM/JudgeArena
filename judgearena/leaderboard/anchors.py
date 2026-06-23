@@ -157,6 +157,15 @@ def compute_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
             }
         )
 
+    ci_by_model = {
+        m: [
+            float(np.percentile(vals, CI_PERCENTILES[0])),
+            float(np.percentile(vals, CI_PERCENTILES[1])),
+        ]
+        for m, vals in boot.items()
+        if vals
+    }
+
     mae = (
         float(np.mean([abs(p["human_elo"] - p["judge_elo"]) for p in points]))
         if points
@@ -168,7 +177,7 @@ def compute_calibration(panel: Panel, *, n_bootstrap: int = 100, seed: int = 0) 
         spearman = float(h.rank().corr(j.rank()))
     else:
         spearman = float("nan")
-    return {"mae": mae, "spearman": spearman, "points": points}
+    return {"mae": mae, "spearman": spearman, "points": points, "ci": ci_by_model}
 
 
 def compute_anchor_h2h(panel: Panel) -> dict:
