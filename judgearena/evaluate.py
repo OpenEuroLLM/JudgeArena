@@ -235,6 +235,7 @@ def resolve_judge_prompts(
     task: str | None = None,
     system_file: str | None = None,
     user_file: str | None = None,
+    criteria_file: str | None = None,
 ) -> ResolvedJudgePrompt:
     if system_prompt is not None and user_prompt_template is not None:
         return ResolvedJudgePrompt(
@@ -256,6 +257,7 @@ def resolve_judge_prompts(
         user_file=user_file,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
+        criteria_file=criteria_file,
     )
     if resolved.delegated:
         raise ValueError(

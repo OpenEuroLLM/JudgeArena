@@ -180,6 +180,7 @@ def resolve_judge_prompt(
     user_file: str | Path | None = None,
     multi_turn: bool = False,
     provide_explanation: bool = False,
+    criteria_file: str | Path | None = None,
 ) -> ResolvedJudgePrompt:
     if (system_file is None) != (user_file is None):
         raise ValueError(
@@ -211,6 +212,12 @@ def resolve_judge_prompt(
             f"Unknown judge prompt preset {preset!r}. Available: {sorted(PRESETS)}"
         )
 
+    if criteria_file is not None and spec.criteria_name is None:
+        raise ValueError(
+            f"criteria_file is set but preset {spec.name!r} is not a criteria "
+            "preset; set prompt_preset to a criteria preset (e.g. 'criteria')."
+        )
+
     if spec.delegated:
         return ResolvedJudgePrompt(
             preset_name=spec.name,
@@ -240,7 +247,7 @@ def resolve_judge_prompt(
         from judgearena.criteria.io import resolve_criteria
         from judgearena.criteria.schema import criterion_names, prompt_block
 
-        _, criteria = resolve_criteria(spec.criteria_name)
+        _, criteria = resolve_criteria(spec.criteria_name, criteria_file)
         names = criterion_names(criteria)
         criteria_names = tuple(names)
         output_lines = "\n".join(f"{n}: A=<1-5> B=<1-5>" for n in names)
@@ -275,4 +282,5 @@ def resolve_run_judge_prompt(
         user_file=getattr(judge_cfg, "user_prompt_file", None),
         multi_turn=multi_turn,
         provide_explanation=getattr(judge_cfg, "provide_explanation", False),
+        criteria_file=getattr(judge_cfg, "criteria_file", None),
     )

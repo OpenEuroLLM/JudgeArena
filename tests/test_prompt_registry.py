@@ -173,6 +173,38 @@ def test_criteria_preset_resolves_with_axes_and_parser_mode():
     assert "fluency: A=<1-5> B=<1-5>" in template
 
 
+_CUSTOM_CRITERIA_YAML = """
+name: custom
+criteria:
+  - name: correctness
+    description: Is the answer correct
+  - name: tone
+    description: Is the tone appropriate
+"""
+
+
+def test_criteria_preset_uses_custom_criteria_file(tmp_path):
+    path = tmp_path / "custom.yaml"
+    path.write_text(_CUSTOM_CRITERIA_YAML, encoding="utf-8")
+
+    resolved = resolve_judge_prompt(preset="criteria", criteria_file=path)
+
+    assert resolved.parser_mode == "criteria"
+    assert resolved.criteria_names == ("correctness", "tone")
+    assert "correctness: A=<1-5> B=<1-5>" in resolved.user_prompt_template
+    assert "tone: A=<1-5> B=<1-5>" in resolved.user_prompt_template
+    # the built-in default axes are replaced, not appended
+    assert "fluency: A=" not in resolved.user_prompt_template
+
+
+def test_criteria_file_with_non_criteria_preset_raises(tmp_path):
+    path = tmp_path / "custom.yaml"
+    path.write_text(_CUSTOM_CRITERIA_YAML, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not a criteria preset"):
+        resolve_judge_prompt(preset="default", criteria_file=path)
+
+
 def test_every_preset_resolves_or_delegates():
     for preset_name, spec in PRESETS.items():
         resolved = resolve_judge_prompt(preset=preset_name)
