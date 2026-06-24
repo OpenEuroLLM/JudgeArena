@@ -42,6 +42,22 @@ def pool_completion(completions: pd.DataFrame, model: str, instruction: str) -> 
     return None if hit.empty else str(hit.iloc[0]["completion"])
 
 
+def select_panel_instructions(panel: Panel, instructions_per_lang: int, *, seed: int) -> pd.DataFrame:
+    """≤k unique instructions per language from the panel, sampled deterministically."""
+    import numpy as np
+
+    uniq = panel.battles[["instruction", "lang"]].drop_duplicates(subset=["instruction"])
+    rng = np.random.default_rng(seed)
+    parts = []
+    for lang in sorted(uniq["lang"].unique()):
+        group = uniq[uniq["lang"] == lang]
+        if len(group) > instructions_per_lang:
+            idx = rng.choice(len(group), size=instructions_per_lang, replace=False)
+            group = group.iloc[sorted(idx)]
+        parts.append(group)
+    return pd.concat(parts, ignore_index=True)[["instruction", "lang"]]
+
+
 def completions_from_battles(battles: pd.DataFrame) -> pd.DataFrame:
     """Per-(model, instruction) completions unpacked from a battles table's inline columns."""
     if battles.empty:

@@ -31,12 +31,19 @@ def generate_panel_completions(
     panel: Panel,
     model: str,
     *,
+    instructions: pd.Series | None = None,
     max_out_tokens: int = 32768,
     truncate_all_input_chars: int = 8192,
     **engine_kwargs,
 ) -> list[str]:
-    """Generate the model's answer to each panel instruction, in row order."""
-    instructions = pd.Series(panel.battles["instruction"].tolist(), name="instruction")
+    """Generate the model's answer to each panel instruction, in row order.
+
+    When *instructions* is given, generate for those (in order) instead of
+    ``panel.battles["instruction"]``.
+    """
+    if instructions is None:
+        instructions = panel.battles["instruction"]
+    instructions = pd.Series(list(instructions), name="instruction")
     df = generate_instructions(
         instructions=instructions,
         model=model,

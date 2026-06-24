@@ -37,6 +37,9 @@ from judgearena.utils import (
 
 logger = get_logger(__name__)
 
+JUDGE_SCORE_MIN = 0.0
+JUDGE_SCORE_MAX = 10.0
+
 
 class PairScore:
     def __init__(self, *, temperature: float = 0.3, parser_mode: str = "score"):
@@ -67,6 +70,12 @@ class PairScore:
         text = strip_thinking_tags(judge_completion).lower()
         score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
         score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
+        # Reject values outside the rubric range [0, 10] — out-of-range numbers
+        # are mis-grabs from the judge's prose, not real scores.
+        if score_a is not None and not (JUDGE_SCORE_MIN <= score_a <= JUDGE_SCORE_MAX):
+            score_a = None
+        if score_b is not None and not (JUDGE_SCORE_MIN <= score_b <= JUDGE_SCORE_MAX):
+            score_b = None
         return score_a, score_b
 
     @staticmethod

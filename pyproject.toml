@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project.scripts]
 judgearena = "judgearena.cli:cli"
 judgearena-curate = "judgearena.leaderboard.curate:main_curate"
-judgearena-submit = "judgearena.leaderboard.submit:main_submit"
+judgearena-submit = "judgearena.leaderboard.submit:main"
 judgearena-board = "judgearena.leaderboard.board:main_board"
 
 [project]

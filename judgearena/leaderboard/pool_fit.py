@@ -28,7 +28,7 @@ def extend_pool(
     # Conform new battles to the panel battle schema (denormalized; null human/anchor-only cols).
     rows = pd.DataFrame({col: pd.NA for col in PANEL_BATTLE_COLUMNS}, index=new_battles.index)
     rows["battle_id"] = [f"{new_model}|{r.model_b}|{r.instruction}" for r in new_battles.itertuples()]
-    for col in ("lang", "model_a", "model_b", "instruction", "judge_pref", "judge_pref_hard"):
+    for col in ("lang", "model_a", "model_b", "instruction", "completion_a", "completion_b", "judge_pref", "judge_pref_hard"):
         rows[col] = new_battles[col].to_numpy()
     merged_battles = pd.concat([panel.battles, rows[PANEL_BATTLE_COLUMNS]], ignore_index=True)
 

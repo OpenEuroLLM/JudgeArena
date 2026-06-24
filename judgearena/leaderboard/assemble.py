@@ -186,8 +186,10 @@ def assemble_bundle(
     }
     anchor_winrate = anchor_ratings.get("winrate_overall", {})
 
+    anchor_set = set(panel_meta.get("anchor_models", []))
     rows = []
     for _, row in overall.iterrows():
+        is_sub = bool(row["is_submission"])
         entry = {
             "rank": int(row["rank"]),
             "model": row["model"],
@@ -195,7 +197,12 @@ def assemble_bundle(
             "ci_low": _opt(row["ci_low"]),
             "ci_high": _opt(row["ci_high"]),
             "n": int(row["n"]),
-            "is_submission": bool(row["is_submission"]),
+            "is_submission": is_sub,
+            "kind": (
+                "submission" if is_sub
+                else "anchor" if row["model"] in anchor_set
+                else "judge-only"
+            ),
             "winrate": None,
             "winrate_per_lang": {},
         }

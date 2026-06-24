@@ -64,3 +64,21 @@ def test_save_load_pool_roundtrip(tmp_path):
     assert anchor_models(p2) == ["m1", "m2"]
     assert pool_completion(c2, "m2", "q") == "a2"
     assert pool_completion(c2, "absent", "q") is None
+
+
+def test_select_panel_instructions_caps_per_language():
+    from judgearena.leaderboard.pool import select_panel_instructions
+    # 5 en instructions, 3 fr; same instruction repeated across battle rows must dedup
+    battles = pd.DataFrame({
+        "instruction": ["e1","e2","e3","e4","e5","e1","f1","f2","f3"],
+        "lang":        ["en","en","en","en","en","en","fr","fr","fr"],
+    })
+    panel = Panel(battles=battles, meta={})
+    out = select_panel_instructions(panel, 2, seed=0)
+    assert list(out.columns) == ["instruction", "lang"]
+    assert (out.groupby("lang").size() <= 2).all()       # ≤k per language
+    assert out["instruction"].is_unique                   # unique instructions
+    assert set(out["lang"]) == {"en", "fr"}
+    # deterministic
+    out2 = select_panel_instructions(panel, 2, seed=0)
+    assert out.equals(out2)

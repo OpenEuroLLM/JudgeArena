@@ -199,3 +199,13 @@ def test_assemble_ci_back_compat_no_ci_key():
     assert by_model["m1"]["ci_low"] == 0.0
     assert by_model["m1"]["ci_high"] == 2.0
     assert by_model["m2"]["ci_low"] is None
+
+
+def test_assemble_rows_tagged_by_kind():
+    panel_meta = {**PANEL_META, "anchor_models": ["m1"]}  # m1 anchor; m2 judge-only
+    ratings = {**ANCHOR_RATINGS}  # overall has m1, m2 (both non-submission)
+    bundle = assemble_bundle(panel_meta, ratings, CALIBRATION, ANCHOR_H2H, [_record()], {"sub": _record_battles()})
+    kind = {r["model"]: r["kind"] for r in bundle["rows"]}
+    assert kind["m1"] == "anchor"
+    assert kind["m2"] == "judge-only"
+    assert kind["sub"] == "submission"

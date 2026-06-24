@@ -630,3 +630,95 @@ def test_quantize_pref_preference_space_direction():
     assert _quantize_pref(0.5) == 0.5   # tie → 0.5
     assert math.isnan(_quantize_pref(float("nan")))  # NaN propagates
     assert math.isnan(_quantize_pref(None))          # None propagates as NaN
+
+
+def test_submit_instructions_per_lang_subsets_generation(monkeypatch, tmp_path):
+    """--instructions-per-lang: generate_panel_completions receives a subset Series;
+    new_completions passed to sample_pool_battles is restricted to that subset."""
+    import judgearena.leaderboard.submit as sub
+    from judgearena.leaderboard.panel import Panel
+    from judgearena.leaderboard.record import ResultRecord
+
+    # Panel with >2 instructions per language so the cap actually truncates.
+    # en: q1, q2, q3 (3 instructions) → cap at 2 → 2
+    # fr: q4, q5 (2 instructions) → cap at 2 → 2
+    # Total subset size: ≤ 4.
+    _pool_battles = pd.DataFrame({
+        "instruction": ["q1", "q2", "q3", "q4", "q5"],
+        "lang":        ["en", "en", "en", "fr", "fr"],
+        "model_a": ["anchor1"] * 5,
+        "model_b": ["anchor2"] * 5,
+    })
+
+    def _fake_load_pool(_dir):
+        return (
+            Panel(
+                meta={
+                    "panel_version": "pv1", "panel_hash": "ph",
+                    "judge_model": "OpenRouter/judge", "baseline_model": None,
+                    "generation_params": {"max_out_tokens": 256, "truncate_all_input_chars": 1000},
+                    "scorer": {"method": "soft", "temperature": 0.3, "calibrated": False},
+                    "pool_models": [], "arena": "test-arena",
+                },
+                battles=_pool_battles,
+            ),
+            pd.DataFrame(columns=["model", "instruction", "lang", "completion"]),
+        )
+
+    monkeypatch.setattr(sub, "_download_panel", lambda repo, version: tmp_path / "panel")
+    monkeypatch.setattr(sub, "_resolve_panel_version", lambda files: "pv1")
+    monkeypatch.setattr(sub, "load_pool", _fake_load_pool)
+
+    captured = {}
+
+    def fake_generate(panel, model, *, instructions=None, **kw):
+        captured["instructions"] = list(instructions) if instructions is not None else None
+        n = len(instructions) if instructions is not None else len(panel.battles)
+        return ["comp"] * n
+
+    monkeypatch.setattr(sub, "generate_panel_completions", fake_generate)
+
+    def capturing_sample(new_model, new_completions, panel, pool_completions, **kw):
+        captured["new_completions"] = new_completions.copy()
+        return pd.DataFrame()
+
+    monkeypatch.setattr(sub, "sample_pool_battles", capturing_sample)
+    monkeypatch.setattr(sub, "judge_pool_battles", lambda *a, **k: pd.DataFrame({
+        "model_a": [], "model_b": [], "instruction": [], "lang": [],
+        "judge_pref": [], "judge_pref_hard": [], "position": [], "opponent": [],
+    }))
+
+    def fake_place(panel, new_model, new_battles, *, n_bootstraps, seed):
+        return ResultRecord(
+            model=new_model, panel_version=panel.meta["panel_version"],
+            panel_hash=panel.meta["panel_hash"], judge_model=panel.meta["judge_model"],
+            elo_overall=1000.0, elo_std=0.0, elo_ci=[990.0, 1010.0], elo_per_lang={},
+            winrate_overall=0.5, winrate_per_lang={}, n_battles=0,
+            n_battles_per_lang={}, kappa_per_lang={}, mae_vs_human=float("nan"),
+            scorer={}, generation_params={}, seed=seed,
+        )
+
+    monkeypatch.setattr(sub, "place_against_pool", fake_place)
+
+    sub.main_submit([
+        "--repo", "u/lb", "--model", "VLLM/test-model",
+        "--out", str(tmp_path / "results"),
+        "--panel-version", "pv1",
+        "--instructions-per-lang", "2",
+        "--dry-run",
+    ])
+
+    # generate_panel_completions must receive an explicit instructions Series.
+    assert captured["instructions"] is not None, \
+        "generate_panel_completions must be called with an explicit instructions arg"
+
+    # ≤ 2 instructions per language → total ≤ 4 (en: ≤2, fr: ≤2).
+    assert len(captured["instructions"]) <= 4
+    # Each language contributes ≤ 2 instructions.
+    nc = captured["new_completions"]
+    assert isinstance(nc, pd.DataFrame)
+    assert list(nc.columns) == ["model", "instruction", "lang", "completion"]
+    for lang in nc["lang"].unique():
+        assert (nc["lang"] == lang).sum() <= 2, f"Lang {lang!r} has >2 rows in new_completions"
+    # The instructions in new_completions match exactly what generate received.
+    assert list(nc["instruction"]) == captured["instructions"]

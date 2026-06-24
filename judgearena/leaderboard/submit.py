@@ -62,6 +62,8 @@ def main_submit(argv: list[str] | None = None) -> Path:
                     help="Extend the reference pool (maintainer mode).")
     ap.add_argument("--n-per-pair", type=int, default=100,
                     help="Number of battles per pool-model pair.")
+    ap.add_argument("--instructions-per-lang", type=int, default=None,
+                    help="Cap a new model to ≤N instructions per language (balanced).")
     args = ap.parse_args(argv)
 
     version = args.panel_version
@@ -75,26 +77,43 @@ def main_submit(argv: list[str] | None = None) -> Path:
     panel, pool_completions = load_pool(panel_dir)
 
     gen = panel.meta.get("generation_params", {})
-    completions = generate_panel_completions(
-        panel,
-        args.model,
-        max_out_tokens=gen.get("max_out_tokens", 32768),
-        truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
-    )
-    # generate_panel_completions returns one completion per battle row (in order);
-    # build the per-(model, instruction) completions frame, one row per instruction.
-    new_completions = (
-        pd.DataFrame(
-            {
-                "model": args.model,
-                "instruction": panel.battles["instruction"].to_numpy(),
-                "lang": panel.battles["lang"].to_numpy(),
-                "completion": completions,
-            }
+    if args.instructions_per_lang is not None:
+        from judgearena.leaderboard.pool import select_panel_instructions
+        subset = select_panel_instructions(panel, args.instructions_per_lang, seed=args.seed)
+        completions = generate_panel_completions(
+            panel,
+            args.model,
+            instructions=subset["instruction"],
+            max_out_tokens=gen.get("max_out_tokens", 32768),
+            truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
         )
-        .drop_duplicates(subset=["instruction"])
-        .reset_index(drop=True)
-    )
+        new_completions = pd.DataFrame({
+            "model": args.model,
+            "instruction": subset["instruction"].to_numpy(),
+            "lang": subset["lang"].to_numpy(),
+            "completion": completions,
+        })
+    else:
+        completions = generate_panel_completions(
+            panel,
+            args.model,
+            max_out_tokens=gen.get("max_out_tokens", 32768),
+            truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
+        )
+        # generate_panel_completions returns one completion per battle row (in order);
+        # build the per-(model, instruction) completions frame, one row per instruction.
+        new_completions = (
+            pd.DataFrame(
+                {
+                    "model": args.model,
+                    "instruction": panel.battles["instruction"].to_numpy(),
+                    "lang": panel.battles["lang"].to_numpy(),
+                    "completion": completions,
+                }
+            )
+            .drop_duplicates(subset=["instruction"])
+            .reset_index(drop=True)
+        )
 
     judge_cfg = JudgeArgs(model=panel.meta["judge_model"])
     scorer = PairScore(temperature=panel.meta.get("scorer", {}).get("temperature", 0.3))
@@ -112,6 +131,16 @@ def main_submit(argv: list[str] | None = None) -> Path:
         return _submit_into_pool(args, panel, pool_completions, new_completions, new_battles, version)
     else:
         return _submit_place(args, panel, new_completions, new_battles)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Console entry point. Wraps ``main_submit`` so a successful run exits 0.
+
+    ``main_submit`` returns the written out_dir (a Path) for library/test callers;
+    ``sys.exit(<Path>)`` would print it and exit with status 1, so the CLI must
+    discard the return value.
+    """
+    main_submit(argv)
 
 
 def _submit_place(args, panel, new_completions, new_battles) -> Path:

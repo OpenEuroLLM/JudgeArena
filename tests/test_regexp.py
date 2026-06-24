@@ -16,6 +16,8 @@ Score_b: 1
 
 
 def test_pair_score2():
+    # score B: -5 is outside the rubric range [0, 10] and is treated as a mis-grab.
+    # parse_model_raw returns None when either side cannot be parsed.
     s = """
 Here is my judgement:
 
@@ -25,10 +27,10 @@ score A: 10
 score B: -5
 ```
 
-In this case, Model A provided a correct and relevant response, listing two countries that start with S. On the other hand, Model B's response was completely irrelevant to the question asked, indicating a lack of understanding or ability to address the topic at hand. Therefore, Model A is significantly better than Model B in this scenario.
+In this case, Model A provided a correct and relevant response, listing two countries that start with S. On the other hand, Model B's response was completely irrelevant to the question asked, indicating a lack of understanding or ability to agree to the topic at hand. Therefore, Model A is significantly better than Model B in this scenario.
 """
     score = PairScore()
-    assert score.parse_model_raw(s) == 0.010986942630593188
+    assert score.parse_model_raw(s) is None
 
 
 def test_regexp():
@@ -95,3 +97,37 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
     )
 
     assert strip_thinking_tags(raw_text) == "Final answer."
+
+
+# --- Range-validation tests (rubric: 0-10) ---
+
+
+def test_parse_raw_scores_valid_in_range():
+    """Standard valid scores stay intact."""
+    sa, sb = PairScore.parse_raw_scores("score_a: 8\nscore_b: 9")
+    assert sa == 8.0
+    assert sb == 9.0
+
+
+def test_parse_raw_scores_misgrab_out_of_range_returns_none():
+    """A completion where the regex grabs a year (2024) as score_a must be rejected.
+
+    The text is crafted so the loose regex r'score.*?a[": *\\n]*(-?\\d+)' matches
+    '2024' before the real score line, replicating the real mis-grab scenario.
+    """
+    # The phrase 'scored a: 2024' comes before the real label, so the loose
+    # regex grabs 2024 for side A.  Side B has a valid score (7).
+    text = (
+        "In 2023, assistant scored a: 2024 exceptional result.\n"
+        "score_b: 7\n"
+    )
+    sa, sb = PairScore.parse_raw_scores(text)
+    assert sa is None, f"Expected None for out-of-range score_a (2024), got {sa}"
+    assert sb == 7.0
+
+
+def test_parse_raw_scores_zero_kept_negative_rejected():
+    """Zero is valid (lower rubric boundary); negative values are rejected."""
+    sa, sb = PairScore.parse_raw_scores("score_a: 0\nscore_b: -5")
+    assert sa == 0.0, f"Expected 0.0 for score_a, got {sa}"
+    assert sb is None, f"Expected None for out-of-range score_b (-5), got {sb}"
