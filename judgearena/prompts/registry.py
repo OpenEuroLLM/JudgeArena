@@ -6,13 +6,14 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-JudgeParserMode = Literal["score"]
+JudgeParserMode = Literal["score", "criteria"]
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
+CRITERIA_JUDGE_PROMPT_PRESET = "criteria"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -40,6 +41,7 @@ class JudgePromptPreset:
     inline_system: str | None = None
     delegated: bool = False
     with_explanation: bool = False
+    criteria_name: str | None = None  # set => multi-criteria preset
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ class ResolvedJudgePrompt:
     system_sha256: str | None = None
     user_sha256: str | None = None
     delegated: bool = False
+    criteria_names: tuple[str, ...] | None = None
 
     def metadata(self) -> dict[str, str | bool | None]:
         return {
@@ -87,6 +90,13 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+    ),
+    CRITERIA_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=CRITERIA_JUDGE_PROMPT_PRESET,
+        parser_mode="criteria",
+        system_file="system-prompt.txt",
+        user_file="prompt-criteria.txt",
+        criteria_name="default",
     ),
 }
 
@@ -224,6 +234,20 @@ def resolve_judge_prompt(
         multi_turn=multi_turn,
         with_explanation=spec.with_explanation,
     )
+
+    criteria_names: tuple[str, ...] | None = None
+    if spec.criteria_name is not None:
+        from judgearena.criteria.io import resolve_criteria
+        from judgearena.criteria.schema import criterion_names, prompt_block
+
+        _, criteria = resolve_criteria(spec.criteria_name)
+        names = criterion_names(criteria)
+        criteria_names = tuple(names)
+        output_lines = "\n".join(f"{n}: A=<1-5> B=<1-5>" for n in names)
+        user_prompt_template = user_prompt_template.replace(
+            "{criteria_block}", prompt_block(criteria)
+        ).replace("{criteria_output_lines}", output_lines)
+
     return ResolvedJudgePrompt(
         preset_name=spec.name,
         parser_mode=spec.parser_mode,
@@ -234,6 +258,7 @@ def resolve_judge_prompt(
         user_path=spec.user_file,
         system_sha256=_sha256(system_prompt),
         user_sha256=_sha256(user_prompt_template),
+        criteria_names=criteria_names,
     )
 
 

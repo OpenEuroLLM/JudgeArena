@@ -644,10 +644,18 @@ def main(cfg: "RunConfig") -> dict:
             # delta_s = score_A - score_B, extracted exactly as the main run does.
             delta_s_cal = []
             y_cal = []
+            cal_parser = PairScore(
+                parser_mode=resolved_prompt.parser_mode,
+                criteria_names=(
+                    list(resolved_prompt.criteria_names)
+                    if resolved_prompt.criteria_names
+                    else None
+                ),
+            )
             for ann, human_winner in zip(
                 cal_annotations, cal_battles["winner"].tolist(), strict=True
             ):
-                sa, sb = PairScore.parse_raw_scores(ann.judge_completion)
+                sa, sb = cal_parser.parse_raw_scores(ann.judge_completion)
                 if sa is None or sb is None:
                     continue
                 human_pref = _winner_to_pref(human_winner)
@@ -676,7 +684,13 @@ def main(cfg: "RunConfig") -> dict:
     score_parser = PairScore(
         temperature=calibrated_temperature
         if calibrated_temperature is not None
-        else cfg.elo.soft_elo_temperature
+        else cfg.elo.soft_elo_temperature,
+        parser_mode=resolved_prompt.parser_mode,
+        criteria_names=(
+            list(resolved_prompt.criteria_names)
+            if resolved_prompt.criteria_names
+            else None
+        ),
     )
 
     # The prefs cached in df_judge were parsed at the default T=0.3, and the

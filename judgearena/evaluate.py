@@ -38,11 +38,22 @@ from judgearena.utils import (
 logger = get_logger(__name__)
 
 
+CRITERIA_SCORE_MIN = 1
+CRITERIA_SCORE_MAX = 5
+
+
 class PairScore:
-    def __init__(self, *, temperature: float = 0.3, parser_mode: str = "score"):
+    def __init__(
+        self,
+        *,
+        temperature: float = 0.3,
+        parser_mode: str = "score",
+        criteria_names: list[str] | None = None,
+    ):
         super(PairScore).__init__()
         self.temperature = temperature
         self.parser_mode = parser_mode
+        self.criteria_names = criteria_names
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
@@ -50,23 +61,84 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        if self.parser_mode != "score":
-            raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         return float(self.preference_from_scores(score_a, score_b))
 
-    @staticmethod
     def parse_raw_scores(
+        self, judge_completion: str
+    ) -> tuple[float | None, float | None]:
+        """Extract the raw A and B scores from a judge completion (no temperature).
+
+        In ``criteria`` mode the per-axis scores are parsed and averaged into a
+        single composite score per side; in ``score`` mode a single overall
+        score per side is parsed.
+        """
+        if self.parser_mode == "criteria":
+            if not self.criteria_names:
+                raise ValueError("parser_mode='criteria' requires criteria_names.")
+            return self.parse_criteria_scores(judge_completion, self.criteria_names)
+        if self.parser_mode != "score":
+            raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
+        return self._parse_score_scores(judge_completion)
+
+    @staticmethod
+    def _parse_score_scores(
         judge_completion: str,
     ) -> tuple[float | None, float | None]:
-        """Extract the raw A and B scores from a judge completion (no temperature)."""
         # Strip thinking-model <think> blocks, then lower-case to avoid confusion
         # (e.g. when "a" is used instead of "A").
         text = strip_thinking_tags(judge_completion).lower()
         score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
         score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
+        return score_a, score_b
+
+    @staticmethod
+    def parse_criteria_axes(
+        judge_completion: str, criteria_names: list[str]
+    ) -> dict[str, float | None]:
+        """Parse the per-axis ``name: A=<n> B=<n>`` scores from a judge output.
+
+        Returns a flat mapping ``{f"{name}_A": value, f"{name}_B": value}`` for
+        each criterion. Each axis is matched independently, so a single
+        malformed line does not discard the others. Scores outside ``[1, 5]``
+        (and missing ones) become ``None``.
+        """
+        text = strip_thinking_tags(judge_completion).lower()
+        axes: dict[str, float | None] = {}
+        for name in criteria_names:
+            # `.` does not cross newlines, so a match stays within one axis line.
+            m = re.search(
+                rf"{re.escape(name.lower())}\b.*?a\s*=\s*(\d+).*?b\s*=\s*(\d+)",
+                text,
+            )
+            a_val: float | None = None
+            b_val: float | None = None
+            if m is not None:
+                a_raw = float(m.group(1))
+                b_raw = float(m.group(2))
+                if CRITERIA_SCORE_MIN <= a_raw <= CRITERIA_SCORE_MAX:
+                    a_val = a_raw
+                if CRITERIA_SCORE_MIN <= b_raw <= CRITERIA_SCORE_MAX:
+                    b_val = b_raw
+            axes[f"{name}_A"] = a_val
+            axes[f"{name}_B"] = b_val
+        return axes
+
+    @staticmethod
+    def parse_criteria_scores(
+        judge_completion: str, criteria_names: list[str]
+    ) -> tuple[float | None, float | None]:
+        """Average the per-axis scores into a single composite per side.
+
+        Returns ``(None, None)`` for whichever side has no in-range scores.
+        """
+        axes = PairScore.parse_criteria_axes(judge_completion, criteria_names)
+        a_scores = [axes[f"{n}_A"] for n in criteria_names if axes[f"{n}_A"] is not None]
+        b_scores = [axes[f"{n}_B"] for n in criteria_names if axes[f"{n}_B"] is not None]
+        score_a = sum(a_scores) / len(a_scores) if a_scores else None
+        score_b = sum(b_scores) / len(b_scores) if b_scores else None
         return score_a, score_b
 
     @staticmethod
@@ -76,6 +148,17 @@ class PairScore:
             return None
         else:
             return float(m.group(group_index).strip(" "))
+
+
+def criteria_axis_columns(
+    judge_completions: list[str], criteria_names: list[str]
+) -> pd.DataFrame:
+    """Expand judge completions into one column per ``{name}_A`` / ``{name}_B``."""
+    rows = [
+        PairScore.parse_criteria_axes(jc, criteria_names) for jc in judge_completions
+    ]
+    columns = [f"{name}_{side}" for name in criteria_names for side in ("A", "B")]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def calibrate_temperature(
@@ -294,7 +377,14 @@ def evaluate_completions(
     )
 
     # Pairwise judge results
-    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
+    score_parser = PairScore(
+        parser_mode=resolved_prompt.parser_mode,
+        criteria_names=(
+            list(resolved_prompt.criteria_names)
+            if resolved_prompt.criteria_names
+            else None
+        ),
+    )
     prefs = pd.Series(
         [
             score_parser.parse_model_raw(annotation.judge_completion)
@@ -480,6 +570,7 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     parser_mode: str = "score",
+    criteria_names: list[str] | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
     score_parser: "PairScore | None" = None,
@@ -535,7 +626,7 @@ def judge_and_parse_prefs(
         return float("nan") if x is None else x
 
     if score_parser is None:
-        score_parser = PairScore(parser_mode=parser_mode)
+        score_parser = PairScore(parser_mode=parser_mode, criteria_names=criteria_names)
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
         results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]

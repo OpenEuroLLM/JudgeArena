@@ -151,6 +151,28 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
     assert resolved_legacy.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 
+def test_criteria_preset_resolves_with_axes_and_parser_mode():
+    resolved = resolve_judge_prompt(preset="criteria")
+
+    assert resolved.parser_mode == "criteria"
+    assert resolved.criteria_names == (
+        "adherence",
+        "helpfulness",
+        "factuality",
+        "completeness",
+        "clarity",
+        "fluency",
+    )
+    template = resolved.user_prompt_template
+    # rubric injected, placeholders fully substituted
+    assert "adherence" in template.lower()
+    assert "{criteria_block}" not in template
+    assert "{criteria_output_lines}" not in template
+    # per-axis output lines present
+    assert "adherence: A=<1-5> B=<1-5>" in template
+    assert "fluency: A=<1-5> B=<1-5>" in template
+
+
 def test_every_preset_resolves_or_delegates():
     for preset_name, spec in PRESETS.items():
         resolved = resolve_judge_prompt(preset=preset_name)
