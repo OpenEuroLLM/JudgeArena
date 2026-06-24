@@ -7,9 +7,8 @@ criteria:
       format, scope, style constraints, and any do/don't requirements.
       Penalize missing requested parts or deviating from constraints.
     score_references:
-      10: Fully follows the user's instructions and constraints, including format and scope.
-      7: Mostly follows the request but misses some details or adds minor unnecessary content.
-      4: Follows only part of the request and misses important constraints or requested parts.
+      5: Fully follows the user's instructions and constraints, including format and scope.
+      3: Follows part of the request but misses important constraints or requested parts.
       1: Does not follow the user's request in any meaningful way.
   - name: helpfulness
     description: >-
@@ -17,9 +16,8 @@ criteria:
       useful steps, options, or explanations tailored to the request.
       Penalize generic filler or non-responsive content.
     score_references:
-      10: Directly solves the user's problem with highly useful, actionable, and relevant content.
-      7: Generally helpful and relevant, but misses some useful detail or optimization.
-      4: Partially helpful but vague, generic, or missing key actionable guidance.
+      5: Directly solves the user's problem with highly useful, actionable, and relevant content.
+      3: Partially helpful but vague, generic, or missing key actionable guidance.
       1: Unhelpful or non-responsive to the user's goal.
   - name: factuality
     description: >-
@@ -27,9 +25,8 @@ criteria:
       and unwarranted specifics. If uncertain, expresses uncertainty and does
       not fabricate sources, citations, or details.
     score_references:
-      10: Accurate and well-qualified throughout, with no fabricated or unsupported claims.
-      7: Mostly accurate, with only minor imprecision or insufficient qualification.
-      4: Contains multiple factual errors, overclaims, or likely hallucinated details.
+      5: Accurate and well-qualified throughout, with no fabricated or unsupported claims.
+      3: Contains some factual errors, overclaims, or likely hallucinated details.
       1: Largely incorrect, fabricated, or misleading.
   - name: completeness
     description: >-
@@ -37,9 +34,8 @@ criteria:
       all sub-questions and important constraints. Penalize partial answers or
       skipped items.
     score_references:
-      10: Covers all major parts of the request with no important omissions.
-      7: Covers the main request but misses some secondary details or sub-parts.
-      4: Only partially addresses the request; multiple important pieces are missing.
+      5: Covers all major parts of the request with no important omissions.
+      3: Only partially addresses the request; multiple important pieces are missing.
       1: Fails to address the requested task in a complete or usable way.
   - name: clarity
     description: >-
@@ -47,16 +43,14 @@ criteria:
       headings/lists when helpful, and clear references. Penalize confusing
       organization or ambiguity.
     score_references:
-      10: Clear, logically structured, and easy to follow with no ambiguity.
-      7: Mostly clear and organized, but has a few awkward transitions or ambiguities.
-      4: Noticeably hard to follow due to weak structure or unclear phrasing.
+      5: Clear, logically structured, and easy to follow with no ambiguity.
+      3: Noticeably hard to follow due to weak structure or unclear phrasing.
       1: Confusing, disorganized, or difficult to understand.
   - name: fluency
     description: >-
       Language and presentation quality: fluent, readable, appropriately
       concise, and well-formatted. Tone is appropriate for the user/context.
     score_references:
-      10: Fluent, natural, polished language with strong readability and appropriate tone.
-      7: Generally fluent and readable, with some awkward phrasing or minor disfluencies.
-      4: Frequent disfluencies or formatting issues that make reading noticeably harder.
+      5: Fluent, natural, polished language with strong readability and appropriate tone.
+      3: Frequent disfluencies or formatting issues that make reading noticeably harder.
       1: Severely disfluent or poorly formatted to the point of harming comprehension.

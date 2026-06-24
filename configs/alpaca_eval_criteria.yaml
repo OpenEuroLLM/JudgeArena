@@ -1,0 +1,11 @@
+# Multi-criteria judging smoke test (judges precomputed alpaca-eval completions).
+# Run with:  judgearena --config_path configs/criteria-test.yaml
+task: alpaca-eval
+model:
+  name: gpt4_1106_preview
+  baseline: llama-2-70b-chat-hf
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  prompt_preset: criteria
+generation:
+  n_instructions: 10

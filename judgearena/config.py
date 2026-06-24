@@ -94,6 +94,10 @@ class JudgeArgs(BaseModel):
     user_prompt_file: str | None = None
     """Path to a custom judge user-prompt template, overriding the preset's."""
 
+    criteria_file: str | None = None
+    """Path to a custom criteria YAML for criteria presets (e.g.
+    ``prompt_preset: criteria``). Overrides the preset's built-in criteria set."""
+
     battle_thinking_token_budget: int | None = None
     """Token budget allotted to a thinking judge's reasoning block. Unset
     leaves the model default."""

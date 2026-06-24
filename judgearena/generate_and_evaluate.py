@@ -3,7 +3,6 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -12,7 +11,11 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
+from judgearena.evaluate import (
+    criteria_axis_columns,
+    judge_and_parse_prefs,
+    resolve_run_judge_prompt,
+)
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
@@ -36,7 +39,7 @@ from judgearena.models import (
     make_model,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.repro import write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -267,7 +270,11 @@ def main(cfg: "RunConfig"):
         )
         instructions = instructions_df.loc[:, "instruction"]
 
-    n_instructions = cfg.generation.n_instructions if cfg.generation.n_instructions else len(instructions)
+    n_instructions = (
+        cfg.generation.n_instructions
+        if cfg.generation.n_instructions
+        else len(instructions)
+    )
     if cfg.generation.n_instructions is not None:
         instructions_df = instructions_df.head(n_instructions)
         instructions = instructions.head(n_instructions)
@@ -389,17 +396,33 @@ def main(cfg: "RunConfig"):
         user_prompt_template=resolved_prompt.user_prompt_template,
         prompt_preset=resolved_prompt.preset_name,
         parser_mode=resolved_prompt.parser_mode,
+        criteria_names=(
+            list(resolved_prompt.criteria_names)
+            if resolved_prompt.criteria_names
+            else None
+        ),
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
     )
 
     eval_instruction_index = instructions.head(n_instructions).index.tolist()
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
+
+    def _attach_criteria_axis_columns(frame: pd.DataFrame) -> pd.DataFrame:
+        """Add per-axis ``{name}_A`` / ``{name}_B`` columns for criteria judging."""
+        if not resolved_prompt.criteria_names:
+            return frame
+        axis_cols = criteria_axis_columns(
+            frame["judge_completion"].tolist(), list(resolved_prompt.criteria_names)
+        )
+        return pd.concat([frame.reset_index(drop=True), axis_cols], axis=1)
+
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
     df["model_A"] = cfg.model.name
     df["model_B"] = baseline_per_eval.tolist()
     df["judge"] = cfg.judge.model
+    df = _attach_criteria_axis_columns(df)
 
     if cfg.judge.swap_mode == "both":
         df_reversed = pd.DataFrame(annotations_reversed)
@@ -407,6 +430,7 @@ def main(cfg: "RunConfig"):
         df_reversed["model_A"] = baseline_per_eval.tolist()
         df_reversed["model_B"] = cfg.model.name
         df_reversed["judge"] = cfg.judge.model
+        df_reversed = _attach_criteria_axis_columns(df_reversed)
         df = pd.concat([df, df_reversed])
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
@@ -439,9 +463,7 @@ def main(cfg: "RunConfig"):
         cfg.judge.model,
     )
     report.render()
-
-    with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
+    report.save(res_folder / f"results-{name}.json")
 
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()

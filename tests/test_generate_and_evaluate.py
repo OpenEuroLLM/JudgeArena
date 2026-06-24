@@ -29,7 +29,11 @@ def _cfg(
 ) -> RunConfig:
     return RunConfig(
         task=task,
-        model={"name": model_A, "baseline": model_B, "engine_kwargs": engine_kwargs or {}},
+        model={
+            "name": model_A,
+            "baseline": model_B,
+            "engine_kwargs": engine_kwargs or {},
+        },
         judge={
             "model": judge_model,
             "swap_mode": swap_mode,

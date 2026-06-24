@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import ClassVar
 
 import pandas as pd
 
@@ -44,13 +47,32 @@ def compute_pref_summary(prefs: pd.Series) -> PrefSummary:
 
 
 class Report(ABC):
-    """A reportable result that can print itself and serialize to a dict."""
+    """A reportable result that renders, serializes (versioned), and saves itself."""
+
+    schema_version: ClassVar[str] = "1"
 
     @abstractmethod
     def render(self) -> None: ...
 
     @abstractmethod
-    def to_dict(self) -> dict: ...
+    def _payload(self) -> dict:
+        """Report-specific fields (everything except the schema envelope)."""
+        ...
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.schema_version,
+            "report_type": type(self).__name__,
+            **self._payload(),
+        }
+
+    def save(self, path: str | Path) -> Path:
+        from judgearena.repro import _to_jsonable  # lazy: avoid an import cycle
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(_to_jsonable(self.to_dict()), indent=2) + "\n")
+        return p
 
 
 @dataclass
@@ -69,7 +91,7 @@ class BattleReport(Report):
     preferences: list = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
-    def to_dict(self) -> dict:
+    def _payload(self) -> dict:
         out: dict = {
             "task": self.task,
             "model_A": self.model_a,
@@ -85,7 +107,7 @@ class BattleReport(Report):
             out["per_category"] = self.per_category
         if self.per_turn is not None:
             out["per_turn"] = self.per_turn
-        out.update(self.metadata)
+        out["metadata"] = self.metadata
         out["preferences"] = self.preferences
         return out
 

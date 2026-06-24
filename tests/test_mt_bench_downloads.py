@@ -236,7 +236,8 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
 
     assert (tmp_path / "config.yaml").exists()
     assert (tmp_path / "mt-bench-test-annotations.csv").exists()
-    assert (tmp_path / "results-mt-bench-test.json").exists()
+    # The results JSON is now written by report.save() in _finalize_mt_bench_run,
+    # not by _save_mt_bench_results (which writes config / annotations / run metadata).
     assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
     assert captured["input_payloads"] == {"instruction_index": [1]}
     assert captured["judge_system_prompt"] == "system"
