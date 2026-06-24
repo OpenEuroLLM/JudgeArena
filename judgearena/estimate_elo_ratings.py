@@ -26,9 +26,6 @@ from judgearena.utils import cache_function_dataframe, compute_pref_summary
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
-if TYPE_CHECKING:
-    from judgearena.config import RunConfig
-
 logger = get_logger(__name__)
 
 

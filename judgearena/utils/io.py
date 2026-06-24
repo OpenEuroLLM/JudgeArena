@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -83,9 +84,11 @@ def download_all():
         else:
             download_hf(name=dataset, local_path=local_path_tables)
 
+    contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
     snapshot_download(
-        repo_id="geoalgo/multilingual-contexts-to-be-completed",
+        repo_id=contexts_repo,
         repo_type="dataset",
+        revision=hf_revision(contexts_repo),
         allow_patterns="*",
         local_dir=data_root / "contexts",
         force_download=False,
