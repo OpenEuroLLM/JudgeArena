@@ -29,9 +29,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Arena models need at least this many human battles to be kept as anchors.
-MIN_HUMAN_BATTLES = 500
-
 
 def _winner_to_pref(winner: str) -> float | None:
     """Convert a hard winner label to a continuous preference value."""
@@ -257,9 +254,9 @@ def _prefs_to_battle_results(
 def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
     """Human anchor battles from a loaded arena frame.
 
-    Keeps battles between models with at least ``MIN_HUMAN_BATTLES`` human
-    votes and shapes them like the persisted rows (``pref``/``pref_hard`` from
-    the hard winner label, ``source="human"``).
+    Keeps battles between models with at least 500 human votes and shapes them
+    like the persisted rows (``pref``/``pref_hard`` from the hard winner label,
+    ``source="human"``).
 
     These anchors are a deterministic function of the (revision-pinned) arena,
     so runs persist only their own llm-judge battles; recompute ELO with
@@ -269,7 +266,7 @@ def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
     counts = pd.concat([df["model_a"], df["model_b"]]).value_counts()
-    well_represented = set(counts[counts >= MIN_HUMAN_BATTLES].index)
+    well_represented = set(counts[counts >= 500].index)
     df = df[df["model_a"].isin(well_represented) & df["model_b"].isin(well_represented)]
     # Hard human labels → pref ∈ {0, 0.5, 1}; pref_hard == pref.
     df["pref"] = df["winner"].map(_winner_to_pref)
