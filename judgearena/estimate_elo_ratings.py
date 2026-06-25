@@ -445,7 +445,7 @@ def main(args: CliEloArgs) -> dict:
     name = (
         f"{args.arena}-{replace_slash(args.model)}-{replace_slash(args.judge_model)}"
     )
-    res_folder = Path(args.result_folder) / f"{name}-{datetime.now():%Y%m%d_%H%M%S}"
+    res_folder = Path(args.result_folder) / f"{name}-{run_started_at:%Y%m%d_%H%M%S}"
     res_folder.mkdir(parents=True, exist_ok=True)
 
     records = df_results.astype(object).where(pd.notna(df_results), None).to_dict("records")
