@@ -1,0 +1,37 @@
+# Main panel: LMArena-140k, 16 languages, top-20 frontier anchors, ~200 battles/lang.
+# Anchors = existing arena models with human votes (the calibrated reference pool).
+# The ~8B cohort is added later via `judgearena-submit --into-pool` (not here).
+# Curate:  uv run judgearena-curate --config_path configs/panel-lmarena16.yaml
+
+elo:
+  arena: LMArena-140k
+  # 12 well-supported (>=1000 battles) + 4 thinner (tr/vi/cs/ar, ~400-630).
+  # kappa-gating drops any language the judge can't track; the per-language
+  # kappa bar surfaces trust for the rest.
+  languages: ["en", "zh", "ru", "pl", "de", "fr", "ko", "ja", "es", "pt", "fa", "it", "tr", "vi", "cs", "ar"]
+  method: calibrated_soft            # calibrate judge temperature on human labels, then soft Bradley-Terry
+  baseline_model: null
+
+panel:
+  # Top-20 anchors by coverage. Frontier models span most languages, so a
+  # modest min-languages still yields the full 20.
+  roster_min_annotations: 200        # a model needs >= this many arena battles to qualify
+  roster_min_languages: 6            # appears in >= 6 of the 16 languages
+  roster_max_models: 20              # keep the top ~20 -> the anchor pool
+  kappa_threshold: 0.0               # keep a language only if judge-vs-human Cohen's kappa > 0
+  n_per_language: 200                # ~200 anchor battles per kept language -> up to ~3200 total
+  panel_dir: panels
+  panel_version: lmarena16-v1
+
+judge:
+  model: OpenRouter/deepseek/deepseek-v3.2   # VERIFY this slug at openrouter.ai/models
+
+run:
+  seed: 0
+  dataset_repo: kbora/judgearena-leaderboard   # uncomment to ALSO upload panel/ to this HF dataset
+
+model:
+  max_out_tokens: 2048               # generation budget for SUBMITTED / pool models frozen into the panel
+
+generation:
+  truncate_all_input_chars: 8192
