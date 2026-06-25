@@ -271,3 +271,26 @@ def test_judge_and_parse_prefs_none_prefs_swap_mode_both():
     )
     # All prefs should be NaN (unparseable → nan), not raise
     assert all(math.isnan(p) for p in prefs)
+
+
+def test_arena_anchor_battles_filters_and_preserves_index():
+    # Anchors are rebuilt on recompute, so this primitive must drop under-
+    # represented models (< 500 battles), keep provenance, and preserve the
+    # arena row labels (calibration looks up conversations via df_arena_all.loc[i]).
+    n = 500
+    df_all = pd.DataFrame(
+        {
+            "model_a": ["x"] * n + ["rare"],
+            "model_b": ["y"] * n + ["x"],
+            "winner": ["model_a", "model_b"] * (n // 2) + ["model_a"],
+            "conversation_a": [["q"]] * (n + 1),  # extra column must be ignored
+        },
+        index=range(1000, 1000 + n + 1),
+    )
+    out = estimate_elo_ratings.arena_anchor_battles(df_all)
+
+    # x, y have >= 500 battles -> kept; 'rare' (1 battle) -> its row dropped
+    assert set(out["model_a"]) | set(out["model_b"]) == {"x", "y"}
+    assert list(out.index) == list(range(1000, 1000 + n))  # labels preserved, rare gone
+    assert (out["source"] == "human").all()
+    assert out.loc[1000, "pref"] == 0.0 and out.loc[1001, "pref"] == 1.0
