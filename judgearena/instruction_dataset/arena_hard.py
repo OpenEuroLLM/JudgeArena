@@ -5,6 +5,8 @@ from typing import Any
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
+
 ARENA_HARD_HF_REPO_ID = "lmarena-ai/arena-hard-auto"
 
 # Mirrors upstream's `JUDGE_SETTINGS` baseline assignment in
@@ -87,6 +89,7 @@ def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
             f"data/{variant}/model_answer/*.jsonl",
         ],
         force_download=False,
+        revision=hf_revision(ARENA_HARD_HF_REPO_ID),
     )
     raw_df = _read_arena_hard_jsonl_frames(
         variant_dir=Path(snapshot_root) / "data" / variant
