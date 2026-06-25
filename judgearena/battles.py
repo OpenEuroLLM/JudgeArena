@@ -28,7 +28,9 @@ class Battle:
     model_b: str
     winner: str  # one of WINNERS
     source: str  # "llm-judge" | "human"
-    pref: float | None = None  # soft preference (0=A wins, 1=B wins); None if unparseable
+    pref: float | None = (
+        None  # soft preference (0=A wins, 1=B wins); None if unparseable
+    )
     question_id: str | None = None  # join key back to cache / transcripts
     judge_model: str | None = None  # llm-judge battles only
 

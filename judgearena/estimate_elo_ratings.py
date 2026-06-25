@@ -469,7 +469,10 @@ def main(cfg: "RunConfig") -> dict:
     # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
     df_llm_judge = _prefs_to_battle_results(
-        prefs, our_model_is_position_a, opponent_models, model_name,
+        prefs,
+        our_model_is_position_a,
+        opponent_models,
+        model_name,
         judge_model=cfg.judge.model,
     )
 
@@ -631,7 +634,10 @@ def main(cfg: "RunConfig") -> dict:
 
         # Rebuild battle results with the re-parsed prefs.
         df_llm_judge = _prefs_to_battle_results(
-            prefs, our_model_is_position_a, opponent_models, model_name,
+            prefs,
+            our_model_is_position_a,
+            opponent_models,
+            model_name,
             judge_model=cfg.judge.model,
         )
         df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
@@ -732,7 +738,13 @@ def main(cfg: "RunConfig") -> dict:
     # is left for a follow-up.
     res_dir = result_path.parent
     battle_cols = [
-        "model_a", "model_b", "winner", "pref", "pref_hard", "source", "judge_model"
+        "model_a",
+        "model_b",
+        "winner",
+        "pref",
+        "pref_hard",
+        "source",
+        "judge_model",
     ]
     write_battles(
         res_dir / "battles.parquet",
