@@ -22,6 +22,7 @@ PANEL_BATTLE_COLUMNS = [
     "judge_pref_hard",
     "challenger_opponent",
     "challenger_position",
+    "axis_scores",  # JSON per-axis criteria scores ({} / null for single-score panels)
 ]
 
 

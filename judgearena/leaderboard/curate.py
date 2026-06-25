@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -105,7 +106,9 @@ def build_panel(
 
     resolved = resolve_run_judge_prompt(elo_args.arena, judge_cfg)
     judge_model = make_model(model=judge_cfg.model)
-    static_scorer = PairScore(temperature=elo_args.soft_elo_temperature)
+    static_scorer = PairScore.from_resolved(
+        resolved, temperature=elo_args.soft_elo_temperature
+    )
 
     kept_frames: list[pd.DataFrame] = []
     kappa_per_language: dict[str, float] = {}
@@ -191,7 +194,7 @@ def build_panel(
             delta_s: list[float] = []
             y: list[float] = []
             for jc, hw in zip(battles["judge_completion"], battles["human_winner"], strict=True):
-                sa, sb = PairScore.parse_raw_scores(jc)
+                sa, sb = static_scorer.parse_raw_scores(jc)
                 if sa is None or sb is None:
                     continue
                 hp = _winner_to_pref(hw)
@@ -211,7 +214,7 @@ def build_panel(
                     MIN_CALIBRATION_PAIRS,
                 )
 
-        soft_scorer = PairScore(temperature=temperature)
+        soft_scorer = PairScore.from_resolved(resolved, temperature=temperature)
         judge_pref = battles["judge_completion"].map(soft_scorer.parse_model_raw)
         judge_pref = judge_pref.map(lambda x: float("nan") if x is None else float(x))
         battles["judge_pref"] = judge_pref.to_numpy()
@@ -227,6 +230,17 @@ def build_panel(
                 np.mean([abs(judge_elo[m] - human_elo[m]) for m in overlap])
             )
 
+        # Persist per-axis criteria scores (JSON per row, A/B aligned to
+        # model_a/model_b) before the raw judge_completion is dropped at freeze.
+        # Single-score panels store null.
+        if resolved.parser_mode == "criteria" and resolved.criteria_names:
+            axis_names = list(resolved.criteria_names)
+            battles["axis_scores"] = battles["judge_completion"].map(
+                lambda jc: json.dumps(PairScore.parse_criteria_axes(jc, axis_names))
+            )
+        else:
+            battles["axis_scores"] = None
+
         # Freeze exactly the schema columns (drops the transient judge_completion).
         battles = battles[list(PANEL_BATTLE_COLUMNS)].reset_index(drop=True)
 
@@ -234,6 +248,8 @@ def build_panel(
         "panel_version": panel_args.panel_version,
         "arena": elo_args.arena,
         "judge_model": judge_cfg.model,
+        "judge_prompt_preset": judge_cfg.prompt_preset,
+        "criteria_file": judge_cfg.criteria_file,
         "swap_mode": judge_cfg.swap_mode,
         "baseline_model": elo_args.baseline_model,
         "roster": roster,

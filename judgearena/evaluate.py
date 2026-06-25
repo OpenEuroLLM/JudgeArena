@@ -58,6 +58,23 @@ class PairScore:
         self.parser_mode = parser_mode
         self.criteria_names = criteria_names
 
+    @classmethod
+    def from_resolved(
+        cls, resolved: ResolvedJudgePrompt, *, temperature: float = 0.3
+    ) -> "PairScore":
+        """Build a scorer that matches a resolved judge prompt's parser mode.
+
+        Ensures the scorer parses in the same mode (``score`` vs ``criteria``)
+        the judge was prompted in, carrying the criteria axes when present.
+        """
+        return cls(
+            temperature=temperature,
+            parser_mode=resolved.parser_mode,
+            criteria_names=(
+                list(resolved.criteria_names) if resolved.criteria_names else None
+            ),
+        )
+
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
         return 1 - np.exp(self.temperature * score_a) / (
             np.exp(self.temperature * np.array([score_a, score_b])).sum()

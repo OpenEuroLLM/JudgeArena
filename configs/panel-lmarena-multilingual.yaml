@@ -1,0 +1,49 @@
+# Multilingual panel: LMArena-140k, 22 languages, top-30 cross-lingual anchors,
+# an EQUAL 100 battles per language (fixed pool, sampled into battles).
+#
+# Design (per the leaderboard discussion):
+#   - A frozen POOL of exactly 100 instructions per language (battles are a
+#     sample of it). 22 languages -> 2,200 anchor battles.
+#   - Anchors = existing arena models with human votes (sampled, so anchors
+#     cover different instructions within a language -- that is expected).
+#   - New models are added later via `judgearena-submit`, each judged on its
+#     own ~100 instructions/language against pool opponents.
+#   - Randomized A/B orientation -> calibrated soft Bradley-Terry ELO.
+#
+# Curate:  uv run judgearena-curate --config_path configs/panel-lmarena-multilingual.yaml
+#
+# LANGUAGE CHOICE: of LMArena-140k's 130 langs, 27 have >=100 raw battles, but
+# curate counts only roster-vs-roster battles -- with the top-30 anchor pool
+# only these 22 still clear 100 (min ~104). ca/fi/el/th/ro fall short and are
+# dropped so every kept language can sample exactly 100 (equal coverage).
+
+elo:
+  arena: LMArena-140k
+  languages: ["en", "pl", "ru", "zh", "de", "fr", "ko", "ja", "es", "pt",
+              "fa", "it", "tr", "vi", "cs", "ar", "uk", "id", "nl", "hu",
+              "bn", "sv"]
+  method: calibrated_soft            # calibrate judge temperature on human labels, then soft Bradley-Terry
+  baseline_model: null
+
+panel:
+  roster_min_annotations: 200        # a model needs >= this many arena battles to qualify as an anchor
+  roster_min_languages: 20           # appears in >= 20 of the 22 kept languages
+  roster_max_models: 30              # keep the top ~30 cross-lingual anchors
+  kappa_threshold: 0.0               # keep a language only if judge-vs-human Cohen's kappa > 0
+  n_per_language: 100                # exactly 100 battles per language -> equal across all 22
+  panel_dir: panels
+  panel_version: lmarena-multi-v1
+
+judge:
+  model: OpenRouter/google/gemma-4-31b-it  # VERIFY this slug at openrouter.ai/models
+  prompt_preset: criteria          # optional: judge on the 6 default axes (1-5, averaged)
+
+run:
+  seed: 0
+  dataset_repo: kbora/judgearena-leaderboard   # uncomment to ALSO upload panel/ to this HF dataset
+
+model:
+  max_out_tokens: 2048               # generation budget for SUBMITTED / pool models frozen into the panel
+
+generation:
+  truncate_all_input_chars: 8192
