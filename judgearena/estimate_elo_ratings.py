@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,7 +21,7 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
-from judgearena.repro import _to_jsonable
+from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
 
 if TYPE_CHECKING:
@@ -249,6 +250,7 @@ def _prefs_to_battle_results(
 
 def main(cfg: "RunConfig") -> dict:
     assert cfg.elo is not None  # main is dispatched only for elo tasks
+    run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
     # Step 1: Load arena battles
@@ -748,6 +750,23 @@ def main(cfg: "RunConfig") -> dict:
             seed=cfg.run.seed,
             ratings=summarize_bootstrap(bootstrap_ratings, battle_counts, model_name),
         ).write(res_dir / "elo_ratings.json")
+
+    # Reproducibility manifest (git hash, dependency versions, timings) — parity
+    # with the other entrypoints, all of which write run-metadata.
+    write_run_metadata(
+        output_dir=res_dir,
+        entrypoint="judgearena.estimate_elo_ratings.main",
+        run=cfg.model_dump(),
+        results=result_summary,
+        input_payloads=(
+            {"question_id": df_battles["question_id"].tolist()}
+            if "question_id" in df_battles.columns
+            else None
+        ),
+        judge_system_prompt=resolved_prompt.system_prompt,
+        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        started_at_utc=run_started_at,
+    )
 
     return {
         **result_summary,
