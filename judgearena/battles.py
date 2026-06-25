@@ -28,6 +28,7 @@ class Battle:
     model_b: str
     winner: str  # one of WINNERS
     source: str  # "llm-judge" | "human"
+    pref: float | None = None  # soft preference (0=A wins, 1=B wins); None if unparseable
     question_id: str | None = None  # join key back to cache / transcripts
     judge_model: str | None = None  # llm-judge battles only
 
@@ -38,22 +39,14 @@ class Battle:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
-def write_battles(path: str | Path, battles: list[Battle]) -> None:
-    """Write battles as JSON Lines."""
-    with Path(path).open("w") as f:
-        for b in battles:
-            f.write(json.dumps(asdict(b)) + "\n")
+def write_battles(path: str | Path, battles: pd.DataFrame) -> None:
+    """Write the battle frame to Parquet."""
+    battles.to_parquet(path, index=False)
 
 
 def read_battles(path: str | Path) -> list[Battle]:
-    """Read battles from a JSON Lines file."""
-    with Path(path).open() as f:
-        return [Battle.from_dict(json.loads(line)) for line in f if line.strip()]
-
-
-def battles_to_frame(battles: list[Battle]) -> pd.DataFrame:
-    """Tabular view, suitable for ``compute_bradley_terry(..., winner_col='winner')``."""
-    return pd.DataFrame(asdict(b) for b in battles)
+    """Read a battles Parquet file into typed Battle objects."""
+    return [Battle.from_dict(r) for r in pd.read_parquet(path).to_dict("records")]
 
 
 @dataclass(frozen=True)

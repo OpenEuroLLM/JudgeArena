@@ -10,6 +10,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.battles import EloReport, summarize_bootstrap, write_battles
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -202,6 +203,8 @@ def _prefs_to_battle_results(
     our_model_is_position_a,
     opponent_models,
     model_name: str,
+    *,
+    judge_model: str | None = None,
 ) -> pd.DataFrame:
     """Map per-battle judge prefs into model-name-level battle rows.
 
@@ -238,7 +241,10 @@ def _prefs_to_battle_results(
             }
         rec["pref_hard"] = _winner_to_pref(winner)
         records.append(rec)
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+    df["source"] = "llm-judge"
+    df["judge_model"] = judge_model
+    return df
 
 
 def main(cfg: "RunConfig") -> dict:
@@ -461,7 +467,8 @@ def main(cfg: "RunConfig") -> dict:
     # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
     df_llm_judge = _prefs_to_battle_results(
-        prefs, our_model_is_position_a, opponent_models, model_name
+        prefs, our_model_is_position_a, opponent_models, model_name,
+        judge_model=cfg.judge.model,
     )
 
     # Normalize prefs so pref < 0.5 always means our model wins, then summarise
@@ -499,6 +506,7 @@ def main(cfg: "RunConfig") -> dict:
     # Human labels are already hard, so pref_hard == pref.
     df_arena["pref"] = df_arena["winner"].map(_winner_to_pref)
     df_arena["pref_hard"] = df_arena["pref"]
+    df_arena["source"] = "human"
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -621,7 +629,8 @@ def main(cfg: "RunConfig") -> dict:
 
         # Rebuild battle results with the re-parsed prefs.
         df_llm_judge = _prefs_to_battle_results(
-            prefs, our_model_is_position_a, opponent_models, model_name
+            prefs, our_model_is_position_a, opponent_models, model_name,
+            judge_model=cfg.judge.model,
         )
         df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -712,6 +721,33 @@ def main(cfg: "RunConfig") -> dict:
         summary=result_summary,
         bootstrap_ratings=bootstrap_ratings,
     )
+
+    # Augment write_elo_result's folder with a self-contained battles table
+    # (ELO is a pure function of it) plus the percentile-CI leaderboard.
+    # battles.parquet carries pref_hard too, so both hard and soft ELO are
+    # recomputable from the file alone. question_id is not persisted yet: unlike
+    # the position arrays it is not duplicated to 2n for swap_mode="both", so it
+    # is left for a follow-up.
+    res_dir = result_path.parent
+    battle_cols = [
+        "model_a", "model_b", "winner", "pref", "pref_hard", "source", "judge_model"
+    ]
+    write_battles(
+        res_dir / "battles.parquet",
+        df_results[[c for c in battle_cols if c in df_results.columns]],
+    )
+    if bootstrap_ratings:
+        pd.DataFrame(bootstrap_ratings).to_csv(
+            res_dir / "bootstrap_ratings.csv", index=False
+        )
+        EloReport(
+            arena=cfg.elo.arena,
+            model=model_name,
+            judge_model=cfg.judge.model,
+            n_bootstraps=n_bootstraps,
+            seed=cfg.run.seed,
+            ratings=summarize_bootstrap(bootstrap_ratings, battle_counts, model_name),
+        ).write(res_dir / "elo_ratings.json")
 
     return {
         **result_summary,
