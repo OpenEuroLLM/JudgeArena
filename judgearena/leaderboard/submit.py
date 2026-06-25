@@ -64,6 +64,12 @@ def main_submit(argv: list[str] | None = None) -> Path:
                     help="Number of battles per pool-model pair.")
     ap.add_argument("--instructions-per-lang", type=int, default=None,
                     help="Cap a new model to ≤N instructions per language (balanced).")
+    ap.add_argument("--completions-out", default=None,
+                    help="Generate completions, save to this parquet, and stop before "
+                         "judging (GPU phase of a split run).")
+    ap.add_argument("--completions-in", default=None,
+                    help="Load completions from this parquet instead of generating "
+                         "(judge phase of a split run; no GPU needed).")
     args = ap.parse_args(argv)
 
     version = args.panel_version
@@ -77,7 +83,13 @@ def main_submit(argv: list[str] | None = None) -> Path:
     panel, pool_completions = load_pool(panel_dir)
 
     gen = panel.meta.get("generation_params", {})
-    if args.instructions_per_lang is not None:
+    if args.completions_in is not None:
+        new_completions = pd.read_parquet(args.completions_in)
+        logger.info(
+            "Loaded %d completions from %s (skipping generation).",
+            len(new_completions), args.completions_in,
+        )
+    elif args.instructions_per_lang is not None:
         from judgearena.leaderboard.pool import select_panel_instructions
         subset = select_panel_instructions(panel, args.instructions_per_lang, seed=args.seed)
         completions = generate_panel_completions(
@@ -115,7 +127,24 @@ def main_submit(argv: list[str] | None = None) -> Path:
             .reset_index(drop=True)
         )
 
-    judge_cfg = JudgeArgs(model=panel.meta["judge_model"])
+    if args.completions_out is not None and args.completions_in is None:
+        out = Path(args.completions_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        new_completions.to_parquet(out, index=False)
+        logger.info(
+            "Saved %d completions to %s; stopping before judging (split mode).",
+            len(new_completions), out,
+        )
+        return out
+
+    # Judge submissions exactly like the anchors: reuse the panel's frozen
+    # judge model AND prompt preset / criteria (else a criteria panel would be
+    # judged on the default score rubric, making the new ELO non-comparable).
+    judge_cfg = JudgeArgs(
+        model=panel.meta["judge_model"],
+        prompt_preset=panel.meta.get("judge_prompt_preset"),
+        criteria_file=panel.meta.get("criteria_file"),
+    )
     scorer = PairScore(temperature=panel.meta.get("scorer", {}).get("temperature", 0.3))
 
     specs = sample_pool_battles(
