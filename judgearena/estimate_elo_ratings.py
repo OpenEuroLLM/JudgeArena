@@ -674,22 +674,21 @@ def main(cfg: "RunConfig") -> dict:
         )
         bootstrap_ratings.append(ratings)
 
+    entries: list = []
     if bootstrap_ratings:
-        all_model_names = sorted(
-            set(df_results["model_a"]) | set(df_results["model_b"])
-        )
-        mean_ratings = {
-            m: np.nanmean([r.get(m, np.nan) for r in bootstrap_ratings])
-            for m in all_model_names
-        }
-        for m in sorted(all_model_names, key=lambda x: -mean_ratings[x]):
-            vals = [r[m] for r in bootstrap_ratings if m in r]
-            suffix = " <-----" if m == model_name else ""
-            count = battle_counts.get(m, 0)
-            print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")
+        # One percentile-CI summary, reused for both the console and the saved
+        # elo_ratings.json so the two never disagree.
+        entries = summarize_bootstrap(bootstrap_ratings, battle_counts, model_name)
+        for e in entries:
+            suffix = " <-----" if e.model == model_name else ""
+            print(
+                f"  {e.model}  ({e.n_battles}){suffix}: "
+                f"{e.rating:.1f} [{e.ci_low:.1f}, {e.ci_high:.1f}]"
+            )
 
         # MAE vs human-only ELO for overlapping arena models
-        overlap = [m for m in all_model_names if m in human_elo and m != model_name]
+        mean_ratings = {e.model: e.rating for e in entries}
+        overlap = [m for m in mean_ratings if m in human_elo and m != model_name]
         if overlap:
             abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
             mae = np.mean(abs_errors)
@@ -760,7 +759,7 @@ def main(cfg: "RunConfig") -> dict:
             judge_model=cfg.judge.model,
             n_bootstraps=n_bootstraps,
             seed=cfg.run.seed,
-            ratings=summarize_bootstrap(bootstrap_ratings, battle_counts, model_name),
+            ratings=entries,
         ).write(res_dir / "elo_ratings.json")
 
     # Reproducibility manifest (git hash, dependency versions, timings) — parity

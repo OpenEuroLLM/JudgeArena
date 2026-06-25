@@ -47,8 +47,15 @@ def write_battles(path: str | Path, battles: pd.DataFrame) -> None:
 
 
 def read_battles(path: str | Path) -> list[Battle]:
-    """Read a battles Parquet file into typed Battle objects."""
-    return [Battle.from_dict(r) for r in pd.read_parquet(path).to_dict("records")]
+    """Read a battles Parquet file into typed Battle objects.
+
+    Missing values (e.g. ``judge_model`` on human rows, an unparsed ``pref``)
+    are normalised from NaN to None so the typed view matches the declared
+    ``str | None`` / ``float | None`` schema regardless of parquet null handling.
+    """
+    df = pd.read_parquet(path)
+    df = df.astype(object).where(pd.notna(df), None)
+    return [Battle.from_dict(r) for r in df.to_dict("records")]
 
 
 @dataclass(frozen=True)
