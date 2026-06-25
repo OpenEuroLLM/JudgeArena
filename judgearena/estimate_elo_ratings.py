@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Arena models need at least this many human battles to be kept as anchors.
+MIN_HUMAN_BATTLES = 500
+
 
 def _winner_to_pref(winner: str) -> float | None:
     """Convert a hard winner label to a continuous preference value."""
@@ -206,6 +209,7 @@ def _prefs_to_battle_results(
     model_name: str,
     *,
     judge_model: str | None = None,
+    question_ids=None,
 ) -> pd.DataFrame:
     """Map per-battle judge prefs into model-name-level battle rows.
 
@@ -245,6 +249,32 @@ def _prefs_to_battle_results(
     df = pd.DataFrame(records)
     df["source"] = "llm-judge"
     df["judge_model"] = judge_model
+    if question_ids is not None:
+        df["question_id"] = question_ids
+    return df
+
+
+def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
+    """Human anchor battles from a loaded arena frame.
+
+    Keeps battles between models with at least ``MIN_HUMAN_BATTLES`` human
+    votes and shapes them like the persisted rows (``pref``/``pref_hard`` from
+    the hard winner label, ``source="human"``).
+
+    These anchors are a deterministic function of the (revision-pinned) arena,
+    so runs persist only their own llm-judge battles; recompute ELO with
+    ``arena_anchor_battles(load_arena_dataframe(arena))`` + the run's saved
+    ``battles.parquet``. The original ``df_arena_all`` index is preserved so
+    callers can still look up the full conversation rows by row label.
+    """
+    df = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
+    counts = pd.concat([df["model_a"], df["model_b"]]).value_counts()
+    well_represented = set(counts[counts >= MIN_HUMAN_BATTLES].index)
+    df = df[df["model_a"].isin(well_represented) & df["model_b"].isin(well_represented)]
+    # Hard human labels → pref ∈ {0, 0.5, 1}; pref_hard == pref.
+    df["pref"] = df["winner"].map(_winner_to_pref)
+    df["pref_hard"] = df["pref"]
+    df["source"] = "human"
     return df
 
 
@@ -464,6 +494,17 @@ def main(cfg: "RunConfig") -> dict:
     opponent_models = df_judge["opponent_model"].tolist()
     prefs = df_judge["pref"].tolist()
 
+    # Instruction-index join key per judged battle, so the saved battles link
+    # back to the arena initial table / completion cache without copying text.
+    # df_judge repeats the n sampled battles once (AB) or twice (AB then BA for
+    # swap_mode="both"), so tile the ids to its actual length.
+    if "question_id" in df_battles.columns and len(df_battles):
+        qids = df_battles["question_id"].tolist()
+        n_rep = (len(df_judge) + len(qids) - 1) // len(qids)
+        question_ids = (qids * n_rep)[: len(df_judge)]
+    else:
+        question_ids = [None] * len(df_judge)
+
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results.
@@ -474,6 +515,7 @@ def main(cfg: "RunConfig") -> dict:
         opponent_models,
         model_name,
         judge_model=cfg.judge.model,
+        question_ids=question_ids,
     )
 
     # Normalize prefs so pref < 0.5 always means our model wins, then summarise
@@ -496,22 +538,9 @@ def main(cfg: "RunConfig") -> dict:
     )
     print(f"Win rate: {winrate:.2%}")
 
-    # Combine LLM-judge battles with human-annotated arena battles,
-    # keeping only arena models with at least 500 human battles
-    df_arena = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
-    human_battle_counts = pd.concat(
-        [df_arena["model_a"], df_arena["model_b"]]
-    ).value_counts()
-    well_represented = set(human_battle_counts[human_battle_counts >= 500].index)
-    df_arena = df_arena[
-        df_arena["model_a"].isin(well_represented)
-        & df_arena["model_b"].isin(well_represented)
-    ]
-    # Add pref column to arena battles (hard labels → 0.0 / 1.0 / 0.5).
-    # Human labels are already hard, so pref_hard == pref.
-    df_arena["pref"] = df_arena["winner"].map(_winner_to_pref)
-    df_arena["pref_hard"] = df_arena["pref"]
-    df_arena["source"] = "human"
+    # Anchor the llm-judge battles against the human arena battles. These are
+    # rebuilt from the (revision-pinned) arena, not persisted per run.
+    df_arena = arena_anchor_battles(df_arena_all)
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -639,6 +668,7 @@ def main(cfg: "RunConfig") -> dict:
             opponent_models,
             model_name,
             judge_model=cfg.judge.model,
+            question_ids=question_ids,
         )
         df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -729,12 +759,12 @@ def main(cfg: "RunConfig") -> dict:
         bootstrap_ratings=bootstrap_ratings,
     )
 
-    # Augment write_elo_result's folder with a self-contained battles table
-    # (ELO is a pure function of it) plus the percentile-CI leaderboard.
-    # battles.parquet carries pref_hard too, so both hard and soft ELO are
-    # recomputable from the file alone. question_id is not persisted yet: unlike
-    # the position arrays it is not duplicated to 2n for swap_mode="both", so it
-    # is left for a follow-up.
+    # Persist only the run's own llm-judge battles (a few KB). The human arena
+    # anchors are identical across every run, so we do not duplicate them per
+    # experiment — recompute ELO by recombining with
+    # arena_anchor_battles(load_arena_dataframe(arena)). question_id is the
+    # instruction-index join key back to the arena initial table / completion
+    # cache. battles.parquet keeps pref_hard so both hard and soft ELO recompute.
     res_dir = result_path.parent
     battle_cols = [
         "model_a",
@@ -744,10 +774,11 @@ def main(cfg: "RunConfig") -> dict:
         "pref_hard",
         "source",
         "judge_model",
+        "question_id",
     ]
     write_battles(
         res_dir / "battles.parquet",
-        df_results[[c for c in battle_cols if c in df_results.columns]],
+        df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
     )
     if bootstrap_ratings:
         pd.DataFrame(bootstrap_ratings).to_csv(
