@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -70,7 +71,12 @@ def main_submit(argv: list[str] | None = None) -> Path:
     ap.add_argument("--completions-in", default=None,
                     help="Load completions from this parquet instead of generating "
                          "(judge phase of a split run; no GPU needed).")
+    ap.add_argument("--engine-kwargs", default=None,
+                    help="JSON dict of vLLM engine kwargs for the generation model, "
+                         'e.g. \'{"enforce_eager": true, "gpu_memory_utilization": 0.9}\'.')
     args = ap.parse_args(argv)
+
+    engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
 
     version = args.panel_version
     if version is None:
@@ -98,6 +104,7 @@ def main_submit(argv: list[str] | None = None) -> Path:
             instructions=subset["instruction"],
             max_out_tokens=gen.get("max_out_tokens", 32768),
             truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
+            **engine_kwargs,
         )
         new_completions = pd.DataFrame({
             "model": args.model,
@@ -111,6 +118,7 @@ def main_submit(argv: list[str] | None = None) -> Path:
             args.model,
             max_out_tokens=gen.get("max_out_tokens", 32768),
             truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
+            **engine_kwargs,
         )
         # generate_panel_completions returns one completion per battle row (in order);
         # build the per-(model, instruction) completions frame, one row per instruction.
