@@ -24,6 +24,10 @@ _ACTIVE_CONFIG_PATH: str | None = None
 _ACTIVE_CLI_ARGS: list[str] | None = None
 
 
+def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 class ModelArgs(BaseModel):
     """The model(s) under evaluation and their generation/engine settings."""
 
@@ -43,6 +47,20 @@ class ModelArgs(BaseModel):
     """Generation token budget for each evaluated-model answer (for vLLM, keep
     this <= ``max_model_len``)."""
 
+    temperature: float | None = None
+    """Sampling temperature for the evaluated model. Unset keeps the backend
+    default."""
+
+    top_p: float | None = None
+    """Nucleus-sampling probability for the evaluated model. Unset keeps the
+    backend default."""
+
+    top_k: int | None = None
+    """Top-k sampling cutoff for the evaluated model when supported."""
+
+    seed: int | None = None
+    """Backend sampling seed for the evaluated model when supported."""
+
     max_model_len: int | None = None
     """Optional total context window (prompt + generation) for the generation
     vLLM instance. Applies to vLLM models only."""
@@ -54,6 +72,107 @@ class ModelArgs(BaseModel):
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine-specific kwargs forwarded to the backend, e.g. for
     vLLM ``{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}``."""
+
+    baseline_max_out_tokens: int | None = None
+    """Generation token budget for the baseline/opponent model. Unset inherits
+    ``model.max_out_tokens``."""
+
+    baseline_temperature: float | None = None
+    """Sampling temperature for the baseline/opponent model. Unset inherits
+    ``model.temperature``."""
+
+    baseline_top_p: float | None = None
+    """Nucleus-sampling probability for the baseline/opponent model. Unset
+    inherits ``model.top_p``."""
+
+    baseline_top_k: int | None = None
+    """Top-k sampling cutoff for the baseline/opponent model when supported.
+    Unset inherits ``model.top_k``."""
+
+    baseline_seed: int | None = None
+    """Backend sampling seed for the baseline/opponent model when supported.
+    Unset inherits ``model.seed``."""
+
+    baseline_max_model_len: int | None = None
+    """Optional total context window for the baseline/opponent vLLM instance.
+    Unset inherits ``model.max_model_len``."""
+
+    baseline_chat_template: str | None = None
+    """Jinja2 chat template for the baseline/opponent model. Unset inherits
+    ``model.chat_template``."""
+
+    baseline_engine_kwargs: dict | None = None
+    """JSON dict of engine-specific kwargs for the baseline/opponent model.
+    Unset inherits ``model.engine_kwargs``."""
+
+    def evaluated_generation_kwargs(self) -> dict[str, object]:
+        """Kwargs for model A / the evaluated model."""
+        kwargs: dict[str, object] = dict(self.engine_kwargs)
+        kwargs.update(
+            _drop_none(
+                {
+                    "max_tokens": self.max_out_tokens,
+                    "max_model_len": self.max_model_len,
+                    "chat_template": self.chat_template,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": self.top_k,
+                    "seed": self.seed,
+                }
+            )
+        )
+        return kwargs
+
+    def baseline_generation_kwargs(self) -> dict[str, object]:
+        """Kwargs for model B / the baseline model."""
+        engine_kwargs = (
+            self.engine_kwargs
+            if self.baseline_engine_kwargs is None
+            else self.baseline_engine_kwargs
+        )
+        kwargs: dict[str, object] = dict(engine_kwargs)
+        kwargs.update(
+            _drop_none(
+                {
+                    "max_tokens": (
+                        self.baseline_max_out_tokens
+                        if self.baseline_max_out_tokens is not None
+                        else self.max_out_tokens
+                    ),
+                    "max_model_len": (
+                        self.baseline_max_model_len
+                        if self.baseline_max_model_len is not None
+                        else self.max_model_len
+                    ),
+                    "chat_template": (
+                        self.baseline_chat_template
+                        if self.baseline_chat_template is not None
+                        else self.chat_template
+                    ),
+                    "temperature": (
+                        self.baseline_temperature
+                        if self.baseline_temperature is not None
+                        else self.temperature
+                    ),
+                    "top_p": (
+                        self.baseline_top_p
+                        if self.baseline_top_p is not None
+                        else self.top_p
+                    ),
+                    "top_k": (
+                        self.baseline_top_k
+                        if self.baseline_top_k is not None
+                        else self.top_k
+                    ),
+                    "seed": (
+                        self.baseline_seed
+                        if self.baseline_seed is not None
+                        else self.seed
+                    ),
+                }
+            )
+        )
+        return kwargs
 
 
 class JudgeArgs(BaseModel):
@@ -68,8 +187,26 @@ class JudgeArgs(BaseModel):
     max_out_tokens: int = 32768
     """Generation token budget for the judge response (reasoning + scores)."""
 
+    temperature: float | None = None
+    """Sampling temperature for the judge model. Unset keeps the backend
+    default, except MT-Bench FastChat-compatible judging which defaults to
+    deterministic ``0.0``."""
+
+    top_p: float | None = None
+    """Nucleus-sampling probability for the judge model."""
+
+    top_k: int | None = None
+    """Top-k sampling cutoff for the judge model when supported."""
+
+    seed: int | None = None
+    """Backend sampling seed for the judge model when supported."""
+
     max_model_len: int | None = None
     """Optional total context window for the judge vLLM instance."""
+
+    chat_template: str | None = None
+    """Jinja2 chat template for the judge vLLM instance. Unset falls back to
+    ``model.chat_template`` for backward compatibility."""
 
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine kwargs applied to the judge model only (overrides
@@ -101,6 +238,34 @@ class JudgeArgs(BaseModel):
     strip_thinking_before_judging: bool = False
     """Strip ``<think>`` reasoning blocks from the battle completions before
     showing them to the judge."""
+
+    def model_kwargs(
+        self,
+        *,
+        base_engine_kwargs: dict | None = None,
+        fallback_chat_template: str | None = None,
+    ) -> dict[str, object]:
+        """Kwargs for constructing the judge model."""
+        kwargs: dict[str, object] = dict(base_engine_kwargs or {})
+        kwargs.update(self.engine_kwargs)
+        kwargs.update(
+            _drop_none(
+                {
+                    "max_tokens": self.max_out_tokens,
+                    "max_model_len": self.max_model_len,
+                    "chat_template": (
+                        self.chat_template
+                        if self.chat_template is not None
+                        else fallback_chat_template
+                    ),
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": self.top_k,
+                    "seed": self.seed,
+                }
+            )
+        )
+        return kwargs
 
 
 class GenerationArgs(BaseModel):

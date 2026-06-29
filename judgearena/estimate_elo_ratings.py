@@ -20,7 +20,12 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.repro import _to_jsonable
-from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+from judgearena.utils import (
+    build_default_judge_model_kwargs,
+    cache_function_dataframe,
+    compute_pref_summary,
+    make_model,
+)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -300,17 +305,11 @@ def main(cfg: "RunConfig") -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", cfg.model.name)
 
-    # Only pass extra engine kwargs that are not None
-    extra_kwargs = dict(cfg.model.engine_kwargs)
-    if cfg.model.max_model_len is not None:
-        extra_kwargs["max_model_len"] = cfg.model.max_model_len
-    if cfg.model.chat_template is not None:
-        extra_kwargs["chat_template"] = cfg.model.chat_template
+    extra_kwargs = cfg.model.evaluated_generation_kwargs()
     use_tqdm = False
     gen_fun = partial(
         generate_instructions,
         truncate_input_chars=cfg.generation.truncate_all_input_chars,
-        max_tokens=cfg.model.max_out_tokens,
         use_tqdm=use_tqdm,
         **extra_kwargs,
     )
@@ -332,7 +331,7 @@ def main(cfg: "RunConfig") -> dict:
     cache_suffix = (
         f"{cfg.elo.arena}_{replace_slash(cfg.model.name)}_"
         f"{sampling_cache_token}_"
-        f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{cfg.model.max_out_tokens}"
+        f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{extra_kwargs['max_tokens']}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
     if len(cache_suffix) > 100:
@@ -386,18 +385,17 @@ def main(cfg: "RunConfig") -> dict:
         for i in range(n)
     ]
 
-    judge_extra_kwargs = {}
-    if cfg.judge.max_model_len is not None:
-        judge_extra_kwargs["max_model_len"] = cfg.judge.max_model_len
-    if cfg.model.chat_template is not None:
-        judge_extra_kwargs["chat_template"] = cfg.model.chat_template
-    judge_extra_kwargs.update(cfg.model.engine_kwargs)
-    judge_extra_kwargs.update(cfg.judge.engine_kwargs)
+    judge_extra_kwargs = build_default_judge_model_kwargs(
+        cfg.judge.model,
+        cfg.model.engine_kwargs,
+        judge_engine_kwargs_override=cfg.judge.model_kwargs(
+            fallback_chat_template=cfg.model.chat_template,
+        ),
+    )
 
     def run_judge() -> pd.DataFrame:
         judge_chat_model = make_model(
             model=cfg.judge.model,
-            max_tokens=cfg.judge.max_out_tokens,
             **judge_extra_kwargs,
         )
         annotations, annotations_reversed, prefs = judge_and_parse_prefs(
