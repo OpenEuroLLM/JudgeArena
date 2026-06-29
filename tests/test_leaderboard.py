@@ -200,7 +200,8 @@ def _patch_curate(monkeypatch):
     monkeypatch.setattr(
         cur, "resolve_run_judge_prompt",
         lambda task, judge_cfg: SimpleNamespace(
-            system_prompt=None, user_prompt_template=None, preset_name="x", parser_mode="score"
+            system_prompt=None, user_prompt_template=None, preset_name="x",
+            parser_mode="score", criteria_names=None,
         ),
     )
     return cur
@@ -313,7 +314,8 @@ def _patch_score(monkeypatch):
     monkeypatch.setattr(
         sc, "resolve_run_judge_prompt",
         lambda task, judge_cfg: SimpleNamespace(
-            system_prompt=None, user_prompt_template=None, preset_name="x", parser_mode="score"
+            system_prompt=None, user_prompt_template=None, preset_name="x",
+            parser_mode="score", criteria_names=None,
         ),
     )
     return sc

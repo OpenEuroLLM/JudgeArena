@@ -421,7 +421,13 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     into ``4**attempt`` chunks on failure.
     """
     invoke_kwargs = {}
-    if use_tqdm:
+    # vLLM's LLM engine is NOT thread-safe; the async path below calls
+    # llm.generate() concurrently from a thread pool and corrupts engine state
+    # (HSA hardware exception / memory fault on ROCm). Local vLLM batches
+    # internally, so route it through the synchronous batch path instead. The
+    # concurrent path is for remote API providers (OpenRouter), where it is both
+    # safe and a throughput win.
+    if use_tqdm and not isinstance(chat_model, ChatVLLM):
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
         # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes

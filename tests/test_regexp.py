@@ -184,6 +184,13 @@ def test_criteria_parser_produces_preference():
     assert pref is not None and 0.0 <= pref <= 1.0
 
 
+def test_pairscore_from_resolved_matches_parser_mode():
+    crit = PairScore.from_resolved(resolve_judge_prompt(preset="criteria"))
+    assert crit.parser_mode == "criteria" and crit.criteria_names
+    score = PairScore.from_resolved(resolve_judge_prompt(preset="default"))
+    assert score.parser_mode == "score" and score.criteria_names is None
+
+
 def test_run_path_builds_criteria_scorer_from_resolved_prompt():
     # Mirrors how the run path constructs the scorer from a resolved prompt.
     resolved = resolve_judge_prompt(preset="criteria")

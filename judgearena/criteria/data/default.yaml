@@ -48,9 +48,19 @@ criteria:
       1: Confusing, disorganized, or difficult to understand.
   - name: fluency
     description: >-
-      Language and presentation quality: fluent, readable, appropriately
-      concise, and well-formatted. Tone is appropriate for the user/context.
+      Language and presentation quality: grammatical, idiomatic, and natural,
+      with precise vocabulary, smooth sentence flow, appropriate concision, and
+      clean formatting. Tone suits the user and context.
     score_references:
-      5: Fluent, natural, polished language with strong readability and appropriate tone.
-      3: Frequent disfluencies or formatting issues that make reading noticeably harder.
-      1: Severely disfluent or poorly formatted to the point of harming comprehension.
+      5: >-
+        Consistently grammatical and idiomatic. Word choice is precise and
+        natural, sentences flow smoothly, phrasing reads like a fluent native
+        writer. Concise and cleanly formatted with tone well-suited to context.
+      3: >-
+        Understandable but with noticeable issues: recurring grammar mistakes,
+        unidiomatic or stilted phrasing, imprecise word choice, or formatting
+        problems that make reading mildly harder.
+      1: >-
+        Severely disfluent: pervasive grammar errors, broken or unidiomatic
+        sentences, wrong vocabulary, or formatting so poor that comprehension
+        is substantially harmed.
