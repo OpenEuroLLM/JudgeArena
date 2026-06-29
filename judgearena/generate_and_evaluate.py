@@ -42,6 +42,7 @@ from judgearena.utils import (
     compute_pref_summary,
     data_root,
     download_hf,
+    generation_cache_token,
     read_df,
 )
 
@@ -190,22 +191,28 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
 
 
-def _build_generation_engine_kwargs(
-    cfg: "RunConfig", model_spec: str
+def _build_generation_kwargs(
+    cfg: "RunConfig", model_spec: str, *, role: str
 ) -> dict[str, object]:
-    """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
-    generation_engine_kwargs = dict(cfg.model.engine_kwargs)
+    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
+    if role == "A":
+        generation_kwargs = cfg.model.evaluated_generation_kwargs()
+    elif role == "B":
+        generation_kwargs = cfg.model.baseline_generation_kwargs()
+    else:
+        raise ValueError(f"Unknown generation role: {role!r}")
     provider, _, model_name = model_spec.partition("/")
     if (
         cfg.judge.battle_thinking_token_budget is not None
         and provider == "VLLM"
         and is_thinking_model(model_name)
     ):
-        generation_engine_kwargs["thinking_token_budget"] = min(
+        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
+        generation_kwargs["thinking_token_budget"] = min(
             int(cfg.judge.battle_thinking_token_budget),
-            int(cfg.model.max_out_tokens),
+            max_tokens,
         )
-    return generation_engine_kwargs
+    return generation_kwargs
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -340,40 +347,49 @@ def main(cfg: "RunConfig"):
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
     generation_function = generate_base if is_fluency_task else generate_instructions
 
-    def _run_generation(model_spec: str) -> pd.DataFrame:
+    def _run_generation(
+        model_spec: str, *, generation_kwargs: dict[str, object]
+    ) -> pd.DataFrame:
         return generation_function(
             instructions=instructions,
             model=model_spec,
             truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            max_tokens=cfg.model.max_out_tokens,
-            max_model_len=cfg.model.max_model_len,
-            chat_template=cfg.model.chat_template,
             use_tqdm=cfg.run.use_tqdm,
-            **_build_generation_engine_kwargs(cfg, model_spec),
+            **generation_kwargs,
         )
 
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str) -> pd.Series:
+    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
         preloaded = try_load_dataset_completions(cfg.task, model_spec, n_instructions)
         if preloaded is not None:
             return _align_completion_series(preloaded)
+        # Fold the resolved generation kwargs into the cache key so that changing
+        # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
+        # the cached completions instead of silently reusing a stale run.
+        generation_kwargs = _build_generation_kwargs(cfg, model_spec, role=role)
+        sampling_token = generation_cache_token(generation_kwargs)
         generated = cache_function_dataframe(
-            lambda: _run_generation(model_spec),
+            lambda: _run_generation(model_spec, generation_kwargs=generation_kwargs),
             ignore_cache=ignore_cache,
-            cache_name=f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}",
+            cache_name=(
+                f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}_"
+                f"{sampling_token}"
+            ),
         )
         return _align_completion_series(generated)
 
-    completions_A = _load_or_generate_completions(cfg.model.name)
+    completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
     if baseline_plan.is_flat:
-        completions_B = _load_or_generate_completions(baseline_plan.single_model)
+        completions_B = _load_or_generate_completions(
+            baseline_plan.single_model, role="B"
+        )
     else:
         per_baseline_completions = {
-            model: _load_or_generate_completions(model)
+            model: _load_or_generate_completions(model, role="B")
             for model in baseline_plan.unique_models
         }
         completions_B = pd.Series(
@@ -396,13 +412,12 @@ def main(cfg: "RunConfig"):
 
     judge_chat_model = make_model(
         model=cfg.judge.model,
-        max_tokens=cfg.judge.max_out_tokens,
-        max_model_len=cfg.judge.max_model_len,
-        chat_template=cfg.model.chat_template,
         **build_default_judge_model_kwargs(
             cfg.judge.model,
             cfg.model.engine_kwargs,
-            judge_engine_kwargs_override=cfg.judge.engine_kwargs,
+            judge_engine_kwargs_override=cfg.judge.model_kwargs(
+                fallback_chat_template=cfg.model.chat_template,
+            ),
         ),
     )
 

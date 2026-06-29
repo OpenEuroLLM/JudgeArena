@@ -16,6 +16,7 @@ from judgearena.utils.io import (
     data_root,
     download_all,
     download_hf,
+    generation_cache_token,
     read_df,
     safe_parse_int,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "data_root",
     "download_all",
     "download_hf",
+    "generation_cache_token",
     "print_results",
     "read_df",
     "safe_parse_int",
