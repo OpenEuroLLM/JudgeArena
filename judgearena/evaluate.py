@@ -50,12 +50,23 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
+        if self.parser_mode == "verdict":
+            return self._parse_bracketed_verdict(judge_completion)
         if self.parser_mode != "score":
             raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         return float(self.preference_from_scores(score_a, score_b))
+
+    @staticmethod
+    def _parse_bracketed_verdict(judge_completion: str) -> float | None:
+        """Parse a Skywork-style ``[[A]]`` / ``[[B]]`` / ``[[C]]`` verdict into
+        P(B wins): A->0.0, B->1.0, tie (C)->0.5. Returns None if unparseable."""
+        verdict_match = re.search(r"\[\[\s*([ABCabc])\s*\]\]", judge_completion)
+        if verdict_match is None:
+            return None
+        return {"a": 0.0, "b": 1.0, "c": 0.5}[verdict_match.group(1).lower()]
 
     @staticmethod
     def parse_raw_scores(

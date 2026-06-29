@@ -158,5 +158,10 @@ def test_every_preset_resolves_or_delegates():
         if spec.delegated:
             assert resolved.delegated is True
         else:
-            assert resolved.system_prompt
+            # Verdict-style presets (e.g. Skywork) carry their instructions in
+            # the user prompt and have no separate system prompt.
+            if spec.inline_system is None and spec.system_file is None:
+                assert resolved.system_prompt is None
+            else:
+                assert resolved.system_prompt
             assert resolved.user_prompt_template

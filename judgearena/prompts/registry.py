@@ -6,13 +6,31 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-JudgeParserMode = Literal["score"]
+JudgeParserMode = Literal["score", "verdict"]
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
+SKYWORK_JUDGE_PROMPT_PRESET = "skywork"
+SKYWORK_WITH_EXPLANATION_PRESET = "skywork_with_explanation"
+
+# m-ArenaHard v2.0 spans many languages; these are the localized judge-prompt
+# variants we currently ship translations for (used by the localized
+# judge-prompt ablation in the paper experiments).
+M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS = {
+    "ar": "m-arena-hard-v2-localized-ar",
+    "pl": "m-arena-hard-v2-localized-pl",
+    "uk": "m-arena-hard-v2-localized-uk",
+    "zh": "m-arena-hard-v2-localized-zh",
+}
+_M_ARENA_HARD_V2_LOCALIZED_LABELS = {
+    "ar": ("إجابة", "محادثة مع المستخدم"),
+    "pl": ("odpowiedzi", "rozmowy z użytkownikiem"),
+    "uk": ("відповіді", "розмови з користувачем"),
+    "zh": ("回答", "与用户的对话"),
+}
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -40,6 +58,8 @@ class JudgePromptPreset:
     inline_system: str | None = None
     delegated: bool = False
     with_explanation: bool = False
+    completion_label_single: str | None = None
+    completion_label_multi_turn: str | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +108,29 @@ PRESETS: dict[str, JudgePromptPreset] = {
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
     ),
+    SKYWORK_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=SKYWORK_JUDGE_PROMPT_PRESET,
+        parser_mode="verdict",
+        user_file="skywork-prompt.txt",
+    ),
+    SKYWORK_WITH_EXPLANATION_PRESET: JudgePromptPreset(
+        name=SKYWORK_WITH_EXPLANATION_PRESET,
+        parser_mode="verdict",
+        user_file="skywork-prompt-with-explanation.txt",
+        with_explanation=True,
+    ),
+    **{
+        M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS[lang]: JudgePromptPreset(
+            name=M_ARENA_HARD_V2_LOCALIZED_PROMPT_PRESETS[lang],
+            system_file=f"m_arena_hard_v2_localized/{lang}/system-prompt.txt",
+            user_file=f"m_arena_hard_v2_localized/{lang}/prompt.txt",
+            completion_label_single=label_single,
+            completion_label_multi_turn=label_multi_turn,
+        )
+        for lang, (label_single, label_multi_turn) in (
+            _M_ARENA_HARD_V2_LOCALIZED_LABELS.items()
+        )
+    },
 }
 
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
@@ -121,11 +164,18 @@ def _load_packaged_text(filename: str) -> str:
 
 
 def _materialize_user_template(
-    text: str, *, multi_turn: bool, with_explanation: bool
+    text: str,
+    *,
+    multi_turn: bool,
+    with_explanation: bool,
+    completion_label_single: str | None = None,
+    completion_label_multi_turn: str | None = None,
 ) -> str:
+    single = completion_label_single or _COMPLETION_LABEL_SINGLE
+    multi_turn_label = completion_label_multi_turn or _COMPLETION_LABEL_MULTI_TURN
     text = text.replace(
         "{completion_label}",
-        _COMPLETION_LABEL_MULTI_TURN if multi_turn else _COMPLETION_LABEL_SINGLE,
+        multi_turn_label if multi_turn else single,
     )
     text = text.replace(
         "{explanation_suffix}",
@@ -214,15 +264,18 @@ def resolve_judge_prompt(
     if spec.user_file is None:
         raise ValueError(f"Judge prompt preset {spec.name!r} is missing a user file.")
 
-    system_prompt = (
-        spec.inline_system
-        if spec.inline_system is not None
-        else _load_packaged_text(spec.system_file)  # type: ignore[arg-type]
-    )
+    if spec.inline_system is not None:
+        system_prompt = spec.inline_system
+    elif spec.system_file is not None:
+        system_prompt = _load_packaged_text(spec.system_file)
+    else:
+        system_prompt = None
     user_prompt_template = _materialize_user_template(
         _load_packaged_text(spec.user_file),
         multi_turn=multi_turn,
         with_explanation=spec.with_explanation,
+        completion_label_single=spec.completion_label_single,
+        completion_label_multi_turn=spec.completion_label_multi_turn,
     )
     return ResolvedJudgePrompt(
         preset_name=spec.name,
@@ -232,7 +285,7 @@ def resolve_judge_prompt(
         source="preset",
         system_path=spec.system_file,
         user_path=spec.user_file,
-        system_sha256=_sha256(system_prompt),
+        system_sha256=_sha256(system_prompt) if system_prompt is not None else None,
         user_sha256=_sha256(user_prompt_template),
     )
 

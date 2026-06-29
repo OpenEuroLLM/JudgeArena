@@ -86,6 +86,33 @@ def test_pair_score_score_mode_ignores_bracketed_verdict_after_thinking():
     assert scorer.parse_model_raw(raw_text) is None
 
 
+def test_pair_score_verdict_mode_parses_bracketed_verdict():
+    scorer = PairScore(parser_mode="verdict")
+    assert scorer.parse_model_raw("The better answer is [[A]].") == 0.0
+    assert scorer.parse_model_raw("My final verdict: [[B]]") == 1.0
+    assert scorer.parse_model_raw("It is a tie [[C]]") == 0.5
+    assert scorer.parse_model_raw("no bracketed verdict here") is None
+
+
+def test_skywork_preset_uses_verdict_mode_without_system_prompt():
+    resolved = resolve_judge_prompt(preset="skywork", provide_explanation=False)
+
+    assert resolved.parser_mode == "verdict"
+    assert resolved.system_prompt is None
+    assert '"[[A]]"' in resolved.user_prompt_template
+
+
+def test_localized_preset_renders_localized_completion_labels():
+    resolved = resolve_judge_prompt(
+        preset="m-arena-hard-v2-localized-uk",
+        provide_explanation=False,
+    )
+
+    assert resolved.parser_mode == "score"
+    assert "{completion_label}" not in resolved.user_prompt_template
+    assert "відповіді" in resolved.user_prompt_template
+
+
 def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
     raw_text = (
         "Reasoning that started implicitly and kept going.\n"
