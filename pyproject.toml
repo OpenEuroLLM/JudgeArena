@@ -61,6 +61,8 @@ dev = [
     "pytest>=8.4.2",
     "ruff==0.15.16",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
+    # Used by scripts/analyze_lmarena_elo.py to render the LMArena Elo figures.
+    "matplotlib>=3.8",
 ]
 # `llmcompressor` pins older `compressed-tensors` / `transformers` that clash
 # with the `vllm` extra (vLLM 0.19.1 pulls `compressed-tensors==0.15.0.1` and
