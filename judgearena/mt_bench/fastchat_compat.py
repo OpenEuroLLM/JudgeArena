@@ -7,21 +7,23 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.judge_prompt_presets import (
-    DEFAULT_JUDGE_PROMPT_PRESET,
-    SKYWORK_JUDGE_PROMPT_PRESET,
-)
 from judgearena.mt_bench.common import (
-    MT_BENCH_REFERENCE_CATEGORIES,
-    iter_mt_bench_pairwise_rows,
+    is_reference_based_category,
+    resolve_mt_bench_turn_flags,
+)
+from judgearena.mt_bench.pairwise_judging import (
+    MTBenchJudgeItem,
+    build_mt_bench_pairwise_judge_items,
+    infer_pairwise_judgments_by_prompt_groups,
+    swap_pairwise_answer_kwargs,
 )
 from judgearena.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
     render_mt_bench_prompt_text,
 )
-from judgearena.utils import do_inference
+from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
+from judgearena.utils import strip_thinking_tags
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -157,63 +159,6 @@ _PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
 )
 
 
-_SKYWORK_PAIR_V2 = _load_pairwise_prompt(
-    name="skywork-pair-v2",
-    multi_turn=False,
-    ref_based=False,
-    system_user_subject="prompt displayed below",
-    system_task_description=(
-        "You should choose the assistant that follows the user's instructions and "
-        "answers the user's prompt better. Your evaluation should consider factors "
-        "such as helpfulness, relevance, accuracy, depth, creativity, and level "
-        "of detail of the responses."
-    ),
-    system_begin_instruction="carefully comparing the two responses",
-)
-
-_SKYWORK_PAIR_V2_MULTI = _load_pairwise_prompt(
-    name="skywork-pair-v2-multi-turn",
-    multi_turn=True,
-    ref_based=False,
-    system_user_subject="questions",
-    system_task_description=(
-        "You should choose the assistant that follows the user's instructions and "
-        "answers the user's questions better. Your evaluation should consider "
-        "factors such as helpfulness, relevance, accuracy, depth, creativity, and "
-        "level of detail of the responses."
-    ),
-    system_focus_line=(
-        "You should focus on which assistant better answers the second user question."
-    ),
-    system_begin_instruction="carefully comparing the two conversations",
-)
-
-_SKYWORK_PAIR_MATH_V1 = _load_pairwise_prompt(
-    name="skywork-pair-math-v1",
-    multi_turn=False,
-    ref_based=True,
-    system_user_subject="prompt displayed below",
-    system_task_description=(
-        "You will be given a reference answer, assistant A's answer, and "
-        "assistant B's answer. Your evaluation should focus on correctness and "
-        "helpfulness while deciding which assistant is better."
-    ),
-    system_begin_instruction="carefully comparing both assistants' answers with the reference answer",
-)
-
-_SKYWORK_PAIR_MATH_V1_MULTI = _load_pairwise_prompt(
-    name="skywork-pair-math-v1-multi-turn",
-    multi_turn=True,
-    ref_based=True,
-    system_user_subject="questions",
-    system_task_description=(
-        "You will be given reference answers together with assistant A's and "
-        "assistant B's answers. Your evaluation should focus on correctness and "
-        "helpfulness while deciding which assistant better answers the second user question."
-    ),
-    system_begin_instruction="carefully comparing both assistants' answers with the reference answers",
-)
-
 _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] = {
     DEFAULT_JUDGE_PROMPT_PRESET: {
         "single": _PAIR_V2,
@@ -221,17 +166,11 @@ _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] =
         "single_ref": _PAIR_MATH_V1,
         "multi_ref": _PAIR_MATH_V1_MULTI,
     },
-    SKYWORK_JUDGE_PROMPT_PRESET: {
-        "single": _SKYWORK_PAIR_V2,
-        "multi": _SKYWORK_PAIR_V2_MULTI,
-        "single_ref": _SKYWORK_PAIR_MATH_V1,
-        "multi_ref": _SKYWORK_PAIR_MATH_V1_MULTI,
-    },
 }
 
 
 def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    stripped = judgment.strip()
+    stripped = strip_thinking_tags(judgment).strip()
     if "[[A]]" in stripped:
         return "A"
     if "[[B]]" in stripped:
@@ -289,7 +228,7 @@ def _select_prompt(
         raise ValueError(
             f"Unsupported MT-Bench prompt preset '{prompt_preset}'. Choose from: {supported}."
         )
-    needs_ref = (category or "") in MT_BENCH_REFERENCE_CATEGORIES
+    needs_ref = is_reference_based_category(category)
     if needs_ref and multi_turn:
         return prompt_variants["multi_ref"]
     if needs_ref:
@@ -297,66 +236,6 @@ def _select_prompt(
     if multi_turn:
         return prompt_variants["multi"]
     return prompt_variants["single"]
-
-
-def _group_indices_by_prompt(
-    items: list[dict[str, Any]],
-) -> dict[str, list[int]]:
-    grouped: dict[str, list[int]] = {}
-    for idx, item in enumerate(items):
-        grouped.setdefault(item["prompt_name"], []).append(idx)
-    return grouped
-
-
-def _swap_prompt_kwargs(kwargs: dict[str, str], *, multi_turn: bool) -> dict[str, str]:
-    swapped = dict(kwargs)
-    if multi_turn:
-        swapped["answer_a_1"], swapped["answer_b_1"] = (
-            swapped["answer_b_1"],
-            swapped["answer_a_1"],
-        )
-        swapped["answer_a_2"], swapped["answer_b_2"] = (
-            swapped["answer_b_2"],
-            swapped["answer_a_2"],
-        )
-        return swapped
-    swapped["answer_a"], swapped["answer_b"] = swapped["answer_b"], swapped["answer_a"]
-    return swapped
-
-
-def _infer_by_prompt_groups(
-    *,
-    judge_chat_model,
-    items: list[dict[str, Any]],
-    use_tqdm: bool,
-    swap_answers: bool,
-) -> list[str]:
-    """Run judge inference, grouping by prompt variant for batching."""
-    grouped_indices = _group_indices_by_prompt(items)
-
-    judgments: list[str] = [""] * len(items)
-    for _prompt_name, idxs in grouped_indices.items():
-        prompt: FastChatPairwisePrompt = items[idxs[0]]["prompt"]
-        prompt_template = ChatPromptTemplate.from_messages(
-            [("system", prompt.system_prompt), ("user", prompt.user_prompt_template)]
-        )
-
-        batch_kwargs = []
-        for i in idxs:
-            kwargs = items[i]["prompt_kwargs"]
-            if swap_answers:
-                kwargs = _swap_prompt_kwargs(kwargs, multi_turn=prompt.multi_turn)
-            batch_kwargs.append(kwargs)
-
-        prompt_inputs = prompt_template.batch(batch_kwargs)
-        outs = do_inference(
-            chat_model=judge_chat_model,
-            inputs=prompt_inputs,
-            use_tqdm=use_tqdm,
-        )
-        for i, out in zip(idxs, outs, strict=True):
-            judgments[i] = str(out)
-    return judgments
 
 
 def _build_fastchat_judge_items(
@@ -368,83 +247,35 @@ def _build_fastchat_judge_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-
-    for pair_row in iter_mt_bench_pairwise_rows(
+    strip_thinking_before_judging: bool = False,
+) -> list[MTBenchJudgeItem]:
+    return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
         completions_b=completions_b,
+        eval_single=eval_single,
+        eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
-    ):
-        category = pair_row.category
-        if eval_single:
-            prompt = _select_prompt(
-                category, multi_turn=False, prompt_preset=prompt_preset
-            )
-            answer_a = pair_row.answer_a_1
-            answer_b = pair_row.answer_b_1
-            kwargs: dict[str, str] = {
-                "question": pair_row.turn_1_question,
-                "answer_a": answer_a,
-                "answer_b": answer_b,
-            }
-            if prompt.ref_based:
-                kwargs["ref_answer_1"] = pair_row.ref_1
-            items.append(
-                {
-                    "question_id": pair_row.question_id,
-                    "category": category,
-                    "turn": 1,
-                    "prompt": prompt,
-                    "prompt_name": prompt.name,
-                    "prompt_kwargs": kwargs,
-                }
-            )
-
-        if eval_multi and pair_row.turn_2_question:
-            prompt = _select_prompt(
-                category, multi_turn=True, prompt_preset=prompt_preset
-            )
-            answer_a_1 = pair_row.answer_a_1
-            answer_a_2 = pair_row.answer_a_2
-            answer_b_1 = pair_row.answer_b_1
-            answer_b_2 = pair_row.answer_b_2
-            kwargs = {
-                "question_1": pair_row.turn_1_question,
-                "question_2": pair_row.turn_2_question,
-                "answer_a_1": answer_a_1,
-                "answer_a_2": answer_a_2,
-                "answer_b_1": answer_b_1,
-                "answer_b_2": answer_b_2,
-            }
-            if prompt.ref_based:
-                kwargs["ref_answer_1"] = pair_row.ref_1
-                kwargs["ref_answer_2"] = pair_row.ref_2
-            items.append(
-                {
-                    "question_id": pair_row.question_id,
-                    "category": category,
-                    "turn": 2,
-                    "prompt": prompt,
-                    "prompt_name": prompt.name,
-                    "prompt_kwargs": kwargs,
-                }
-            )
-    return items
+        select_prompt=lambda category, multi_turn: _select_prompt(
+            category,
+            multi_turn=multi_turn,
+            prompt_preset=prompt_preset,
+        ),
+        strip_thinking_before_judging=strip_thinking_before_judging,
+    )
 
 
 def _resolve_fastchat_item_result(
     *,
-    item: dict[str, Any],
+    item: MTBenchJudgeItem,
     g1_raw: str,
     g2_raw: str | None,
     judge_model: str,
     model_a: str,
     model_b: str,
 ) -> tuple[dict[str, Any], dict[str, object], float, bool]:
-    prompt: FastChatPairwisePrompt = item["prompt"]
-    kwargs = item["prompt_kwargs"]
+    prompt: FastChatPairwisePrompt = item.prompt
+    kwargs = item.prompt_kwargs
     g1_user_prompt = prompt.user_prompt_template.format(**kwargs)
     g1_verdict = _parse_fastchat_verdict(g1_raw)
     g1_winner = _map_verdict_to_winner(g1_verdict, swapped=False)
@@ -452,9 +283,9 @@ def _resolve_fastchat_item_result(
     final_winner = g1_winner
     inconsistent = False
     annotation_row: dict[str, Any] = {
-        "question_id": item["question_id"],
-        "category": item["category"],
-        "turn": item["turn"],
+        "question_id": item.question_id,
+        "category": item.category,
+        "turn": item.turn,
         "model_A": model_a,
         "model_B": model_b,
         "judge": judge_model,
@@ -467,13 +298,18 @@ def _resolve_fastchat_item_result(
     }
 
     if g2_raw is not None:
+        # swap_mode="both": conservative agreement — keep a winner only if both
+        # orderings agree, otherwise tie (FastChat/MT-Bench consistency).
         g2_verdict = _parse_fastchat_verdict(g2_raw)
         g2_winner = _map_verdict_to_winner(g2_verdict, swapped=True)
         final_winner, inconsistent = _conservative_winner(g1_winner, g2_winner)
         annotation_row.update(
             {
                 "g2_user_prompt": prompt.user_prompt_template.format(
-                    **_swap_prompt_kwargs(kwargs, multi_turn=prompt.multi_turn)
+                    **swap_pairwise_answer_kwargs(
+                        kwargs,
+                        multi_turn=prompt.multi_turn,
+                    )
                 ),
                 "g2_judgment": g2_raw,
                 "g2_verdict": g2_verdict,
@@ -489,9 +325,9 @@ def _resolve_fastchat_item_result(
     preference = _winner_to_preference(final_winner)
     annotation_row["preference"] = preference
     metadata = {
-        "question_id": item["question_id"],
-        "category": item["category"],
-        "turn": item["turn"],
+        "question_id": item.question_id,
+        "category": item.category,
+        "turn": item.turn,
     }
     return annotation_row, metadata, preference, inconsistent
 
@@ -510,13 +346,11 @@ def judge_mt_bench_pairwise_fastchat(
     truncate_input_chars: int | None,
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
-    assert turns_mode in ("both", "single", "multi")
     assert swap_mode in ("fixed", "both")
-
-    eval_single = turns_mode in ("both", "single")
-    eval_multi = turns_mode in ("both", "multi")
+    eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
 
     items = _build_fastchat_judge_items(
         questions=questions,
@@ -526,9 +360,10 @@ def judge_mt_bench_pairwise_fastchat(
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
-    g1_judgments = _infer_by_prompt_groups(
+    g1_judgments, _ = infer_pairwise_judgments_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
         use_tqdm=use_tqdm,
@@ -537,7 +372,7 @@ def judge_mt_bench_pairwise_fastchat(
 
     g2_judgments: list[str] | None = None
     if swap_mode == "both":
-        g2_judgments = _infer_by_prompt_groups(
+        g2_judgments, _ = infer_pairwise_judgments_by_prompt_groups(
             judge_chat_model=judge_chat_model,
             items=items,
             use_tqdm=use_tqdm,

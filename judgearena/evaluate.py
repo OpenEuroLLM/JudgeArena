@@ -8,18 +8,22 @@ import numpy as np
 import pandas as pd
 from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
+from scipy.optimize import minimize_scalar
 
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.judge_prompt_presets import (
+from judgearena.log import get_logger
+from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
-    resolve_pairwise_judge_prompt,
+    resolve_judge_prompt,
 )
-from judgearena.log import get_logger
+from judgearena.prompts.registry import (
+    resolve_run_judge_prompt as _resolve_run_judge_prompt,
+)
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
@@ -27,6 +31,7 @@ from judgearena.utils import (
     do_inference,
     download_hf,
     read_df,
+    strip_thinking_tags,
     truncate,
 )
 
@@ -34,9 +39,9 @@ logger = get_logger(__name__)
 
 
 class PairScore:
-    def __init__(self, *, parser_mode: str = "score"):
+    def __init__(self, *, temperature: float = 0.3, parser_mode: str = "score"):
         super(PairScore).__init__()
-        self.temperature = 0.3
+        self.temperature = temperature
         self.parser_mode = parser_mode
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
@@ -45,32 +50,27 @@ class PairScore:
         )
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
-        if self.parser_mode == "verdict":
-            return self._parse_bracketed_verdict(judge_completion)
-        if self.parser_mode == "score":
-            return self._parse_numeric_scores(judge_completion)
-        raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
-
-    def _parse_numeric_scores(self, judge_completion: str) -> float | None:
-        lowered = judge_completion.lower()
-        score_a = self.get_regexp_match(lowered, r'score.*?a[": *\n]*(-?\d+)')
-        score_b = self.get_regexp_match(lowered, r'score.*?b[": *\n]*(-?\d+)')
+        if self.parser_mode != "score":
+            raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
+        score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         return float(self.preference_from_scores(score_a, score_b))
 
-    def _parse_bracketed_verdict(self, judge_completion: str) -> float | None:
-        verdict_match = re.search(r"\[\[\s*([ABCabc])\s*\]\]", judge_completion)
-        if verdict_match is None:
-            return None
-        bracketed_verdict = verdict_match.group(1).lower()
-        return {
-            "a": 0.0,
-            "b": 1.0,
-            "c": 0.5,
-        }[bracketed_verdict]
+    @staticmethod
+    def parse_raw_scores(
+        judge_completion: str,
+    ) -> tuple[float | None, float | None]:
+        """Extract the raw A and B scores from a judge completion (no temperature)."""
+        # Strip thinking-model <think> blocks, then lower-case to avoid confusion
+        # (e.g. when "a" is used instead of "A").
+        text = strip_thinking_tags(judge_completion).lower()
+        score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
+        score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
+        return score_a, score_b
 
-    def get_regexp_match(self, s: str, regex: str, group_index: int = 1):
+    @staticmethod
+    def get_regexp_match(s: str, regex: str, group_index: int = 1):
         m = re.search(re.compile(regex), s)
         if m is None:
             return None
@@ -78,12 +78,64 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
+def calibrate_temperature(
+    delta_s: np.ndarray,
+    y: np.ndarray,
+    bounds: tuple[float, float] = (-10.0, 10.0),
+) -> float:
+    """Find the MLE temperature T* for the model P(A>B) = σ(T·Δs).
+
+    The log-likelihood is:
+
+        L(T) = Σ_i [ y_i·log σ(T·Δs_i) + (1−y_i)·log σ(−T·Δs_i) ]
+               = Σ_i log σ(T · (2y_i − 1) · Δs_i)
+
+    This is concave in T (single global maximum) so ``minimize_scalar`` with
+    the 'bounded' method is guaranteed to converge.
+
+    Args:
+        delta_s: Score differences ``s_A − s_B`` for each battle, shape (N,).
+        y: Observed hard labels (1 = A was preferred, 0 = B was preferred,
+           0.5 = tie).  Ties contribute zero gradient and are skipped.
+        bounds: Search interval for T (default −10 to +10).
+
+    Returns:
+        The calibrated temperature T*.
+    """
+    delta_s = np.asarray(delta_s, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # Skip ties (y == 0.5) — they carry no directional information.
+    non_tie = y != 0.5
+    delta_s = delta_s[non_tie]
+    y = y[non_tie]
+
+    if len(delta_s) == 0:
+        raise ValueError(
+            "No non-tie observations available for temperature calibration."
+        )
+
+    # z_i = (2y_i − 1) · Δs_i  (positive when the score difference agrees with the outcome)
+    z = (2 * y - 1) * delta_s
+
+    def neg_log_likelihood(T: float) -> float:
+        # log σ(T·z) = −log(1 + exp(−T·z)) = −logaddexp(0, −T·z)
+        return float(np.sum(np.logaddexp(0.0, -T * z)))
+
+    result = minimize_scalar(
+        neg_log_likelihood,
+        bounds=bounds,
+        method="bounded",
+    )
+    return float(result.x)
+
+
 def load_judge_system_and_user_prompt(
     provide_explanation: bool = True,
     multi_turn: bool = False,
 ) -> tuple[str, str]:
-    resolved = resolve_pairwise_judge_prompt(
-        prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
+    resolved = resolve_judge_prompt(
+        preset=DEFAULT_JUDGE_PROMPT_PRESET,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
     )
@@ -92,19 +144,51 @@ def load_judge_system_and_user_prompt(
 
 def resolve_judge_prompts(
     *,
-    provide_explanation: bool,
+    provide_explanation: bool = False,
     multi_turn: bool = False,
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    prompt_preset: str | None = None,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
+    task: str | None = None,
+    system_file: str | None = None,
+    user_file: str | None = None,
 ) -> ResolvedJudgePrompt:
-    return resolve_pairwise_judge_prompt(
-        prompt_preset=prompt_preset,
+    if system_prompt is not None and user_prompt_template is not None:
+        return ResolvedJudgePrompt(
+            preset_name=prompt_preset or "custom",
+            parser_mode="score",
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            source="override",
+        )
+    if system_prompt is not None or user_prompt_template is not None:
+        raise ValueError(
+            "Both system_prompt and user_prompt_template must be provided together."
+        )
+
+    resolved = resolve_judge_prompt(
+        task=task,
+        preset=prompt_preset,
+        system_file=system_file,
+        user_file=user_file,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
     )
+    if resolved.delegated:
+        raise ValueError(
+            f"Judge prompt preset '{resolved.preset_name}' is delegated and cannot "
+            "be used for generic pairwise judging."
+        )
+    return resolved
+
+
+def resolve_run_judge_prompt(
+    task: str | None,
+    cli_args,
+    *,
+    multi_turn: bool = False,
+) -> ResolvedJudgePrompt:
+    return _resolve_run_judge_prompt(task, cli_args, multi_turn=multi_turn)
 
 
 def evaluate_completions(
@@ -117,6 +201,7 @@ def evaluate_completions(
     truncate_input_chars: int | None = 8192,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ):
     """
     :param dataset:
@@ -205,6 +290,7 @@ def evaluate_completions(
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
         provide_explanation=provide_explanation,
+        strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
     # Pairwise judge results
@@ -217,7 +303,7 @@ def evaluate_completions(
     )
     results = {
         **compute_pref_summary(prefs),
-        "judge_prompt_preset": resolved_prompt.preset_name,
+        **resolved_prompt.metadata(),
     }
     pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
 
@@ -234,7 +320,8 @@ def evaluate_completions(
         "use_tqdm": use_tqdm,
         "truncate_input_chars": truncate_input_chars,
         "provide_explanation": provide_explanation,
-        "judge_prompt_preset": resolved_prompt.preset_name,
+        **resolved_prompt.metadata(),
+        "strip_thinking_before_judging": strip_thinking_before_judging,
     }
 
     try:
@@ -278,6 +365,7 @@ def annotate_battles(
     use_tqdm: bool = False,
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -322,6 +410,9 @@ def annotate_battles(
         message_templates.append(("system", resolved_prompt.system_prompt))
     message_templates.append(("user", resolved_prompt.user_prompt_template))
     prompt_template = ChatPromptTemplate.from_messages(message_templates)
+    if strip_thinking_before_judging:
+        completions_A = [strip_thinking_tags(c) for c in completions_A]
+        completions_B = [strip_thinking_tags(c) for c in completions_B]
 
     inputs = prompt_template.batch(
         [
@@ -335,6 +426,7 @@ def annotate_battles(
             )
         ]
     )
+
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     judge_completions = do_inference(
         chat_model=judge_chat_model,
@@ -364,6 +456,18 @@ def annotate_battles(
     return annotations
 
 
+def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
+    """Combine swap_mode='both' prefs into one P(B wins) series: [pref_AB, 1 - pref_BA].
+
+    ``prefs_ab`` are P(B wins) from the AB ordering; ``prefs_ba`` are P(B wins)
+    from the swapped BA ordering, so ``1 - prefs_ba`` re-orients them to the AB
+    frame before stacking.
+    """
+    return pd.concat(
+        [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
+    ).reset_index(drop=True)
+
+
 def judge_and_parse_prefs(
     judge_chat_model,
     instructions: list[str],
@@ -371,11 +475,14 @@ def judge_and_parse_prefs(
     completions_B: list[str],
     swap_mode: str = "fixed",
     provide_explanation: bool = False,
+    strip_thinking_before_judging: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    parser_mode: str = "score",
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
+    score_parser: "PairScore | None" = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -394,22 +501,16 @@ def judge_and_parse_prefs(
             judge_chat_model,
         )
 
-    resolved_prompt = resolve_judge_prompts(
-        provide_explanation=provide_explanation,
-        prompt_preset=prompt_preset,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
-    )
-
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
         completions_A=completions_A,
         completions_B=completions_B,
         provide_explanation=provide_explanation,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
+        strip_thinking_before_judging=strip_thinking_before_judging,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        prompt_preset=prompt_preset,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
     )
@@ -422,9 +523,10 @@ def judge_and_parse_prefs(
             completions_A=completions_B,
             completions_B=completions_A,
             provide_explanation=provide_explanation,
-            system_prompt=resolved_prompt.system_prompt,
-            user_prompt_template=resolved_prompt.user_prompt_template,
-            prompt_preset=resolved_prompt.preset_name,
+            strip_thinking_before_judging=strip_thinking_before_judging,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+            prompt_preset=prompt_preset,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
         )
@@ -432,19 +534,27 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
-    prefs = pd.Series(
-        [score_parser.parse_model_raw(a.judge_completion) for a in annotations]
-    )
+    if score_parser is None:
+        score_parser = PairScore(parser_mode=parser_mode)
+
+    def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
+        results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]
+        n_failed = sum(1 for r in results if r is None)
+        if n_failed:
+            logger.warning(
+                "%d/%d judge outputs could not be parsed (%s) — those battles are dropped from stats.",
+                n_failed,
+                len(results),
+                label,
+            )
+        return pd.Series(results)
+
+    prefs = _parse_and_warn(annotations, "direct")
 
     if swap_mode == "both":
-        prefs = prefs.apply(_none_to_nan)
-        prefs_reversed = pd.Series(
-            [
-                score_parser.parse_model_raw(a.judge_completion)
-                for a in annotations_reversed
-            ]
-        ).apply(_none_to_nan)
-        prefs = pd.concat([prefs, (1 - prefs_reversed)]).reset_index(drop=True)
+        prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(
+            _none_to_nan
+        )
+        prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
 
     return annotations, annotations_reversed, prefs

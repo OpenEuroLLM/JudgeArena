@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import os
+import re
 import time
 import warnings
 from collections.abc import Callable
@@ -14,48 +16,103 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from judgearena.dataset_revisions import hf_revision
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
 from judgearena.log import get_logger
 
+# ``data_root``, ``download_hf`` and ``read_df`` live in the leaf
+# :mod:`judgearena.paths` module so that ``judgearena.instruction_dataset`` can
+# import them without going through ``judgearena.utils``.  We re-export them
+# here so existing callers that do ``from judgearena.utils import data_root``
+# (or ``download_hf`` / ``read_df``) keep working.
+from judgearena.paths import data_root, download_hf, read_df
+
 logger = get_logger(__name__)
 
+__all__ = ["data_root", "download_hf", "read_df"]
 
-def _data_root_path() -> Path:
-    raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
-    if raw:
-        return Path(raw).expanduser()
-    return Path("~/judgearena-data/").expanduser()
+DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
+VLLM_REASONING_START_STR = "<think>"
+VLLM_REASONING_END_STR = (
+    "I have to give the solution based on the thinking directly now.</think>"
+)
+_THINKING_MODEL_PARSER_BY_SUBSTRING = (
+    ("qwen3", "qwen3"),
+    ("smollm3", "qwen3"),
+    ("olmo-3-7b-think", "olmo3"),
+)
 
 
-data_root = _data_root_path()
+def _split_model_spec(model_spec: str) -> tuple[str, str]:
+    provider, sep, model_name = model_spec.partition("/")
+    if not sep:
+        return model_spec, ""
+    return provider, model_name
+
+
+def is_thinking_model(model_name: str) -> bool:
+    """Return True for reasoning models that emit `<think>...</think>` traces.
+
+    Covers the Qwen3 family (e.g. `Qwen/Qwen3.5-9B`) and SmolLM3 (e.g.
+    `HuggingFaceTB/SmolLM3-3B`) plus `allenai/Olmo-3-7B-Think`; all emit
+    `<think>`/`</think>` traces so vLLM's budget enforcement and our
+    tag-stripping apply uniformly. Matching is case-insensitive to tolerate
+    mixed-case HF repo ids like `HuggingFaceTB/SmolLM3-3B`.
+    """
+    return _default_reasoning_parser_for_model(model_name) is not None
+
+
+def _default_reasoning_parser_for_model(model_name: str) -> str | None:
+    lowered = model_name.lower()
+    for token, reasoning_parser in _THINKING_MODEL_PARSER_BY_SUBSTRING:
+        if token in lowered:
+            return reasoning_parser
+    return None
+
+
+def build_default_judge_model_kwargs(
+    judge_model: str,
+    engine_kwargs: dict[str, object],
+    *,
+    judge_engine_kwargs_override: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Copy judge engine kwargs and add supported built-in defaults."""
+    provider, model_name = _split_model_spec(judge_model)
+    judge_model_kwargs = dict(engine_kwargs) if provider == "VLLM" else {}
+    if judge_engine_kwargs_override:
+        judge_model_kwargs.update(judge_engine_kwargs_override)
+    if provider == "VLLM":
+        if "thinking_token_budget" not in judge_model_kwargs and is_thinking_model(
+            model_name
+        ):
+            judge_model_kwargs["thinking_token_budget"] = (
+                DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+            )
+        # FP8 weights leave little KV headroom on consumer-class GPUs; default
+        # to FP8 KV cache so judges like Skywork-70B-FP8 fit comfortably on
+        # 2x L40S at 32k context. Explicit caller overrides still win.
+        if "kv_cache_dtype" not in judge_model_kwargs and "fp8" in model_name.lower():
+            judge_model_kwargs["kv_cache_dtype"] = "fp8"
+    return judge_model_kwargs
+
+
+def _resolve_chat_template_kwargs(
+    *,
+    explicit_chat_template_kwargs: dict[str, object] | None,
+    disable_thinking: bool,
+) -> dict[str, object] | None:
+    chat_template_kwargs = dict(explicit_chat_template_kwargs or {})
+    if disable_thinking and "enable_thinking" not in chat_template_kwargs:
+        chat_template_kwargs["enable_thinking"] = False
+
+    return chat_template_kwargs or None
 
 
 def set_langchain_cache():
     set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
-
-
-def download_hf(name: str, local_path: Path):
-    local_path.mkdir(exist_ok=True, parents=True)
-    # downloads the model from huggingface into `local_path` folder
-    snapshot_download(
-        repo_id="geoalgo/llmjudge",
-        repo_type="dataset",
-        allow_patterns=f"*{name}*",
-        local_dir=local_path,
-        force_download=False,
-    )
-
-
-def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
-    assert filename.exists(), f"Dataframe file not found at {filename}"
-    if filename.name.endswith(".csv.zip") or filename.name.endswith(".csv"):
-        return pd.read_csv(filename, **pandas_kwargs)
-    else:
-        assert filename.name.endswith(".parquet"), f"Unsupported extension {filename}"
-        return pd.read_parquet(filename, **pandas_kwargs)
 
 
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
@@ -127,9 +184,63 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     return truncate(str(value), max_len=truncate_chars)
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+
+
+def strip_thinking_tags(text: str | None) -> str:
+    """Remove full `<think>...</think>` blocks from raw model output."""
+    return strip_thinking_tags_with_metadata(text)[0]
+
+
+def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
+    """Remove visible reasoning spans from raw model output."""
+    if not isinstance(text, str):
+        return "", False
+
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    if cleaned != text:
+        return cleaned.lstrip(), True
+
+    lowered = text.lower()
+    closing_tag = "</think>"
+    closing_idx = lowered.find(closing_tag)
+    if closing_idx != -1 and "<think>" not in lowered[:closing_idx]:
+        return text[closing_idx + len(closing_tag) :].lstrip(), True
+
+    forced_end_idx = text.find(VLLM_REASONING_END_STR)
+    if forced_end_idx != -1:
+        return (
+            text[forced_end_idx + len(VLLM_REASONING_END_STR) :].lstrip(),
+            True,
+        )
+
+    return text, False
+
+
+def safe_parse_int(env_var: str) -> int | None:
+    """Parse an integer environment variable by name.
+
+    Returns ``None`` when the variable is unset, blank, or malformed (a warning
+    is logged for malformed values) so callers can fall back to a default
+    instead of crashing at import time.
+    """
+    raw = os.getenv(env_var)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring malformed %s=%r; expected an integer.", env_var, raw)
+        return None
+
+
 def do_inference(chat_model, inputs, use_tqdm: bool = False):
-    # Retries on rate-limit/server errors with exponential backoff.
-    # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
+    """Run inference over *inputs*, returning a list of text completions.
+
+    Retries on rate-limit/server errors with exponential backoff. The async
+    path (``use_tqdm=True``) retries individual calls; the batch path splits
+    into ``4**attempt`` chunks on failure.
+    """
     invoke_kwargs = {
         # "stop": ["```"],
         # "max_tokens": 100,
@@ -137,7 +248,14 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
+        # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
+        # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
+        cap = safe_parse_int("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
+        cap = cap if cap and cap > 0 else None
+
         async def process_with_real_progress(chat_model, inputs, pbar):
+            sem = asyncio.Semaphore(cap) if cap else None
+
             async def process_single(input_item, max_retries=5, base_delay=1.0):
                 for attempt in range(max_retries):
                     try:
@@ -157,8 +275,14 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
                         )
                         await asyncio.sleep(delay)
 
+            async def gated(inp):
+                if sem is None:
+                    return await process_single(inp)
+                async with sem:
+                    return await process_single(inp)
+
             # asyncio.gather preserves order (unlike as_completed)
-            results = await asyncio.gather(*[process_single(inp) for inp in inputs])
+            results = await asyncio.gather(*[gated(inp) for inp in inputs])
             return results
 
         with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
@@ -207,8 +331,9 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
 
 class DummyModel:
-    def __init__(self, name: str):
+    def __init__(self, name: str, **init_kwargs):
         self.name = name
+        self.init_kwargs = dict(init_kwargs)
         self.message = "/".join(name.split("/")[1:])
 
     def batch(self, inputs, **invoke_kwargs) -> list[str]:
@@ -219,6 +344,43 @@ class DummyModel:
 
     async def ainvoke(self, input, **invoke_kwargs):
         return self.message
+
+
+_VLLM_INIT_RETRY_SIGNATURES = (
+    "cudaErrorDevicesUnavailable",
+    "CUDA-capable device(s) is/are busy or unavailable",
+    "CUDA error: initialization error",
+)
+_VLLM_INIT_MAX_ATTEMPTS = safe_parse_int("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS") or 4
+_VLLM_INIT_BACKOFF_SECONDS = (
+    safe_parse_int("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS") or 20
+)
+
+
+def _init_llm_with_retry(llm_cls, **kwargs):
+    """Instantiate ``vllm.LLM`` with retries on transient GPU-init races."""
+    last_exc: Exception | None = None
+    for attempt in range(1, _VLLM_INIT_MAX_ATTEMPTS + 1):
+        try:
+            return llm_cls(**kwargs)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            if not any(sig in message for sig in _VLLM_INIT_RETRY_SIGNATURES):
+                raise
+            last_exc = exc
+            if attempt == _VLLM_INIT_MAX_ATTEMPTS:
+                break
+            delay = _VLLM_INIT_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            warnings.warn(
+                f"vLLM init attempt {attempt}/{_VLLM_INIT_MAX_ATTEMPTS} failed "
+                f"with transient GPU-init signature ({message.splitlines()[0]}); "
+                f"sleeping {delay}s before retry.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 class ChatVLLM:
@@ -241,12 +403,27 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
+        from vllm.config.reasoning import ReasoningConfig
 
         self.model_path = model
         self.max_tokens = max_tokens
+        disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
+        thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
+        explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
+        explicit_reasoning_settings = (
+            "reasoning_parser" in vllm_kwargs or "reasoning_config" in vllm_kwargs
+        )
+        self._chat_template_kwargs = _resolve_chat_template_kwargs(
+            explicit_chat_template_kwargs=explicit_chat_template_kwargs,
+            disable_thinking=disable_thinking,
+        )
 
         # Cap max_model_len to the model's max_position_embeddings so that
         # vLLM doesn't reject an overly large context window.
@@ -273,12 +450,57 @@ class ChatVLLM:
                     stacklevel=2,
                 )
 
-        self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
-        self.sampling_params = SamplingParams(
-            max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
+        if seed is not None:
+            vllm_kwargs.setdefault("seed", int(seed))
+
+        self._sampling_params_kwargs = {
+            "max_tokens": max_tokens,
+            "temperature": 0.6 if temperature is None else float(temperature),
+            "top_p": 0.95 if top_p is None else float(top_p),
+        }
+        if top_k is not None:
+            self._sampling_params_kwargs["top_k"] = int(top_k)
+        if seed is not None:
+            self._sampling_params_kwargs["seed"] = int(seed)
+        if thinking_token_budget is not None:
+            if max_tokens is not None:
+                thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
+            if explicit_reasoning_settings:
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+            elif is_thinking_model(model):
+                reasoning_parser = _default_reasoning_parser_for_model(model)
+                assert reasoning_parser is not None  # guarded by is_thinking_model()
+                vllm_kwargs.setdefault(
+                    "reasoning_config",
+                    ReasoningConfig(
+                        reasoning_start_str=VLLM_REASONING_START_STR,
+                        # Shared forced end marker so vLLM can enforce the
+                        # thinking-token budget for offline `LLM.chat()`. The
+                        # parser itself still varies by model family (e.g. OLMo
+                        # uses `olmo3`) on vLLM's OpenAI server.
+                        reasoning_end_str=VLLM_REASONING_END_STR,
+                    ),
+                )
+                vllm_kwargs.setdefault("reasoning_parser", reasoning_parser)
+                self._sampling_params_kwargs["thinking_token_budget"] = int(
+                    thinking_token_budget
+                )
+            else:
+                warnings.warn(
+                    f"Model '{model}' is not in JudgeArena's built-in thinking-model "
+                    "defaults (Qwen3/SmolLM3/Olmo-3-7B-Think). Ignoring "
+                    "thinking_token_budget unless reasoning_parser or "
+                    "reasoning_config is provided explicitly.",
+                    stacklevel=2,
+                )
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
+
+        self.llm = _init_llm_with_retry(
+            LLM, model=model, trust_remote_code=True, **vllm_kwargs
         )
+        self.tokenizer = self.llm.get_tokenizer()
 
         # Resolve chat template:
         # 1. Explicit override always wins → use chat() with that template
@@ -289,8 +511,7 @@ class ChatVLLM:
             self._use_generate = False
             logger.info("ChatVLLM: using explicit chat template for '%s'", model)
         else:
-            tokenizer = self.llm.get_tokenizer()
-            if not getattr(tokenizer, "chat_template", None):
+            if not getattr(self.tokenizer, "chat_template", None):
                 warnings.warn(
                     f"Model '{model}' tokenizer does not define a chat template. "
                     f"Falling back to llm.generate() (no chat formatting). "
@@ -299,10 +520,22 @@ class ChatVLLM:
                 )
                 self.chat_template = None
                 self._use_generate = True
+                if disable_thinking:
+                    warnings.warn(
+                        f"Model '{model}' has no chat template, so disable_thinking "
+                        "cannot be applied when falling back to llm.generate().",
+                        stacklevel=2,
+                    )
             else:
                 self.chat_template = None  # let vLLM use the tokenizer's own
                 self._use_generate = False
                 logger.info("ChatVLLM: using tokenizer's chat template for '%s'", model)
+
+    def set_temperature(self, temperature: float) -> None:
+        from vllm import SamplingParams
+
+        self._sampling_params_kwargs["temperature"] = float(temperature)
+        self.sampling_params = SamplingParams(**self._sampling_params_kwargs)
 
     def _to_messages(self, input_item) -> list[dict]:
         """Convert LangChain prompt input to OpenAI-style messages."""
@@ -355,7 +588,7 @@ class ChatVLLM:
             return "\n".join(msg["content"] for msg in input_item)
         raise ValueError(f"Cannot extract raw text from: {type(input_item)}")
 
-    def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
+    def _run_raw_batch(self, inputs: list):
         """Process a batch of inputs using vllm.LLM.chat() or llm.generate().
 
         Uses ``llm.chat()`` when a chat template is available (instruct models),
@@ -371,7 +604,13 @@ class ChatVLLM:
                 self.sampling_params,
                 add_generation_prompt=True,
                 chat_template=self.chat_template,
+                chat_template_kwargs=self._chat_template_kwargs,
             )
+        return outputs
+
+    def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
+        """Return the text completion for each input in *inputs*."""
+        outputs = self._run_raw_batch(inputs)
         return [out.outputs[0].text for out in outputs]
 
     def invoke(self, input_item, **invoke_kwargs) -> str:
@@ -389,6 +628,48 @@ class ChatVLLM:
         )
 
 
+def _route_sampling_params(
+    engine_kwargs: dict,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    seed: int | None = None,
+    supported_fields: set[str] | None = None,
+    top_k_via_model_kwargs: bool = False,
+    provider: str = "",
+) -> dict:
+    """Route the cross-backend sampling params onto a provider's constructor kwargs.
+
+    Only params that are explicitly set (not ``None``) are applied.
+    ``top_k_via_model_kwargs`` tunnels ``top_k`` through ``model_kwargs`` for
+    OpenAI-compatible backends that do not expose it directly. When
+    ``supported_fields`` is provided, a param the target class cannot accept
+    (and cannot be tunneled) is dropped with a warning rather than being passed
+    through and raising at construction time.
+    """
+    for key, value in (
+        ("temperature", temperature),
+        ("top_p", top_p),
+        ("seed", seed),
+        ("top_k", top_k),
+    ):
+        if value is None:
+            continue
+        if key == "top_k" and top_k_via_model_kwargs:
+            engine_kwargs.setdefault("model_kwargs", {})["top_k"] = value
+            continue
+        if supported_fields is not None and key not in supported_fields:
+            logger.warning(
+                "%s backend does not support sampling param %r; dropping it.",
+                provider or "This",
+                key,
+            )
+            continue
+        engine_kwargs[key] = value
+    return engine_kwargs
+
+
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
 
@@ -397,6 +678,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``VLLM/meta-llama/Llama-3.3-70B-Instruct``.
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
+            Common keys honoured across backends: ``temperature``, ``top_p``,
+            ``top_k``, ``seed``. vLLM-only keys (``max_model_len``,
+            ``chat_template``) are stripped before reaching hosted providers.
     """
     # Avoid mutating the original engine_kwargs dictionary
     # NOTE: this is a shallow copy since we are not modifying any
@@ -406,25 +690,56 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
 
-    model_provider = model.split("/")[0]
+    temperature = engine_kwargs.pop("temperature", None)
+    top_p = engine_kwargs.pop("top_p", None)
+    top_k = engine_kwargs.pop("top_k", None)
+    seed = engine_kwargs.pop("seed", None)
+
+    model_provider, model_name = _split_model_spec(model)
 
     # vLLM-engine-only kwargs must not leak to remote-API providers
     # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
     # kwargs via model_kwargs into chat.completions.create, which rejects them.
     if model_provider != "VLLM":
-        engine_kwargs.pop("max_model_len", None)
-        engine_kwargs.pop("chat_template", None)
+        for key in (
+            "max_model_len",
+            "chat_template",
+            "language_model_only",
+            "gpu_memory_utilization",
+            "enforce_eager",
+            "tensor_parallel_size",
+            "quantization",
+            "kv_cache_dtype",
+            "reasoning_parser",
+            "reasoning_config",
+            "trust_remote_code",
+        ):
+            engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
-        return DummyModel(model)
+        dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+        _route_sampling_params(
+            dummy_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
+        return DummyModel(model, **dummy_kwargs)
 
-    model_name = "/".join(model.split("/")[1:])
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
     # Use our custom ChatVLLM wrapper which properly applies chat templates
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
 
         return ChatVLLM(
             model=model_name,
@@ -433,22 +748,28 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
+        openai_kwargs = dict(engine_kwargs)
+        # OpenAI-compatible chat backends expose temperature/top_p/seed directly
+        # but not top_k, which has to be tunneled through model_kwargs.
+        _route_sampling_params(
+            openai_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            top_k_via_model_kwargs=True,
+        )
         return ChatOpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,
-            **engine_kwargs,
+            **openai_kwargs,
         )
     else:
         model_classes = [
             LlamaCpp,
             ChatOpenAI,
         ]
-        if model_provider == "LlamaCpp":
-            engine_kwargs["model_path"] = model_name
-        else:
-            engine_kwargs["model"] = model_name
-
         try:
             from langchain_together.llms import Together
 
@@ -465,30 +786,56 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         assert model_provider in model_cls_dict, (
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         )
-        return model_cls_dict[model_provider](**engine_kwargs)
+        model_cls = model_cls_dict[model_provider]
+        if model_provider == "LlamaCpp":
+            engine_kwargs["model_path"] = model_name
+        else:
+            engine_kwargs["model"] = model_name
+
+        # Route sampling params against the target class's accepted fields:
+        # tunnel top_k via model_kwargs when the class lacks a top_k field,
+        # and drop any param the class cannot accept (e.g. Together has no
+        # ``seed``) instead of raising at construction time.
+        supported_fields = set(getattr(model_cls, "model_fields", {}))
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            supported_fields=supported_fields,
+            top_k_via_model_kwargs=(
+                "top_k" not in supported_fields and "model_kwargs" in supported_fields
+            ),
+            provider=model_provider,
+        )
+        return model_cls(**engine_kwargs)
 
 
 def download_all():
+    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
+
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
-    for dataset in [
+    for dataset in (
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
-        "m-arena-hard-v0.1",
-        "m-arena-hard-v2.0",
-    ]:
+        *M_ARENA_HARD_BASELINES,
+    ):
         if is_arena_hard_dataset(dataset):
             download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
         else:
             download_hf(name=dataset, local_path=local_path_tables)
 
+    contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
     snapshot_download(
-        repo_id="geoalgo/multilingual-contexts-to-be-completed",
+        repo_id=contexts_repo,
         repo_type="dataset",
         allow_patterns="*",
         local_dir=data_root / "contexts",
         force_download=False,
+        revision=hf_revision(contexts_repo),
     )
 
     from judgearena.instruction_dataset.mt_bench import download_mt_bench
@@ -519,6 +866,18 @@ class Timeblock:
         name = self.name if self.name else "block"
         msg = f"{name} took {self.duration} seconds"
         return msg
+
+
+def generation_cache_token(kwargs: dict[str, object]) -> str:
+    """Short, deterministic token of generation kwargs for cache-key busting.
+
+    Folds the resolved per-role generation kwargs (sampling params, max_tokens,
+    chat_template, ...) into a stable 16-char hash so that changing any of them
+    invalidates cached completions. Hashing keeps the cache name bounded even
+    when a long ``chat_template`` is present.
+    """
+    serialized = "_".join(f"{k}={kwargs[k]!r}" for k in sorted(kwargs))
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
 def cache_function_dataframe(

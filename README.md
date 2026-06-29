@@ -46,10 +46,10 @@ Compare two models head-to-head:
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model_A gpt4_1106_preview \
-  --model_B VLLM/utter-project/EuroLLM-9B \
-  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10
+  --model.name gpt4_1106_preview \
+  --model.baseline VLLM/utter-project/EuroLLM-9B \
+  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --generation.n_instructions 10
 ```
 
 **What happens here?**
@@ -74,32 +74,64 @@ It will then display the results of the battles:
 ============================================================
 ```
 
+### Run from a YAML config (`--config_path`)
+
+Every option can also come from a YAML file. The CLI flags mirror the config
+structure (`--model.name`, `--judge.model`, `--generation.n_instructions`, …),
+and **precedence is: CLI flags > `--config_path` YAML > built-in defaults**, so
+you can keep a base file and override single fields on the command line:
+
+```bash
+judgearena --config_path configs/alpaca_eval.yaml
+# override one field on top of the file:
+judgearena --config_path configs/alpaca_eval.yaml --judge.model VLLM/Qwen/Qwen2.5-32B-Instruct
+```
+
+Example [`configs/alpaca_eval.yaml`](configs/alpaca_eval.yaml):
+
+```yaml
+task: alpaca-eval
+model:
+  name: gpt4_1106_preview
+  baseline: VLLM/utter-project/EuroLLM-9B
+judge:
+  model: OpenRouter/deepseek/deepseek-chat-v3.1
+generation:
+  n_instructions: 10
+```
+
+Only the fields you want to change need to be present — everything else uses the
+model defaults. Each run also writes the fully-resolved config to
+`<result_folder>/<run>/config.yaml`, which you can feed straight back via
+`--config_path` to reproduce the run. An ELO example is in
+[`configs/elo_comparia.yaml`](configs/elo_comparia.yaml).
+
 ### Length and Token Parameters
 
 The evaluation scripts expose four different length controls with different roles:
-- `--truncate_all_input_chars`: character-level truncation applied to prompts before model generation and before judge evaluation.
-- `--max_out_tokens_models`: generation token budget for each answer from `model_A` and `model_B`.
-- `--max_out_tokens_judge`: generation token budget for the judge completion (reasoning + score output).
-- `--max_model_len`: optional vLLM context-window limit (prompt + generated tokens), applied to vLLM models; this should be greater than or equal to the two `max_out_tokens_*` values.
+- `--generation.truncate_all_input_chars`: character-level truncation applied to prompts before model generation and before judge evaluation.
+- `--model.max_out_tokens`: generation token budget for each answer from `model_A` and `model_B`.
+- `--judge.max_out_tokens`: generation token budget for the judge completion (reasoning + score output).
+- `--model.max_model_len`: optional vLLM context-window limit (prompt + generated tokens), applied to vLLM models; this should be greater than or equal to the two `max_out_tokens_*` values.
 
-### Engine-Specific Configuration (`--engine_kwargs`)
+### Engine-Specific Configuration (`--model.engine_kwargs`)
 
 Some providers expose additional engine-level knobs (for example, vLLM allows configuring tensor parallelism or GPU memory utilization).
-JudgeArena lets you forward these options directly to the underlying engine via `--engine_kwargs`, which expects a JSON object.
+JudgeArena lets you forward these options directly to the underlying engine via `--model.engine_kwargs`, which expects a JSON object.
 
 For instance, to run vLLM with tensor parallelism across multiple GPUs:
 
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
-  --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
-  --judge_model VLLM/Qwen/Qwen3.5-27B-FP8 \
-  --n_instructions 10 \
-  --engine_kwargs '{"tensor_parallel_size": 2}'
+  --model.name VLLM/Qwen/Qwen2.5-0.5B-Instruct \
+  --model.baseline VLLM/Qwen/Qwen2.5-1.5B-Instruct \
+  --judge.model VLLM/Qwen/Qwen3.5-27B-FP8 \
+  --generation.n_instructions 10 \
+  --model.engine_kwargs '{"tensor_parallel_size": 2}'
 ```
 
-While any key in `--engine_kwargs` is forwarded to the underlying engine (e.g. `vllm.LLM`, `LlamaCpp`, `ChatOpenAI`), existing dedicated flags such as `--max_model_len` and `--chat_template` have higher precedence.
+While any key in `--model.engine_kwargs` is forwarded to the underlying engine (e.g. `vllm.LLM`, `LlamaCpp`, `ChatOpenAI`), existing dedicated flags such as `--model.max_model_len` and `--model.chat_template` have higher precedence.
 
 ## 🎨 Model Specification
 
@@ -120,10 +152,10 @@ For instance, to run everything locally with vLLM:
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
-  --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
-  --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
-  --n_instructions 10
+  --model.name VLLM/Qwen/Qwen2.5-0.5B-Instruct \
+  --model.baseline VLLM/Qwen/Qwen2.5-1.5B-Instruct \
+  --judge.model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
+  --generation.n_instructions 10
 ```
 
 ### Running locally with LlamaCpp
@@ -136,25 +168,39 @@ LlamaCpp allows you to run GGUF models locally with high efficiency across vario
 uv sync --extra llamacpp
 ```
 
-**Download GGUF models** using `huggingface-cli` (included via `huggingface-hub`):
+**Download GGUF models** using `hf` (included via `huggingface-hub`):
 
 ```bash
-huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q8_0.gguf --local-dir ./models
-huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF qwen2.5-1.5b-instruct-q8_0.gguf --local-dir ./models
+hf download Qwen/Qwen2.5-0.5B-Instruct-GGUF qwen2.5-0.5b-instruct-q8_0.gguf --local-dir ./models
+hf download Qwen/Qwen2.5-1.5B-Instruct-GGUF qwen2.5-1.5b-instruct-q8_0.gguf --local-dir ./models
 ```
 
 The `LlamaCpp` provider expects a **file path** to a `.gguf` model after the `LlamaCpp/` prefix.
 For absolute paths, this results in a double slash (e.g., `LlamaCpp//home/user/models/model.gguf`).
+
+**Chat format:** LlamaCpp falls back to a generic template if the GGUF metadata does not embed a chat template. Pass the correct format for your model via `--model.engine_kwargs`:
+
+```bash
+# Llama-3.x models
+--model.engine_kwargs '{"chat_format": "llama-3"}'
+# Gemma models
+--model.engine_kwargs '{"chat_format": "gemma"}'
+# ChatML models (SmolLM, Qwen, Mistral, etc.)
+--model.engine_kwargs '{"chat_format": "chatml"}'
+```
+
+Use separate `--judge.engine_kwargs` if the judge uses a different architecture than the evaluated models.
 
 **Mixed example** — local LlamaCpp model with a remote judge:
 
 ```bash
 uv run judgearena \
   --task alpaca-eval \
-  --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
-  --model_B OpenRouter/qwen/qwen-2.5-7b-instruct \
-  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 10 --max_out_tokens_models 16384
+  --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  --model.baseline OpenRouter/qwen/qwen-2.5-7b-instruct \
+  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --generation.n_instructions 10 --model.max_out_tokens 16384 \
+  --model.engine_kwargs '{"chat_format": "chatml"}'
 ```
 
 **Fully local example** — no API keys required (useful for verifying your setup):
@@ -162,10 +208,11 @@ uv run judgearena \
 ```bash
 uv run judgearena \
   --task alpaca-eval \
-  --model_A LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
-  --model_B LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
-  --judge_model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
-  --n_instructions 5 --max_out_tokens_models 16384
+  --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
+  --model.baseline LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
+  --judge.model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
+  --generation.n_instructions 5 --model.max_out_tokens 16384 \
+  --model.engine_kwargs '{"chat_format": "chatml"}'
 ```
 
 **Note:** Ensure you have the required LangChain dependencies installed for your chosen provider.
@@ -178,15 +225,15 @@ When using vLLM, JudgeArena automatically picks the right inference method based
 - **Instruct/chat models** (e.g. `swiss-ai/Apertus-8B-Instruct-2509`): the tokenizer already defines a chat template, so JudgeArena uses `vllm.LLM.chat()` and the template is applied automatically.
 - **Base/pretrained models** (e.g. `swiss-ai/Apertus-8B-2509`): these typically don't ship a chat template. JudgeArena detects this and falls back to `vllm.LLM.generate()` (plain text, no chat formatting). A warning is printed when this happens.
 
-If you need to force a specific chat template (for example, a base model that you know works with ChatML), pass it via `--chat_template`:
+If you need to force a specific chat template (for example, a base model that you know works with ChatML), pass it via `--model.chat_template`:
 
 ```bash
 judgearena \
   --task alpaca-eval \
-  --model_A VLLM/swiss-ai/Apertus-8B-2509 \
-  --model_B VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
-  --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
-  --chat_template '{% for message in messages %}<|im_start|>{{ message["role"] }}\n{{ message["content"] }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}'
+  --model.name VLLM/swiss-ai/Apertus-8B-2509 \
+  --model.baseline VLLM/swiss-ai/Apertus-8B-Instruct-2509 \
+  --judge.model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
+  --model.chat_template '{% for message in messages %}<|im_start|>{{ message["role"] }}\n{{ message["content"] }}<|im_end|>\n{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}'
 ```
 
 This override applies to all vLLM models in the run. For remote providers (OpenAI, Together, OpenRouter), the flag is ignored since they handle templates server-side.
@@ -214,7 +261,7 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
 a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
-ship in the `lmsys/mt-bench` HF Space. Override per run with `--model_B`.
+ship in the `lmsys/mt-bench` HF Space. Override per run with `--model.baseline`.
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`
@@ -242,16 +289,16 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
 The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
 
-Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model_A` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model_B` is reserved for a future extension).
+Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model.name` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model.baseline` is reserved for a future extension).
 
 ### Quick start
 
 ```bash
 judgearena \
   --task elo-comparia \
-  --model_A Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
-  --judge_model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --n_instructions 200
+  --model.name Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --generation.n_instructions 200
 ```
 
 ### Key options
@@ -259,14 +306,38 @@ judgearena \
 | Flag | Default | Description |
 |---|---|---|
 | `--task elo-<arena>` | *(required)* | Arena to sample opponents from: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
-| `--model_A` | *(required)* | Model under evaluation (same format as pairwise tasks) |
-| `--judge_model` | *(required)* | LLM judge (same format as pairwise tasks) |
-| `--n_instructions` | all | Number of arena battles to use for evaluation |
-| `--n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
-| `--languages` | all | Restrict to specific language codes, e.g. `en fr de` |
-| `--n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
-| `--swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
-| `--result_folder` | `results` | Directory where annotations and results are saved |
+| `--model.name` | *(required)* | Model under evaluation (same format as pairwise tasks) |
+| `--judge.model` | *(required)* | LLM judge (same format as pairwise tasks) |
+| `--generation.n_instructions` | all | Number of arena battles to use for evaluation |
+| `--elo.n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
+| `--elo.languages` | all | Restrict to specific language codes (JSON list), e.g. `'["en", "fr", "de"]'` |
+| `--elo.n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
+| `--elo.elo_random_battles` | off | Sample N arena rows uniformly at random (seeded by `--run.seed`) instead of the first N |
+| `--judge.swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
+| `--run.result_folder` | `results` | Directory where annotations and results are saved |
+| `--elo.soft_elo` | `true` | Soft Bradley-Terry (continuous preferences); set `false` for hard win/loss/tie labels |
+| `--elo.soft_elo_temperature` | `0.3` | Initial softmax temperature for soft-ELO; overridden if calibration succeeds |
+| `--elo.calibrate_temperature` | off | MLE-calibrate the score-to-preference temperature against human arena annotations |
+| `--elo.calibration_size` | all | Number of human battles to sample for calibration (requires `--elo.calibrate_temperature`) |
+
+### Soft-ELO & temperature calibration
+
+By default, judge scores are converted into continuous preferences via a softmax (temperature `0.3`) and fed into a soft
+Bradley-Terry model. Set `--elo.soft_elo false` to fall back to hard win/loss/tie labels.
+
+To let the data choose the best temperature automatically, add `--elo.calibrate_temperature`.
+JudgeArena will run the judge on a sample of human-annotated arena battles, fit the temperature $T^*$ by MLE, and
+use it for the full evaluation:
+
+```bash
+judgearena \
+  --task elo-lmarena-100k \
+  --model.name Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
+  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
+  --generation.n_instructions 200 \
+  --elo.calibrate_temperature \
+  --elo.calibration_size 300
+```
 
 ### Output
 

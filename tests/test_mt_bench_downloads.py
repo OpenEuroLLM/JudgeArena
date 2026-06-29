@@ -1,10 +1,13 @@
+from datetime import UTC, datetime
+
 import pandas as pd
+import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils as utils
-from judgearena.generate_and_evaluate import CliArgs
-from judgearena.judge_prompt_presets import SKYWORK_JUDGE_PROMPT_PRESET
+from judgearena.config import RunConfig
+from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -144,17 +147,19 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         ),
     )
 
-    args = CliArgs(
+    cfg = RunConfig(
         task="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B="gpt-4",
-        judge_model="Dummy/J",
-        n_instructions=2,
-        engine_kwargs={"gpu_memory_utilization": 0.7},
+        model={
+            "name": "VLLM/example/model-a",
+            "baseline": "gpt-4",
+            "engine_kwargs": {"gpu_memory_utilization": 0.7},
+        },
+        judge={"model": "Dummy/J"},
+        generation={"n_instructions": 2},
     )
 
     completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
-        args=args,
+        cfg=cfg,
         questions_df=questions_df,
         ignore_cache=False,
     )
@@ -163,6 +168,80 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
+
+
+def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1", "Q2"], "turn_2": ["Q1b", "Q2b"]},
+        index=pd.Index([1, 2], name="instruction_index"),
+    )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["Base A1"],
+                "completion_turn_2": ["Base B1"],
+            }
+        ),
+    )
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "gpt-4", "baseline": "gpt-4"},
+        judge={"model": "Dummy/J"},
+        generation={"n_instructions": 2},
+    )
+
+    with pytest.raises(ValueError, match="missing 1 question"):
+        mt_bench_utils._generate_mt_bench_completions(
+            cfg=cfg,
+            questions_df=questions_df,
+            ignore_cache=False,
+        )
+
+
+def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_write_run_metadata(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "run-metadata.v1.json"
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "write_run_metadata",
+        fake_write_run_metadata,
+    )
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "model-a", "baseline": "model-b"},
+        judge={"model": "judge"},
+    )
+    started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+
+    mt_bench_utils._save_mt_bench_results(
+        cfg=cfg,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+        results={"win_rate": 0.5, "preferences": [1.0]},
+        annotations_df=pd.DataFrame([{"preference": 1.0}]),
+        started_at_utc=started_at,
+        input_payloads={"instruction_index": [1]},
+        judge_system_prompt="system",
+        judge_user_prompt_template="user",
+    )
+
+    assert (tmp_path / "config.yaml").exists()
+    assert (tmp_path / "mt-bench-test-annotations.csv").exists()
+    assert (tmp_path / "results-mt-bench-test.json").exists()
+    assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
+    assert captured["input_payloads"] == {"instruction_index": [1]}
+    assert captured["judge_system_prompt"] == "system"
+    assert captured["judge_user_prompt_template"] == "user"
+    assert captured["started_at_utc"] == started_at
 
 
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
@@ -182,7 +261,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache: (
+        lambda cfg, questions_df, ignore_cache: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -210,35 +289,40 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         fake_run_mt_bench_fastchat,
     )
 
-    args = CliArgs(
+    cfg = RunConfig(
         task="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B=None,
-        judge_model="VLLM/Judge",
-        n_instructions=1,
-        truncate_judge_input_chars=80000,
-        max_judge_model_len=65536,
-        mt_bench_judge_mode="fastchat_original",
-        engine_kwargs={"tensor_parallel_size": 1},
-        judge_engine_kwargs={"tensor_parallel_size": 4},
-        result_folder=str(tmp_path),
+        model={
+            "name": "VLLM/example/model-a",
+            "baseline": None,
+            "engine_kwargs": {"tensor_parallel_size": 1},
+        },
+        judge={
+            "model": "VLLM/Judge",
+            "max_model_len": 65536,
+            "engine_kwargs": {"tensor_parallel_size": 4},
+        },
+        generation={"n_instructions": 1, "truncate_judge_input_chars": 80000},
+        run={"result_folder": str(tmp_path)},
     )
 
     mt_bench_utils.run_mt_bench(
-        args,
+        cfg,
         ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
 
-    assert args.model_B == "gpt-4"
+    assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
-    assert captured["fastchat"]["args"].truncate_judge_input_chars == 80000
-    assert captured["fastchat"]["prompt_preset"] == "default"
+    assert captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
+    assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
+    assert captured["fastchat"]["resolved_prompt"].preset_name == (
+        FASTCHAT_PAIRWISE_PROMPT_PRESET
+    )
 
 
-def test_run_mt_bench_fastchat_keeps_skywork_prompt_preset(monkeypatch, tmp_path):
+def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     questions_df = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
         index=pd.Index([1], name="instruction_index"),
@@ -253,7 +337,204 @@ def test_run_mt_bench_fastchat_keeps_skywork_prompt_preset(monkeypatch, tmp_path
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda args, questions_df, ignore_cache: (
+        lambda cfg, questions_df, ignore_cache: (
+            pd.DataFrame(
+                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
+                index=questions_df.index,
+            ),
+            pd.DataFrame(
+                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
+                index=questions_df.index,
+            ),
+        ),
+    )
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
+
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+
+    def fake_run_mt_bench_fastchat(**kwargs):
+        captured["fastchat"] = kwargs
+        return pd.Series([0.0], dtype=float)
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        fake_run_mt_bench_fastchat,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        lambda **_kwargs: pytest.fail("preset path should not run"),
+    )
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "VLLM/example/model-a"},
+        judge={"model": "VLLM/Judge"},
+        generation={"n_instructions": 1},
+        run={"result_folder": str(tmp_path)},
+    )
+
+    mt_bench_utils.run_mt_bench(
+        cfg,
+        ignore_cache=False,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+    )
+
+    assert cfg.model.baseline == "gpt-4"
+    assert captured["make_model"]["temperature"] == 0.0
+    assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
+    assert captured["fastchat"]["resolved_prompt"].preset_name == (
+        FASTCHAT_PAIRWISE_PROMPT_PRESET
+    )
+
+
+def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tmp_path):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda cfg, questions_df, ignore_cache: (
+            pd.DataFrame(
+                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
+                index=questions_df.index,
+            ),
+            pd.DataFrame(
+                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
+                index=questions_df.index,
+            ),
+        ),
+    )
+
+    def fake_make_model(**kwargs):
+        captured["make_model"] = kwargs
+        return object()
+
+    def fake_run_mt_bench_preset(**kwargs):
+        captured["preset"] = kwargs
+        return pd.Series([0.0], dtype=float)
+
+    captured = {}
+    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_preset",
+        fake_run_mt_bench_preset,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_run_mt_bench_fastchat",
+        lambda **_kwargs: pytest.fail("fastchat path should not run"),
+    )
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "VLLM/example/model-a"},
+        judge={"model": "VLLM/Judge", "prompt_preset": "default_with_explanation"},
+        generation={"n_instructions": 1},
+        run={"result_folder": str(tmp_path)},
+    )
+
+    mt_bench_utils.run_mt_bench(
+        cfg,
+        ignore_cache=False,
+        res_folder=tmp_path,
+        result_name="mt-bench-test",
+    )
+
+    assert captured["preset"]["resolved_prompt"].preset_name == (
+        "default_with_explanation"
+    )
+    assert "temperature" not in captured["make_model"]
+
+
+def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: None,
+    )
+
+    def fake_generate_multiturn(**kwargs):
+        captured[kwargs["model"]] = kwargs
+        return pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["A1"],
+                "completion_turn_2": ["B1"],
+            }
+        )
+
+    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate_multiturn)
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={
+            "name": "VLLM/Qwen/Qwen3.5-9B",
+            "baseline": "VLLM/meta-llama/Llama-3.1-8B",
+            "max_out_tokens": 8192,
+        },
+        judge={
+            "model": "Dummy/J",
+            "battle_thinking_token_budget": 16384,
+            "strip_thinking_before_judging": True,
+        },
+        generation={"n_instructions": 1},
+    )
+
+    mt_bench_utils._generate_mt_bench_completions(
+        cfg=cfg,
+        questions_df=questions_df,
+        ignore_cache=False,
+    )
+
+    thinking_call = captured["VLLM/Qwen/Qwen3.5-9B"]
+    plain_call = captured["VLLM/meta-llama/Llama-3.1-8B"]
+
+    assert thinking_call["strip_thinking_before_turn_2_prompt"] is True
+    assert thinking_call["thinking_token_budget"] == 8192
+    assert plain_call["strip_thinking_before_turn_2_prompt"] is True
+    assert "thinking_token_budget" not in plain_call
+
+
+def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp_path):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "_generate_mt_bench_completions",
+        lambda cfg, questions_df, ignore_cache: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -265,34 +546,29 @@ def test_run_mt_bench_fastchat_keeps_skywork_prompt_preset(monkeypatch, tmp_path
         ),
     )
     monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
-
-    def fake_run_mt_bench_fastchat(**kwargs):
-        captured["fastchat"] = kwargs
-        return pd.Series([0.0], dtype=float)
-
     monkeypatch.setattr(
-        mt_bench_utils,
-        "_run_mt_bench_fastchat",
-        fake_run_mt_bench_fastchat,
+        mt_bench_utils, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
     )
 
-    args = CliArgs(
+    def fake_judge(**kwargs):
+        captured["judge"] = kwargs
+        return pd.Series([0.0], dtype=float), [], [], 0
+
+    monkeypatch.setattr(mt_bench_utils, "judge_mt_bench_pairwise_fastchat", fake_judge)
+
+    cfg = RunConfig(
         task="mt-bench",
-        model_A="VLLM/example/model-a",
-        model_B=None,
-        judge_model="VLLM/Skywork/Skywork-Critic-Llama-3.1-8B",
-        n_instructions=1,
-        mt_bench_judge_mode="fastchat_original",
-        judge_prompt_preset=SKYWORK_JUDGE_PROMPT_PRESET,
-        result_folder=str(tmp_path),
+        model={"name": "VLLM/example/model-a"},
+        judge={"model": "VLLM/Judge", "strip_thinking_before_judging": True},
+        generation={"n_instructions": 1},
+        run={"result_folder": str(tmp_path)},
     )
 
     mt_bench_utils.run_mt_bench(
-        args,
+        cfg,
         ignore_cache=False,
         res_folder=tmp_path,
-        result_name="mt-bench-skywork",
+        result_name="mt-bench-test",
     )
 
-    assert args.model_B == "gpt-4"
-    assert captured["fastchat"]["prompt_preset"] == SKYWORK_JUDGE_PROMPT_PRESET
+    assert captured["judge"]["strip_thinking_before_judging"] is True
