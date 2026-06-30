@@ -178,4 +178,7 @@ def _compute_grouped_stats(
         if key is None:
             continue
         grouped.setdefault(key, []).append(pref)
-    return {key: compute_pref_summary(pd.Series(vals)).to_dict() for key, vals in grouped.items()}
+    return {
+        key: compute_pref_summary(pd.Series(vals)).to_dict()
+        for key, vals in grouped.items()
+    }

@@ -33,7 +33,9 @@ def test_prefsummary_to_dict_keys():
     }
 
 
-def _summary(num_battles=4, winrate=0.5, num_wins=2, num_losses=1, num_ties=1, num_missing=0):
+def _summary(
+    num_battles=4, winrate=0.5, num_wins=2, num_losses=1, num_ties=1, num_missing=0
+):
     return PrefSummary(
         num_battles=num_battles,
         winrate=winrate,
@@ -80,7 +82,9 @@ def test_battlereport_to_dict_mtbench_shape():
         model_b="baseline",
         judge_model="judge",
         summary=_summary(),
-        per_category={"writing": {"winrate": 0.6, "num_wins": 3, "num_losses": 2, "num_ties": 0}},
+        per_category={
+            "writing": {"winrate": 0.6, "num_wins": 3, "num_losses": 2, "num_ties": 0}
+        },
         per_turn={1: {"winrate": 0.5, "num_wins": 1, "num_losses": 1, "num_ties": 0}},
         preferences=[0.0, 1.0],
         metadata={"date": "2026-06-16", "user": "tester"},
@@ -124,7 +128,9 @@ def test_battlereport_render_mtbench_breakdowns():
         model_b="B",
         judge_model="J",
         summary=_summary(),
-        per_category={"writing": {"winrate": 0.6, "num_wins": 3, "num_losses": 2, "num_ties": 0}},
+        per_category={
+            "writing": {"winrate": 0.6, "num_wins": 3, "num_losses": 2, "num_ties": 0}
+        },
         per_turn={1: {"winrate": 0.5, "num_wins": 1, "num_losses": 1, "num_ties": 0}},
         preferences=[],
         metadata={},

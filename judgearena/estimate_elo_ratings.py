@@ -248,15 +248,10 @@ class EloReport(Report):
             vals = [r[m] for r in self.bootstrap_ratings if m in r]
             suffix = " <-----" if m == self.model_name else ""
             count = self.battle_counts.get(m, 0)
-            print(
-                f"  {m}  ({count}){suffix}: "
-                f"{np.mean(vals):.1f} ± {np.std(vals):.1f}"
-            )
+            print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")
 
         overlap = [
-            m
-            for m in self.mean_ratings
-            if m in self.human_elo and m != self.model_name
+            m for m in self.mean_ratings if m in self.human_elo and m != self.model_name
         ]
         if overlap:
             print(
