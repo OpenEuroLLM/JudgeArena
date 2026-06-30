@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from judgearena.config import RunConfig, build_run_config
-from judgearena.utils import generation_cache_token, make_model
+from judgearena.models import make_model
+from judgearena.utils import generation_cache_token
 
 
 def test_make_model_dummy_captures_temperature_and_seed():

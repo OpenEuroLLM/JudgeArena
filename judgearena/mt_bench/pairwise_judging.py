@@ -7,8 +7,9 @@ from typing import Protocol
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.models import do_inference
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.utils import do_inference, strip_thinking_tags
+from judgearena.utils import strip_thinking_tags
 
 
 class MTBenchPairwisePrompt(Protocol):

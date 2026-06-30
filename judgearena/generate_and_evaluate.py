@@ -30,17 +30,19 @@ from judgearena.log import (
     get_logger,
     make_run_log_path,
 )
+from judgearena.models import (
+    build_default_judge_model_kwargs,
+    is_thinking_model,
+    make_model,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
-    build_default_judge_model_kwargs,
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
     generation_cache_token,
-    is_thinking_model,
-    make_model,
     read_df,
 )
 

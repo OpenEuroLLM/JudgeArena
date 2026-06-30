@@ -19,13 +19,9 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
+from judgearena.models import build_default_judge_model_kwargs, make_model
 from judgearena.repro import _to_jsonable
-from judgearena.utils import (
-    build_default_judge_model_kwargs,
-    cache_function_dataframe,
-    compute_pref_summary,
-    make_model,
-)
+from judgearena.utils import cache_function_dataframe, compute_pref_summary
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
