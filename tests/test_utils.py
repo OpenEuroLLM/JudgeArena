@@ -154,7 +154,9 @@ def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):
             )
         return "llm"
 
-    result = utils_models._init_llm_with_retry(fake_llm, model="m", trust_remote_code=True)
+    result = utils_models._init_llm_with_retry(
+        fake_llm, model="m", trust_remote_code=True
+    )
     assert result == "llm"
     assert len(calls) == 3
 

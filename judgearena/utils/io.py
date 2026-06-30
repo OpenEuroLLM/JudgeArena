@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.dataset_revisions import hf_revision
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -83,9 +85,11 @@ def download_all():
         else:
             download_hf(name=dataset, local_path=local_path_tables)
 
+    contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
     snapshot_download(
-        repo_id="geoalgo/multilingual-contexts-to-be-completed",
+        repo_id=contexts_repo,
         repo_type="dataset",
+        revision=hf_revision(contexts_repo),
         allow_patterns="*",
         local_dir=data_root / "contexts",
         force_download=False,
@@ -119,6 +123,18 @@ class Timeblock:
         name = self.name if self.name else "block"
         msg = f"{name} took {self.duration} seconds"
         return msg
+
+
+def generation_cache_token(kwargs: dict[str, object]) -> str:
+    """Short, deterministic token of generation kwargs for cache-key busting.
+
+    Folds the resolved per-role generation kwargs (sampling params, max_tokens,
+    chat_template, ...) into a stable 16-char hash so that changing any of them
+    invalidates cached completions. Hashing keeps the cache name bounded even
+    when a long ``chat_template`` is present.
+    """
+    serialized = "_".join(f"{k}={kwargs[k]!r}" for k in sorted(kwargs))
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
 
 
 def cache_function_dataframe(

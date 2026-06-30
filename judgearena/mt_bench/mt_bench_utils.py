@@ -32,7 +32,11 @@ from judgearena.prompts.registry import (
     resolve_run_judge_prompt,
 )
 from judgearena.repro import write_run_metadata
-from judgearena.utils import cache_function_dataframe, compute_pref_summary
+from judgearena.utils import (
+    cache_function_dataframe,
+    compute_pref_summary,
+    generation_cache_token,
+)
 from judgearena.utils.eval import BattleReport, _compute_grouped_stats
 
 logger = get_logger(__name__)
@@ -57,21 +61,27 @@ def _align_mt_bench_completions(
 
 
 def _build_mt_bench_generation_kwargs(
-    *, cfg: RunConfig, model_spec: str
+    *, cfg: RunConfig, model_spec: str, role: str
 ) -> dict[str, object]:
-    """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
-    generation_engine_kwargs = dict(cfg.model.engine_kwargs)
+    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
+    if role == "A":
+        generation_kwargs = cfg.model.evaluated_generation_kwargs()
+    elif role == "B":
+        generation_kwargs = cfg.model.baseline_generation_kwargs()
+    else:
+        raise ValueError(f"Unknown generation role: {role!r}")
     provider, _, model_name = model_spec.partition("/")
     if (
         cfg.judge.battle_thinking_token_budget is not None
         and provider == "VLLM"
         and is_thinking_model(model_name)
     ):
-        generation_engine_kwargs["thinking_token_budget"] = min(
+        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
+        generation_kwargs["thinking_token_budget"] = min(
             int(cfg.judge.battle_thinking_token_budget),
-            int(cfg.model.max_out_tokens),
+            max_tokens,
         )
-    return generation_engine_kwargs
+    return generation_kwargs
 
 
 def _generate_mt_bench_completions(
@@ -81,21 +91,26 @@ def _generate_mt_bench_completions(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cache_prefix = "mt-bench"
 
-    def _run_generation(model_name: str) -> pd.DataFrame:
+    def _run_generation(
+        model_name: str, *, generation_kwargs: dict[str, object]
+    ) -> pd.DataFrame:
+        # MT-Bench's category-aware temperatures only kick in when the user has
+        # not explicitly pinned a per-role temperature; otherwise the config
+        # override should win for reproducibility.
+        temperature_config = (
+            None if "temperature" in generation_kwargs else FASTCHAT_TEMPERATURE_CONFIG
+        )
         return generate_multiturn(
             questions=questions_df,
             model=model_name,
             truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            max_tokens=cfg.model.max_out_tokens,
             use_tqdm=cfg.run.use_tqdm,
-            max_model_len=cfg.model.max_model_len,
-            chat_template=cfg.model.chat_template,
-            temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            temperature_config=temperature_config,
             strip_thinking_before_turn_2_prompt=cfg.judge.strip_thinking_before_judging,
-            **_build_mt_bench_generation_kwargs(cfg=cfg, model_spec=model_name),
+            **generation_kwargs,
         )
 
-    def _load_or_generate(model_name: str) -> pd.DataFrame:
+    def _load_or_generate(model_name: str, *, role: str) -> pd.DataFrame:
         loaded_answers = load_mt_bench_model_answers(
             model_name, n_instructions=cfg.generation.n_instructions
         )
@@ -105,10 +120,19 @@ def _generate_mt_bench_completions(
                 completions=loaded_answers,
                 model_name=model_name,
             )
+        # Fold the resolved generation kwargs into the cache key so changing any
+        # sampling param busts cached completions instead of reusing a stale run.
+        generation_kwargs = _build_mt_bench_generation_kwargs(
+            cfg=cfg, model_spec=model_name, role=role
+        )
+        sampling_token = generation_cache_token(generation_kwargs)
         generated_answers = cache_function_dataframe(
-            lambda: _run_generation(model_name),
+            lambda: _run_generation(model_name, generation_kwargs=generation_kwargs),
             ignore_cache=ignore_cache,
-            cache_name=f"{cache_prefix}_{model_name}_{cfg.generation.n_instructions}",
+            cache_name=(
+                f"{cache_prefix}_{model_name}_{cfg.generation.n_instructions}_"
+                f"{sampling_token}"
+            ),
         )
         return _align_mt_bench_completions(
             questions_df=questions_df,
@@ -116,7 +140,9 @@ def _generate_mt_bench_completions(
             model_name=model_name,
         )
 
-    return _load_or_generate(cfg.model.name), _load_or_generate(cfg.model.baseline)
+    return _load_or_generate(cfg.model.name, role="A"), _load_or_generate(
+        cfg.model.baseline, role="B"
+    )
 
 
 def _build_mt_bench_input_payloads(
@@ -350,16 +376,13 @@ def run_mt_bench(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."
         )
-    judge_model_kwargs = {
-        "model": cfg.judge.model,
-        "max_tokens": cfg.judge.max_out_tokens,
-        "max_model_len": cfg.judge.max_model_len,
-        "chat_template": cfg.model.chat_template,
-        **{**cfg.model.engine_kwargs, **cfg.judge.engine_kwargs},
-    }
-    if resolved_prompt.delegated:
-        judge_model_kwargs["temperature"] = 0.0
-    judge_chat_model = make_model(**judge_model_kwargs)
+    judge_model_kwargs = cfg.judge.model_kwargs(
+        base_engine_kwargs=cfg.model.engine_kwargs,
+        fallback_chat_template=cfg.model.chat_template,
+    )
+    if resolved_prompt.delegated and cfg.judge.temperature is None:
+        judge_model_kwargs.setdefault("temperature", 0.0)
+    judge_chat_model = make_model(model=cfg.judge.model, **judge_model_kwargs)
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
             cfg=cfg,

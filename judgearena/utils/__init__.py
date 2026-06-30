@@ -7,6 +7,9 @@ layer lives in :mod:`judgearena.models` (it is a core component, not a utility).
 """
 
 from judgearena.utils.eval import (
+    BattleReport,
+    PrefSummary,
+    Report,
     compute_pref_summary,
 )
 from judgearena.utils.io import (
@@ -15,6 +18,7 @@ from judgearena.utils.io import (
     data_root,
     download_all,
     download_hf,
+    generation_cache_token,
     read_df,
     safe_parse_int,
 )
@@ -26,12 +30,16 @@ from judgearena.utils.text import (
 )
 
 __all__ = [
+    "BattleReport",
+    "PrefSummary",
+    "Report",
     "Timeblock",
     "cache_function_dataframe",
     "compute_pref_summary",
     "data_root",
     "download_all",
     "download_hf",
+    "generation_cache_token",
     "read_df",
     "safe_parse_int",
     "safe_text",
