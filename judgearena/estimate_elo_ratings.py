@@ -18,6 +18,7 @@ from judgearena.evaluate import (
     resolve_run_judge_prompt,
 )
 from judgearena.generate import generate_instructions
+from judgearena.generate_and_evaluate import _build_generation_kwargs
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
 from judgearena.repro import _to_jsonable
@@ -301,7 +302,11 @@ def main(cfg: "RunConfig") -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", cfg.model.name)
 
-    extra_kwargs = cfg.model.evaluated_generation_kwargs()
+    # Mirror the benchmark generation path so Elo battles honor the
+    # thinking-token sub-budget for thinking models (the Elo entrypoint
+    # previously called evaluated_generation_kwargs() directly and silently
+    # dropped battle_thinking_token_budget).
+    extra_kwargs = _build_generation_kwargs(cfg, cfg.model.name, role="A")
     use_tqdm = False
     gen_fun = partial(
         generate_instructions,
@@ -401,6 +406,7 @@ def main(cfg: "RunConfig") -> dict:
             completions_B=completions_B,
             swap_mode=cfg.judge.swap_mode,
             provide_explanation=cfg.judge.provide_explanation,
+            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
             prompt_preset=resolved_prompt.preset_name,
@@ -437,7 +443,12 @@ def main(cfg: "RunConfig") -> dict:
             }
         )
 
+    # Stripping reasoning traces changes the judged text but not the cached
+    # completions, so it must be part of the judge cache key. Only append when
+    # enabled so prior (non-stripped) runs keep their existing cache hashes.
     judge_cache_suffix = f"judge_{cache_suffix}"
+    if cfg.judge.strip_thinking_before_judging:
+        judge_cache_suffix += "_stripthinking"
     df_judge = cache_function_dataframe(
         run_judge,
         ignore_cache=cfg.run.ignore_cache,
