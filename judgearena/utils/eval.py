@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
+import abc
 import json
-from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import ClassVar
 
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_serializer
 
 
-@dataclass
-class PrefSummary:
+class PrefSummary(BaseModel):
     """Win/loss/tie statistics for a preference series (0=A, 0.5=tie, 1=B)."""
 
     num_battles: int
@@ -23,7 +21,7 @@ class PrefSummary:
     num_missing: int
 
     def to_dict(self) -> dict[str, float | int]:
-        return asdict(self)
+        return self.model_dump()
 
 
 def compute_pref_summary(prefs: pd.Series) -> PrefSummary:
@@ -46,25 +44,39 @@ def compute_pref_summary(prefs: pd.Series) -> PrefSummary:
     )
 
 
-class Report(ABC):
+class Report(BaseModel, abc.ABC):
     """A reportable result that renders, serializes (versioned), and saves itself."""
 
-    schema_version: ClassVar[str] = "1"
+    # protected_namespaces=() allows model_* field names (model_a, model_name)
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        populate_by_name=True,
+        protected_namespaces=(),
+    )
 
-    @abstractmethod
+    @computed_field
+    @property
+    def schema_version(self) -> str:
+        return "1"
+
+    @computed_field
+    @property
+    def report_type(self) -> str:
+        return type(self).__name__
+
+    @model_serializer(mode="wrap")
+    def _flatten_summary(self, handler) -> dict:
+        data = handler(self)
+        summary = data.pop("summary", None)
+        if isinstance(summary, dict):
+            data = {**summary, **data}
+        return data
+
+    @abc.abstractmethod
     def render(self) -> None: ...
 
-    @abstractmethod
-    def _payload(self) -> dict:
-        """Report-specific fields (everything except the schema envelope)."""
-        ...
-
     def to_dict(self) -> dict:
-        return {
-            "schema_version": self.schema_version,
-            "report_type": type(self).__name__,
-            **self._payload(),
-        }
+        return self.model_dump(by_alias=True, exclude_none=True)
 
     def save(self, path: str | Path) -> Path:
         from judgearena.repro import _to_jsonable  # lazy: avoid an import cycle
@@ -75,41 +87,20 @@ class Report(ABC):
         return p
 
 
-@dataclass
 class BattleReport(Report):
     """Pairwise battle results for the arena and MT-Bench pipelines."""
 
     task: str
-    model_a: str
-    model_b: str
+    model_a: str = Field(serialization_alias="model_A")
+    model_b: str = Field(serialization_alias="model_B")
     judge_model: str
     summary: PrefSummary
     swap_mode: str | None = None
     result_folder: str | None = None
     per_category: dict | None = None
     per_turn: dict | None = None
-    preferences: list = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-
-    def _payload(self) -> dict:
-        out: dict = {
-            "task": self.task,
-            "model_A": self.model_a,
-            "model_B": self.model_b,
-            "judge_model": self.judge_model,
-            **self.summary.to_dict(),
-        }
-        if self.swap_mode is not None:
-            out["swap_mode"] = self.swap_mode
-        if self.result_folder is not None:
-            out["result_folder"] = self.result_folder
-        if self.per_category is not None:
-            out["per_category"] = self.per_category
-        if self.per_turn is not None:
-            out["per_turn"] = self.per_turn
-        out["metadata"] = self.metadata
-        out["preferences"] = self.preferences
-        return out
+    preferences: list = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
 
     def render(self) -> None:
         s = self.summary

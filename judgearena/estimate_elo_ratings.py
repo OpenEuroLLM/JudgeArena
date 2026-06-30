@@ -1,7 +1,6 @@
 import hashlib
 import json
 import re
-from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -183,7 +182,6 @@ def _slugify(value: str) -> str:
     return slug or "model"
 
 
-@dataclass
 class EloReport(Report):
     """Bradley-Terry / Soft-ELO ratings for one focal model against an arena."""
 
@@ -206,23 +204,6 @@ class EloReport(Report):
     bootstrap_ratings: list[dict[str, float]]
     sampling_metadata: dict[str, object]
     source_battle_counts: dict[str, int]
-
-    def _payload(self) -> dict:
-        return {
-            **self.summary.to_dict(),
-            "arena": self.arena,
-            "model_A": self.model_name,
-            "judge_model": self.judge_model,
-            "num_battles": self.num_battles,
-            "llm_judged_battles": self.llm_judged_battles,
-            "human_anchor_battles": self.human_anchor_battles,
-            "sampling_metadata": self.sampling_metadata,
-            "elo_mean": self.elo_mean,
-            "elo_std": self.elo_std,
-            "elo_num_bootstraps": self.elo_num_bootstraps,
-            "source_battle_counts": self.source_battle_counts,
-            "bootstrap_ratings": self.bootstrap_ratings,
-        }
 
     def render(self) -> None:
         s = self.summary
@@ -768,11 +749,5 @@ def main(cfg: "RunConfig") -> dict:
 
     return {
         **report.to_dict(),
-        "bootstrap_ratings": bootstrap_ratings,
-        "human_elo": human_elo,
-        "mae_vs_human": mae,
-        "model_name": model_name,
         "result_path": str(result_path),
-        "method": method_label,
-        "calibrated_temperature": calibrated_temperature,
     }

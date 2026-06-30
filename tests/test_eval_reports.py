@@ -186,4 +186,4 @@ def test_eloreport_to_dict_envelope():
     assert d["schema_version"] == "1"
     assert d["report_type"] == "EloReport"
     assert d["arena"] == "chatbot-arena"
-    assert d["model_A"] == "my-model"
+    assert d["model_name"] == "my-model"
