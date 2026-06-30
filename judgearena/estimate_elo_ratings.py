@@ -186,24 +186,41 @@ class EloReport(Report):
     """Bradley-Terry / Soft-ELO ratings for one focal model against an arena."""
 
     arena: str
+    """Arena/benchmark the focal model is rated against."""
     judge_model: str
+    """LLM judge that scored the battles."""
     summary: PrefSummary
+    """Win/loss/tie stats for the focal model's LLM-judged battles."""
     num_battles: int
+    """Total battles (LLM-judged + human-anchor)."""
     llm_judged_battles: int
+    """Battles the LLM judged for the focal model."""
     human_anchor_battles: int
+    """Human-annotated battles anchoring the other arena models."""
     elo_mean: float
+    """Focal model's mean ELO across bootstrap samples."""
     elo_std: float
-    elo_num_bootstraps: int
+    """Std of the focal model's ELO across bootstrap samples."""
+    elo_n_bootstraps: int
+    """Bootstrap samples that rated the focal model (≤ n_bootstraps); the n behind elo_mean/elo_std."""
     mae_vs_human: float
+    """Mean absolute error of estimated vs human ELO over overlapping models."""
     method: str
+    """Rating method label (e.g. "Soft-ELO")."""
     n_bootstraps: int
+    """Total bootstrap iterations run."""
     model_name: str
+    """Focal model under evaluation."""
     mean_ratings: dict[str, float]
+    """Per-model mean ELO across bootstraps."""
     battle_counts: dict[str, int]
+    """Per-model battle count."""
     human_elo: dict[str, float]
+    """Per-model human-derived ELO (anchors)."""
     bootstrap_ratings: list[dict[str, float]]
+    """One model→ELO dict per bootstrap sample."""
     sampling_metadata: dict[str, object]
-    source_battle_counts: dict[str, int]
+    """Instruction-sampling parameters for the run."""
 
     def render(self) -> None:
         s = self.summary
@@ -728,7 +745,7 @@ def main(cfg: "RunConfig") -> dict:
         human_anchor_battles=n_human,
         elo_mean=elo_mean,
         elo_std=elo_std,
-        elo_num_bootstraps=len(model_rating_values),
+        elo_n_bootstraps=len(model_rating_values),
         mae_vs_human=mae,
         method=method_label,
         n_bootstraps=n_bootstraps,
@@ -738,7 +755,6 @@ def main(cfg: "RunConfig") -> dict:
         human_elo=human_elo,
         bootstrap_ratings=bootstrap_ratings,
         sampling_metadata=sampling_metadata,
-        source_battle_counts=battle_counts,
     )
     report.render()
     result_path = report.save(

@@ -170,7 +170,7 @@ def test_eloreport_to_dict_envelope():
         human_anchor_battles=5,
         elo_mean=1000.0,
         elo_std=10.0,
-        elo_num_bootstraps=100,
+        elo_n_bootstraps=100,
         mae_vs_human=5.0,
         method="Soft-ELO",
         n_bootstraps=100,
@@ -180,7 +180,6 @@ def test_eloreport_to_dict_envelope():
         human_elo={"gpt4": 1100.0},
         bootstrap_ratings=[{"my-model": 1000.0}],
         sampling_metadata={"sampling_mode": "head"},
-        source_battle_counts={"my-model": 10},
     )
     d = report.to_dict()
     assert d["schema_version"] == "1"

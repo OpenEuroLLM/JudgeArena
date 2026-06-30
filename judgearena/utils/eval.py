@@ -52,6 +52,7 @@ class Report(BaseModel, abc.ABC):
         arbitrary_types_allowed=True,
         populate_by_name=True,
         protected_namespaces=(),
+        use_attribute_docstrings=True,
     )
 
     @computed_field
@@ -91,16 +92,27 @@ class BattleReport(Report):
     """Pairwise battle results for the arena and MT-Bench pipelines."""
 
     task: str
+    """Evaluation task name."""
     model_a: str = Field(serialization_alias="model_A")
+    """Model in the A position."""
     model_b: str = Field(serialization_alias="model_B")
+    """Model in the B position."""
     judge_model: str
+    """LLM judge that scored the battles."""
     summary: PrefSummary
+    """Win/loss/tie statistics (flattened to the top level on serialization)."""
     swap_mode: str | None = None
+    """Position-bias handling: "fixed" or "both"."""
     result_folder: str | None = None
+    """Directory the run's artifacts were written to."""
     per_category: dict | None = None
+    """Per-category win/loss/tie breakdown (MT-Bench)."""
     per_turn: dict | None = None
+    """Per-turn win/loss/tie breakdown (MT-Bench)."""
     preferences: list = Field(default_factory=list)
+    """Raw per-battle preference values (0=A, 0.5=tie, 1=B)."""
     metadata: dict = Field(default_factory=dict)
+    """Free-form run metadata (baseline assignment, prompt preset, ...)."""
 
     def render(self) -> None:
         s = self.summary
