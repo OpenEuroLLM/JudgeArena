@@ -13,6 +13,7 @@ from judgearena.arenas_utils import _extract_instruction_text, load_arena_datafr
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_instructions
+from judgearena.generate_and_evaluate import _build_generation_engine_kwargs
 from judgearena.log import get_logger
 from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
@@ -293,8 +294,10 @@ def main(args: CliEloArgs) -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", args.model)
 
-    # Only pass extra engine kwargs that are not None
-    extra_kwargs = dict(args.engine_kwargs)
+    # Mirror the benchmark generation path: inject the reasoning-token
+    # sub-budget for thinking models so the Elo battles use the same
+    # generation protocol as the rest of the benchmarks.
+    extra_kwargs = _build_generation_engine_kwargs(args, args.model)
     if args.max_model_len is not None:
         extra_kwargs["max_model_len"] = args.max_model_len
     if args.chat_template is not None:
@@ -400,6 +403,7 @@ def main(args: CliEloArgs) -> dict:
             completions_B=completions_B,
             swap_mode=args.swap_mode,
             provide_explanation=args.provide_explanation,
+            strip_thinking_before_judging=args.strip_thinking_before_judging,
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
             prompt_preset=resolved_prompt.preset_name,
@@ -419,7 +423,12 @@ def main(args: CliEloArgs) -> dict:
             }
         )
 
+    # Stripping reasoning traces changes the judged text but not the cached
+    # completions, so it must be part of the judge cache key. Only append when
+    # enabled so prior (non-stripped) runs keep their existing cache hashes.
     judge_cache_suffix = f"judge_{cache_suffix}"
+    if args.strip_thinking_before_judging:
+        judge_cache_suffix += "_stripthinking"
     df_judge = cache_function_dataframe(
         run_judge,
         ignore_cache=args.ignore_cache,

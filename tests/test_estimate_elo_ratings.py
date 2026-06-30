@@ -219,6 +219,121 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch):
     assert captured.get("swap_mode") == "both"
 
 
+def test_main_strip_thinking_forwarded_to_judge(monkeypatch):
+    """strip_thinking_before_judging from CliEloArgs must reach the judge.
+
+    Regression test: the Elo path previously ignored
+    --strip_thinking_before_judging, so reasoning traces were judged verbatim
+    even though the benchmark path stripped them.
+    """
+    captured = {}
+
+    def spy_judge(
+        judge_chat_model,
+        instructions,
+        completions_A,
+        completions_B,
+        swap_mode="fixed",
+        strip_thinking_before_judging=False,
+        **kwargs,
+    ):
+        captured["strip_thinking_before_judging"] = strip_thinking_before_judging
+        n = len(instructions)
+        dummy = JudgeAnnotation(
+            judge_completion="score A: 0 score B: 10",
+            instruction="",
+            completion_A="",
+            completion_B="",
+        )
+        return [dummy] * n, None, pd.Series([1.0] * n)
+
+    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
+    main(_default_args(strip_thinking_before_judging=True))
+    assert captured.get("strip_thinking_before_judging") is True
+
+
+def test_main_thinking_budget_injected_for_thinking_model(monkeypatch):
+    """A thinking battle model gets a reasoning sub-budget capped by max_out_tokens.
+
+    Regression test: the Elo path previously ignored
+    --battle_thinking_token_budget, so reasoning generation was unbounded.
+    """
+    captured = {}
+
+    def spy_generate(instructions, model, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(
+            {
+                "completion": [
+                    f"Synthetic completion {i}" for i in range(len(instructions))
+                ],
+                "instruction_index": range(len(instructions)),
+            }
+        )
+
+    monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", spy_generate)
+    main(
+        _default_args(
+            model="VLLM/Qwen/Qwen3.5-9B",
+            battle_thinking_token_budget=32768,
+            max_out_tokens_models=49152,
+        )
+    )
+    assert captured.get("thinking_token_budget") == 32768
+
+
+def test_main_thinking_budget_capped_by_max_out_tokens(monkeypatch):
+    """The reasoning sub-budget never exceeds max_out_tokens_models."""
+    captured = {}
+
+    def spy_generate(instructions, model, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(
+            {
+                "completion": [
+                    f"Synthetic completion {i}" for i in range(len(instructions))
+                ],
+                "instruction_index": range(len(instructions)),
+            }
+        )
+
+    monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", spy_generate)
+    main(
+        _default_args(
+            model="VLLM/Qwen/Qwen3.5-9B",
+            battle_thinking_token_budget=100000,
+            max_out_tokens_models=4096,
+        )
+    )
+    assert captured.get("thinking_token_budget") == 4096
+
+
+def test_main_thinking_budget_absent_for_nonthinking_model(monkeypatch):
+    """Non-thinking battle models never receive a thinking_token_budget."""
+    captured = {}
+
+    def spy_generate(instructions, model, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame(
+            {
+                "completion": [
+                    f"Synthetic completion {i}" for i in range(len(instructions))
+                ],
+                "instruction_index": range(len(instructions)),
+            }
+        )
+
+    monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", spy_generate)
+    main(
+        _default_args(
+            model="VLLM/allenai/Olmo-3-7B-Instruct",
+            battle_thinking_token_budget=32768,
+            max_out_tokens_models=49152,
+        )
+    )
+    assert "thinking_token_budget" not in captured
+
+
 def test_judge_and_parse_prefs_none_prefs_swap_mode_both():
     """swap_mode='both' must not raise when judge output is unparseable (None prefs).
 

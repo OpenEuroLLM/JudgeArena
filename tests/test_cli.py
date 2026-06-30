@@ -294,6 +294,45 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert elo_args.judge_user_prompt_file == "user.txt"
 
 
+def test_boolean_flags_accept_explicit_values(capture_mains):
+    """Slurmpilot serialises dict python_args as --key=value, so the boolean
+    flags must accept --flag=True/False (not only bare store_true switches)."""
+    cli_module.cli(
+        [
+            "--task",
+            "elo-lmarena-140k",
+            "--model_A",
+            "Dummy/X",
+            "--judge",
+            "Dummy/J",
+            "--provide_explanation=False",
+            "--strip_thinking_before_judging=True",
+        ]
+    )
+    elo_args: CliEloArgs = capture_mains["args"]
+    assert elo_args.provide_explanation is False
+    assert elo_args.strip_thinking_before_judging is True
+
+
+def test_boolean_flags_work_as_bare_switches(capture_mains):
+    """Interactive bare-flag usage stays True (const) for backward compatibility."""
+    cli_module.cli(
+        [
+            "--task",
+            "elo-lmarena-140k",
+            "--model_A",
+            "Dummy/X",
+            "--judge",
+            "Dummy/J",
+            "--provide_explanation",
+            "--strip_thinking_before_judging",
+        ]
+    )
+    elo_args: CliEloArgs = capture_mains["args"]
+    assert elo_args.provide_explanation is True
+    assert elo_args.strip_thinking_before_judging is True
+
+
 def test_engine_kwargs_parsed_as_json(capture_mains):
     cli_module.cli(
         [

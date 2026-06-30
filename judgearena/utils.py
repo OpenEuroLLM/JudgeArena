@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import time
@@ -165,6 +166,13 @@ def _is_retryable_error(e: Exception) -> bool:
     # langchain-openai raises ValueError(response_dict.get("error")) where the
     # error value is a dict like {'message': '...', 'code': 408}
     _RETRYABLE_CODES = {408, 429, 502, 503, 504}
+    # A gateway/proxy that returns a non-JSON body (an HTML 5xx page, an empty
+    # body, or a truncated/streamed chunk) makes the HTTP client raise
+    # JSONDecodeError while parsing the response. These are transient and safe
+    # to retry. JSONDecodeError subclasses ValueError but carries a string arg,
+    # so it must be matched before the dict-arg branch below.
+    if isinstance(e, json.JSONDecodeError):
+        return True
     if isinstance(e, ValueError) and e.args:
         arg = e.args[0]
         if isinstance(arg, dict) and arg.get("code") in _RETRYABLE_CODES:
@@ -174,6 +182,8 @@ def _is_retryable_error(e: Exception) -> bool:
     return (
         any(str(code) in error_str for code in _RETRYABLE_CODES)
         or "rate" in error_str.lower()
+        or "Expecting value" in error_str
+        or "JSONDecodeError" in error_str
     )
 
 

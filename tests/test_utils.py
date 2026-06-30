@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench_mod
@@ -25,6 +27,32 @@ def test_safe_parse_int(monkeypatch, raw, expected):
     else:
         monkeypatch.setenv(var, raw)
     assert safe_parse_int(var) == expected
+
+
+def test_is_retryable_error_retries_jsondecodeerror():
+    err = json.JSONDecodeError("Expecting value", "<html>503</html>", 0)
+    assert utils._is_retryable_error(err) is True
+
+
+def test_is_retryable_error_retries_jsondecodeerror_by_message():
+    # Wrapped/re-raised variants may surface only via the string representation.
+    assert (
+        utils._is_retryable_error(
+            Exception("Expecting value: line 739 column 1 (char 4059)")
+        )
+        is True
+    )
+
+
+def test_is_retryable_error_retries_transient_http_codes():
+    assert utils._is_retryable_error(Exception("HTTP 503 Service Unavailable")) is True
+    assert (
+        utils._is_retryable_error(ValueError({"message": "slow", "code": 429})) is True
+    )
+
+
+def test_is_retryable_error_does_not_retry_auth_failure():
+    assert utils._is_retryable_error(Exception("401 User not found.")) is False
 
 
 def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):

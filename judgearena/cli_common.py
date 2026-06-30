@@ -13,6 +13,26 @@ from dataclasses import dataclass, field
 
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 
+_TRUE_TOKENS = {"true", "t", "yes", "y", "1"}
+_FALSE_TOKENS = {"false", "f", "no", "n", "0"}
+
+
+def str2bool(value: str | bool) -> bool:
+    """Parse a CLI boolean supplied either as a bare flag or an explicit value.
+
+    Slurmpilot serialises ``python_args`` dicts as ``--key=value``, so boolean
+    flags reach the CLI as ``--flag=True`` / ``--flag=False`` instead of bare
+    switches. Accept both forms so launcher-driven and interactive use agree.
+    """
+    if isinstance(value, bool):
+        return value
+    normalized = value.strip().lower()
+    if normalized in _TRUE_TOKENS:
+        return True
+    if normalized in _FALSE_TOKENS:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got {value!r}.")
+
 
 @dataclass
 class BaseCliArgs:
@@ -71,12 +91,16 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--provide_explanation",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
         help=(
             "Equivalent to --judge_prompt_preset default_with_explanation. "
             "If specified, judge will provide explanation before making a "
             "judgement. Does not necessarily improve the accuracy of the judge "
-            "but enables some result interpretation."
+            "but enables some result interpretation. Accepts a bare flag or an "
+            "explicit --provide_explanation=true/false value."
         ),
     )
     parser.add_argument(
@@ -136,10 +160,14 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--strip_thinking_before_judging",
-        action="store_true",
+        nargs="?",
+        const=True,
+        default=False,
+        type=str2bool,
         help=(
             "If specified, strip visible reasoning traces from model completions "
-            "before sending them to the judge."
+            "before sending them to the judge. Accepts a bare flag or an "
+            "explicit --strip_thinking_before_judging=true/false value."
         ),
     )
     parser.add_argument(
