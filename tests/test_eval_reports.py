@@ -163,7 +163,6 @@ def test_eloreport_to_dict_envelope():
 
     report = EloReport(
         arena="chatbot-arena",
-        model_a="my-model",
         judge_model="judge",
         summary=_summary(),
         num_battles=10,
@@ -174,7 +173,6 @@ def test_eloreport_to_dict_envelope():
         elo_num_bootstraps=100,
         mae_vs_human=5.0,
         method="Soft-ELO",
-        calibrated_temperature=0.3,
         n_bootstraps=100,
         model_name="my-model",
         mean_ratings={"my-model": 1000.0},

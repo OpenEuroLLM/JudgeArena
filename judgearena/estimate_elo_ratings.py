@@ -21,7 +21,6 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import make_model
-from judgearena.repro import _to_jsonable
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
 
@@ -189,7 +188,6 @@ class EloReport(Report):
     """Bradley-Terry / Soft-ELO ratings for one focal model against an arena."""
 
     arena: str
-    model_a: str
     judge_model: str
     summary: PrefSummary
     num_battles: int
@@ -200,7 +198,6 @@ class EloReport(Report):
     elo_num_bootstraps: int
     mae_vs_human: float
     method: str
-    calibrated_temperature: float
     n_bootstraps: int
     model_name: str
     mean_ratings: dict[str, float]
@@ -214,7 +211,7 @@ class EloReport(Report):
         return {
             **self.summary.to_dict(),
             "arena": self.arena,
-            "model_A": self.model_a,
+            "model_A": self.model_name,
             "judge_model": self.judge_model,
             "num_battles": self.num_battles,
             "llm_judged_battles": self.llm_judged_battles,
@@ -224,21 +221,8 @@ class EloReport(Report):
             "elo_std": self.elo_std,
             "elo_num_bootstraps": self.elo_num_bootstraps,
             "source_battle_counts": self.source_battle_counts,
-        }
-
-    def save(self, result_folder: str | Path) -> Path:
-        output_dir = (
-            Path(result_folder)
-            / f"elo-{_slugify(self.arena)}-{_slugify(self.model_name)}"
-        )
-        output_dir.mkdir(parents=True, exist_ok=True)
-        path = output_dir / f"results-{_slugify(self.model_name)}.json"
-        payload = {
-            "summary": self.to_dict(),
             "bootstrap_ratings": self.bootstrap_ratings,
         }
-        path.write_text(json.dumps(_to_jsonable(payload), indent=2) + "\n")
-        return path
 
     def render(self) -> None:
         s = self.summary
@@ -756,7 +740,6 @@ def main(cfg: "RunConfig") -> dict:
 
     report = EloReport(
         arena=cfg.elo.arena,
-        model_a=model_name,
         judge_model=cfg.judge.model,
         summary=summary,
         num_battles=n,
@@ -767,7 +750,6 @@ def main(cfg: "RunConfig") -> dict:
         elo_num_bootstraps=len(model_rating_values),
         mae_vs_human=mae,
         method=method_label,
-        calibrated_temperature=calibrated_temperature,
         n_bootstraps=n_bootstraps,
         model_name=model_name,
         mean_ratings=mean_ratings,
@@ -778,7 +760,11 @@ def main(cfg: "RunConfig") -> dict:
         source_battle_counts=battle_counts,
     )
     report.render()
-    result_path = report.save(cfg.run.result_folder)
+    result_path = report.save(
+        Path(cfg.run.result_folder)
+        / f"elo-{_slugify(cfg.elo.arena)}-{_slugify(model_name)}"
+        / f"results-{_slugify(model_name)}.json"
+    )
 
     return {
         **report.to_dict(),
