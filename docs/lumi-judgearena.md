@@ -78,7 +78,7 @@ Set the offline/runtime flags per run rather than baking them in:
 ```bash
 srun --account=project_465002530 --partition=dev-g --gpus=1 --time=01:00:00 \
   singularity exec \
-    --env HF_HUB_OFFLINE=1,VLLM_ENABLE_V1_MULTIPROCESSING=0 \
+    --env HF_HUB_OFFLINE=1 \
     "$SIF" "$VENV/bin/judgearena" --config_path "$REPO/configs/<run>.yaml"
 ```
 
