@@ -82,7 +82,7 @@ srun --account=project_465002530 --partition=dev-g --gpus=1 --time=01:00:00 \
     "$SIF" "$VENV/bin/judgearena" --config_path "$REPO/configs/<run>.yaml"
 ```
 
-`HF_HUB_OFFLINE=1` is required because compute nodes are offline. `VLLM_ENABLE_V1_MULTIPROCESSING=0` avoids a ZMQ engine-IPC crash on this stack.
+`HF_HUB_OFFLINE=1` is required because compute nodes are offline.
 
 ## Gotchas
 
