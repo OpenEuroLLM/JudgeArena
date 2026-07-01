@@ -198,6 +198,11 @@ class PanelArgs(BaseModel):
     n_per_language: int = 100
     """Cap kept battles per language."""
 
+    balanced_per_model: bool = False
+    """If set, sample per-language battles to keep each model's battle count as
+    equal as possible (instead of uniform sampling). Use for balanced panels
+    where every roster model should get a similar number of battles per language."""
+
     panel_dir: str = "panels"
     """Directory the frozen panel is read from (scoring) and written to (curation)."""
 

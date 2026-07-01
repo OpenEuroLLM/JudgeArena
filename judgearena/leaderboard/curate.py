@@ -87,6 +87,41 @@ def _battle_id(question_id: str, model_a: str, model_b: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _balanced_sample(
+    group: pd.DataFrame, n: int, rng: np.random.Generator
+) -> pd.DataFrame:
+    """Sample ``n`` battles keeping each model's battle count as equal as possible.
+
+    Fills battles under a per-model cap (~2n/|models|), relaxing the cap when
+    none more fit, so every model lands near the target and none is starved.
+    """
+    if len(group) <= n:
+        return group.reset_index(drop=True)
+    group = group.reset_index(drop=True)
+    a = group["model_a"].to_numpy()
+    b = group["model_b"].to_numpy()
+    cap = max(1, round(2 * n / len(set(a) | set(b))))
+    counts: dict[str, int] = {}
+    order = rng.permutation(len(group))
+    taken = np.zeros(len(group), dtype=bool)
+    chosen: list[int] = []
+    while len(chosen) < n:
+        progressed = False
+        for i in order:
+            if len(chosen) >= n:
+                break
+            if taken[i] or counts.get(a[i], 0) >= cap or counts.get(b[i], 0) >= cap:
+                continue
+            counts[a[i]] = counts.get(a[i], 0) + 1
+            counts[b[i]] = counts.get(b[i], 0) + 1
+            taken[i] = True
+            chosen.append(int(i))
+            progressed = True
+        if not progressed:
+            cap += 1
+    return group.iloc[chosen].reset_index(drop=True)
+
+
 def build_panel(
     panel_args: PanelArgs,
     elo_args: EloArgs,
@@ -116,7 +151,9 @@ def build_panel(
 
     for lang in sorted(df["lang"].unique()):
         group = df[df["lang"] == lang]
-        if len(group) > panel_args.n_per_language:
+        if panel_args.balanced_per_model:
+            group = _balanced_sample(group, panel_args.n_per_language, rng)
+        elif len(group) > panel_args.n_per_language:
             group = group.sample(
                 n=panel_args.n_per_language, random_state=int(rng.integers(0, RNG_SEED_MAX))
             )
