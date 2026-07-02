@@ -74,6 +74,9 @@ def main_submit(argv: list[str] | None = None) -> Path:
     ap.add_argument("--engine-kwargs", default=None,
                     help="JSON dict of vLLM engine kwargs for the generation model, "
                          'e.g. \'{"enforce_eager": true, "gpu_memory_utilization": 0.9}\'.')
+    ap.add_argument("--truncate-input-chars", type=int, default=None,
+                    help="Override input truncation (chars) for the generation model; "
+                         "lower it for short-context models (e.g. 3000 for a 4096-token model).")
     args = ap.parse_args(argv)
 
     engine_kwargs = json.loads(args.engine_kwargs) if args.engine_kwargs else {}
@@ -89,6 +92,11 @@ def main_submit(argv: list[str] | None = None) -> Path:
     panel, pool_completions = load_pool(panel_dir)
 
     gen = panel.meta.get("generation_params", {})
+    truncate_chars = (
+        args.truncate_input_chars
+        if args.truncate_input_chars is not None
+        else gen.get("truncate_all_input_chars", 8192)
+    )
     if args.completions_in is not None:
         new_completions = pd.read_parquet(args.completions_in)
         logger.info(
@@ -103,7 +111,7 @@ def main_submit(argv: list[str] | None = None) -> Path:
             args.model,
             instructions=subset["instruction"],
             max_out_tokens=gen.get("max_out_tokens", 32768),
-            truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
+            truncate_all_input_chars=truncate_chars,
             **engine_kwargs,
         )
         new_completions = pd.DataFrame({
@@ -117,7 +125,7 @@ def main_submit(argv: list[str] | None = None) -> Path:
             panel,
             args.model,
             max_out_tokens=gen.get("max_out_tokens", 32768),
-            truncate_all_input_chars=gen.get("truncate_all_input_chars", 8192),
+            truncate_all_input_chars=truncate_chars,
             **engine_kwargs,
         )
         # generate_panel_completions returns one completion per battle row (in order);
