@@ -118,7 +118,7 @@ def _is_retryable_error(e: Exception) -> bool:
     """
     # langchain-openai raises ValueError(response_dict.get("error")) where the
     # error value is a dict like {'message': '...', 'code': 408}
-    _RETRYABLE_CODES = {408, 429, 502, 503, 504}
+    _RETRYABLE_CODES = {408, 429, 500, 502, 503, 504}
     # A provider hiccup (rate-limit page, truncated/HTML body) makes langchain
     # fail to parse the HTTP response as JSON. Treat that as transient.
     if isinstance(e, json.JSONDecodeError):
