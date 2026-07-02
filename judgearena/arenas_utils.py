@@ -22,13 +22,14 @@ def _extract_instruction_text(turn: dict) -> str:
     return " ".join(block["text"] for block in content if block.get("type") == "text")
 
 
-KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
+BASE_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
+KNOWN_ARENAS = BASE_ARENAS + ["LMArena+ComparIA"]
 
 
 def _load_arena_dataframe(
     arena: str, comparia_revision: str | None = None
 ) -> pd.DataFrame:
-    assert arena in KNOWN_ARENAS
+    assert arena in BASE_ARENAS
     if arena == "LMArena-55k":
         path = snapshot_download(
             repo_id="lmarena-ai/arena-human-preference-55k",
@@ -182,8 +183,8 @@ def load_arena_dataframe(
     :param comparia_revision: pinned revision for the ComparIA dataset.
     :return: dataframe containing battles for the arena(s) selected.
     """
-    if arena is None:
-        arenas = KNOWN_ARENAS
+    if arena is None or arena == "LMArena+ComparIA":
+        arenas = BASE_ARENAS
     elif arena == "LMArena":
         arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
@@ -197,7 +198,7 @@ def load_arena_dataframe(
 def main():
     for arena in KNOWN_ARENAS:
         logger.info("Loading %s", arena)
-        df = _load_arena_dataframe(arena)
+        df = load_arena_dataframe(arena)
         n_battles = len(df)
         n_models = len(set(df["model_a"]) | set(df["model_b"]))
         n_languages = df["lang"].nunique()
