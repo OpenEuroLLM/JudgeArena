@@ -1,0 +1,54 @@
+elo:
+  arena: LMArena-140k
+  # 18-language block: every roster model has >=10 battles in every language
+  languages: [en, ru, zh, es, ko, ja, de, fr, pl, it, pt, fa, vi, tr, cs, ar, uk, id]
+  baseline_model: gpt-4.1-2025-04-14
+  method: calibrated_soft
+
+panel:
+  panel_version: lmarena-multi-v2
+  panel_dir: /scratch/project_465002530/users/kargibora/panels
+  n_per_language: 200
+  balanced_per_model: true      # equal battles per model per language (not uniform)
+  kappa_threshold: 0.0
+  roster_models:                # the 31-model block (>=10 samples in all 18 languages)
+    - amazon.nova-pro-v1:0
+    - chatgpt-4o-latest-20250326
+    - claude-3-5-haiku-20241022
+    - claude-3-5-sonnet-20241022
+    - claude-3-7-sonnet-20250219
+    - claude-3-7-sonnet-20250219-thinking-32k
+    - claude-opus-4-20250514
+    - claude-opus-4-20250514-thinking-16k
+    - claude-sonnet-4-20250514
+    - claude-sonnet-4-20250514-thinking-32k
+    - command-a-03-2025
+    - deepseek-r1-0528
+    - gemini-2.0-flash-001
+    - gemini-2.5-flash
+    - gemini-2.5-flash-lite-preview-06-17-thinking
+    - gemini-2.5-flash-preview-04-17
+    - gemini-2.5-pro
+    - gemma-3-27b-it
+    - gpt-4.1-2025-04-14
+    - gpt-4.1-mini-2025-04-14
+    - grok-3-mini-beta
+    - grok-3-preview-02-24
+    - llama-3.3-70b-instruct
+    - llama-4-maverick-03-26-experimental
+    - llama-4-maverick-17b-128e-instruct
+    - mistral-medium-2505
+    - o3-2025-04-16
+    - o4-mini-2025-04-16
+    - qwen3-235b-a22b
+    - qwen3-235b-a22b-no-thinking
+    - qwen3-30b-a3b
+
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  prompt_preset: criteria       # built-in default.yaml criteria (unset criteria_file = built-in)
+  swap_mode: fixed
+
+run:
+  seed: 0
+  dataset_repo: kbora/judgearena-leaderboard   # curation uploads panel/<version> here (login node has internet)

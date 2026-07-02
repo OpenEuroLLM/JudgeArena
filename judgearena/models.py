@@ -209,6 +209,7 @@ class ChatVLLM:
         disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
         thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
         explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
+        truncate_prompt_tokens = vllm_kwargs.pop("truncate_prompt_tokens", None)
         explicit_reasoning_settings = (
             "reasoning_parser" in vllm_kwargs or "reasoning_config" in vllm_kwargs
         )
@@ -247,6 +248,12 @@ class ChatVLLM:
             "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
             "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
         }
+        if truncate_prompt_tokens is not None:
+            # Token-level prompt truncation so long inputs never overflow a
+            # short context window (char-based truncation can't bound tokens).
+            self._sampling_params_kwargs["truncate_prompt_tokens"] = int(
+                truncate_prompt_tokens
+            )
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
