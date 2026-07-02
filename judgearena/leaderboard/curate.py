@@ -33,7 +33,7 @@ from judgearena.leaderboard.kappa import language_kappa
 from judgearena.leaderboard.panel import PANEL_BATTLE_COLUMNS, Panel
 from judgearena.leaderboard.pool import completions_from_battles, save_pool
 from judgearena.log import get_logger
-from judgearena.models import make_model
+from judgearena.models import ChatVLLM, make_model
 
 logger = get_logger(__name__)
 
@@ -174,6 +174,7 @@ def build_panel(
             user_prompt_template=resolved.user_prompt_template,
             prompt_preset=resolved.preset_name,
             score_parser=static_scorer,
+            use_tqdm=not isinstance(judge_model, ChatVLLM),
         )
         prefs = pd.Series(prefs).reset_index(drop=True)
         # Hard labels are temperature-independent; the κ gate runs before calibration.
