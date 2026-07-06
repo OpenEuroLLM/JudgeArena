@@ -1,12 +1,8 @@
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.utils import (
-    do_inference,
-    make_model,
-    strip_thinking_tags,
-    truncate,
-)
+from judgearena.models import do_inference, make_model
+from judgearena.utils import strip_thinking_tags, truncate
 
 
 def generate_instructions(

@@ -3,7 +3,6 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,18 +29,22 @@ from judgearena.log import (
     get_logger,
     make_run_log_path,
 )
-from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import _to_jsonable, write_run_metadata
-from judgearena.utils import (
+from judgearena.models import (
     build_default_judge_model_kwargs,
+    is_thinking_model,
+    make_model,
+)
+from judgearena.mt_bench.mt_bench_utils import run_mt_bench
+from judgearena.repro import write_run_metadata
+from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
-    is_thinking_model,
-    make_model,
+    generation_cache_token,
     read_df,
 )
+from judgearena.utils.eval import BattleReport
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -188,61 +191,33 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
 
 
-def _build_generation_engine_kwargs(
-    cfg: "RunConfig", model_spec: str
+def _build_generation_kwargs(
+    cfg: "RunConfig", model_spec: str, *, role: str
 ) -> dict[str, object]:
-    """Battle-model engine kwargs, adding a thinking-token sub-budget when requested."""
-    generation_engine_kwargs = dict(cfg.model.engine_kwargs)
+    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
+    if role == "A":
+        generation_kwargs = cfg.model.evaluated_generation_kwargs()
+    elif role == "B":
+        generation_kwargs = cfg.model.baseline_generation_kwargs()
+    else:
+        raise ValueError(f"Unknown generation role: {role!r}")
     provider, _, model_name = model_spec.partition("/")
     if (
         cfg.judge.battle_thinking_token_budget is not None
         and provider == "VLLM"
         and is_thinking_model(model_name)
     ):
-        generation_engine_kwargs["thinking_token_budget"] = min(
+        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
+        generation_kwargs["thinking_token_budget"] = min(
             int(cfg.judge.battle_thinking_token_budget),
-            int(cfg.model.max_out_tokens),
+            max_tokens,
         )
-    return generation_engine_kwargs
+    return generation_kwargs
 
 
 def load_contexts(dataset: str) -> pd.Series:
     path = data_root / "contexts" / dataset
     return pd.read_csv(path).loc[:, "instruction"]
-
-
-def print_results(results):
-    """Print battle results in a nice formatted way"""
-
-    print("\n" + "=" * 60)
-    print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Task: {results['task']}")
-    print(
-        f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
-    )
-    print(f"⚖️ Judge: {results['judge_model']}")
-    print("📈 Results Summary:")
-    num_battles = results["num_battles"]
-    num_missing = results.get("num_missing", 0)
-    swap_mode = results.get("swap_mode", "fixed")
-    if num_missing > 0:
-        parsed = num_battles - num_missing
-        print(
-            f"   Total Battles: {num_battles}  ⚠️  {num_missing} unparseable (parsed: {parsed}/{num_battles})"
-        )
-    elif swap_mode == "both":
-        print(
-            f"   Total Battles: {num_battles} (2×{num_battles // 2} — each instruction judged in both orders to detect positional bias)"
-        )
-    else:
-        print(f"   Total Battles: {num_battles}")
-    print(f"   Win Rate (A): {results['winrate']:.1%}")
-    print(f"   ✅ Wins:   {results['num_wins']}")
-    print(f"   ❌ Losses: {results['num_losses']}")
-    print(f"   🤝 Ties:   {results['num_ties']}")
-    if results.get("result_folder"):
-        print(f"📁 Results: {results['result_folder']}")
-    print("=" * 60 + "\n")
 
 
 def main(cfg: "RunConfig"):
@@ -338,40 +313,49 @@ def main(cfg: "RunConfig"):
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
     generation_function = generate_base if is_fluency_task else generate_instructions
 
-    def _run_generation(model_spec: str) -> pd.DataFrame:
+    def _run_generation(
+        model_spec: str, *, generation_kwargs: dict[str, object]
+    ) -> pd.DataFrame:
         return generation_function(
             instructions=instructions,
             model=model_spec,
             truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            max_tokens=cfg.model.max_out_tokens,
-            max_model_len=cfg.model.max_model_len,
-            chat_template=cfg.model.chat_template,
             use_tqdm=cfg.run.use_tqdm,
-            **_build_generation_engine_kwargs(cfg, model_spec),
+            **generation_kwargs,
         )
 
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str) -> pd.Series:
+    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
         preloaded = try_load_dataset_completions(cfg.task, model_spec, n_instructions)
         if preloaded is not None:
             return _align_completion_series(preloaded)
+        # Fold the resolved generation kwargs into the cache key so that changing
+        # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
+        # the cached completions instead of silently reusing a stale run.
+        generation_kwargs = _build_generation_kwargs(cfg, model_spec, role=role)
+        sampling_token = generation_cache_token(generation_kwargs)
         generated = cache_function_dataframe(
-            lambda: _run_generation(model_spec),
+            lambda: _run_generation(model_spec, generation_kwargs=generation_kwargs),
             ignore_cache=ignore_cache,
-            cache_name=f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}",
+            cache_name=(
+                f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}_"
+                f"{sampling_token}"
+            ),
         )
         return _align_completion_series(generated)
 
-    completions_A = _load_or_generate_completions(cfg.model.name)
+    completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
     if baseline_plan.is_flat:
-        completions_B = _load_or_generate_completions(baseline_plan.single_model)
+        completions_B = _load_or_generate_completions(
+            baseline_plan.single_model, role="B"
+        )
     else:
         per_baseline_completions = {
-            model: _load_or_generate_completions(model)
+            model: _load_or_generate_completions(model, role="B")
             for model in baseline_plan.unique_models
         }
         completions_B = pd.Series(
@@ -394,13 +378,12 @@ def main(cfg: "RunConfig"):
 
     judge_chat_model = make_model(
         model=cfg.judge.model,
-        max_tokens=cfg.judge.max_out_tokens,
-        max_model_len=cfg.judge.max_model_len,
-        chat_template=cfg.model.chat_template,
         **build_default_judge_model_kwargs(
             cfg.judge.model,
             cfg.model.engine_kwargs,
-            judge_engine_kwargs_override=cfg.judge.engine_kwargs,
+            judge_engine_kwargs_override=cfg.judge.model_kwargs(
+                fallback_chat_template=cfg.model.chat_template,
+            ),
         ),
     )
 
@@ -449,31 +432,32 @@ def main(cfg: "RunConfig"):
     # compute and report statistics
     summary = compute_pref_summary(prefs)
 
-    results = {
-        "task": cfg.task,
-        "model_A": cfg.model.name,
-        "model_B": baseline_plan.display_name,
-        "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
-        "baseline_models": baseline_plan.unique_models,
-        "judge_model": cfg.judge.model,
-        **resolved_prompt.metadata(),
-        "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
-        "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
-        "swap_mode": cfg.judge.swap_mode,
-        "result_folder": str(res_folder),
-        **summary,
-        "preferences": prefs.tolist(),
-    }
+    report = BattleReport(
+        task=cfg.task,
+        model_a=cfg.model.name,
+        model_b=baseline_plan.display_name,
+        judge_model=cfg.judge.model,
+        summary=summary,
+        swap_mode=cfg.judge.swap_mode,
+        result_folder=str(res_folder),
+        preferences=prefs.tolist(),
+        metadata={
+            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_models": baseline_plan.unique_models,
+            **resolved_prompt.metadata(),
+            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
+            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+        },
+    )
+    results = report.to_dict()
     logger.info(
         "%s vs %s judged by %s",
         cfg.model.name,
         baseline_plan.display_name,
         cfg.judge.model,
     )
-    print_results(results)
-
-    with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
+    report.render()
+    report.save(res_folder / f"results-{name}.json")
 
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()

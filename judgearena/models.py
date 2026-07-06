@@ -1,47 +1,40 @@
+"""Model/inference layer: provider wrappers, the vLLM engine, and batched inference."""
+
+from __future__ import annotations
+
 import asyncio
+import json
 import os
-import re
 import time
 import warnings
-from collections.abc import Callable
-from pathlib import Path
 
-import pandas as pd
-from huggingface_hub import snapshot_download
-from langchain_community.cache import SQLiteCache
 from langchain_community.llms import LlamaCpp
-from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.dataset_revisions import hf_revision
-from judgearena.instruction_dataset.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
+from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
 from judgearena.log import get_logger
-
-# ``data_root``, ``download_hf`` and ``read_df`` live in the leaf
-# :mod:`judgearena.paths` module so that ``judgearena.instruction_dataset`` can
-# import them without going through ``judgearena.utils``.  We re-export them
-# here so existing callers that do ``from judgearena.utils import data_root``
-# (or ``download_hf`` / ``read_df``) keep working.
-from judgearena.paths import data_root, download_hf, read_df
+from judgearena.utils.io import safe_parse_int
 
 logger = get_logger(__name__)
 
-__all__ = ["data_root", "download_hf", "read_df"]
 
 DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
-VLLM_REASONING_START_STR = "<think>"
-VLLM_REASONING_END_STR = (
-    "I have to give the solution based on the thinking directly now.</think>"
-)
 _THINKING_MODEL_PARSER_BY_SUBSTRING = (
     ("qwen3", "qwen3"),
     ("smollm3", "qwen3"),
     ("olmo-3-7b-think", "olmo3"),
+)
+
+_VLLM_INIT_RETRY_SIGNATURES = (
+    "cudaErrorDevicesUnavailable",
+    "CUDA-capable device(s) is/are busy or unavailable",
+    "CUDA error: initialization error",
+)
+_VLLM_INIT_MAX_ATTEMPTS = safe_parse_int("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS") or 4
+_VLLM_INIT_BACKOFF_SECONDS = (
+    safe_parse_int("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS") or 20
 )
 
 
@@ -110,36 +103,13 @@ def _resolve_chat_template_kwargs(
     return chat_template_kwargs or None
 
 
-def set_langchain_cache():
-    set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
-
-
-def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
-    """Compute win/loss/tie stats for preference series (0=A, 0.5=tie, 1=B)."""
-    prefs = pd.Series(prefs, dtype="float64")
-    valid = prefs.dropna()
-    num_wins = int((valid < 0.5).sum())
-    num_losses = int((valid > 0.5).sum())
-    num_ties = int((valid == 0.5).sum())
-    num_battles = int(len(prefs))
-    denom = num_wins + num_losses + num_ties
-    winrate = float((num_wins + 0.5 * num_ties) / denom) if denom > 0 else float("nan")
-    return {
-        "num_battles": num_battles,
-        "winrate": winrate,
-        "num_wins": num_wins,
-        "num_losses": num_losses,
-        "num_ties": num_ties,
-        "num_missing": int(num_battles - denom),
-    }
-
-
 def _is_retryable_error(e: Exception) -> bool:
     """Return True if the exception is a transient server error that should be retried.
 
-    Handles two formats:
+    Handles three formats:
     - String representation contains the HTTP code (most providers)
     - ValueError raised by langchain-openai with a dict arg: {'message': ..., 'code': 429}
+    - json.JSONDecodeError when a gateway returns a non-JSON (e.g. HTML) body
     """
     # langchain-openai raises ValueError(response_dict.get("error")) where the
     # error value is a dict like {'message': '...', 'code': 408}
@@ -149,210 +119,20 @@ def _is_retryable_error(e: Exception) -> bool:
         if isinstance(arg, dict) and arg.get("code") in _RETRYABLE_CODES:
             return True
 
+    # Gateways (e.g. OpenRouter) intermittently return non-JSON error bodies that
+    # surface as JSONDecodeError while parsing the response. These are transient
+    # and safe to retry. JSONDecodeError subclasses ValueError but carries a
+    # string arg, so it bypasses the dict-code check above.
+    if isinstance(e, json.JSONDecodeError):
+        return True
+
     error_str = str(e)
     return (
         any(str(code) in error_str for code in _RETRYABLE_CODES)
         or "rate" in error_str.lower()
+        or "Expecting value" in error_str
+        or "JSONDecodeError" in error_str
     )
-
-
-def truncate(s: str, max_len: int | None = None) -> str:
-    """Truncate a string to *max_len* characters.
-
-    Non-string inputs (e.g. ``None`` or ``float('nan')``) are coerced to the
-    empty string so that callers don't have to guard against missing data.
-    """
-    if not isinstance(s, str):
-        return ""
-    if max_len is not None:
-        return s[:max_len]
-    return s
-
-
-def safe_text(value: object, truncate_chars: int | None) -> str:
-    """Coerce *value* to a string and optionally truncate.
-
-    Returns the empty string for ``None`` and NaN-like values so callers
-    don't have to guard against missing data.
-    """
-    if value is None:
-        return ""
-    is_missing = pd.isna(value)
-    if isinstance(is_missing, bool) and is_missing:
-        return ""
-    return truncate(str(value), max_len=truncate_chars)
-
-
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
-
-
-def strip_thinking_tags(text: str | None) -> str:
-    """Remove full `<think>...</think>` blocks from raw model output."""
-    return strip_thinking_tags_with_metadata(text)[0]
-
-
-def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
-    """Remove visible reasoning spans from raw model output."""
-    if not isinstance(text, str):
-        return "", False
-
-    cleaned = _THINK_BLOCK_RE.sub("", text)
-    if cleaned != text:
-        return cleaned.lstrip(), True
-
-    lowered = text.lower()
-    closing_tag = "</think>"
-    closing_idx = lowered.find(closing_tag)
-    if closing_idx != -1 and "<think>" not in lowered[:closing_idx]:
-        return text[closing_idx + len(closing_tag) :].lstrip(), True
-
-    forced_end_idx = text.find(VLLM_REASONING_END_STR)
-    if forced_end_idx != -1:
-        return (
-            text[forced_end_idx + len(VLLM_REASONING_END_STR) :].lstrip(),
-            True,
-        )
-
-    return text, False
-
-
-def safe_parse_int(env_var: str) -> int | None:
-    """Parse an integer environment variable by name.
-
-    Returns ``None`` when the variable is unset, blank, or malformed (a warning
-    is logged for malformed values) so callers can fall back to a default
-    instead of crashing at import time.
-    """
-    raw = os.getenv(env_var)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning("Ignoring malformed %s=%r; expected an integer.", env_var, raw)
-        return None
-
-
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
-    """Run inference over *inputs*, returning a list of text completions.
-
-    Retries on rate-limit/server errors with exponential backoff. The async
-    path (``use_tqdm=True``) retries individual calls; the batch path splits
-    into ``4**attempt`` chunks on failure.
-    """
-    invoke_kwargs = {
-        # "stop": ["```"],
-        # "max_tokens": 100,
-    }
-    if use_tqdm:
-        # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
-        # all requests are received
-        # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
-        # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
-        cap = safe_parse_int("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
-        cap = cap if cap and cap > 0 else None
-
-        async def process_with_real_progress(chat_model, inputs, pbar):
-            sem = asyncio.Semaphore(cap) if cap else None
-
-            async def process_single(input_item, max_retries=5, base_delay=1.0):
-                for attempt in range(max_retries):
-                    try:
-                        result = await chat_model.ainvoke(input_item, **invoke_kwargs)
-                        pbar.update(1)
-                        return result
-                    except Exception as e:
-                        if attempt == max_retries - 1 or not _is_retryable_error(e):
-                            raise
-                        delay = base_delay * (2**attempt)
-                        logger.warning(
-                            "Retry because of a server error, %d/%d: %s. Waiting %ss...",
-                            attempt + 1,
-                            max_retries,
-                            e,
-                            delay,
-                        )
-                        await asyncio.sleep(delay)
-
-            async def gated(inp):
-                if sem is None:
-                    return await process_single(inp)
-                async with sem:
-                    return await process_single(inp)
-
-            # asyncio.gather preserves order (unlike as_completed)
-            results = await asyncio.gather(*[gated(inp) for inp in inputs])
-            return results
-
-        with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
-            res = asyncio.run(
-                process_with_real_progress(
-                    chat_model=chat_model, inputs=inputs, pbar=pbar
-                )
-            )
-    else:
-
-        def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
-            for attempt in range(max_retries):
-                num_chunks = 4**attempt
-                chunk_size = max(1, len(batch_inputs) // num_chunks)
-                chunks = [
-                    batch_inputs[i : i + chunk_size]
-                    for i in range(0, len(batch_inputs), chunk_size)
-                ]
-                try:
-                    results = []
-                    for chunk in chunks:
-                        results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
-                    return results
-                except Exception as e:
-                    if attempt == max_retries - 1 or not _is_retryable_error(e):
-                        raise
-                    delay = base_delay * (2**attempt)
-                    next_chunks = 4 ** (attempt + 1)
-                    logger.warning(
-                        "Retry because of a server error, %d/%d: %s. Waiting %ss, then splitting into %d chunks...",
-                        attempt + 1,
-                        max_retries,
-                        e,
-                        delay,
-                        next_chunks,
-                    )
-                    time.sleep(delay)
-
-        res = batch_with_retry(inputs)
-
-    # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
-    # is it because of using Chat and barebones models?
-    # when using OpenAI, the output is AIMessage not a string...
-    res = [x.content if hasattr(x, "content") else x for x in res]
-    return res
-
-
-class DummyModel:
-    def __init__(self, name: str):
-        self.name = name
-        self.message = "/".join(name.split("/")[1:])
-
-    def batch(self, inputs, **invoke_kwargs) -> list[str]:
-        return [self.message] * len(inputs)
-
-    def invoke(self, input, **invoke_kwargs) -> str:
-        return self.message
-
-    async def ainvoke(self, input, **invoke_kwargs):
-        return self.message
-
-
-_VLLM_INIT_RETRY_SIGNATURES = (
-    "cudaErrorDevicesUnavailable",
-    "CUDA-capable device(s) is/are busy or unavailable",
-    "CUDA error: initialization error",
-)
-_VLLM_INIT_MAX_ATTEMPTS = safe_parse_int("JUDGEARENA_VLLM_INIT_MAX_ATTEMPTS") or 4
-_VLLM_INIT_BACKOFF_SECONDS = (
-    safe_parse_int("JUDGEARENA_VLLM_INIT_BACKOFF_SECONDS") or 20
-)
 
 
 def _init_llm_with_retry(llm_cls, **kwargs):
@@ -381,6 +161,22 @@ def _init_llm_with_retry(llm_cls, **kwargs):
     raise last_exc
 
 
+class DummyModel:
+    def __init__(self, name: str, **init_kwargs):
+        self.name = name
+        self.init_kwargs = dict(init_kwargs)
+        self.message = "/".join(name.split("/")[1:])
+
+    def batch(self, inputs, **invoke_kwargs) -> list[str]:
+        return [self.message] * len(inputs)
+
+    def invoke(self, input, **invoke_kwargs) -> str:
+        return self.message
+
+    async def ainvoke(self, input, **invoke_kwargs):
+        return self.message
+
+
 class ChatVLLM:
     """VLLM wrapper that auto-detects whether to use chat() or generate().
 
@@ -401,6 +197,10 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -444,11 +244,18 @@ class ChatVLLM:
                     stacklevel=2,
                 )
 
+        if seed is not None:
+            vllm_kwargs.setdefault("seed", int(seed))
+
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
-            "temperature": float(vllm_kwargs.pop("temperature", 0.6)),
-            "top_p": float(vllm_kwargs.pop("top_p", 0.95)),
+            "temperature": 0.6 if temperature is None else float(temperature),
+            "top_p": 0.95 if top_p is None else float(top_p),
         }
+        if top_k is not None:
+            self._sampling_params_kwargs["top_k"] = int(top_k)
+        if seed is not None:
+            self._sampling_params_kwargs["seed"] = int(seed)
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
@@ -615,6 +422,144 @@ class ChatVLLM:
         )
 
 
+def do_inference(chat_model, inputs, use_tqdm: bool = False):
+    """Run inference over *inputs*, returning a list of text completions.
+
+    Retries on rate-limit/server errors with exponential backoff. The async
+    path (``use_tqdm=True``) retries individual calls; the batch path splits
+    into ``4**attempt`` chunks on failure.
+    """
+    invoke_kwargs = {
+        # "stop": ["```"],
+        # "max_tokens": 100,
+    }
+    if use_tqdm:
+        # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
+        # all requests are received
+        # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
+        # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
+        cap = safe_parse_int("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
+        cap = cap if cap and cap > 0 else None
+
+        async def process_with_real_progress(chat_model, inputs, pbar):
+            sem = asyncio.Semaphore(cap) if cap else None
+
+            async def process_single(input_item, max_retries=5, base_delay=1.0):
+                for attempt in range(max_retries):
+                    try:
+                        result = await chat_model.ainvoke(input_item, **invoke_kwargs)
+                        pbar.update(1)
+                        return result
+                    except Exception as e:
+                        if attempt == max_retries - 1 or not _is_retryable_error(e):
+                            raise
+                        delay = base_delay * (2**attempt)
+                        logger.warning(
+                            "Retry because of a server error, %d/%d: %s. Waiting %ss...",
+                            attempt + 1,
+                            max_retries,
+                            e,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+
+            async def gated(inp):
+                if sem is None:
+                    return await process_single(inp)
+                async with sem:
+                    return await process_single(inp)
+
+            # asyncio.gather preserves order (unlike as_completed)
+            results = await asyncio.gather(*[gated(inp) for inp in inputs])
+            return results
+
+        with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
+            res = asyncio.run(
+                process_with_real_progress(
+                    chat_model=chat_model, inputs=inputs, pbar=pbar
+                )
+            )
+    else:
+
+        def batch_with_retry(batch_inputs, max_retries=5, base_delay=1.0):
+            for attempt in range(max_retries):
+                num_chunks = 4**attempt
+                chunk_size = max(1, len(batch_inputs) // num_chunks)
+                chunks = [
+                    batch_inputs[i : i + chunk_size]
+                    for i in range(0, len(batch_inputs), chunk_size)
+                ]
+                try:
+                    results = []
+                    for chunk in chunks:
+                        results.extend(chat_model.batch(inputs=chunk, **invoke_kwargs))
+                    return results
+                except Exception as e:
+                    if attempt == max_retries - 1 or not _is_retryable_error(e):
+                        raise
+                    delay = base_delay * (2**attempt)
+                    next_chunks = 4 ** (attempt + 1)
+                    logger.warning(
+                        "Retry because of a server error, %d/%d: %s. Waiting %ss, then splitting into %d chunks...",
+                        attempt + 1,
+                        max_retries,
+                        e,
+                        delay,
+                        next_chunks,
+                    )
+                    time.sleep(delay)
+
+        res = batch_with_retry(inputs)
+
+    # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
+    # is it because of using Chat and barebones models?
+    # when using OpenAI, the output is AIMessage not a string...
+    res = [x.content if hasattr(x, "content") else x for x in res]
+    return res
+
+
+def _route_sampling_params(
+    engine_kwargs: dict,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
+    seed: int | None = None,
+    supported_fields: set[str] | None = None,
+    top_k_via_model_kwargs: bool = False,
+    provider: str = "",
+) -> dict:
+    """Route the cross-backend sampling params onto a provider's constructor kwargs.
+
+    Only params that are explicitly set (not ``None``) are applied.
+    ``top_k_via_model_kwargs`` tunnels ``top_k`` through ``model_kwargs`` for
+    OpenAI-compatible backends that do not expose it directly. When
+    ``supported_fields`` is provided, a param the target class cannot accept
+    (and cannot be tunneled) is dropped with a warning rather than being passed
+    through and raising at construction time.
+    """
+    for key, value in (
+        ("temperature", temperature),
+        ("top_p", top_p),
+        ("seed", seed),
+        ("top_k", top_k),
+    ):
+        if value is None:
+            continue
+        if key == "top_k" and top_k_via_model_kwargs:
+            engine_kwargs.setdefault("model_kwargs", {})["top_k"] = value
+            continue
+        if supported_fields is not None and key not in supported_fields:
+            logger.warning(
+                "%s backend does not support sampling param %r; dropping it.",
+                provider or "This",
+                key,
+            )
+            continue
+        engine_kwargs[key] = value
+    return engine_kwargs
+
+
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
 
@@ -623,6 +568,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``VLLM/meta-llama/Llama-3.3-70B-Instruct``.
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
+            Common keys honoured across backends: ``temperature``, ``top_p``,
+            ``top_k``, ``seed``. vLLM-only keys (``max_model_len``,
+            ``chat_template``) are stripped before reaching hosted providers.
     """
     # Avoid mutating the original engine_kwargs dictionary
     # NOTE: this is a shallow copy since we are not modifying any
@@ -631,6 +579,11 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     # Dedicated arguments like max_tokens always win over engine_kwargs.
     engine_kwargs["max_tokens"] = max_tokens or 8192
+
+    temperature = engine_kwargs.pop("temperature", None)
+    top_p = engine_kwargs.pop("top_p", None)
+    top_k = engine_kwargs.pop("top_k", None)
+    seed = engine_kwargs.pop("seed", None)
 
     model_provider, model_name = _split_model_spec(model)
 
@@ -654,7 +607,15 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
-        return DummyModel(model)
+        dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+        _route_sampling_params(
+            dummy_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
+        return DummyModel(model, **dummy_kwargs)
 
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
@@ -662,6 +623,13 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+        )
 
         return ChatVLLM(
             model=model_name,
@@ -670,22 +638,28 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
+        openai_kwargs = dict(engine_kwargs)
+        # OpenAI-compatible chat backends expose temperature/top_p/seed directly
+        # but not top_k, which has to be tunneled through model_kwargs.
+        _route_sampling_params(
+            openai_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            top_k_via_model_kwargs=True,
+        )
         return ChatOpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
             model=model_name,
-            **engine_kwargs,
+            **openai_kwargs,
         )
     else:
         model_classes = [
             LlamaCpp,
             ChatOpenAI,
         ]
-        if model_provider == "LlamaCpp":
-            engine_kwargs["model_path"] = model_name
-        else:
-            engine_kwargs["model"] = model_name
-
         try:
             from langchain_together.llms import Together
 
@@ -702,126 +676,27 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         assert model_provider in model_cls_dict, (
             f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
         )
-        return model_cls_dict[model_provider](**engine_kwargs)
-
-
-def download_all():
-    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
-
-    logger.info("Downloading all datasets in %s", data_root)
-    local_path_tables = data_root / "tables"
-    for dataset in (
-        "alpaca-eval",
-        "arena-hard-v0.1",
-        "arena-hard-v2.0",
-        *M_ARENA_HARD_BASELINES,
-    ):
-        if is_arena_hard_dataset(dataset):
-            download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+        model_cls = model_cls_dict[model_provider]
+        if model_provider == "LlamaCpp":
+            engine_kwargs["model_path"] = model_name
         else:
-            download_hf(name=dataset, local_path=local_path_tables)
+            engine_kwargs["model"] = model_name
 
-    contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
-    snapshot_download(
-        repo_id=contexts_repo,
-        repo_type="dataset",
-        allow_patterns="*",
-        local_dir=data_root / "contexts",
-        force_download=False,
-        revision=hf_revision(contexts_repo),
-    )
-
-    from judgearena.instruction_dataset.mt_bench import download_mt_bench
-
-    download_mt_bench()
-
-
-class Timeblock:
-    """Timer context manager"""
-
-    def __init__(self, name: str | None = None, verbose: bool = True):
-        self.name = name
-        self.verbose = verbose
-
-    def __enter__(self):
-        """Start a new timer as a context manager"""
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        """Stop the context manager timer"""
-        self.end = time.time()
-        self.duration = self.end - self.start
-        if self.verbose:
-            logger.info("%s", self)
-
-    def __str__(self):
-        name = self.name if self.name else "block"
-        msg = f"{name} took {self.duration} seconds"
-        return msg
-
-
-def cache_function_dataframe(
-    fun: Callable[[], pd.DataFrame],
-    cache_name: str,
-    ignore_cache: bool = False,
-    cache_path: Path | None = None,
-    parquet: bool = False,
-) -> pd.DataFrame:
-    """
-    :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
-    :param ignore_cache: whether to recompute even if the cache is present
-    :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
-    :param parquet: whether to store the data in parquet, if not specified use csv.zip
-    :return: result of fun()
-    """
-    if cache_path is None:
-        cache_path = data_root / "cache"
-
-    if parquet:
-        cache_file = cache_path / (cache_name + ".parquet")
-    else:
-        cache_file = cache_path / (cache_name + ".csv.zip")
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    if cache_file.exists() and not ignore_cache:
-        logger.info("Loading cache %s", cache_file)
-        if parquet:
-            return pd.read_parquet(cache_file)
-        else:
-            return pd.read_csv(cache_file)
-    else:
-        logger.info(
-            "Cache %s not found or ignore_cache set to True, regenerating the file",
-            cache_file,
+        # Route sampling params against the target class's accepted fields:
+        # tunnel top_k via model_kwargs when the class lacks a top_k field,
+        # and drop any param the class cannot accept (e.g. Together has no
+        # ``seed``) instead of raising at construction time.
+        supported_fields = set(getattr(model_cls, "model_fields", {}))
+        _route_sampling_params(
+            engine_kwargs,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            seed=seed,
+            supported_fields=supported_fields,
+            top_k_via_model_kwargs=(
+                "top_k" not in supported_fields and "model_kwargs" in supported_fields
+            ),
+            provider=model_provider,
         )
-        with Timeblock("Evaluate function."):
-            df = fun()
-            assert isinstance(df, pd.DataFrame)
-            if parquet:
-                # object cols cannot be saved easily in parquet; numpy arrays must be
-                # deep-converted to plain Python so str() produces ast.literal_eval-safe
-                # repr (no "array([...])" syntax, which breaks literal_eval)
-                import numpy as np
-
-                def _to_python(x):
-                    """Recursively convert numpy arrays/scalars to Python lists/dicts."""
-                    if isinstance(x, np.ndarray):
-                        return [_to_python(i) for i in x]
-                    if isinstance(x, dict):
-                        return {k: _to_python(v) for k, v in x.items()}
-                    if isinstance(x, list):
-                        return [_to_python(i) for i in x]
-                    return x
-
-                for col in df.select_dtypes(include="object").columns:
-                    df[col] = df[col].apply(_to_python).astype(str)
-                df.to_parquet(cache_file, index=False)
-                return pd.read_parquet(cache_file)
-            else:
-                df.to_csv(cache_file, index=False)
-                return pd.read_csv(cache_file)
-
-
-if __name__ == "__main__":
-    download_all()
+        return model_cls(**engine_kwargs)

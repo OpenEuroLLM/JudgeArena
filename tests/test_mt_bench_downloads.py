@@ -5,7 +5,7 @@ import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
-import judgearena.utils as utils
+import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 
@@ -45,14 +45,14 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     arena_hard_datasets = []
     calls = {"contexts": 0, "mt_bench": 0}
 
-    monkeypatch.setattr(utils, "data_root", tmp_path)
+    monkeypatch.setattr(utils_io, "data_root", tmp_path)
     monkeypatch.setattr(
-        utils,
+        utils_io,
         "download_hf",
         lambda name, local_path: hf_datasets.append((name, local_path)),
     )
     monkeypatch.setattr(
-        utils,
+        utils_io,
         "download_arena_hard",
         lambda dataset, local_tables_path: arena_hard_datasets.append(
             (dataset, local_tables_path)
@@ -62,14 +62,14 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     def _contexts_snapshot_stub(**_kwargs):
         calls["contexts"] += 1
 
-    monkeypatch.setattr(utils, "snapshot_download", _contexts_snapshot_stub)
+    monkeypatch.setattr(utils_io, "snapshot_download", _contexts_snapshot_stub)
     monkeypatch.setattr(
         mt_bench,
         "download_mt_bench",
         lambda: calls.__setitem__("mt_bench", calls["mt_bench"] + 1),
     )
 
-    utils.download_all()
+    utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
     assert [name for name, _ in hf_datasets] == [
@@ -236,7 +236,8 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
 
     assert (tmp_path / "config.yaml").exists()
     assert (tmp_path / "mt-bench-test-annotations.csv").exists()
-    assert (tmp_path / "results-mt-bench-test.json").exists()
+    # The results JSON is now written by report.save() in _finalize_mt_bench_run,
+    # not by _save_mt_bench_results (which writes config / annotations / run metadata).
     assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
     assert captured["input_payloads"] == {"instruction_index": [1]}
     assert captured["judge_system_prompt"] == "system"

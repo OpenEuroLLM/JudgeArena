@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from judgearena.battles import (
-    EloReport,
+    Leaderboard,
     read_battles,
     summarize_bootstrap,
     write_battles,
@@ -45,7 +45,7 @@ def test_summarize_bootstrap_sorts_and_bounds(tmp_path):
     assert a.source == "evaluated" and a.ci_low <= a.rating <= a.ci_high
     assert next(r for r in ratings if r.model == "b").source == "human"
 
-    EloReport(
+    Leaderboard(
         arena="A", model="a", judge_model="j", n_bootstraps=2, seed=0, ratings=ratings
     ).write(tmp_path / "elo.json")
     assert (tmp_path / "elo.json").exists()

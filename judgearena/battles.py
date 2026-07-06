@@ -73,8 +73,13 @@ class RatingEntry:
 
 
 @dataclass
-class EloReport:
-    """The leaderboard plus the run metadata that produced it."""
+class Leaderboard:
+    """Per-model ratings (mean + bootstrap CI) plus the run metadata that produced them.
+
+    Named distinctly from :class:`judgearena.estimate_elo_ratings.EloReport`,
+    which is the console/``results-*.json`` run report; this is the narrower
+    ``elo_ratings.json`` leaderboard artifact with per-model CIs.
+    """
 
     arena: str
     model: str
