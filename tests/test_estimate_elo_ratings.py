@@ -90,11 +90,20 @@ def _default_args(**kwargs) -> RunConfig:
     n_bootstraps = kwargs.pop("n_bootstraps", 3)
     languages = kwargs.pop("languages", None)
     swap_mode = kwargs.pop("swap_mode", "fixed")
+    strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
+    battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
+    judge: dict[str, object] = {
+        "model": judge_model,
+        "swap_mode": swap_mode,
+        "strip_thinking_before_judging": strip_thinking_before_judging,
+    }
+    if battle_thinking_token_budget is not None:
+        judge["battle_thinking_token_budget"] = battle_thinking_token_budget
     return RunConfig(
         task="elo-comparia",
         model={"name": model},
-        judge={"model": judge_model, "swap_mode": swap_mode},
+        judge=judge,
         generation={"n_instructions": n_instructions},
         elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
     )
@@ -249,6 +258,98 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch):
     monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
     main(_default_args(swap_mode="both"))
     assert captured.get("swap_mode") == "both"
+
+
+def _spy_judge_capturing(captured):
+    def spy_judge(
+        judge_chat_model,
+        instructions,
+        completions_A,
+        completions_B,
+        swap_mode="fixed",
+        strip_thinking_before_judging=False,
+        **kwargs,
+    ):
+        captured["strip_thinking_before_judging"] = strip_thinking_before_judging
+        n = len(instructions)
+        dummy = JudgeAnnotation(
+            judge_completion="score A: 0 score B: 10",
+            instruction="",
+            completion_A="",
+            completion_B="",
+        )
+        return [dummy] * n, None, pd.Series([1.0] * n)
+
+    return spy_judge
+
+
+def test_main_strip_thinking_forwarded_to_judge(monkeypatch):
+    """strip_thinking_before_judging from the run config must reach the judge.
+
+    Regression test: the Elo entrypoint accepted the flag but never forwarded it
+    to judge_and_parse_prefs, so reasoning traces were judged verbatim.
+    """
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
+    )
+    main(_default_args(strip_thinking_before_judging=True))
+    assert captured.get("strip_thinking_before_judging") is True
+
+
+def test_main_strip_thinking_defaults_off(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
+    )
+    main(_default_args())
+    assert captured.get("strip_thinking_before_judging") is False
+
+
+def _spy_generate_capturing(captured):
+    def spy_generate(instructions, model, **kwargs):
+        captured["gen_kwargs"] = kwargs
+        return pd.DataFrame(
+            {
+                "completion": [f"c{i}" for i in range(len(instructions))],
+                "instruction_index": range(len(instructions)),
+            }
+        )
+
+    return spy_generate
+
+
+def test_main_thinking_budget_injected_for_thinking_model(monkeypatch):
+    """battle_thinking_token_budget must reach generation for VLLM thinking models."""
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
+    )
+    main(_default_args(model="VLLM/Qwen/Qwen3.5-9B", battle_thinking_token_budget=128))
+    assert captured["gen_kwargs"].get("thinking_token_budget") == 128
+
+
+def test_main_thinking_budget_capped_by_max_out_tokens(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
+    )
+    cfg = _default_args(
+        model="VLLM/Qwen/Qwen3.5-9B", battle_thinking_token_budget=10**9
+    )
+    main(cfg)
+    assert (
+        captured["gen_kwargs"].get("thinking_token_budget") == cfg.model.max_out_tokens
+    )
+
+
+def test_main_thinking_budget_absent_for_nonthinking_model(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
+    )
+    main(_default_args(model="Dummy/my model", battle_thinking_token_budget=128))
+    assert "thinking_token_budget" not in captured["gen_kwargs"]
 
 
 def test_judge_and_parse_prefs_none_prefs_swap_mode_both():

@@ -1,3 +1,4 @@
+import json
 import sys
 from types import SimpleNamespace
 
@@ -265,3 +266,29 @@ def test_chat_vllm_preserves_explicit_reasoning_settings_for_non_qwen(monkeypatc
     assert (
         captured["llm_init"]["kwargs"]["reasoning_config"] is explicit_reasoning_config
     )
+
+
+def test_is_retryable_error_retries_jsondecodeerror():
+    err = json.JSONDecodeError("Expecting value", "<html>503</html>", 0)
+    assert models._is_retryable_error(err) is True
+
+
+def test_is_retryable_error_retries_jsondecodeerror_by_message():
+    # Wrapped/re-raised variants may surface only via the string representation.
+    assert (
+        models._is_retryable_error(
+            Exception("Expecting value: line 739 column 1 (char 4059)")
+        )
+        is True
+    )
+
+
+def test_is_retryable_error_retries_transient_http_codes():
+    assert models._is_retryable_error(Exception("HTTP 503 Service Unavailable")) is True
+    assert (
+        models._is_retryable_error(ValueError({"message": "slow", "code": 429})) is True
+    )
+
+
+def test_is_retryable_error_does_not_retry_auth_failure():
+    assert models._is_retryable_error(Exception("401 User not found.")) is False
