@@ -82,7 +82,7 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
     )
 
 
-def _default_args(**kwargs) -> RunConfig:
+def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     arena = kwargs.pop("arena", "ComparIA")
     model = kwargs.pop("model", "Dummy/my model")
     judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
@@ -97,6 +97,7 @@ def _default_args(**kwargs) -> RunConfig:
         judge={"model": judge_model, "swap_mode": swap_mode},
         generation={"n_instructions": n_instructions},
         elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
+        run={"result_folder": result_folder},
     )
 
 
@@ -156,8 +157,8 @@ def test_bradley_terry_soft_matches_hard():
 # --- main() integration tests ---
 
 
-def test_main_returns_summary():
-    result = main(_default_args())
+def test_main_returns_summary(tmp_path):
+    result = main(_default_args(result_folder=str(tmp_path)))
     assert set(result.keys()) >= {
         "num_wins",
         "num_losses",
@@ -168,24 +169,36 @@ def test_main_returns_summary():
     }
 
 
-def test_main_winrate_in_valid_range():
-    result = main(_default_args())
+def test_main_winrate_in_valid_range(tmp_path):
+    result = main(_default_args(result_folder=str(tmp_path)))
     assert 0.0 <= result["winrate"] <= 1.0
 
 
-def test_main_winrate_depends_on_judge():
+def test_main_winrate_depends_on_judge(tmp_path):
     """A judge biased toward one position should yield different winrates depending on direction."""
     # With seed=0 and n=10 our model is always placed in position B, so:
     # judge favouring B → all wins; judge favouring A → all losses
-    result_wins = main(_default_args(judge_model="Dummy/score A: 0 score B: 10"))
-    result_loses = main(_default_args(judge_model="Dummy/score A: 10 score B: 0"))
+    result_wins = main(
+        _default_args(
+            result_folder=str(tmp_path), judge_model="Dummy/score A: 0 score B: 10"
+        )
+    )
+    result_loses = main(
+        _default_args(
+            result_folder=str(tmp_path), judge_model="Dummy/score A: 10 score B: 0"
+        )
+    )
     assert result_wins["winrate"] > result_loses["winrate"]
 
 
-def test_main_language_filter_reduces_battles():
+def test_main_language_filter_reduces_battles(tmp_path):
     """Filtering to a single language should use fewer battles than no filter."""
-    result_all = main(_default_args(n_instructions=None))
-    result_en = main(_default_args(n_instructions=None, languages=["en"]))
+    result_all = main(_default_args(result_folder=str(tmp_path), n_instructions=None))
+    result_en = main(
+        _default_args(
+            result_folder=str(tmp_path), n_instructions=None, languages=["en"]
+        )
+    )
     total_all = (
         result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
     )
@@ -193,17 +206,17 @@ def test_main_language_filter_reduces_battles():
     assert total_en < total_all
 
 
-def test_main_model_in_bootstrap_ratings():
+def test_main_model_in_bootstrap_ratings(tmp_path):
     """Our model should appear in the bootstrap ELO leaderboard."""
-    result = main(_default_args())
+    result = main(_default_args(result_folder=str(tmp_path)))
     model_name = result["model_name"]
     assert all(model_name in r for r in result["bootstrap_ratings"])
 
 
-def test_main_n_instructions_limits_battles():
+def test_main_n_instructions_limits_battles(tmp_path):
     """n_instructions caps the number of judged battles."""
-    result_5 = main(_default_args(n_instructions=5))
-    result_10 = main(_default_args(n_instructions=10))
+    result_5 = main(_default_args(result_folder=str(tmp_path), n_instructions=5))
+    result_10 = main(_default_args(result_folder=str(tmp_path), n_instructions=10))
     total_5 = (
         result_5["num_wins"]
         + result_5["num_losses"]
@@ -220,7 +233,7 @@ def test_main_n_instructions_limits_battles():
     assert total_10 == 10
 
 
-def test_main_swap_mode_forwarded_to_judge(monkeypatch):
+def test_main_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
     """swap_mode from the run config must be forwarded to judge_and_parse_prefs.
 
     Regression test: previously run_judge() called judge_and_parse_prefs without
@@ -247,7 +260,7 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch):
         return [dummy] * n, None, pd.Series([1.0] * n)
 
     monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
-    main(_default_args(swap_mode="both"))
+    main(_default_args(result_folder=str(tmp_path), swap_mode="both"))
     assert captured.get("swap_mode") == "both"
 
 

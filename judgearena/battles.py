@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from judgearena.repro import _to_jsonable
+
 # Winners accepted by compute_bradley_terry.
 WINNERS = frozenset({"model_a", "model_b", "tie", "tie (bothbad)"})
 
@@ -83,7 +85,7 @@ class EloReport:
 
     def write(self, path: str | Path) -> None:
         with Path(path).open("w") as f:
-            json.dump(asdict(self), f, indent=2)
+            json.dump(_to_jsonable(asdict(self)), f, indent=2, allow_nan=False)
 
 
 def summarize_bootstrap(

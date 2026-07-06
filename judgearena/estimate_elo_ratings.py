@@ -188,7 +188,14 @@ def write_elo_result(
 ) -> Path:
     model = str(summary["model_A"])
     arena = str(summary["arena"])
-    output_dir = Path(result_folder) / f"elo-{_slugify(arena)}-{_slugify(model)}"
+    judge = str(summary["judge_model"])
+    # ELO artifacts (ratings, battles, bootstrap CSV, metadata) are judge-specific,
+    # so key the folder on the judge too — otherwise re-running the same
+    # arena/model under a different judge silently overwrites the previous run.
+    output_dir = (
+        Path(result_folder)
+        / f"elo-{_slugify(arena)}-{_slugify(model)}-{_slugify(judge)}"
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"results-{_slugify(model)}.json"
     payload = {
