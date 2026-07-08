@@ -1,11 +1,21 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.log import get_logger
 from judgearena.utils import (
     do_inference,
     make_model,
     truncate,
 )
+
+if TYPE_CHECKING:
+    from judgearena.store_sqlite import SQLiteCompletionStore
+
+logger = get_logger(__name__)
 
 
 def generate_instructions(
@@ -15,11 +25,30 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
+    completion_store: SQLiteCompletionStore | None = None,
+    pushed_by: str = "judgearena",
     **engine_kwargs,
 ) -> pd.DataFrame:
+    # Filter to instructions not already in the shared store
+    if completion_store is not None:
+        all_indices = instructions.index.tolist()
+        missing = set(completion_store.missing_indices(all_indices))
+        cached_df = completion_store.query([i for i in all_indices if i not in missing])
+        instructions_to_run = instructions.loc[sorted(missing)]
+        logger.info(
+            "Completion store: %d cached, %d to generate.",
+            len(cached_df),
+            len(instructions_to_run),
+        )
+    else:
+        instructions_to_run = instructions
+        cached_df = pd.DataFrame()
+
+    if instructions_to_run.empty:
+        return cached_df[["instruction_index", "completion"]].reset_index(drop=True)
+
     chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
 
-    # TODO improve prompt to generate instructions
     if system_prompt is None:
         system_prompt = (
             "You are an helpful assistant that answer queries asked by users."
@@ -27,28 +56,33 @@ def generate_instructions(
     prompt_template = ChatPromptTemplate.from_messages(
         [("system", system_prompt), ("user", "{user_prompt}")]
     )
-
     inputs = prompt_template.batch(
         [
-            {
-                "user_prompt": truncate(user_prompt, max_len=truncate_input_chars),
-            }
-            for user_prompt in instructions
+            {"user_prompt": truncate(user_prompt, max_len=truncate_input_chars)}
+            for user_prompt in instructions_to_run
         ]
     )
-
-    completions = do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-    )
-    df_outputs = pd.DataFrame(
-        data={
+    completions = do_inference(chat_model=chat_model, inputs=inputs, use_tqdm=use_tqdm)
+    df_new = pd.DataFrame(
+        {
             "completion": completions,
-            "instruction_index": instructions.index.tolist(),
-        },
+            "instruction_index": instructions_to_run.index.tolist(),
+        }
     )
-    return df_outputs
+
+    if completion_store is not None:
+        completion_store.save(df_new, pushed_by=pushed_by)
+        if not cached_df.empty:
+            df_new = (
+                pd.concat(
+                    [cached_df[["instruction_index", "completion"]], df_new],
+                    ignore_index=True,
+                )
+                .sort_values("instruction_index")
+                .reset_index(drop=True)
+            )
+
+    return df_new
 
 
 def _set_temperature_on_model(chat_model, temperature: float) -> None:
