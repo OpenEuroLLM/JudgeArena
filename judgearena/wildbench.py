@@ -247,9 +247,15 @@ def apply_wildbench_length_penalty(
     """Convert only a length-advantaged slight win/loss into a tie."""
     if length_penalty_chars is None or abs(reward) != 0.5:
         return reward
-    if reward > 0 and len(candidate_output) > len(baseline_output) + length_penalty_chars:
+    if (
+        reward > 0
+        and len(candidate_output) > len(baseline_output) + length_penalty_chars
+    ):
         return 0.0
-    if reward < 0 and len(baseline_output) > len(candidate_output) + length_penalty_chars:
+    if (
+        reward < 0
+        and len(baseline_output) > len(candidate_output) + length_penalty_chars
+    ):
         return 0.0
     return reward
 
@@ -330,8 +336,7 @@ def _load_or_generate_outputs(
         ),
         ignore_cache=cfg.run.ignore_cache,
         cache_name=(
-            f"wildbench-v2/{model_name}/{role.lower()}_"
-            f"{session_token}_{sampling_token}"
+            f"wildbench-v2/{model_name}/{role.lower()}_{session_token}_{sampling_token}"
         ),
     )
     return _align_outputs(generated, examples, model_name)
@@ -403,9 +408,7 @@ def _reward_metrics(
             float(values.mean()) * 100.0 if not values.empty else float("nan")
         )
     valid_baselines = [value for value in per_baseline.values() if np.isfinite(value)]
-    wb_reward = (
-        float(np.mean(valid_baselines)) if valid_baselines else float("nan")
-    )
+    wb_reward = float(np.mean(valid_baselines)) if valid_baselines else float("nan")
 
     category_baseline_values: dict[str, dict[str, list[float]]] = {}
     for row in canonical.dropna(subset=["reward"]).itertuples(index=False):
@@ -540,9 +543,7 @@ def _reward_annotations(
     judge_outputs = _run_judge_prompts(
         _make_judge(cfg), pending_prompts, use_tqdm=cfg.run.use_tqdm
     )
-    for record_index, judge_output in zip(
-        pending_indices, judge_outputs, strict=True
-    ):
+    for record_index, judge_output in zip(pending_indices, judge_outputs, strict=True):
         prompt_records[record_index]["judge_completion"] = judge_output
         prompt_records[record_index]["choice"] = parse_wildbench_choice(judge_output)
 
@@ -634,9 +635,7 @@ def main(cfg: RunConfig) -> dict[str, object]:
     assert cfg.wildbench is not None
     assert cfg.model.name is not None
     started_at = datetime.now(UTC)
-    examples = load_instructions(
-        cfg.task, n_instructions=cfg.generation.n_instructions
-    )
+    examples = load_instructions(cfg.task, n_instructions=cfg.generation.n_instructions)
     if examples.empty:
         raise ValueError("WildBench selection contains no examples.")
     examples = examples.copy()
@@ -683,9 +682,7 @@ def main(cfg: RunConfig) -> dict[str, object]:
         )
         logger.info("Using WildBench baselines: %s", ", ".join(baseline_models))
         baseline_outputs = {
-            baseline: _load_or_generate_outputs(
-                cfg, examples, baseline, role="B"
-            )
+            baseline: _load_or_generate_outputs(cfg, examples, baseline, role="B")
             for baseline in baseline_models
         }
         annotations, num_judgments = _reward_annotations(

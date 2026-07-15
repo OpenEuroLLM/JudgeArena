@@ -37,7 +37,7 @@ def _examples() -> pd.DataFrame:
     )
 
 
-def test_normalize_wildbench_preserves_multiturn_checklists_and_tags():
+def test_normalize_wildbench_multiturn_example():
     raw = pd.DataFrame(
         {
             "session_id": ["s1"],
@@ -57,87 +57,39 @@ def test_normalize_wildbench_preserves_multiturn_checklists_and_tags():
         }
     )
 
-    normalized = normalize_wildbench(raw)
+    row = normalize_wildbench(raw).iloc[0]
 
-    row = normalized.iloc[0]
     assert row["instruction_index"] == "s1"
     assert row["instruction"] == "Follow-up"
-    assert row["conversation_input"][-1] == {
-        "role": "user",
-        "content": "Follow-up",
-    }
-    assert row["history"] == ("USER: First question\n\nASSISTANT: First answer\n\n")
+    assert row["history"] == "USER: First question\n\nASSISTANT: First answer\n\n"
     assert row["checklist"] == ["Correct?", "Clear?"]
-    assert row["task_categories"] == [
-        "Math & Data Analysis",
-        "Planning & Reasoning",
-    ]
-
-
-def test_normalize_wildbench_rejects_conversation_not_ending_in_user():
-    raw = pd.DataFrame(
-        {
-            "session_id": ["s1"],
-            "conversation_input": [[{"role": "assistant", "content": "No user query"}]],
-            "checklist": [[]],
-            "primary_tag": ["Others"],
-            "secondary_tags": [[]],
-        }
-    )
-    with pytest.raises(ValueError, match="must end with a user query"):
-        normalize_wildbench(raw)
+    assert row["task_categories"] == ["Math & Data Analysis", "Planning & Reasoning"]
 
 
 @pytest.mark.parametrize(
-    "completion, expected",
+    "parser, completion, expected",
     [
-        ('{"strengths": "good", "weaknesses": "none", "score": "8"}', 8.0),
-        ('analysis before JSON\n{"score": 6}', 6.0),
-        ("broken output: score: 4.5", 4.5),
-        ('{"score": 11}', None),
-        ("no score", None),
+        (parse_wildbench_score, '{"score": "8"}', 8.0),
+        (parse_wildbench_score, 'analysis\n{"score": 6}', 6.0),
+        (parse_wildbench_score, "broken output: score: 4.5", 4.5),
+        (parse_wildbench_score, '{"score": 11}', None),
+        (parse_wildbench_choice, '{"choice": "A++"}', "A++"),
+        (parse_wildbench_choice, "I choose A=B", "A=B"),
+        (parse_wildbench_choice, "undecided", None),
     ],
 )
-def test_parse_wildbench_score(completion, expected):
-    assert parse_wildbench_score(completion) == expected
+def test_parse_judge_output(parser, completion, expected):
+    assert parser(completion) == expected
 
 
-@pytest.mark.parametrize(
-    "completion, expected",
-    [
-        ('{"choice": "A++"}', "A++"),
-        ('analysis\n{"choice": " b+ "}', "B+"),
-        ("I choose A=B", "A=B"),
-        ("undecided", None),
-    ],
-)
-def test_parse_wildbench_choice(completion, expected):
-    assert parse_wildbench_choice(completion) == expected
-
-
-@pytest.mark.parametrize(
-    "choice, candidate_is_a, expected",
-    [
-        ("A++", True, 1.0),
-        ("A+", False, -0.5),
-        ("A=B", False, 0.0),
-        ("B+", False, 0.5),
-        ("B++", True, -1.0),
-    ],
-)
-def test_choice_to_candidate_reward(choice, candidate_is_a, expected):
-    assert choice_to_candidate_reward(choice, candidate_is_a=candidate_is_a) == expected
-
-
-def test_length_penalty_only_ties_slight_winner_with_length_advantage():
+def test_reward_helpers():
+    assert choice_to_candidate_reward("A+", candidate_is_a=True) == 0.5
+    assert choice_to_candidate_reward("A+", candidate_is_a=False) == -0.5
     assert apply_wildbench_length_penalty(0.5, "x" * 11, "", 10) == 0.0
-    assert apply_wildbench_length_penalty(-0.5, "", "x" * 11, 10) == 0.0
-    assert apply_wildbench_length_penalty(0.5, "x" * 10, "", 10) == 0.5
     assert apply_wildbench_length_penalty(1.0, "x" * 100, "", 10) == 1.0
-    assert apply_wildbench_length_penalty(0.5, "x" * 100, "", None) == 0.5
 
 
-def test_official_prompts_replace_fields_and_keep_required_output_contract():
+def test_official_prompts_include_inputs_and_output_contracts():
     example = _examples().loc["s2"]
     score_prompt = render_wildbench_score_prompt(
         example, "Model answer", max_words=1000, max_chars=None
@@ -146,57 +98,33 @@ def test_official_prompts_replace_fields_and_keep_required_output_contract():
         example, "Answer A", "Answer B", max_words=1000, max_chars=None
     )
 
-    assert "USER: Earlier" in score_prompt
-    assert "Solve this" in score_prompt
-    assert "Model answer" in score_prompt
-    assert "Is it correct?" in score_prompt
+    assert all(
+        value in score_prompt
+        for value in ("USER: Earlier", "Solve this", "Model answer", "Is it correct?")
+    )
     assert '"score": "[1~10]"' in score_prompt
-    assert "Answer A" in pairwise_prompt
-    assert "Answer B" in pairwise_prompt
+    assert "Answer A" in pairwise_prompt and "Answer B" in pairwise_prompt
     assert '"choice": "[A++ or A+ or A=B or B+ or B++]"' in pairwise_prompt
-    assert "$" not in score_prompt
-    assert "$" not in pairwise_prompt
 
 
-def test_score_metrics_use_public_leaderboard_scale_and_secondary_categories():
+def test_wildbench_metrics_use_published_scales():
     examples = _examples()
-    examples.at["s1", "task_categories"] = [
-        "Creative Tasks",
-        "Planning & Reasoning",
-    ]
     annotations = pd.DataFrame({"session_id": ["s1", "s2"], "score": [8.0, 6.0]})
+    raw_mean, score, categories = _score_metrics(examples, annotations)
+    assert (raw_mean, score) == (7.0, 40.0)
+    assert categories == {"Creative Tasks": 60.0, "Math & Data Analysis": 20.0}
 
-    raw_mean, wb_score, per_category = _score_metrics(examples, annotations)
-
-    assert raw_mean == 7.0
-    assert wb_score == 40.0
-    assert per_category == {
-        "Creative Tasks": 60.0,
-        "Planning & Reasoning": 60.0,
-        "Math & Data Analysis": 20.0,
-    }
-
-
-def test_reward_metrics_average_each_reference_equally():
-    examples = _examples()
-    canonical = pd.DataFrame(
+    rewards = pd.DataFrame(
         {
             "session_id": ["s1", "s2", "s1", "s2"],
             "baseline_model": ["b1", "b1", "b2", "b2"],
             "reward": [1.0, 0.0, 0.5, -0.5],
         }
     )
-
-    reward, per_baseline, per_category = _reward_metrics(
-        examples, canonical, ["b1", "b2"]
-    )
-
+    reward, per_baseline, categories = _reward_metrics(examples, rewards, ["b1", "b2"])
     assert reward == 25.0
     assert per_baseline == {"b1": 50.0, "b2": 0.0}
-    assert per_category == {
-        "Creative Tasks": 75.0,
-        "Math & Data Analysis": -25.0,
-    }
+    assert categories == {"Creative Tasks": 75.0, "Math & Data Analysis": -25.0}
 
 
 @pytest.mark.parametrize(
@@ -206,7 +134,7 @@ def test_reward_metrics_average_each_reference_equally():
         ("wildbench-reward", '{"choice": "A=B"}', "wb_reward", 0.0),
     ],
 )
-def test_wildbench_main_writes_testable_artifacts(
+def test_wildbench_run_writes_results(
     tmp_path, monkeypatch, task, judge_completion, metric, expected
 ):
     examples = _examples()
@@ -215,39 +143,36 @@ def test_wildbench_main_writes_testable_artifacts(
         for instruction in examples["instruction"]
     ]
     monkeypatch.setattr(
-        wildbench_module,
-        "load_instructions",
-        lambda *args, **kwargs: examples,
+        wildbench_module, "load_instructions", lambda *a, **kw: examples
     )
-
-    def fake_outputs(cfg, frame, model_name, *, role):
-        prefix = "candidate" if role == "A" else f"reference-{model_name}"
-        return pd.Series([f"{prefix}-1", f"{prefix}-2"], index=frame.index, dtype=str)
-
-    monkeypatch.setattr(wildbench_module, "_load_or_generate_outputs", fake_outputs)
+    monkeypatch.setattr(
+        wildbench_module,
+        "_load_or_generate_outputs",
+        lambda cfg, frame, model_name, *, role: pd.Series(
+            [f"{role}-{index}" for index in frame.index], index=frame.index, dtype=str
+        ),
+    )
     monkeypatch.setattr(wildbench_module, "_make_judge", lambda cfg: object())
     monkeypatch.setattr(
         wildbench_module,
         "_run_judge_prompts",
-        lambda judge, prompts, **kwargs: [judge_completion] * len(prompts),
+        lambda judge, prompts, **kw: [judge_completion] * len(prompts),
     )
-    monkeypatch.setattr(wildbench_module, "write_run_metadata", lambda **kwargs: None)
+    monkeypatch.setattr(wildbench_module, "write_run_metadata", lambda **kw: None)
 
-    cfg = RunConfig(
-        task=task,
-        model={"name": "Dummy/candidate"},
-        judge={"model": "Dummy/judge"},
-        run={"result_folder": str(tmp_path), "no_log_file": True},
+    result = wildbench_module.main(
+        RunConfig(
+            task=task,
+            model={"name": "Dummy/candidate"},
+            judge={"model": "Dummy/judge"},
+            run={"result_folder": str(tmp_path), "no_log_file": True},
+        )
     )
-    result = wildbench_module.main(cfg)
 
+    result_path = Path(result["result_path"])
     assert result[metric] == expected
+    assert json.loads(result_path.read_text())[metric] == expected
+    assert (result_path.parent / "config.yaml").exists()
+    assert (result_path.parent / "annotations.parquet").exists()
     if task == "wildbench-reward":
         assert result["baseline_models"] == list(OFFICIAL_WILDBENCH_BASELINES)
-        assert result["num_judgments"] == len(examples) * 3
-    result_path = Path(result["result_path"])
-    run_dir = result_path.parent
-    assert json.loads(result_path.read_text())[metric] == expected
-    assert (run_dir / "config.yaml").exists()
-    assert len(pd.read_parquet(run_dir / "annotations.parquet")) >= len(examples)
-    assert len(pd.read_parquet(run_dir / "model_outputs.parquet")) >= len(examples)

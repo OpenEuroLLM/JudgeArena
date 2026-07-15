@@ -70,9 +70,7 @@ def _normalize_messages(value: object, session_id: str) -> list[dict[str, str]]:
             )
         messages.append({"role": role, "content": content})
     if not messages or messages[-1]["role"] != "user":
-        raise ValueError(
-            f"WildBench row {session_id!r} must end with a user query."
-        )
+        raise ValueError(f"WildBench row {session_id!r} must end with a user query.")
     return messages
 
 
@@ -117,9 +115,7 @@ def normalize_wildbench(raw_df: pd.DataFrame) -> pd.DataFrame:
                 "history": _history_text(messages),
                 "checklist": checklist,
                 "primary_tag": str(raw["primary_tag"]),
-                "secondary_tags": [
-                    str(tag) for tag in _as_list(raw["secondary_tags"])
-                ],
+                "secondary_tags": [str(tag) for tag in _as_list(raw["secondary_tags"])],
                 "task_categories": _task_categories(
                     raw["primary_tag"], raw["secondary_tags"]
                 ),
@@ -140,9 +136,7 @@ def load_wildbench() -> pd.DataFrame:
         force_download=False,
         revision=hf_revision(WILDBENCH_REPO_ID),
     )
-    parquet_files = sorted(
-        (Path(snapshot_root) / WILDBENCH_VARIANT).glob("*.parquet")
-    )
+    parquet_files = sorted((Path(snapshot_root) / WILDBENCH_VARIANT).glob("*.parquet"))
     if not parquet_files:
         raise FileNotFoundError(
             f"No WildBench V2 parquet files found under {snapshot_root}."
