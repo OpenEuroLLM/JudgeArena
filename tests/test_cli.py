@@ -10,7 +10,7 @@ from judgearena.config import RunConfig
 
 @pytest.fixture
 def capture_mains(monkeypatch):
-    """Replace both main functions (and logging) with spies recording the config."""
+    """Replace all main functions (and logging) with spies recording the config."""
     captured: dict[str, object] = {}
 
     def fake_main_ge(cfg: RunConfig) -> None:
@@ -21,9 +21,14 @@ def capture_mains(monkeypatch):
         captured["module"] = "elo"
         captured["cfg"] = cfg
 
+    def fake_main_wildbench(cfg: RunConfig) -> None:
+        captured["module"] = "wildbench"
+        captured["cfg"] = cfg
+
     monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
     monkeypatch.setattr(cli_module, "main_generate_and_evaluate", fake_main_ge)
     monkeypatch.setattr(cli_module, "main_elo", fake_main_elo)
+    monkeypatch.setattr(cli_module, "main_wildbench", fake_main_wildbench)
     return captured
 
 
@@ -78,6 +83,18 @@ def test_elo_task_dispatches(capture_mains, task: str, expected_arena: str):
     assert cfg.elo is not None
     assert cfg.elo.arena == expected_arena
     assert cfg.model.name == "Dummy/X"
+
+
+@pytest.mark.parametrize("task", ["wildbench-score", "wildbench-reward"])
+def test_wildbench_task_dispatches(capture_mains, task: str):
+    cli_module.cli(
+        ["--task", task, "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
+    )
+    assert capture_mains["module"] == "wildbench"
+    cfg = capture_mains["cfg"]
+    assert isinstance(cfg, RunConfig)
+    assert cfg.task == task
+    assert cfg.wildbench is not None
 
 
 def test_config_path_dispatches_and_cli_overrides(tmp_path, capture_mains):

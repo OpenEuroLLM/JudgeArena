@@ -5,7 +5,7 @@ Whether you're comparing proprietary models or testing your own fine-tuned creat
 
 ## ✨ Key Features
 
-🎯 **Flexible Benchmarking** – Evaluate models on `Alpaca-Eval`, `Arena-Hard`, `m-Arena-Hard` and others
+🎯 **Flexible Benchmarking** – Evaluate models on `Alpaca-Eval`, `Arena-Hard`, `m-Arena-Hard`, `WildBench V2` and others
 
 🔄 **Swappable Judges** – Switch between self-hosted (`vLLM`) or remote judges (`OpenAI`, `Together AI`, `OpenRouter`)
 
@@ -274,6 +274,49 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
+
+### WildBench V2
+
+JudgeArena supports both metrics from
+[WildBench](https://arxiv.org/abs/2406.04770), including conversation history,
+instance-specific checklists, the five task groups, and the official judge
+prompts:
+
+| Task | Description |
+|---|---|
+| `wildbench-score` | Scores each response from 1–10 and reports raw mean, published WB-Score, and task-macro score |
+| `wildbench-reward` | Pairwise five-level reward; averages the three official reference models by default |
+
+Run a small WB-Score smoke test:
+
+```bash
+judgearena \
+  --task wildbench-score \
+  --model.name VLLM/utter-project/EuroLLM-9B \
+  --judge.model OpenRouter/openai/gpt-4o \
+  --judge.engine_kwargs '{"model_kwargs":{"response_format":{"type":"json_object"}}}' \
+  --generation.n_instructions 10
+```
+
+For WB-Reward, omit `model.baseline` to use the released outputs for the three
+paper references (GPT-4-Turbo-0409, Claude-3-Haiku, and Llama-2-70B-chat):
+
+```bash
+judgearena \
+  --task wildbench-reward \
+  --model.name VLLM/utter-project/EuroLLM-9B \
+  --judge.model OpenRouter/openai/gpt-4o \
+  --judge.engine_kwargs '{"model_kwargs":{"response_format":{"type":"json_object"}}}' \
+  --generation.n_instructions 10 \
+  --wildbench.length_penalty_chars 500
+```
+
+Set `model.baseline` to compare against one custom reference instead. Use
+`judge.swap_mode: both` to judge both response orders; the default uses one
+seeded random order, matching the upstream evaluation. WildBench judging
+defaults to temperature `0.0`. Example YAML files are available in
+[`configs/wildbench_score.yaml`](configs/wildbench_score.yaml) and
+[`configs/wildbench_reward.yaml`](configs/wildbench_reward.yaml).
 
 ### ELO rating
 

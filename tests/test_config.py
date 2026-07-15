@@ -21,6 +21,14 @@ def _base_elo() -> dict:
     }
 
 
+def _base_wildbench(task: str = "wildbench-score") -> dict:
+    return {
+        "task": task,
+        "model": {"name": "Dummy/m"},
+        "judge": {"model": "Dummy/j"},
+    }
+
+
 def test_generate_config_constructs():
     cfg = RunConfig(**_base_generate())
     assert cfg.task == "alpaca-eval"
@@ -33,6 +41,46 @@ def test_elo_config_derives_arena():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
     assert cfg.elo.arena == "ComparIA"
+
+
+def test_wildbench_config_uses_defaults():
+    cfg = RunConfig(**_base_wildbench())
+    assert cfg.wildbench is not None
+    assert cfg.wildbench.max_words_to_eval == 1000
+    assert cfg.wildbench.length_penalty_chars is None
+    assert cfg.judge.temperature == 0.0
+
+
+def test_wildbench_reward_accepts_reference_and_length_penalty():
+    data = _base_wildbench("wildbench-reward")
+    data["model"]["baseline"] = "Dummy/reference"
+    data["judge"]["swap_mode"] = "both"
+    data["wildbench"] = {"length_penalty_chars": 100}
+    cfg = RunConfig(**data)
+    assert cfg.model.baseline == "Dummy/reference"
+    assert cfg.judge.swap_mode == "both"
+    assert cfg.wildbench is not None
+    assert cfg.wildbench.length_penalty_chars == 100
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("baseline", "Dummy/reference"),
+        ("swap_mode", "both"),
+        ("length_penalty_chars", 100),
+    ],
+)
+def test_wildbench_score_rejects_reward_only_settings(field, value):
+    data = _base_wildbench()
+    if field == "baseline":
+        data["model"][field] = value
+    elif field == "swap_mode":
+        data["judge"][field] = value
+    else:
+        data["wildbench"] = {field: value}
+    with pytest.raises(ValidationError):
+        RunConfig(**data)
 
 
 def test_elo_requires_model_path():

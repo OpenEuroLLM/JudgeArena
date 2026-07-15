@@ -1,0 +1,10 @@
+task: wildbench-score
+model:
+  name: VLLM/utter-project/EuroLLM-9B
+judge:
+  model: OpenRouter/openai/gpt-4o
+  engine_kwargs:
+    model_kwargs:
+      response_format: {type: json_object}
+generation:
+  n_instructions: 10

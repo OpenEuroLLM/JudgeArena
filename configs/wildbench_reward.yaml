@@ -1,0 +1,14 @@
+task: wildbench-reward
+model:
+  name: VLLM/utter-project/EuroLLM-9B
+judge:
+  model: OpenRouter/openai/gpt-4o
+  engine_kwargs:
+    model_kwargs:
+      response_format: {type: json_object}
+generation:
+  n_instructions: 10
+wildbench:
+  # Set an integer K to tie slight wins caused by responses longer by >K chars.
+  # Omit this field to disable the length penalty.
+  length_penalty_chars: 500

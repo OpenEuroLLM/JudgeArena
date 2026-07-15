@@ -10,10 +10,11 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from judgearena.config import build_run_config
-from judgearena.constants import ELO_TASK_PREFIX
+from judgearena.constants import ELO_TASK_PREFIX, WILDBENCH_TASKS
 from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
+from judgearena.wildbench import main as main_wildbench
 
 logger = get_logger(__name__)
 
@@ -36,6 +37,8 @@ def cli(argv: list[str] | None = None) -> None:
     logger.debug("Running with config: %s", cfg.model_dump())
     if cfg.task.startswith(ELO_TASK_PREFIX):
         main_elo(cfg)
+    elif cfg.task in WILDBENCH_TASKS:
+        main_wildbench(cfg)
     else:
         main_generate_and_evaluate(cfg)
 

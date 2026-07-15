@@ -16,6 +16,11 @@ ELO_TASK_TO_ARENA: dict[str, str] = {
     "elo-comparia": "ComparIA",
 }
 
+WILDBENCH_SCORE_TASK = "wildbench-score"
+WILDBENCH_REWARD_TASK = "wildbench-reward"
+WILDBENCH_TASKS = frozenset({WILDBENCH_SCORE_TASK, WILDBENCH_REWARD_TASK})
+"""WildBench V2 task identifiers supported by the dedicated pipeline."""
+
 
 # vLLM reasoning markers shared by the inference layer (judgearena.models) and
 # the reasoning-tag stripping in judgearena.utils.text.

@@ -14,7 +14,12 @@ logger = get_logger(__name__)
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
-    if dataset == "mt-bench":
+    if dataset in {"wildbench-score", "wildbench-reward"}:
+        from judgearena.instruction_dataset.wildbench import load_wildbench
+
+        df_instructions = load_wildbench()
+
+    elif dataset == "mt-bench":
         from judgearena.instruction_dataset.mt_bench import load_mt_bench
 
         df_instructions = load_mt_bench()

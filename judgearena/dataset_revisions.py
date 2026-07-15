@@ -35,6 +35,10 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
     "geoalgo/multilingual-contexts-to-be-completed": "06e73c95ad18d71a04b5a1b6464ed89d38195039",
     # Arena-Hard official source (used via datasets.load_dataset).
     "lmarena-ai/arena-hard-auto": "15f3746e21432264ce9b453999bde4f3c946d2e6",
+    # WildBench V2 tasks and the official reference-model completions used by
+    # WB-Reward Mix.
+    "allenai/WildBench": "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec",
+    "allenai/WildBench-V2-Model-Outputs": "d6755bc68220df853c0825a733430f73f5af2501",
 }
 
 

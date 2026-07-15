@@ -16,7 +16,13 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
+from judgearena.constants import (
+    ELO_TASK_PREFIX,
+    ELO_TASK_TO_ARENA,
+    WILDBENCH_REWARD_TASK,
+    WILDBENCH_SCORE_TASK,
+    WILDBENCH_TASKS,
+)
 from judgearena.generate_and_evaluate import native_pairwise_baseline
 
 # Set by build_run_config() for the duration of RunConfig() construction.
@@ -328,6 +334,20 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class WildBenchArgs(BaseModel):
+    """Settings specific to WildBench V2 evaluation."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    max_words_to_eval: int = Field(default=1000, gt=0)
+    """Maximum words retained from each history, query, and response in the
+    official judge prompt."""
+
+    length_penalty_chars: int | None = Field(default=None, ge=0)
+    """WB-Reward length margin ``K`` in characters. A slight win becomes a tie
+    when the winner is longer by more than ``K``. Unset disables the penalty."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -382,13 +402,20 @@ class RunConfig(BaseSettings):
     elo: EloArgs | None = None
     """ELO-task settings (only for ``elo-*`` tasks)."""
 
+    wildbench: WildBenchArgs | None = None
+    """WildBench V2 settings (only for ``wildbench-score`` and
+    ``wildbench-reward``)."""
+
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
         is_elo = self.task.startswith(ELO_TASK_PREFIX)
+        is_wildbench = self.task in WILDBENCH_TASKS
         if is_elo:
+            if self.wildbench is not None:
+                raise ValueError("wildbench config is only valid for WildBench tasks.")
             if self.elo is None:
                 self.elo = EloArgs()
             if self.elo.arena is None:
@@ -402,9 +429,36 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required for elo tasks.")
             if self.model.baseline is not None:
                 raise ValueError("model.baseline is not supported for elo tasks.")
+        elif is_wildbench:
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for elo-* tasks.")
+            if self.wildbench is None:
+                self.wildbench = WildBenchArgs()
+            if self.model.name is None:
+                raise ValueError("model.name is required for WildBench tasks.")
+            if self.judge.temperature is None:
+                self.judge.temperature = 0.0
+            if self.task == WILDBENCH_SCORE_TASK and self.model.baseline is not None:
+                raise ValueError(
+                    "model.baseline is not used by wildbench-score; omit it."
+                )
+            if self.task == WILDBENCH_SCORE_TASK and self.judge.swap_mode != "fixed":
+                raise ValueError(
+                    "judge.swap_mode is only meaningful for wildbench-reward."
+                )
+            if (
+                self.task == WILDBENCH_SCORE_TASK
+                and self.wildbench.length_penalty_chars is not None
+            ):
+                raise ValueError(
+                    "wildbench.length_penalty_chars is only valid for "
+                    f"{WILDBENCH_REWARD_TASK}."
+                )
         else:
             if self.elo is not None:
                 raise ValueError("elo config is only valid for elo-* tasks.")
+            if self.wildbench is not None:
+                raise ValueError("wildbench config is only valid for WildBench tasks.")
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (
