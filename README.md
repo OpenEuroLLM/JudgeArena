@@ -240,9 +240,9 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; ELO tasks (`elo-*`) estimate a single model's ELO rating against human-annotated arena opponents.
+Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generation-and-evaluation tasks produce pairwise preferences or benchmark-specific scores; ELO tasks (`elo-*`) estimate a single model's ELO rating against human-annotated arena opponents.
 
-### Generate + judge (pairwise)
+### Generation and evaluation
 
 | Task                         | Description                                                                                    |
 |------------------------------|------------------------------------------------------------------------------------------------|
@@ -256,6 +256,8 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
+| `wildbench-score`            | WildBench V2 checklist-based individual scoring                                                 |
+| `wildbench-reward`           | WildBench V2 pairwise reward against one or three reference models                              |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
@@ -274,49 +276,6 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
-
-### WildBench V2
-
-JudgeArena supports both metrics from
-[WildBench](https://arxiv.org/abs/2406.04770), including conversation history,
-instance-specific checklists, the five task groups, and the official judge
-prompts:
-
-| Task | Description |
-|---|---|
-| `wildbench-score` | Scores each response from 1–10 and reports raw mean, published WB-Score, and task-macro score |
-| `wildbench-reward` | Pairwise five-level reward; averages the three official reference models by default |
-
-Run a small WB-Score smoke test:
-
-```bash
-judgearena \
-  --task wildbench-score \
-  --model.name VLLM/utter-project/EuroLLM-9B \
-  --judge.model OpenRouter/openai/gpt-4o \
-  --judge.engine_kwargs '{"model_kwargs":{"response_format":{"type":"json_object"}}}' \
-  --generation.n_instructions 10
-```
-
-For WB-Reward, omit `model.baseline` to use the released outputs for the three
-paper references (GPT-4-Turbo-0409, Claude-3-Haiku, and Llama-2-70B-chat):
-
-```bash
-judgearena \
-  --task wildbench-reward \
-  --model.name VLLM/utter-project/EuroLLM-9B \
-  --judge.model OpenRouter/openai/gpt-4o \
-  --judge.engine_kwargs '{"model_kwargs":{"response_format":{"type":"json_object"}}}' \
-  --generation.n_instructions 10 \
-  --wildbench.length_penalty_chars 500
-```
-
-Set `model.baseline` to compare against one custom reference instead. Use
-`judge.swap_mode: both` to judge both response orders; the default uses one
-seeded random order, matching the upstream evaluation. WildBench judging
-defaults to temperature `0.0`. Example YAML files are available in
-[`configs/wildbench_score.yaml`](configs/wildbench_score.yaml) and
-[`configs/wildbench_reward.yaml`](configs/wildbench_reward.yaml).
 
 ### ELO rating
 
