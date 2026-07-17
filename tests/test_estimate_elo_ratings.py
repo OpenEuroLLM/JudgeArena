@@ -1,4 +1,6 @@
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -92,6 +94,8 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     swap_mode = kwargs.pop("swap_mode", "fixed")
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
+    calibrate_temperature = kwargs.pop("calibrate_temperature", False)
+    calibration_size = kwargs.pop("calibration_size", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
         "model": judge_model,
@@ -105,7 +109,13 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         model={"name": model},
         judge=judge,
         generation={"n_instructions": n_instructions},
-        elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
+        elo={
+            "arena": arena,
+            "n_bootstraps": n_bootstraps,
+            "languages": languages,
+            "calibrate_temperature": calibrate_temperature,
+            "calibration_size": calibration_size,
+        },
         run={"result_folder": result_folder},
     )
 
@@ -181,6 +191,58 @@ def test_main_returns_summary(tmp_path):
 def test_main_winrate_in_valid_range(tmp_path):
     result = main(_default_args(result_folder=str(tmp_path)))
     assert 0.0 <= result["winrate"] <= 1.0
+
+
+def test_main_writes_compact_metadata_and_config(tmp_path):
+    result = main(_default_args(result_folder=str(tmp_path)))
+    result_dir = Path(result["result_path"]).parent
+
+    assert (result_dir / "config.yaml").exists()
+    metadata = json.loads((result_dir / "run-metadata.v2.json").read_text())
+    assert metadata["identity"]["workflow"] == "elo"
+    assert metadata["identity"]["elo"]["arena"] == "ComparIA"
+    assert metadata["identity"]["model"]["name"] == "Dummy/my model"
+    assert metadata["identity"]["judge"]["model"].startswith("Dummy/")
+    assert metadata["configuration"]["path"] == "config.yaml"
+    assert metadata["inputs"]["example_count"] == 10
+    assert "judgment_count" not in metadata["inputs"]
+    assert "content_sha256" in metadata["inputs"]
+
+
+def test_calibration_judgments_and_prompt_are_recorded(monkeypatch, tmp_path):
+    original = estimate_elo_ratings.judge_and_parse_prefs
+    calls = []
+
+    def keep_all_arena_battles(df):
+        anchors = df.loc[:, ["model_a", "model_b", "winner"]].copy()
+        anchors["pref"] = anchors["winner"].map(_winner_to_pref)
+        anchors["pref_hard"] = anchors["pref"]
+        anchors["source"] = "human"
+        return anchors
+
+    def spy_judge(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        estimate_elo_ratings, "arena_anchor_battles", keep_all_arena_battles
+    )
+    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
+    result = main(
+        _default_args(
+            result_folder=str(tmp_path),
+            calibrate_temperature=True,
+            calibration_size=5,
+        )
+    )
+
+    metadata = json.loads(
+        (Path(result["result_path"]).parent / "run-metadata.v2.json").read_text()
+    )
+    assert metadata["inputs"]["calibration_example_count"] == 5
+    assert metadata["inputs"]["calibration_judgment_count"] == 5
+    assert calls[-1]["system_prompt"] is not None
+    assert calls[-1]["user_prompt_template"] is not None
 
 
 def test_main_winrate_depends_on_judge(tmp_path):

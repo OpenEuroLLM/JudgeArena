@@ -124,7 +124,7 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         ]
     )
 
-    prefs, annotations, metadata = judge_mt_bench_with_preset(
+    result = judge_mt_bench_with_preset(
         judge_chat_model=judge,
         judge_model="judge",
         questions=_questions_df(category="writing"),
@@ -140,14 +140,16 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     )
 
     assert len(judge.calls) == 2
-    assert len(prefs) == 2
-    assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
-    assert prefs.iloc[0] < 0.5
-    assert annotations[0]["model_A"] == "model-a"
-    assert annotations[1]["model_A"] == "model-b"
-    assert annotations[1]["swapped"] is True
-    assert "B1" in annotations[1]["user_prompt"]
-    assert metadata == [
+    assert result.judgment_count == 2
+    assert len(result.preferences) == 2
+    assert result.preferences.iloc[0] == pytest.approx(result.preferences.iloc[1])
+    assert result.preferences.iloc[0] < 0.5
+    assert result.annotations[0]["model_A"] == "model-a"
+    assert result.annotations[1]["model_A"] == "model-b"
+    assert result.annotations[1]["swapped"] is True
+    assert "B1" in result.annotations[1]["user_prompt"]
+    assert result.item_metadata == [
         {"question_id": 1, "category": "writing", "turn": 1},
         {"question_id": 1, "category": "writing", "turn": 1},
     ]
+    assert [variant.name for variant in result.prompt_variants] == ["default-single"]

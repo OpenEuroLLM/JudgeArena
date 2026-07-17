@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pytest
 
@@ -242,6 +244,15 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
 
     avg_pref = sum(prefs) / len(prefs)
     assert avg_pref == 0.5
+
+    metadata_path = next(tmp_path.glob("*/run-metadata.v2.json"))
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["inputs"]["example_count"] == 5
+    assert metadata["inputs"]["judgment_count"] == 10
+    assert metadata["identity"]["workflow"] == "pairwise"
+    assert metadata["identity"]["model"]["name"] == "Dummy/no answer"
+    assert metadata["configuration"]["path"] == "config.yaml"
+    assert "content_sha256" in metadata["inputs"]
 
 
 def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path):

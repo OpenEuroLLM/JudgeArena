@@ -14,7 +14,9 @@ from judgearena.mt_bench.common import (
 )
 from judgearena.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
+    MTBenchJudgingResult,
     build_mt_bench_pairwise_judge_items,
+    collect_prompt_variants,
     infer_pairwise_judgments_by_prompt_groups,
     swap_pairwise_answer_kwargs,
 )
@@ -291,6 +293,7 @@ def _resolve_fastchat_item_result(
         "judge": judge_model,
         "prompt_name": prompt.name,
         "system_prompt": prompt.system_prompt,
+        "user_prompt_template": prompt.user_prompt_template,
         "g1_user_prompt": g1_user_prompt,
         "g1_judgment": g1_raw,
         "g1_verdict": g1_verdict,
@@ -347,7 +350,7 @@ def judge_mt_bench_pairwise_fastchat(
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
-) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
+) -> MTBenchJudgingResult:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
@@ -362,6 +365,7 @@ def judge_mt_bench_pairwise_fastchat(
         prompt_preset=prompt_preset,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
+    prompt_variants = collect_prompt_variants(items)
 
     g1_judgments, _ = infer_pairwise_judgments_by_prompt_groups(
         judge_chat_model=judge_chat_model,
@@ -402,4 +406,11 @@ def judge_mt_bench_pairwise_fastchat(
         metadata.append(item_metadata)
         prefs.append(preference)
 
-    return pd.Series(prefs, dtype=float), annotations, metadata, num_inconsistent
+    return MTBenchJudgingResult(
+        preferences=pd.Series(prefs, dtype=float),
+        annotations=annotations,
+        item_metadata=metadata,
+        prompt_variants=prompt_variants,
+        judgment_count=len(items) * (2 if swap_mode == "both" else 1),
+        num_inconsistent=num_inconsistent,
+    )

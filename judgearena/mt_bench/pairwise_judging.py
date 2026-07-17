@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
@@ -31,6 +31,49 @@ class MTBenchJudgeItem:
     @property
     def prompt_name(self) -> str:
         return self.prompt.name
+
+
+@dataclass(frozen=True)
+class MTBenchPromptVariant:
+    name: str
+    system_prompt: str | None
+    user_prompt_template: str
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "name": self.name,
+            "system_prompt": self.system_prompt,
+            "user_prompt_template": self.user_prompt_template,
+        }
+
+
+@dataclass
+class MTBenchJudgingResult:
+    preferences: pd.Series
+    annotations: list[dict[str, Any]]
+    item_metadata: list[dict[str, object]]
+    prompt_variants: list[MTBenchPromptVariant]
+    judgment_count: int
+    num_inconsistent: int = 0
+
+
+def collect_prompt_variants(
+    items: list[MTBenchJudgeItem],
+) -> list[MTBenchPromptVariant]:
+    """Collect the exact named prompts selected for this judging run."""
+    variants_by_name: dict[str, MTBenchPromptVariant] = {}
+    for item in items:
+        variant = MTBenchPromptVariant(
+            name=item.prompt.name,
+            system_prompt=item.prompt.system_prompt,
+            user_prompt_template=item.prompt.user_prompt_template,
+        )
+        existing = variants_by_name.setdefault(variant.name, variant)
+        if existing != variant:
+            raise ValueError(
+                f"MT-Bench prompt name {variant.name!r} resolved to multiple templates."
+            )
+    return [variants_by_name[name] for name in sorted(variants_by_name)]
 
 
 def group_indices_by_prompt_key(items: list[MTBenchJudgeItem]) -> dict[str, list[int]]:

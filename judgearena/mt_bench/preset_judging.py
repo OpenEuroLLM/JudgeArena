@@ -13,7 +13,9 @@ from judgearena.mt_bench.common import (
 )
 from judgearena.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
+    MTBenchJudgingResult,
     build_mt_bench_pairwise_judge_items,
+    collect_prompt_variants,
     infer_pairwise_judgments_by_prompt_groups,
 )
 from judgearena.mt_bench.prompt_templates import build_mt_bench_user_prompt_template
@@ -154,7 +156,7 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
     strip_thinking_before_judging: bool = False,
-) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
+) -> MTBenchJudgingResult:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
 
@@ -171,6 +173,7 @@ def judge_mt_bench_with_preset(
         user_file=user_file,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
+    prompt_variants = collect_prompt_variants(items)
     judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
@@ -242,4 +245,10 @@ def judge_mt_bench_with_preset(
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 
-    return pd.Series(preferences, dtype=float), annotations, metadata
+    return MTBenchJudgingResult(
+        preferences=pd.Series(preferences, dtype=float),
+        annotations=annotations,
+        item_metadata=metadata,
+        prompt_variants=prompt_variants,
+        judgment_count=len(annotations),
+    )

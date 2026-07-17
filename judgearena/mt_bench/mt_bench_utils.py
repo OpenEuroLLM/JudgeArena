@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.dataset_revisions import revisions_for_task
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.mt_bench import (
@@ -25,13 +26,17 @@ from judgearena.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
+from judgearena.mt_bench.pairwise_judging import (
+    MTBenchJudgingResult,
+    MTBenchPromptVariant,
+)
 from judgearena.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     resolve_run_judge_prompt,
 )
-from judgearena.repro import write_run_metadata
+from judgearena.repro import InputMetadata, RunContext, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -151,6 +156,7 @@ def _build_mt_bench_input_payloads(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
 ) -> dict[str, object]:
+    """Build the exact MT-Bench inputs used by the metadata fingerprint."""
     return {
         "instruction_index": questions_df.index.tolist(),
         "turn_1": questions_df["turn_1"].tolist(),
@@ -167,30 +173,47 @@ def _save_mt_bench_results(
     cfg: RunConfig,
     res_folder: Path,
     result_name: str,
-    results: dict[str, object],
+    result_path: Path,
     annotations_df: pd.DataFrame,
     started_at_utc: datetime,
     input_payloads: dict[str, object],
-    judge_system_prompt: str | None = None,
-    judge_user_prompt_template: str | None = None,
+    judgment_count: int,
+    judge_prompt: ResolvedJudgePrompt,
+    prompt_variants: list[MTBenchPromptVariant],
+    run_log_path: Path | None = None,
 ) -> None:
     """Persist MT-Bench arguments, annotations, aggregate results, and metadata."""
     res_folder.mkdir(parents=True, exist_ok=True)
 
     from judgearena.config import dump_config
 
-    dump_config(cfg, res_folder / "config.yaml")
+    config_path = res_folder / "config.yaml"
+    dump_config(cfg, config_path)
 
-    annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
+    annotations_path = res_folder / f"{result_name}-annotations.csv"
+    annotations_df.to_csv(annotations_path, index=False)
 
     write_run_metadata(
         output_dir=res_folder,
         entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
-        run=cfg.model_dump(),
-        results=results,
-        input_payloads=input_payloads,
-        judge_system_prompt=judge_system_prompt,
-        judge_user_prompt_template=judge_user_prompt_template,
+        context=RunContext.from_config(
+            cfg,
+            workflow="mt_bench",
+            configuration_path=config_path,
+        ),
+        inputs=InputMetadata.capture(
+            dataset_revisions=revisions_for_task(cfg.task),
+            example_ids=input_payloads["instruction_index"],
+            content=input_payloads,
+            judgment_count=judgment_count,
+        ),
+        judge_prompt=judge_prompt,
+        prompt_variants=[variant.to_dict() for variant in prompt_variants],
+        artifacts={
+            "annotations": annotations_path,
+            "results": result_path,
+            **({"log": run_log_path} if run_log_path is not None else {}),
+        },
         started_at_utc=started_at_utc,
     )
 
@@ -200,16 +223,16 @@ def _finalize_mt_bench_run(
     cfg: RunConfig,
     res_folder: Path,
     result_name: str,
-    prefs: pd.Series,
-    annotations: list[dict[str, object]],
-    combined_metadata: list[dict[str, object]],
+    judging_result: MTBenchJudgingResult,
     resolved_prompt: ResolvedJudgePrompt,
     questions_df: pd.DataFrame,
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     started_at_utc: datetime,
+    run_log_path: Path | None = None,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
+    prefs = judging_result.preferences
     stats = compute_pref_summary(prefs)
     report = BattleReport(
         task=cfg.task,
@@ -217,35 +240,35 @@ def _finalize_mt_bench_run(
         model_b=cfg.model.baseline,
         judge_model=cfg.judge.model,
         summary=stats,
-        per_category=_compute_grouped_stats(prefs, combined_metadata, "category"),
-        per_turn=_compute_grouped_stats(prefs, combined_metadata, "turn"),
+        per_category=_compute_grouped_stats(
+            prefs, judging_result.item_metadata, "category"
+        ),
+        per_turn=_compute_grouped_stats(prefs, judging_result.item_metadata, "turn"),
         preferences=prefs.tolist(),
         metadata={
-            **resolved_prompt.metadata(),
-            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
-            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             **(extra_result_fields or {}),
             "date": datetime.now(UTC).isoformat(),
             "user": os.getenv("USER", ""),
         },
     )
-    results = report.to_dict()
     report.render()
-    report.save(res_folder / f"results-{result_name}.json")
+    result_path = report.save(res_folder / f"results-{result_name}.json")
     _save_mt_bench_results(
         cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
-        results=results,
-        annotations_df=pd.DataFrame(annotations),
+        result_path=result_path,
+        annotations_df=pd.DataFrame(judging_result.annotations),
         started_at_utc=started_at_utc,
         input_payloads=_build_mt_bench_input_payloads(
             questions_df=questions_df,
             completions_a=completions_a,
             completions_b=completions_b,
         ),
-        judge_system_prompt=resolved_prompt.system_prompt,
-        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        judgment_count=judging_result.judgment_count,
+        judge_prompt=resolved_prompt,
+        prompt_variants=judging_result.prompt_variants,
+        run_log_path=run_log_path,
     )
     return prefs
 
@@ -262,37 +285,35 @@ def _run_mt_bench_fastchat(
     resolved_prompt: ResolvedJudgePrompt,
     fastchat_prompt_preset: str,
     started_at_utc: datetime,
+    run_log_path: Path | None = None,
 ) -> pd.Series:
-    prefs, annotations, combined_metadata, num_inconsistent = (
-        judge_mt_bench_pairwise_fastchat(
-            judge_chat_model=judge_chat_model,
-            judge_model=cfg.judge.model,
-            questions=questions_df,
-            completions_a=completions_a,
-            completions_b=completions_b,
-            model_a=cfg.model.name,
-            model_b=cfg.model.baseline,
-            turns_mode="both",
-            swap_mode=cfg.judge.swap_mode,
-            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            prompt_preset=fastchat_prompt_preset,
-            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        )
+    judging_result = judge_mt_bench_pairwise_fastchat(
+        judge_chat_model=judge_chat_model,
+        judge_model=cfg.judge.model,
+        questions=questions_df,
+        completions_a=completions_a,
+        completions_b=completions_b,
+        model_a=cfg.model.name,
+        model_b=cfg.model.baseline,
+        turns_mode="both",
+        swap_mode=cfg.judge.swap_mode,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=cfg.run.use_tqdm,
+        prompt_preset=fastchat_prompt_preset,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
         cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
-        prefs=prefs,
-        annotations=annotations,
-        combined_metadata=combined_metadata,
+        judging_result=judging_result,
         resolved_prompt=resolved_prompt,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,
         started_at_utc=started_at_utc,
-        extra_result_fields={"num_inconsistent": num_inconsistent},
+        run_log_path=run_log_path,
+        extra_result_fields={"num_inconsistent": judging_result.num_inconsistent},
     )
 
 
@@ -307,8 +328,9 @@ def _run_mt_bench_preset(
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
     started_at_utc: datetime,
+    run_log_path: Path | None = None,
 ) -> pd.Series:
-    prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
+    judging_result = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
         judge_model=cfg.judge.model,
         questions=questions_df,
@@ -330,14 +352,13 @@ def _run_mt_bench_preset(
         cfg=cfg,
         res_folder=res_folder,
         result_name=result_name,
-        prefs=prefs,
-        annotations=annotations,
-        combined_metadata=combined_metadata,
+        judging_result=judging_result,
         resolved_prompt=resolved_prompt,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,
         started_at_utc=started_at_utc,
+        run_log_path=run_log_path,
     )
 
 
@@ -347,6 +368,7 @@ def run_mt_bench(
     *,
     res_folder: Path,
     result_name: str,
+    run_log_path: Path | None = None,
 ):
     """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
@@ -395,6 +417,7 @@ def run_mt_bench(
             resolved_prompt=resolved_prompt,
             fastchat_prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
             started_at_utc=run_started_at,
+            run_log_path=run_log_path,
         )
     return _run_mt_bench_preset(
         cfg=cfg,
@@ -406,4 +429,5 @@ def run_mt_bench(
         judge_chat_model=judge_chat_model,
         resolved_prompt=resolved_prompt,
         started_at_utc=run_started_at,
+        run_log_path=run_log_path,
     )

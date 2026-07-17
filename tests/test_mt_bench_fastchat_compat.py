@@ -96,7 +96,7 @@ def test_select_prompt_variants(
 def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
     judge = SequenceJudge(["[[A]]", "[[B]]"])
 
-    prefs, annotations, metadata, num_inconsistent = judge_mt_bench_pairwise_fastchat(
+    result = judge_mt_bench_pairwise_fastchat(
         judge_chat_model=judge,
         judge_model="judge",
         questions=_questions_df(category="writing"),
@@ -110,11 +110,15 @@ def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
         use_tqdm=False,
     )
 
-    assert num_inconsistent == 0
+    assert result.num_inconsistent == 0
+    assert result.judgment_count == 2
     assert len(judge.calls) == 2
-    assert prefs.tolist() == [0.0]
-    assert annotations[0]["g1_winner"] == "model_A"
-    assert annotations[0]["g2_winner"] == "model_A"
-    assert annotations[0]["final_winner"] == "model_A"
-    assert "B1" in annotations[0]["g2_user_prompt"]
-    assert metadata == [{"question_id": 1, "category": "writing", "turn": 1}]
+    assert result.preferences.tolist() == [0.0]
+    assert result.annotations[0]["g1_winner"] == "model_A"
+    assert result.annotations[0]["g2_winner"] == "model_A"
+    assert result.annotations[0]["final_winner"] == "model_A"
+    assert "B1" in result.annotations[0]["g2_user_prompt"]
+    assert result.item_metadata == [
+        {"question_id": 1, "category": "writing", "turn": 1}
+    ]
+    assert [variant.name for variant in result.prompt_variants] == ["pair-v2"]

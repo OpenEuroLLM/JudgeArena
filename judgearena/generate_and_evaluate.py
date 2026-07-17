@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.dataset_revisions import revisions_for_task
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
@@ -35,7 +36,7 @@ from judgearena.models import (
     make_model,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import write_run_metadata
+from judgearena.repro import InputMetadata, RunContext, write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -249,13 +250,16 @@ def main(cfg: "RunConfig"):
         run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
         res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
         res_folder.mkdir(parents=True, exist_ok=True)
+        run_log_path = None
         if not cfg.run.no_log_file:
-            attach_file_handler(make_run_log_path(res_folder))
+            run_log_path = make_run_log_path(res_folder)
+            attach_file_handler(run_log_path)
         return run_mt_bench(
             cfg,
             ignore_cache,
             res_folder=res_folder,
             result_name=name,
+            run_log_path=run_log_path,
         )
 
     # Currrently, we run context evaluation
@@ -292,8 +296,10 @@ def main(cfg: "RunConfig"):
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
     res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
     res_folder.mkdir(parents=True, exist_ok=True)
+    run_log_path = None
     if not cfg.run.no_log_file:
-        attach_file_handler(make_run_log_path(res_folder))
+        run_log_path = make_run_log_path(res_folder)
+        attach_file_handler(run_log_path)
 
     logger.info(
         "Using task %s and evaluating %s against baseline %s.",
@@ -390,7 +396,8 @@ def main(cfg: "RunConfig"):
     # save the resolved config for results analysis (round-trippable via --config_path)
     from judgearena.config import dump_config
 
-    dump_config(cfg, res_folder / "config.yaml")
+    config_path = res_folder / "config.yaml"
+    dump_config(cfg, config_path)
 
     logger.info("Saving results to %s", res_folder)
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
@@ -427,7 +434,8 @@ def main(cfg: "RunConfig"):
         df_reversed["judge"] = cfg.judge.model
         df = pd.concat([df, df_reversed])
 
-    df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
+    annotations_path = res_folder / f"{name}-annotations.csv"
+    df.to_csv(annotations_path, index=False)
 
     # compute and report statistics
     summary = compute_pref_summary(prefs)
@@ -444,12 +452,8 @@ def main(cfg: "RunConfig"):
         metadata={
             "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
             "baseline_models": baseline_plan.unique_models,
-            **resolved_prompt.metadata(),
-            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
-            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
         },
     )
-    results = report.to_dict()
     logger.info(
         "%s vs %s judged by %s",
         cfg.model.name,
@@ -457,27 +461,37 @@ def main(cfg: "RunConfig"):
         cfg.judge.model,
     )
     report.render()
-    report.save(res_folder / f"results-{name}.json")
-
-    eval_instructions = instructions.head(n_instructions).tolist()
-    eval_completions_A = completions_A.head(n_instructions).tolist()
-    eval_completions_B = completions_B.head(n_instructions).tolist()
+    result_path = report.save(res_folder / f"results-{name}.json")
 
     try:
         write_run_metadata(
             output_dir=res_folder,
             entrypoint="judgearena.generate_and_evaluate.main",
-            run=cfg.model_dump(),
-            results=results,
-            input_payloads={
-                "instruction_index": eval_instruction_index,
-                "instructions": eval_instructions,
-                "completions_A": eval_completions_A,
-                "completions_B": eval_completions_B,
-                "baseline_model_B": baseline_per_eval.tolist(),
+            context=RunContext.from_config(
+                cfg,
+                workflow="pairwise",
+                configuration_path=config_path,
+            ),
+            inputs=InputMetadata.capture(
+                dataset_revisions=revisions_for_task(cfg.task),
+                example_ids=eval_instruction_index,
+                content={
+                    "instructions": instructions.loc[eval_instruction_index].tolist(),
+                    "completions_a": completions_A.loc[eval_instruction_index].tolist(),
+                    "completions_b": completions_B.loc[eval_instruction_index].tolist(),
+                    "baseline_models": baseline_per_eval.tolist(),
+                },
+                judgment_count=len(annotations)
+                + (
+                    len(annotations_reversed) if annotations_reversed is not None else 0
+                ),
+            ),
+            judge_prompt=resolved_prompt,
+            artifacts={
+                "annotations": annotations_path,
+                "results": result_path,
+                **({"log": run_log_path} if run_log_path is not None else {}),
             },
-            judge_system_prompt=resolved_prompt.system_prompt,
-            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
         )
     except OSError as e:

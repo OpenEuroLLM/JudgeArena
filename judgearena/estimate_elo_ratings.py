@@ -12,6 +12,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
+from judgearena.dataset_revisions import revisions_for_arena
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -23,7 +24,7 @@ from judgearena.generate import generate_instructions
 from judgearena.generate_and_evaluate import _build_generation_kwargs
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
-from judgearena.repro import write_run_metadata
+from judgearena.repro import InputMetadata, RunContext, write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
 
@@ -619,6 +620,8 @@ def main(cfg: "RunConfig") -> dict:
     # Run the judge on a random subset of human arena battles that already
     # have ground-truth winner labels so we can fit T* via MLE.
     calibrated_temperature: float | None = None
+    calibration_example_count: int | None = None
+    calibration_judgment_count: int | None = None
     if cfg.elo.calibrate_temperature:
         if not cfg.elo.soft_elo:
             logger.warning(
@@ -639,6 +642,7 @@ def main(cfg: "RunConfig") -> dict:
             cal_battles = df_arena.sample(
                 n=_cal_n, random_state=int(rng.integers(0, 2**31))
             )
+            calibration_example_count = len(cal_battles)
 
             cal_instructions = [
                 _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][0])
@@ -655,17 +659,29 @@ def main(cfg: "RunConfig") -> dict:
 
             judge_chat_model_cal = make_model(
                 model=cfg.judge.model,
-                max_tokens=cfg.judge.max_out_tokens,
                 **judge_extra_kwargs,
             )
-            cal_annotations, _, cal_prefs = judge_and_parse_prefs(
-                judge_chat_model=judge_chat_model_cal,
-                instructions=cal_instructions,
-                completions_A=cal_completions_a,
-                completions_B=cal_completions_b,
-                swap_mode=cfg.judge.swap_mode,
-                provide_explanation=cfg.judge.provide_explanation,
-                truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+            cal_annotations, cal_annotations_reversed, cal_prefs = (
+                judge_and_parse_prefs(
+                    judge_chat_model=judge_chat_model_cal,
+                    instructions=cal_instructions,
+                    completions_A=cal_completions_a,
+                    completions_B=cal_completions_b,
+                    swap_mode=cfg.judge.swap_mode,
+                    provide_explanation=cfg.judge.provide_explanation,
+                    strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+                    system_prompt=resolved_prompt.system_prompt,
+                    user_prompt_template=resolved_prompt.user_prompt_template,
+                    prompt_preset=resolved_prompt.preset_name,
+                    parser_mode=resolved_prompt.parser_mode,
+                    truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+                    use_tqdm=use_tqdm,
+                )
+            )
+            calibration_judgment_count = len(cal_annotations) + (
+                len(cal_annotations_reversed)
+                if cal_annotations_reversed is not None
+                else 0
             )
 
             # Build (delta_s, y) pairs from calibration battles.
@@ -824,6 +840,11 @@ def main(cfg: "RunConfig") -> dict:
     # instruction-index join key back to the arena initial table / completion
     # cache. battles.parquet keeps pref_hard so both hard and soft ELO recompute.
     res_dir = result_path.parent
+    from judgearena.config import dump_config
+
+    config_path = res_dir / "config.yaml"
+    dump_config(cfg, config_path)
+
     battle_cols = [
         "model_a",
         "model_b",
@@ -834,14 +855,21 @@ def main(cfg: "RunConfig") -> dict:
         "judge_model",
         "question_id",
     ]
+    battles_path = res_dir / "battles.parquet"
     write_battles(
-        res_dir / "battles.parquet",
+        battles_path,
         df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
     )
+    artifacts: dict[str, Path] = {
+        "battles": battles_path,
+        "results": result_path,
+    }
     if bootstrap_ratings:
+        bootstrap_path = res_dir / "bootstrap_ratings.csv"
         pd.DataFrame(bootstrap_ratings).to_csv(
-            res_dir / "bootstrap_ratings.csv", index=False
+            bootstrap_path, index=False
         )
+        ratings_path = res_dir / "elo_ratings.json"
         Leaderboard(
             arena=cfg.elo.arena,
             model=model_name,
@@ -849,7 +877,13 @@ def main(cfg: "RunConfig") -> dict:
             n_bootstraps=n_bootstraps,
             seed=cfg.run.seed,
             ratings=entries,
-        ).write(res_dir / "elo_ratings.json")
+        ).write(ratings_path)
+        artifacts.update(
+            {
+                "bootstrap_ratings": bootstrap_path,
+                "elo_ratings": ratings_path,
+            }
+        )
 
     # Reproducibility manifest (git hash, dependency versions, timings) — parity
     # with the other entrypoints, all of which write run-metadata. Best-effort:
@@ -858,15 +892,33 @@ def main(cfg: "RunConfig") -> dict:
         write_run_metadata(
             output_dir=res_dir,
             entrypoint="judgearena.estimate_elo_ratings.main",
-            run=cfg.model_dump(),
-            results=results,
-            input_payloads=(
-                {"question_id": df_battles["question_id"].tolist()}
-                if "question_id" in df_battles.columns
-                else None
+            context=RunContext.from_config(
+                cfg,
+                workflow="elo",
+                configuration_path=config_path,
             ),
-            judge_system_prompt=resolved_prompt.system_prompt,
-            judge_user_prompt_template=resolved_prompt.user_prompt_template,
+            inputs=InputMetadata.capture(
+                dataset_revisions=revisions_for_arena(cfg.elo.arena),
+                example_ids=(
+                    df_battles["question_id"].tolist()
+                    if "question_id" in df_battles.columns
+                    else None
+                ),
+                content=df_judge[
+                    [
+                        "instruction",
+                        "completion_A",
+                        "completion_B",
+                        "opponent_model",
+                    ]
+                ].to_dict(orient="records"),
+                example_count=len(df_battles),
+                judgment_count=n_llm,
+                calibration_example_count=calibration_example_count,
+                calibration_judgment_count=calibration_judgment_count,
+            ),
+            judge_prompt=resolved_prompt,
+            artifacts=artifacts,
             started_at_utc=run_started_at,
         )
     except OSError as e:

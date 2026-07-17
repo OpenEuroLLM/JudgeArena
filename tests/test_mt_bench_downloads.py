@@ -7,7 +7,14 @@ import judgearena.instruction_dataset.mt_bench as mt_bench
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
-from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
+from judgearena.mt_bench.pairwise_judging import (
+    MTBenchJudgingResult,
+    MTBenchPromptVariant,
+)
+from judgearena.prompts.registry import (
+    FASTCHAT_PAIRWISE_PROMPT_PRESET,
+    resolve_judge_prompt,
+)
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -208,7 +215,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
 
     def fake_write_run_metadata(**kwargs):
         captured.update(kwargs)
-        return tmp_path / "run-metadata.v1.json"
+        return tmp_path / "run-metadata.v2.json"
 
     monkeypatch.setattr(
         mt_bench_utils,
@@ -221,17 +228,44 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         judge={"model": "judge"},
     )
     started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    resolved_prompt = resolve_judge_prompt(preset="default")
+    result_path = tmp_path / "results-mt-bench-test.json"
+    result_path.write_text("{}")
 
     mt_bench_utils._save_mt_bench_results(
         cfg=cfg,
         res_folder=tmp_path,
         result_name="mt-bench-test",
-        results={"win_rate": 0.5, "preferences": [1.0]},
-        annotations_df=pd.DataFrame([{"preference": 1.0}]),
+        result_path=result_path,
+        annotations_df=pd.DataFrame(
+            [
+                {
+                    "preference": 1.0,
+                    "prompt_name": "annotation-only",
+                    "system_prompt": "not metadata input",
+                    "user_prompt_template": "not metadata input",
+                }
+            ]
+        ),
         started_at_utc=started_at,
-        input_payloads={"instruction_index": [1]},
-        judge_system_prompt="system",
-        judge_user_prompt_template="user",
+        input_payloads={
+            "instruction_index": [1],
+            "turn_1": ["Q"],
+            "turn_2": ["Q2"],
+            "completion_turn_1_A": ["A1"],
+            "completion_turn_2_A": ["A2"],
+            "completion_turn_1_B": ["B1"],
+            "completion_turn_2_B": ["B2"],
+        },
+        judgment_count=1,
+        judge_prompt=resolved_prompt,
+        prompt_variants=[
+            MTBenchPromptVariant(
+                name="single",
+                system_prompt="system",
+                user_prompt_template="user {answer}",
+            )
+        ],
     )
 
     assert (tmp_path / "config.yaml").exists()
@@ -239,10 +273,54 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
     # The results JSON is now written by report.save() in _finalize_mt_bench_run,
     # not by _save_mt_bench_results (which writes config / annotations / run metadata).
     assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
-    assert captured["input_payloads"] == {"instruction_index": [1]}
-    assert captured["judge_system_prompt"] == "system"
-    assert captured["judge_user_prompt_template"] == "user"
+    assert captured["context"].identity.workflow == "mt_bench"
+    assert captured["context"].identity.model.name == "model-a"
+    assert captured["context"].identity.judge.model == "judge"
+    assert captured["inputs"].example_count == 1
+    assert captured["inputs"].judgment_count is None
+    assert captured["inputs"].content_sha256 is not None
+    assert captured["prompt_variants"] == [
+        {
+            "name": "single",
+            "system_prompt": "system",
+            "user_prompt_template": "user {answer}",
+        }
+    ]
+    assert captured["artifacts"] == {
+        "annotations": tmp_path / "mt-bench-test-annotations.csv",
+        "results": result_path,
+    }
+    assert captured["judge_prompt"] is resolved_prompt
     assert captured["started_at_utc"] == started_at
+
+
+def test_build_mt_bench_input_payloads_preserves_original_fields():
+    questions = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q2"], "unused": ["ignored"]},
+        index=[7],
+    )
+    completions_a = pd.DataFrame(
+        {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
+        index=[7],
+    )
+    completions_b = pd.DataFrame(
+        {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
+        index=[7],
+    )
+
+    assert mt_bench_utils._build_mt_bench_input_payloads(
+        questions_df=questions,
+        completions_a=completions_a,
+        completions_b=completions_b,
+    ) == {
+        "instruction_index": [7],
+        "turn_1": ["Q1"],
+        "turn_2": ["Q2"],
+        "completion_turn_1_A": ["A1"],
+        "completion_turn_2_A": ["A2"],
+        "completion_turn_1_B": ["B1"],
+        "completion_turn_2_B": ["B2"],
+    }
 
 
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
@@ -548,12 +626,20 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     )
     monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
     monkeypatch.setattr(
-        mt_bench_utils, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
+        mt_bench_utils,
+        "_finalize_mt_bench_run",
+        lambda **kwargs: kwargs["judging_result"].preferences,
     )
 
     def fake_judge(**kwargs):
         captured["judge"] = kwargs
-        return pd.Series([0.0], dtype=float), [], [], 0
+        return MTBenchJudgingResult(
+            preferences=pd.Series([0.0], dtype=float),
+            annotations=[],
+            item_metadata=[],
+            prompt_variants=[],
+            judgment_count=1,
+        )
 
     monkeypatch.setattr(mt_bench_utils, "judge_mt_bench_pairwise_fastchat", fake_judge)
 

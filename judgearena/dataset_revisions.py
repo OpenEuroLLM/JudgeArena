@@ -54,11 +54,51 @@ def hf_revision(repo_id: str) -> str | None:
 def all_dataset_revisions() -> dict[str, str | None]:
     """Return a copy of every pin recorded in this module.
 
-    Used by :func:`judgearena.repro.write_run_metadata` to record the
-    pin table alongside each run so future readers know which version of
-    the data was visible at the time of the run.
+    Run metadata uses :func:`revisions_for_task` or
+    :func:`revisions_for_arena` so it records only sources relevant to that
+    experiment rather than copying the complete global pin table.
     """
     return {
         **HF_DATASET_REVISIONS,
         **{f"raw:{k}": v for k, v in RAW_URL_REVISIONS.items()},
+    }
+
+
+def revisions_for_task(task: str) -> dict[str, str | None]:
+    """Return only the pinned sources used by one instruction benchmark."""
+    repo_ids: list[str] = []
+    if task == "alpaca-eval":
+        repo_ids = ["judge-arena/judge-arena-dataset"]
+    elif task.startswith("arena-hard-"):
+        repo_ids = ["lmarena-ai/arena-hard-auto"]
+    elif task.startswith("m-arena-hard-v0.1"):
+        repo_ids = ["CohereLabs/m-ArenaHard"]
+    elif task.startswith("m-arena-hard-v2.0"):
+        repo_ids = ["CohereLabs/m-ArenaHard-v2.0"]
+    elif task == "mt-bench":
+        repo_ids = ["lmsys/mt-bench"]
+    elif task.startswith("fluency-"):
+        repo_ids = ["geoalgo/multilingual-contexts-to-be-completed"]
+
+    revisions = {repo_id: hf_revision(repo_id) for repo_id in repo_ids}
+    if task == "mt-bench":
+        revisions["raw:lm-sys/FastChat"] = RAW_URL_REVISIONS.get("lm-sys/FastChat")
+    return revisions
+
+
+def revisions_for_arena(arena: str) -> dict[str, str | None]:
+    """Return the pinned source revision(s) used by one ELO arena."""
+    arena_repositories = {
+        "LMArena-100k": ["lmarena-ai/arena-human-preference-100k"],
+        "LMArena-55k": ["lmarena-ai/arena-human-preference-55k"],
+        "LMArena-140k": ["lmarena-ai/arena-human-preference-140k"],
+        "LMArena": [
+            "lmarena-ai/arena-human-preference-100k",
+            "lmarena-ai/arena-human-preference-55k",
+            "lmarena-ai/arena-human-preference-140k",
+        ],
+        "ComparIA": ["ministere-culture/comparia-votes"],
+    }
+    return {
+        repo_id: hf_revision(repo_id) for repo_id in arena_repositories.get(arena, [])
     }
