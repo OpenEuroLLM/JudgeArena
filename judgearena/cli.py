@@ -20,10 +20,16 @@ from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import CliArgs
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
+from judgearena.meta_eval.cli_args import (
+    add_meta_eval_arguments,
+    build_meta_eval_args,
+)
+from judgearena.meta_eval.runner import run_or_exit as main_meta_eval
 
 logger = get_logger(__name__)
 
 ELO_TASK_PREFIX = "elo-"
+META_EVAL_TASK = "meta-eval"
 
 # Lowercase CLI task name -> canonical arena identifier used inside
 # ``judgearena.arenas_utils.KNOWN_ARENAS`` and the ``benchmark`` column of
@@ -42,8 +48,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="judgearena",
         description=(
             "Run a judge-based evaluation. Use `--task <name>` for generate+judge "
-            "benchmarks (e.g. alpaca-eval, arena-hard-v2.0, mt-bench) or "
-            "`--task elo-<arena>` for ELO rating (e.g. elo-lmarena-140k, elo-comparia)."
+            "benchmarks (e.g. alpaca-eval, arena-hard-v2.0, mt-bench), "
+            "`--task meta-eval` for judge meta-evaluation against human arena labels, "
+            "or `--task elo-<arena>` for ELO rating (e.g. elo-lmarena-140k, elo-comparia)."
         ),
     )
     parser.add_argument(
@@ -51,8 +58,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Task to run. Generate+judge tasks: `alpaca-eval`, `arena-hard-v0.1`, "
             "`arena-hard-v2.0`, `m-arena-hard`, `m-arena-hard-{lang}`, `m-arena-hard-EU`, "
-            "`mt-bench`, `fluency-{lang}`. ELO tasks: `elo-lmarena-100k`, `elo-lmarena-140k`, "
-            "`elo-lmarena`, `elo-comparia`."
+            "`mt-bench`, `fluency-{lang}`, `meta-eval`. ELO tasks: `elo-lmarena-100k`, "
+            "`elo-lmarena-140k`, `elo-lmarena`, `elo-comparia`."
         ),
     )
     parser.add_argument(
@@ -87,7 +94,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--languages",
         nargs="+",
         default=None,
-        help="[elo] Language codes to evaluate, e.g. `en fr de`.",
+        help=(
+            "[elo/meta-eval] Language codes to evaluate, e.g. `en es fr` (ISO 639-1)."
+        ),
     )
     parser.add_argument(
         "--n_instructions_per_language",
@@ -99,13 +108,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--n_bootstraps",
         type=int,
         default=20,
-        help="[elo] Bootstrap samples for ELO confidence intervals.",
+        help="[elo/meta-eval] Bootstrap samples for uncertainty estimates.",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=0,
-        help="[elo] Random seed for reproducibility.",
+        help="[elo/meta-eval] Random seed for reproducibility.",
     )
     parser.add_argument(
         "--baseline_model",
@@ -113,6 +122,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="[elo] Model anchored at 1000 ELO (ratings are reported relative to it).",
     )
+    add_meta_eval_arguments(parser)
     add_common_arguments(parser)
     return parser
 
@@ -243,7 +253,11 @@ def cli(argv: list[str] | None = None) -> None:
     configure_logging(resolve_verbosity(args), log_file=args.log_file)
     task = _resolve_task(args)
     model_a = _resolve_model_a(args)
-    if task.startswith(ELO_TASK_PREFIX):
+    if task == META_EVAL_TASK:
+        meta_args = build_meta_eval_args(args)
+        logger.debug("Running with CLI args: %s", meta_args.__dict__)
+        main_meta_eval(meta_args)
+    elif task.startswith(ELO_TASK_PREFIX):
         if task not in ELO_TASK_TO_ARENA:
             raise SystemExit(
                 f"Unknown elo task {task!r}; expected one of {list(ELO_TASK_TO_ARENA)}."

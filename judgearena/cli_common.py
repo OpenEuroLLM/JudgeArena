@@ -11,6 +11,9 @@ import argparse
 import json
 from dataclasses import dataclass, field
 
+DEFAULT_MAX_OUT_TOKENS_MODELS = 32768
+DEFAULT_MAX_OUT_TOKENS_JUDGE = 32768
+
 
 @dataclass
 class BaseCliArgs:
@@ -23,8 +26,8 @@ class BaseCliArgs:
     swap_mode: str = "fixed"
     ignore_cache: bool = False
     truncate_all_input_chars: int = 8192
-    max_out_tokens_models: int = 32768
-    max_out_tokens_judge: int = 32768
+    max_out_tokens_models: int = DEFAULT_MAX_OUT_TOKENS_MODELS
+    max_out_tokens_judge: int = DEFAULT_MAX_OUT_TOKENS_JUDGE
     max_model_len: int | None = None
     chat_template: str | None = None
     result_folder: str = "results"
@@ -77,7 +80,9 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "Model comparison order mode. 'fixed': always use model order A-B. "
             "'both': correct for model order bias by evaluating each instruction "
             "twice, once as A-B and once as B-A, and concatenating the results. "
-            "This helps account for judge position bias. Default is 'fixed'."
+            "This helps account for judge position bias. For meta-eval, overall "
+            "agreement uses both passes while ranking and ELO-gap analyses retain "
+            "the forward pass. Default is 'fixed'."
         ),
     )
     parser.add_argument(
@@ -110,7 +115,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--max_out_tokens_models",
         type=int,
         required=False,
-        default=32768,
+        default=DEFAULT_MAX_OUT_TOKENS_MODELS,
         help=(
             "Generation token budget for each model A/B response. For VLLM, "
             "keep this <= --max_model_len (if provided)."
@@ -120,7 +125,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--max_out_tokens_judge",
         type=int,
         required=False,
-        default=32768,
+        default=DEFAULT_MAX_OUT_TOKENS_JUDGE,
         help=(
             "Generation token budget for the judge response (reasoning + scores). "
             "For VLLM, keep this <= --max_model_len (if provided)."
