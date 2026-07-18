@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.arenas_utils import extract_turn_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
@@ -178,7 +178,7 @@ def main(args: CliEloArgs) -> dict:
     # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
         [
-            _extract_instruction_text(row["conversation_a"][0])
+            extract_turn_text(row["conversation_a"][0])
             for _, row in df_battles.iterrows()
         ],
         name="instruction",
@@ -246,9 +246,9 @@ def main(args: CliEloArgs) -> dict:
 
     opponent_completions = [
         (
-            _extract_instruction_text(row["conversation_a"][1])
+            extract_turn_text(row["conversation_a"][1])
             if use_model_a_as_opponent[i]
-            else _extract_instruction_text(row["conversation_b"][1])
+            else extract_turn_text(row["conversation_b"][1])
         )
         for i, (_, row) in enumerate(df_battles.iterrows())
     ]
