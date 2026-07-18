@@ -10,6 +10,14 @@ from importlib.resources import files
 
 from judgearena.criteria.defaults import CRITERIA_BY_NAME
 
+META_EVAL_PROMPT_RESOURCES = (
+    "arena_hard_system.txt",
+    "arena_hard_user.txt",
+    "alpaca_eval_system.txt",
+    "alpaca_eval_user.txt",
+    "alpaca_eval_pair_score_user.txt",
+)
+
 
 def _assert_non_empty_text_resource(package: str, relative_path: str) -> None:
     content = files(package).joinpath(relative_path).read_text()
@@ -30,6 +38,11 @@ def main() -> None:
     _assert_non_empty_text_resource("judgearena.prompts", "prompt.txt")
     _assert_non_empty_text_resource("judgearena.prompts", "system-prompt.txt")
     _assert_non_empty_text_resource("judgearena.criteria", "data/default.yaml")
+    for filename in META_EVAL_PROMPT_RESOURCES:
+        _assert_non_empty_text_resource(
+            "judgearena.meta_eval",
+            f"prompts/{filename}",
+        )
 
     print("✅ All integrity checks passed: Imports, Criteria, and Resources are valid.")
 
