@@ -11,8 +11,8 @@ from judgearena.log import get_logger
 logger = get_logger(__name__)
 
 
-def _extract_instruction_text(turn: dict) -> str:
-    """Extract plain instruction text from a conversation first turn.
+def extract_turn_text(turn: dict) -> str:
+    """Extract plain text from an arena conversation turn.
 
     Handles both the 100k schema (content is a plain string) and the 140k
     schema (content is an array of {type, text, ...} objects).
@@ -20,7 +20,13 @@ def _extract_instruction_text(turn: dict) -> str:
     content = turn["content"]
     if isinstance(content, str):
         return content
-    return " ".join(block["text"] for block in content if block.get("type") == "text")
+    if isinstance(content, (list, tuple)):
+        return " ".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content)
 
 
 KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
@@ -144,7 +150,7 @@ def _load_arena_dataframe(
         df["question_id"] = df["id"]
 
     df["lang"] = df["conversation_a"].apply(
-        lambda conv: detect_language(_extract_instruction_text(conv[0])).lower()
+        lambda conv: detect_language(extract_turn_text(conv[0])).lower()
     )
 
     cols = [
