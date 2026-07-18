@@ -17,7 +17,7 @@ from pydantic_settings import (
 )
 
 from judgearena.baselines import native_pairwise_baseline
-from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
+from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA, META_EVAL_TASK
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -328,6 +328,47 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class MetaEvalArgs(BaseModel):
+    """Settings for judge meta-evaluation against human arena labels."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    reference_arena: str = "LMArena-140k"
+    """Human-labeled reference arena to sample battles from."""
+
+    prompt_mode: Literal[
+        "standard",
+        "arena-hard",
+        "alpaca-eval",
+        "alpaca-eval-pair-score",
+    ] = "standard"
+    """Named judge prompt and parser mode."""
+
+    top_models: int = 20
+    """Number of top models by battle count to include."""
+
+    battles_per_model: int = 50
+    """Battles sampled per top model."""
+
+    batch_size: int = Field(default=50, gt=0)
+    """Annotation batch size."""
+
+    languages: list[str] | None = None
+    """Restrict reference battles to ISO 639-1 language codes."""
+
+    n_bootstraps: int = 20
+    """Bootstrap samples used for uncertainty estimates."""
+
+    elo_gap_battles: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50])
+    """Battle counts included in the ELO-gap analysis."""
+
+    elo_gap_seeds: int = 10
+    """Random seeds used for ELO-gap subsampling."""
+
+    include_human_ties: bool = False
+    """Include human-labeled ties in the primary agreement view."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -367,8 +408,9 @@ class RunConfig(BaseSettings):
 
     task: str
     """Benchmark to run. Generate+judge: ``alpaca-eval``, ``arena-hard-v2.0``,
-    ``m-arena-hard-*``, ``mt-bench``, ``fluency-*``. ELO: ``elo-lmarena-100k``,
-    ``elo-lmarena-140k``, ``elo-lmarena``, ``elo-comparia``."""
+    ``m-arena-hard-*``, ``mt-bench``, ``fluency-*``. Meta-evaluation:
+    ``meta-eval``. ELO: ``elo-lmarena-100k``, ``elo-lmarena-140k``,
+    ``elo-lmarena``, ``elo-comparia``."""
 
     model: ModelArgs = Field(default_factory=ModelArgs)
     """Model(s) under evaluation and their generation settings."""
@@ -382,11 +424,39 @@ class RunConfig(BaseSettings):
     elo: EloArgs | None = None
     """ELO-task settings (only for ``elo-*`` tasks)."""
 
+    meta_eval: MetaEvalArgs | None = None
+    """Judge meta-evaluation settings (only for ``meta-eval``)."""
+
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
+        if self.task == META_EVAL_TASK:
+            if self.meta_eval is None:
+                self.meta_eval = MetaEvalArgs()
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for elo-* tasks.")
+            if self.model.name is not None or self.model.baseline is not None:
+                raise ValueError(
+                    "model config is not used for meta-eval; "
+                    "only judge.model is required."
+                )
+            if self.model.max_out_tokens != ModelArgs().max_out_tokens:
+                raise ValueError(
+                    "model.max_out_tokens is not used for meta-eval because "
+                    "no model completions are generated."
+                )
+            if self.generation.n_instructions is not None:
+                raise ValueError(
+                    "generation.n_instructions is not used for meta-eval; use "
+                    "meta_eval.top_models and meta_eval.battles_per_model."
+                )
+            return self
+
+        if self.meta_eval is not None:
+            raise ValueError("meta_eval config is only valid for the meta-eval task.")
+
         is_elo = self.task.startswith(ELO_TASK_PREFIX)
         if is_elo:
             if self.elo is None:

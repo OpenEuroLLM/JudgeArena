@@ -5,6 +5,9 @@ from __future__ import annotations
 ELO_TASK_PREFIX = "elo-"
 """Prefix marking a task as an ELO-rating run (e.g. ``elo-lmarena-100k``)."""
 
+META_EVAL_TASK = "meta-eval"
+"""Task identifier for judge meta-evaluation against human arena labels."""
+
 # Lowercase CLI task name -> canonical arena identifier used inside
 # the arena loaders and the ``benchmark`` column of saved battle dataframes.
 # The CLI stays lowercase (matching ``alpaca-eval`` conventions) while internal

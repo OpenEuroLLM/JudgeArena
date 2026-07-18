@@ -10,10 +10,12 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from judgearena.config import build_run_config
-from judgearena.constants import ELO_TASK_PREFIX
+from judgearena.constants import ELO_TASK_PREFIX, META_EVAL_TASK
 from judgearena.estimate_elo_ratings import main as main_elo
 from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
+from judgearena.meta_eval.cli_args import meta_eval_args_from_config
+from judgearena.meta_eval.runner import run_or_exit as main_meta_eval
 
 logger = get_logger(__name__)
 
@@ -34,7 +36,9 @@ def cli(argv: list[str] | None = None) -> None:
 
     configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
     logger.debug("Running with config: %s", cfg.model_dump())
-    if cfg.task.startswith(ELO_TASK_PREFIX):
+    if cfg.task == META_EVAL_TASK:
+        main_meta_eval(meta_eval_args_from_config(cfg))
+    elif cfg.task.startswith(ELO_TASK_PREFIX):
         main_elo(cfg)
     else:
         main_generate_and_evaluate(cfg)
