@@ -37,6 +37,7 @@ dependencies = [
     "pandas>=2.3.2",
     "pyyaml>=6.0.2",
     "scikit-learn>=1.8.0",
+    "scipy>=1.16.0",
     "tqdm>=4.67.1",
     "pydantic-settings>=2.0",
     "pydantic>=2.13.4",
@@ -54,6 +55,7 @@ exclude = ["slurmpilot_scripts*"]
 [tool.setuptools.package-data]
 "judgearena.criteria" = ["data/*.yaml"]
 "judgearena.prompts" = ["*.txt", "*/*.txt"]
+"judgearena.meta_eval" = ["prompts/*.txt"]
 
 [dependency-groups]
 dev = [

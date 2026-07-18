@@ -1,0 +1,32 @@
+I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding responses. Your task is to assess these responses, ranking the models in order of preference from a human perspective.
+
+## Prompt
+
+{{
+    "instruction": "{user_prompt}",
+}}
+
+## Model Outputs
+
+Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
+
+{{
+    {{
+        "model": "model A",
+        "output": "{completion_A}"
+    }},
+    {{
+        "model": "model B",
+        "output": "{completion_B}"
+    }}
+}}
+
+## Task
+
+Evaluate and rank the models based on the quality and relevance of their outputs. The ranking should be such that the model with the highest quality output is ranked first.
+
+## Your output, do not repeat the input above
+```
+score_A: <a number between 0 and 10 to indicate the quality of model A's answer>
+score_B: <a number between 0 and 10 to indicate the quality of model B's answer>
+```
