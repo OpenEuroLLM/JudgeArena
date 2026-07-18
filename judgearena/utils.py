@@ -14,10 +14,6 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.instruction_dataset.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -56,6 +52,13 @@ def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
     else:
         assert filename.name.endswith(".parquet"), f"Unsupported extension {filename}"
         return pd.read_parquet(filename, **pandas_kwargs)
+
+
+# The instruction_dataset package imports these data helpers during initialization.
+from judgearena.instruction_dataset.arena_hard import (  # noqa: E402
+    download_arena_hard,
+    is_arena_hard_dataset,
+)
 
 
 def compute_pref_summary(prefs: pd.Series) -> dict[str, float | int]:
