@@ -207,6 +207,7 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 | `m-arena-hard-EU`     | All EU languages combined                                                                      |
 | `mt-bench`            | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
 | `fluency-{lang}`      | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+| `meta-eval`           | Judge meta-evaluation against human-labeled arena battles (not generator ELO)                  |
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`
@@ -220,6 +221,59 @@ For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 | `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
 | `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
 | `elo-comparia`      | Battles sampled from the ComparIA arena                            |
+
+## Judge meta-evaluation (`meta-eval`)
+
+`meta-eval` measures how well an LLM judge agrees with **human-labeled arena battles**.
+It does **not** generate model completions and does **not** estimate a generator model's ELO rating.
+Use `elo-*` tasks for generator ELO estimation instead.
+
+The task samples battles from a reference arena (default `LMArena-140k`), asks the judge to label fixed human battles, and reports accuracy, Cohen's kappa, Bradley-Terry ranking agreement, Spearman correlation, ELO MAE, bootstrap uncertainty, and ELO-gap analyses.
+
+```bash
+judgearena \
+  --task meta-eval \
+  --judge_model OpenRouter/deepseek/deepseek-v3.2 \
+  --reference_arena LMArena-140k \
+  --prompt_mode standard \
+  --languages en es \
+  --top_models 20 \
+  --battles_per_model 50 \
+  --n_bootstraps 1000 \
+  --seed 0
+```
+
+### Prompt modes
+
+Only named prompt modes are supported (no custom prompt files):
+
+| `--prompt_mode`           | Description                                      |
+|---------------------------|--------------------------------------------------|
+| `standard`                | Default PairScore judge prompt                   |
+| `arena-hard`              | Arena-Hard Likert verdict parsing                  |
+| `alpaca-eval`             | Alpaca-Eval JSON ordering prompt                 |
+| `alpaca-eval-pair-score`  | Alpaca-Eval prompt with PairScore output           |
+
+PairScore meta-eval uses temperature `0.5` (paper setting). The standard generate+judge benchmark path keeps PairScore temperature `0.3`.
+
+Language filters use ISO 639-1 codes such as `en es fr`.
+
+With `--swap_mode both`, overall accuracy and kappa use both judge orderings
+(the reversed verdict is inverted), while language, ranking, and ELO-gap analyses
+retain one forward-order row per sampled battle to match the reference
+meta-evaluation methodology. `annotations.parquet` stores one row per judge pass
+with an `orientation` column; swapped winners and preferences are normalized
+back to the original model ordering. Cost totals include both passes.
+
+Results are written under `[result_folder]/meta-eval-*` as `args.json`,
+`annotations.parquet`, `results.json`, `summary.csv`, logs, and
+`run-metadata.v1.json`. Judge annotations are cached per battle in
+`$JUDGEARENA_DATA/cache/db/{benchmark}/{judge}.db`. This temporary SQLite WAL
+cache should only be used by a single host; do not share the same database
+concurrently across NFS-mounted compute nodes. Annotation artifacts include
+character-based token estimates. Equivalent OpenRouter cost is reported only
+when `[data_root]/cache/openrouter_pricing.json` already contains the judge
+model; meta-eval never fetches pricing from compute nodes.
 
 ## 📈 Estimating ELO Ratings
 
