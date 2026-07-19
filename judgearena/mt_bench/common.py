@@ -7,6 +7,22 @@ import pandas as pd
 
 from judgearena.utils import safe_text
 
+MT_BENCH_REFERENCE_CATEGORIES: set[str] = {
+    "math",
+    "reasoning",
+    "coding",
+    "arena-hard-200",
+}
+
+
+def is_reference_based_category(category: str | None) -> bool:
+    return (category or "") in MT_BENCH_REFERENCE_CATEGORIES
+
+
+def resolve_mt_bench_turn_flags(turns_mode: str) -> tuple[bool, bool]:
+    assert turns_mode in ("both", "single", "multi")
+    return turns_mode in ("both", "single"), turns_mode in ("both", "multi")
+
 
 @dataclass(frozen=True)
 class MTBenchPairwiseRow:

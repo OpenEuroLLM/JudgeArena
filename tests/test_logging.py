@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import logging
 
 import pytest
@@ -123,15 +122,28 @@ def test_attach_file_handler_creates_parent_directory(tmp_path):
     assert log_file.parent.exists()
 
 
-# ---------- resolve_verbosity ----------
+# ---------- verbosity ----------
 
 
-def test_resolve_verbosity_quiet_overrides_verbose():
-    """When both -q and -v are set, quiet wins (returns -1)."""
-    from judgearena.cli_common import resolve_verbosity
+def test_quiet_overrides_verbose():
+    """When both -q and -v are set, quiet wins (verbosity -1)."""
+    from judgearena.config import build_run_config
 
-    ns = argparse.Namespace(verbose=2, quiet=True)
-    assert resolve_verbosity(ns) == -1
+    cfg = build_run_config(
+        [
+            "-q",
+            "-v",
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/a",
+            "--model.baseline",
+            "Dummy/b",
+            "--judge.model",
+            "Dummy/j",
+        ]
+    )
+    assert cfg.run.verbosity == -1
 
 
 # ---------- make_run_log_path ----------

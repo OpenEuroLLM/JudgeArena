@@ -25,8 +25,8 @@ from judgearena.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
+from judgearena.models import make_model
 from judgearena.repro import _to_jsonable, write_run_metadata
-from judgearena.utils import make_model
 
 logger = get_logger(__name__)
 

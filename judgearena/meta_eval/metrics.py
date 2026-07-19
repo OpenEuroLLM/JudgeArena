@@ -10,7 +10,7 @@ from scipy.stats import spearmanr
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import cohen_kappa_score
 
-from judgearena.estimate_elo_ratings import compute_bradley_terry
+from judgearena.estimate_elo_ratings import fit_bradley_terry
 
 WINNER_LABELS = ["model_a", "model_b", "tie"]
 
@@ -178,13 +178,29 @@ def format_metric(value: float | None, se: float | None, *, digits: int = 2) -> 
     return f"{value:.{digits}f} ± {se:.{digits}f}"
 
 
+def _hard_bradley_terry(
+    df: pd.DataFrame,
+    winner_col: str,
+) -> dict[str, float]:
+    battles = df[["model_a", "model_b", winner_col]].copy()
+    battles["pref"] = battles[winner_col].map(
+        {
+            "model_a": 0.0,
+            "model_b": 1.0,
+            "tie": 0.5,
+            "tie (bothbad)": 0.5,
+        }
+    )
+    return fit_bradley_terry(battles, pref_col="pref")
+
+
 def _bt_ratings(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
     try:
-        human = compute_bradley_terry(
+        human = _hard_bradley_terry(
             df_sub[["model_a", "model_b", "winner"]],
             "winner",
         )
-        llm = compute_bradley_terry(
+        llm = _hard_bradley_terry(
             df_sub[["model_a", "model_b", "winner_llm"]].rename(
                 columns={"winner_llm": "winner"}
             ),
@@ -196,7 +212,10 @@ def _bt_ratings(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float
 
 
 def _bt_ratings_soft(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
-    human = compute_bradley_terry(df_sub[["model_a", "model_b", "winner"]], "winner")
+    human = _hard_bradley_terry(
+        df_sub[["model_a", "model_b", "winner"]],
+        "winner",
+    )
     llm = compute_soft_bradley_terry(df_sub[["model_a", "model_b", "pref_llm"]])
     return human, llm
 
@@ -364,7 +383,7 @@ def compute_elo_gap_summary(
     exclude_ties: bool,
 ) -> pd.DataFrame:
     df_battles = df_top[["model_a", "model_b", "winner"]].copy()
-    human_ratings = compute_bradley_terry(df_battles, "winner")
+    human_ratings = _hard_bradley_terry(df_battles, "winner")
     rows: list[dict[str, float | int | str]] = []
 
     for num_battles in n_battles_list:
@@ -394,7 +413,7 @@ def compute_elo_gap_summary(
                     columns={"winner_llm": "winner"}
                 )
                 hybrid = pd.concat([other_human, model_llm], ignore_index=True)
-                hybrid_ratings = compute_bradley_terry(hybrid, "winner")
+                hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
                 if model in hybrid_ratings and model in human_ratings:
                     gaps.append(
                         abs(hybrid_ratings[model] - human_ratings[model]),

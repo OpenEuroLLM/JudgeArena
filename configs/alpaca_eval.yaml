@@ -1,0 +1,12 @@
+# Example JudgeArena run config (pairwise generate + judge).
+# Run with:  judgearena --config_path configs/alpaca_eval.yaml
+# Only the fields you want to change need to be present; everything else uses
+# the built-in defaults. CLI flags (e.g. --judge.model X) override this file.
+task: alpaca-eval
+model:
+  name: gpt4_1106_preview
+  baseline: VLLM/utter-project/EuroLLM-9B
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+generation:
+  n_instructions: 10

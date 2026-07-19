@@ -147,7 +147,7 @@ def _run_cached_batch(
             completions_B=[completions_b[index] for index in missing_indices],
             system_prompt=prompt_spec.system_prompt,
             user_prompt_template=prompt_spec.user_prompt_template,
-            truncate_input_chars=args.truncate_all_input_chars,
+            truncate_input_chars=args.truncate_judge_input_chars,
             provide_explanation=args.provide_explanation,
         )
         new_entries = [

@@ -3,39 +3,64 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import json
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
+from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
+    ARENA_HARD_BASELINES,
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.m_arenahard import (
+    M_ARENA_HARD_BASELINES,
+    split_m_arena_hard_dataset,
+)
+from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
 from judgearena.log import (
     attach_file_handler,
     get_logger,
     make_run_log_path,
 )
+from judgearena.models import (
+    build_default_judge_model_kwargs,
+    is_thinking_model,
+    make_model,
+)
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import _to_jsonable, write_run_metadata
+from judgearena.repro import write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
-    make_model,
+    generation_cache_token,
     read_df,
 )
+from judgearena.utils.eval import BattleReport
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
+
+ALPACA_EVAL_BASELINES: dict[str, str] = {
+    "alpaca-eval": "gpt4_1106_preview",
+}
+
+PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
+    **ALPACA_EVAL_BASELINES,
+    **ARENA_HARD_BASELINES,
+    **M_ARENA_HARD_BASELINES,
+    **MT_BENCH_BASELINES,
+}
 
 
 def try_load_dataset_completions(
@@ -80,14 +105,114 @@ def try_load_dataset_completions(
     )
 
 
-@dataclass
-class CliArgs(BaseCliArgs):
-    """CLI arguments for the generate-and-evaluate entrypoint."""
+@dataclass(frozen=True)
+class BaselinePlan:
+    """Row-aligned baseline assignment for `--model_B`."""
 
-    task: str | None = None
-    model_A: str | None = None
-    model_B: str | None = None
-    use_tqdm: bool = False
+    baseline_by_index: pd.Series
+
+    @classmethod
+    def flat(cls, model: str, *, index: pd.Index) -> "BaselinePlan":
+        return cls(
+            baseline_by_index=pd.Series(model, index=index, name="model_B", dtype=str)
+        )
+
+    @classmethod
+    def per_row(cls, series: pd.Series) -> "BaselinePlan":
+        return cls(baseline_by_index=series.astype(str).rename("model_B"))
+
+    @property
+    def unique_models(self) -> list[str]:
+        return sorted(self.baseline_by_index.dropna().unique().tolist())
+
+    @property
+    def is_flat(self) -> bool:
+        return len(self.unique_models) == 1
+
+    @property
+    def single_model(self) -> str:
+        if not self.is_flat:
+            raise ValueError(
+                "BaselinePlan is per-row; use baseline_by_index for row-level lookups."
+            )
+        return self.unique_models[0]
+
+    @property
+    def display_name(self) -> str:
+        return self.single_model if self.is_flat else "+".join(self.unique_models)
+
+    def aligned_to(self, index: pd.Index) -> pd.Series:
+        return self.baseline_by_index.loc[index]
+
+
+def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
+    """Return the dataset-native pairwise baseline, if the task defines one."""
+    if task in PAIRWISE_BASELINES:
+        return PAIRWISE_BASELINES[task]
+    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
+    if parsed_m_arena_hard is not None:
+        version_key, _lang_or_subset = parsed_m_arena_hard
+        return PAIRWISE_BASELINES[version_key]
+    return None
+
+
+def _resolve_baseline_plan(
+    *, task: str, model_b: str | None, instructions_df: pd.DataFrame
+) -> BaselinePlan:
+    """Resolve explicit or dataset-native baseline assignment."""
+    if model_b is not None:
+        return BaselinePlan.flat(model_b, index=instructions_df.index)
+
+    native = native_pairwise_baseline(task)
+    if native is None:
+        raise ValueError(
+            f"model.baseline is required for task '{task}'; no dataset-native "
+            "baseline is registered."
+        )
+    if isinstance(native, str):
+        return BaselinePlan.flat(native, index=instructions_df.index)
+    if isinstance(native, Mapping):
+        if "category" not in instructions_df.columns:
+            raise ValueError(
+                f"{task} requires a 'category' column for per-category "
+                "baseline routing; re-run dataset download to regenerate the "
+                "instructions table."
+            )
+        per_row = instructions_df["category"].map(native)
+        if per_row.isna().any():
+            unknown = sorted(
+                instructions_df.loc[per_row.isna(), "category"].unique().tolist()
+            )
+            raise ValueError(
+                f"Unknown Arena-Hard categories for {task}: {unknown}. "
+                f"Known: {sorted(native.keys())}"
+            )
+        return BaselinePlan.per_row(per_row)
+    raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
+
+
+def _build_generation_kwargs(
+    cfg: "RunConfig", model_spec: str, *, role: str
+) -> dict[str, object]:
+    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
+    if role == "A":
+        generation_kwargs = cfg.model.evaluated_generation_kwargs()
+    elif role == "B":
+        generation_kwargs = cfg.model.baseline_generation_kwargs()
+    else:
+        raise ValueError(f"Unknown generation role: {role!r}")
+    provider, _, model_name = model_spec.partition("/")
+    if (
+        cfg.judge.battle_thinking_token_budget is not None
+        and provider == "VLLM"
+        and is_thinking_model(model_name)
+    ):
+        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
+        generation_kwargs["thinking_token_budget"] = min(
+            int(cfg.judge.battle_thinking_token_budget),
+            max_tokens,
+        )
+    return generation_kwargs
 
 
 def load_contexts(dataset: str) -> pd.Series:
@@ -95,26 +220,7 @@ def load_contexts(dataset: str) -> pd.Series:
     return pd.read_csv(path).loc[:, "instruction"]
 
 
-def print_results(results):
-    """Print battle results in a nice formatted way"""
-
-    print("\n" + "=" * 60)
-    print("🏆 MODEL BATTLE RESULTS 🏆".center(60))
-    print(f"📊 Task: {results['task']}")
-    print(
-        f"🤖 Competitors: Model A: {results['model_A']} vs Model B: {results['model_B']}"
-    )
-    print(f"⚖️ Judge: {results['judge_model']}")
-    print("📈 Results Summary:")
-    print(f"   Total Battles: {results['num_battles']}")
-    print(f"   Win Rate (A): {results['winrate']:.1%}")
-    print(f"   ✅ Wins:   {results['num_wins']}")
-    print(f"   ❌ Losses: {results['num_losses']}")
-    print(f"   🤝 Ties:   {results['num_ties']}")
-    print("=" * 60 + "\n")
-
-
-def main(args: CliArgs):
+def main(cfg: "RunConfig"):
     """
     1) take as input:
      * task (dataset), make sure instruct-completion works
@@ -128,182 +234,197 @@ def main(args: CliArgs):
 
     run_started_at = datetime.now(UTC)
 
-    # Build the result folder early so the file handler captures the entire run.
-    # Include a timestamp so each run gets its own unique directory.
-    name = f"{args.task}-{args.model_A}-{args.model_B}-{args.judge_model}"
-    name += f"-{args.swap_mode}"
-    name = name.replace("/", "_")
-    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-    res_folder = Path(args.result_folder) / f"{name}-{run_ts}"
-    res_folder.mkdir(parents=True, exist_ok=True)
-    if not args.no_log_file:
-        attach_file_handler(make_run_log_path(res_folder))
-
-    logger.info(
-        "Using task %s and evaluating models %s and %s.",
-        args.task,
-        args.model_A,
-        args.model_B,
-    )
-
     # Not working with vllm, not detecting model changes and serving the same cache for two different models...
-    # if not args.ignore_cache:
+    # if not cfg.run.ignore_cache:
     #     set_langchain_cache()
-    ignore_cache = args.ignore_cache
+    ignore_cache = cfg.run.ignore_cache
 
-    if args.task == "mt-bench":
+    if cfg.task == "mt-bench":
+        model_b = cfg.model.baseline or native_pairwise_baseline(cfg.task)
+        if not isinstance(model_b, str):
+            raise ValueError("MT-Bench requires a flat native baseline.")
+        name = f"{cfg.task}-{cfg.model.name}-{model_b}-{cfg.judge.model}"
+        name += f"-{cfg.judge.swap_mode}"
+        name = name.replace("/", "_")
+        run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+        res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
+        res_folder.mkdir(parents=True, exist_ok=True)
+        if not cfg.run.no_log_file:
+            attach_file_handler(make_run_log_path(res_folder))
         return run_mt_bench(
-            args,
+            cfg,
             ignore_cache,
             res_folder=res_folder,
             result_name=name,
         )
 
     # Currrently, we run context evaluation
-    is_fluency_task = "fluency" in args.task
+    is_fluency_task = "fluency" in cfg.task
     if is_fluency_task:
-        # if args.task = "fluency-french", we map to "french-contexts.csv"
+        # if cfg.task = "fluency-french", we map to "french-contexts.csv"
         # to match files in https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
-        lang = args.task.split("-")[-1]
+        lang = cfg.task.split("-")[-1]
         instructions = load_contexts(f"{lang}-contexts.csv")
+        instructions_df = pd.DataFrame({"instruction": instructions.values})
+        instructions_df.index = instructions.index
     else:
-        instructions = load_instructions(
-            dataset=args.task, n_instructions=args.n_instructions
-        ).loc[:, "instruction"]
+        instructions_df = load_instructions(
+            dataset=cfg.task, n_instructions=cfg.generation.n_instructions
+        )
+        instructions = instructions_df.loc[:, "instruction"]
 
-    n_instructions = args.n_instructions if args.n_instructions else len(instructions)
-    if args.n_instructions is not None:
-        instructions = instructions[:n_instructions]
+    n_instructions = (
+        cfg.generation.n_instructions
+        if cfg.generation.n_instructions
+        else len(instructions)
+    )
+    if cfg.generation.n_instructions is not None:
+        instructions_df = instructions_df.head(n_instructions)
+        instructions = instructions.head(n_instructions)
+
+    baseline_plan = _resolve_baseline_plan(
+        task=cfg.task, model_b=cfg.model.baseline, instructions_df=instructions_df
+    )
+
+    name = f"{cfg.task}-{cfg.model.name}-{baseline_plan.display_name}-{cfg.judge.model}"
+    name += f"-{cfg.judge.swap_mode}"
+    name = name.replace("/", "_")
+    run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
+    res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
+    res_folder.mkdir(parents=True, exist_ok=True)
+    if not cfg.run.no_log_file:
+        attach_file_handler(make_run_log_path(res_folder))
 
     logger.info(
-        "Generating completions for task %s with model %s and %s "
+        "Using task %s and evaluating %s against baseline %s.",
+        cfg.task,
+        cfg.model.name,
+        baseline_plan.display_name,
+    )
+
+    logger.info(
+        "Generating completions for task %s with model %s and baseline %s "
         "(or loading them directly if present)",
-        args.task,
-        args.model_A,
-        args.model_B,
+        cfg.task,
+        cfg.model.name,
+        baseline_plan.display_name,
     )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    gen_fun = (
-        partial(
-            generate_base,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-        if is_fluency_task
-        else partial(
-            generate_instructions,
-            truncate_input_chars=args.truncate_all_input_chars,
-            max_tokens=args.max_out_tokens_models,
-            max_model_len=args.max_model_len,
-            chat_template=args.chat_template,
-            use_tqdm=args.use_tqdm,
-            **args.engine_kwargs,
-        )
-    )
-    dataset_completions_A = try_load_dataset_completions(
-        args.task, args.model_A, n_instructions
-    )
-    if dataset_completions_A is not None:
-        completions_A = dataset_completions_A.set_index("instruction_index").loc[
-            :, "completion"
-        ]
-    else:
-        completions_A = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_A,
-                use_tqdm=args.use_tqdm,
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_A}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_A = completions_A.loc[:, "completion"]
+    generation_function = generate_base if is_fluency_task else generate_instructions
 
-    dataset_completions_B = try_load_dataset_completions(
-        args.task, args.model_B, n_instructions
-    )
-    if dataset_completions_B is not None:
-        completions_B = dataset_completions_B.set_index("instruction_index").loc[
-            :, "completion"
-        ]
-    else:
-        completions_B = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_B,
-                use_tqdm=args.use_tqdm,
-            ),
+    def _run_generation(
+        model_spec: str, *, generation_kwargs: dict[str, object]
+    ) -> pd.DataFrame:
+        return generation_function(
+            instructions=instructions,
+            model=model_spec,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
+            **generation_kwargs,
+        )
+
+    def _align_completion_series(df: pd.DataFrame) -> pd.Series:
+        return df.set_index("instruction_index").loc[instructions.index, "completion"]
+
+    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
+        preloaded = try_load_dataset_completions(cfg.task, model_spec, n_instructions)
+        if preloaded is not None:
+            return _align_completion_series(preloaded)
+        # Fold the resolved generation kwargs into the cache key so that changing
+        # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
+        # the cached completions instead of silently reusing a stale run.
+        generation_kwargs = _build_generation_kwargs(cfg, model_spec, role=role)
+        sampling_token = generation_cache_token(generation_kwargs)
+        generated = cache_function_dataframe(
+            lambda: _run_generation(model_spec, generation_kwargs=generation_kwargs),
             ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_B}_{args.n_instructions}",
-        ).set_index("instruction_index")
-        completions_B = completions_B.loc[:, "completion"]
+            cache_name=(
+                f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}_"
+                f"{sampling_token}"
+            ),
+        )
+        return _align_completion_series(generated)
+
+    completions_A = _load_or_generate_completions(cfg.model.name, role="A")
+
+    baseline_per_index = baseline_plan.aligned_to(instructions.index)
+    if baseline_plan.is_flat:
+        completions_B = _load_or_generate_completions(
+            baseline_plan.single_model, role="B"
+        )
+    else:
+        per_baseline_completions = {
+            model: _load_or_generate_completions(model, role="B")
+            for model in baseline_plan.unique_models
+        }
+        completions_B = pd.Series(
+            [
+                per_baseline_completions[model].loc[instruction_index]
+                for instruction_index, model in baseline_per_index.items()
+            ],
+            index=instructions.index,
+            name="completion",
+        )
+
     logger.debug("First instruction/context: %s", instructions.values[0])
-    logger.debug("First completion of %s:\n%s", args.model_A, completions_A.values[0])
-    logger.debug("First completion of %s:\n%s", args.model_B, completions_B.values[0])
-    logger.info("Evaluating completions with judge %s.", args.judge_model)
+    logger.debug("First completion of %s:\n%s", cfg.model.name, completions_A.values[0])
+    logger.debug(
+        "First completion of %s:\n%s",
+        baseline_plan.display_name,
+        completions_B.values[0],
+    )
+    logger.info("Evaluating completions with judge %s.", cfg.judge.model)
 
     judge_chat_model = make_model(
-        model=args.judge_model,
-        max_tokens=args.max_out_tokens_judge,
-        max_model_len=args.max_model_len,
-        chat_template=args.chat_template,
-        **args.engine_kwargs,
+        model=cfg.judge.model,
+        **build_default_judge_model_kwargs(
+            cfg.judge.model,
+            cfg.model.engine_kwargs,
+            judge_engine_kwargs_override=cfg.judge.model_kwargs(
+                fallback_chat_template=cfg.model.chat_template,
+            ),
+        ),
     )
 
-    # save argument for results analysis
-    with open(res_folder / f"args-{name}.json", "w") as f:
-        json.dump(asdict(args), f, indent=2)
+    # save the resolved config for results analysis (round-trippable via --config_path)
+    from judgearena.config import dump_config
+
+    dump_config(cfg, res_folder / "config.yaml")
 
     logger.info("Saving results to %s", res_folder)
-    if is_fluency_task:
-        system_prompt = """You are a highly efficient assistant, who evaluates and selects the best large language \
-        model based on the quality of completion of a sentence. You will see a sentence to be completed and two \
-        completions from Assistant A and Assistant B and will have to decide which one is best. Make sure to not \
-        over-confidently prefer one assistant or the other and also make sure to not bias your preference based on \
-        the ordering or on the length of the answers."""
-    else:
-        # the default system prompt of annotate is to compare instruction tuned models.
-        system_prompt = None
-    (
-        effective_judge_system_prompt,
-        judge_user_prompt_template,
-    ) = resolve_judge_prompts(
-        provide_explanation=args.provide_explanation,
-        system_prompt=system_prompt,
-    )
+    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
     annotations, annotations_reversed, prefs = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
         instructions=instructions.head(n_instructions).tolist(),
         completions_A=completions_A.head(n_instructions).tolist(),
         completions_B=completions_B.head(n_instructions).tolist(),
-        swap_mode=args.swap_mode,
-        provide_explanation=args.provide_explanation,
-        system_prompt=effective_judge_system_prompt,
-        user_prompt_template=judge_user_prompt_template,
-        truncate_input_chars=args.truncate_all_input_chars,
-        use_tqdm=args.use_tqdm,
+        swap_mode=cfg.judge.swap_mode,
+        provide_explanation=cfg.judge.provide_explanation,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
+        parser_mode=resolved_prompt.parser_mode,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=cfg.run.use_tqdm,
     )
 
+    eval_instruction_index = instructions.head(n_instructions).index.tolist()
+    baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
-    df["instruction_index"] = instructions.head(n_instructions).index.tolist()
-    df["model_A"] = args.model_A
-    df["model_B"] = args.model_B
-    df["judge"] = args.judge_model
+    df["instruction_index"] = eval_instruction_index
+    df["model_A"] = cfg.model.name
+    df["model_B"] = baseline_per_eval.tolist()
+    df["judge"] = cfg.judge.model
 
-    if args.swap_mode == "both":
+    if cfg.judge.swap_mode == "both":
         df_reversed = pd.DataFrame(annotations_reversed)
-        df_reversed["instruction_index"] = instructions.head(
-            n_instructions
-        ).index.tolist()
-        df_reversed["model_A"] = args.model_B
-        df_reversed["model_B"] = args.model_A
-        df_reversed["judge"] = args.judge_model
+        df_reversed["instruction_index"] = eval_instruction_index
+        df_reversed["model_A"] = baseline_per_eval.tolist()
+        df_reversed["model_B"] = cfg.model.name
+        df_reversed["judge"] = cfg.judge.model
         df = pd.concat([df, df_reversed])
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
@@ -311,21 +432,33 @@ def main(args: CliArgs):
     # compute and report statistics
     summary = compute_pref_summary(prefs)
 
-    results = {
-        "task": args.task,
-        "model_A": args.model_A,
-        "model_B": args.model_B,
-        "judge_model": args.judge_model,
-        **summary,
-        "preferences": prefs.tolist(),
-    }
-    logger.info("%s vs %s judged by %s", args.model_A, args.model_B, args.judge_model)
-    print_results(results)
+    report = BattleReport(
+        task=cfg.task,
+        model_a=cfg.model.name,
+        model_b=baseline_plan.display_name,
+        judge_model=cfg.judge.model,
+        summary=summary,
+        swap_mode=cfg.judge.swap_mode,
+        result_folder=str(res_folder),
+        preferences=prefs.tolist(),
+        metadata={
+            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_models": baseline_plan.unique_models,
+            **resolved_prompt.metadata(),
+            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
+            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+        },
+    )
+    results = report.to_dict()
+    logger.info(
+        "%s vs %s judged by %s",
+        cfg.model.name,
+        baseline_plan.display_name,
+        cfg.judge.model,
+    )
+    report.render()
+    report.save(res_folder / f"results-{name}.json")
 
-    with open(res_folder / f"results-{name}.json", "w") as f:
-        json.dump(_to_jsonable(results), f, indent=2, allow_nan=False)
-
-    eval_instruction_index = instructions.head(n_instructions).index.tolist()
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()
     eval_completions_B = completions_B.head(n_instructions).tolist()
@@ -334,16 +467,17 @@ def main(args: CliArgs):
         write_run_metadata(
             output_dir=res_folder,
             entrypoint="judgearena.generate_and_evaluate.main",
-            run=asdict(args),
+            run=cfg.model_dump(),
             results=results,
             input_payloads={
                 "instruction_index": eval_instruction_index,
                 "instructions": eval_instructions,
                 "completions_A": eval_completions_A,
                 "completions_B": eval_completions_B,
+                "baseline_model_B": baseline_per_eval.tolist(),
             },
-            judge_system_prompt=effective_judge_system_prompt,
-            judge_user_prompt_template=judge_user_prompt_template,
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
             started_at_utc=run_started_at,
         )
     except OSError as e:

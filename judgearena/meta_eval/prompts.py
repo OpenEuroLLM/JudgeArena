@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.resources import files
 
-from judgearena.evaluate import load_judge_system_and_user_prompt
 from judgearena.meta_eval.cli_args import PROMPT_MODES
+from judgearena.prompts.registry import resolve_judge_prompt
 
 
 @dataclass(frozen=True)
@@ -33,13 +33,13 @@ def resolve_prompt_mode(
         raise ValueError(f"Unknown prompt mode {prompt_mode!r}.")
 
     if prompt_mode == "standard":
-        system_prompt, user_prompt_template = load_judge_system_and_user_prompt(
+        resolved = resolve_judge_prompt(
             provide_explanation=provide_explanation,
         )
         return PromptModeSpec(
             name=prompt_mode,
-            system_prompt=system_prompt,
-            user_prompt_template=user_prompt_template,
+            system_prompt=resolved.system_prompt,
+            user_prompt_template=resolved.user_prompt_template,
         )
 
     if prompt_mode == "arena-hard":
