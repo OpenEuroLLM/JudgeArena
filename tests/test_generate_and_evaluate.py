@@ -1,12 +1,15 @@
 import pandas as pd
 import pytest
 
+import judgearena.benchmark as benchmark_module
 import judgearena.generate_and_evaluate as generate_and_evaluate
+from judgearena.baselines import native_pairwise_baseline
+from judgearena.benchmark import resolve_benchmark_adapter
 from judgearena.config import RunConfig
 from judgearena.generate_and_evaluate import (
     BaselinePlan,
+    _benchmark_adapters,
     _resolve_baseline_plan,
-    native_pairwise_baseline,
 )
 from judgearena.generate_and_evaluate import (
     main as main_generate_and_eval,
@@ -153,6 +156,12 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
     assert native_pairwise_baseline(task) == expected
 
 
+def test_benchmark_adapter_resolution():
+    assert resolve_benchmark_adapter("alpaca-eval", _benchmark_adapters()).name == (
+        "pairwise"
+    )
+
+
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
     with pytest.raises(ValueError, match="baseline"):
         _resolve_baseline_plan(
@@ -256,7 +265,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 
         return FakeJudge()
 
-    monkeypatch.setattr(generate_and_evaluate, "make_model", fake_make_model)
+    monkeypatch.setattr(benchmark_module, "make_model", fake_make_model)
 
     prefs = main_generate_and_eval(
         _cfg(
