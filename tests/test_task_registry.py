@@ -43,15 +43,10 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
             },
             "judge": {
                 "default_prompt": "default",
-                "parser": "pairwise_preference",
                 "default_swap_mode": "fixed",
                 "allowed_swap_modes": ["fixed", "both"],
             },
-            "scoring": {
-                "adapter": "pairwise_win_rate",
-                "primary_metric": "winrate",
-                "higher_is_better": True,
-            },
+            "scoring": {"adapter": "pairwise_win_rate"},
         },
     }
 
@@ -138,7 +133,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.dataset.sources["benchmark"].revision == (
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
-    assert alpaca.spec.protocol.scoring.primary_metric == "winrate"
+    assert alpaca.spec.protocol.scoring.adapter == "pairwise_win_rate"
 
 
 def test_find_returns_none_for_unregistered_task():
@@ -338,6 +333,20 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="unknown dataset adapter"):
+        load_tasks(tmp_path)
+
+
+def test_registry_rejects_unknown_scorer_id(tmp_path):
+    definition = _task_definition()
+    definition["protocol"]["scoring"]["adapter"] = "missing_scorer"
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="unknown scorer"):
         load_tasks(tmp_path)
 
 

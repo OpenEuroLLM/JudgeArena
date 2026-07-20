@@ -12,6 +12,10 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
+from judgearena.benchmarks.pairwise.scoring import (
+    DEFAULT_PAIRWISE_SCORER,
+    resolve_pairwise_scorer,
+)
 from judgearena.datasets import load_instructions
 from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
 from judgearena.datasets.fluency import load_fluency_contexts
@@ -23,7 +27,6 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 from judgearena.utils import (
     cache_function_dataframe,
-    compute_pref_summary,
     data_root,
     download_hf,
     generation_cache_token,
@@ -263,8 +266,12 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    # compute and report statistics
-    summary = compute_pref_summary(prefs)
+    scorer = resolve_pairwise_scorer(
+        resolved_task.spec.protocol.scoring.adapter
+        if resolved_task is not None
+        else DEFAULT_PAIRWISE_SCORER
+    )
+    summary = scorer.summarize(prefs)
 
     report = BattleReport(
         task=cfg.task,
