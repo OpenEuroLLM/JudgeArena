@@ -28,7 +28,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _to_jsonable(value: Any) -> Any:
+def to_jsonable(value: Any) -> Any:
     """Convert arbitrary objects into JSON-safe values."""
     if value is None or isinstance(value, (str, int, bool)):
         return value
@@ -40,14 +40,14 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, dict):
-        return {str(k): _to_jsonable(v) for k, v in value.items()}
+        return {str(k): to_jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
-        return [_to_jsonable(v) for v in value]
+        return [to_jsonable(v) for v in value]
     # numpy / pandas scalars usually expose .item()
     item = getattr(value, "item", None)
     if callable(item):
         try:
-            return _to_jsonable(item())
+            return to_jsonable(item())
         except Exception:
             pass
     return str(value)
@@ -55,7 +55,7 @@ def _to_jsonable(value: Any) -> Any:
 
 def _stable_json_dumps(value: Any) -> str:
     return json.dumps(
-        _to_jsonable(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        to_jsonable(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
 
 
@@ -71,7 +71,7 @@ def _hash_normalized_set_sha256(values: list[Any] | None) -> str | None:
 
     normalized_by_key: dict[str, Any] = {}
     for value in values:
-        normalized = _to_jsonable(value)
+        normalized = to_jsonable(value)
         normalized_by_key[_stable_json_dumps(normalized)] = normalized
 
     normalized_values = [normalized_by_key[key] for key in sorted(normalized_by_key)]
@@ -199,7 +199,7 @@ def _build_dataset_statistics(input_payloads: dict[str, Any] | None) -> dict[str
         return {}
     summary: dict[str, Any] = {}
     for key, payload in input_payloads.items():
-        normalized = _to_jsonable(payload)
+        normalized = to_jsonable(payload)
         count = len(normalized) if hasattr(normalized, "__len__") else None
         summary[f"{key}_count"] = count
     return summary
@@ -210,7 +210,7 @@ def _compact_results(results: dict[str, Any] | None) -> dict[str, Any]:
 
     Keep summary stats but avoid embedding large per-sample arrays.
     """
-    payload = _to_jsonable(results or {})
+    payload = to_jsonable(results or {})
     if not isinstance(payload, dict):
         return {"value": payload}
 
@@ -251,7 +251,7 @@ def write_run_metadata(
             "duration_sec": duration_sec,
         },
         "entrypoint": entrypoint,
-        "run": _to_jsonable(run),
+        "run": to_jsonable(run),
         "results": _compact_results(results),
         "dataset_statistics": _build_dataset_statistics(input_payloads),
         "environment": {
@@ -268,7 +268,7 @@ def write_run_metadata(
 
     instruction_indices = None
     if input_payloads and "instruction_index" in input_payloads:
-        raw_indices = _to_jsonable(input_payloads["instruction_index"])
+        raw_indices = to_jsonable(input_payloads["instruction_index"])
         if isinstance(raw_indices, list):
             instruction_indices = raw_indices
     instruction_indices_hash = _hash_normalized_set_sha256(instruction_indices)
@@ -289,5 +289,5 @@ def write_run_metadata(
 
     metadata_path = output_path / metadata_filename
     with open(metadata_path, "w", encoding="utf-8") as f:
-        json.dump(_to_jsonable(metadata), f, indent=2, allow_nan=False)
+        json.dump(to_jsonable(metadata), f, indent=2, allow_nan=False)
     return metadata_path

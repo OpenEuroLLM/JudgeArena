@@ -13,25 +13,25 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.generate import generate_multiturn
-from judgearena.instruction_dataset import load_instructions
-from judgearena.instruction_dataset.mt_bench import (
-    load_mt_bench_model_answers,
-    mt_bench_native_baseline,
-)
-from judgearena.log import get_logger
-from judgearena.models import is_thinking_model, make_model
-from judgearena.mt_bench.fastchat_compat import (
+from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.benchmarks.mt_bench.fastchat_compat import (
     FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
-from judgearena.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.datasets import load_instructions
+from judgearena.datasets.mt_bench import (
+    load_mt_bench_model_answers,
+    mt_bench_native_baseline,
+)
+from judgearena.generate import generate_multiturn
+from judgearena.log import get_logger
+from judgearena.models import is_thinking_model, make_model
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     resolve_run_judge_prompt,
 )
-from judgearena.repro import write_run_metadata
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -175,17 +175,13 @@ def _save_mt_bench_results(
     judge_user_prompt_template: str | None = None,
 ) -> None:
     """Persist MT-Bench arguments, annotations, aggregate results, and metadata."""
-    res_folder.mkdir(parents=True, exist_ok=True)
-
-    from judgearena.config import dump_config
-
-    dump_config(cfg, res_folder / "config.yaml")
+    prepare_run_directory(cfg, res_folder, attach_log=False)
 
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
-    write_run_metadata(
+    write_run_metadata_safely(
         output_dir=res_folder,
-        entrypoint="judgearena.mt_bench.mt_bench_utils.run_mt_bench",
+        entrypoint="judgearena.benchmarks.mt_bench.mt_bench_utils.run_mt_bench",
         run=cfg.model_dump(),
         results=results,
         input_payloads=input_payloads,

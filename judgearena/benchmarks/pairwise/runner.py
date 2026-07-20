@@ -11,27 +11,22 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from judgearena.baselines import native_pairwise_baseline
-from judgearena.benchmark import (
+from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
+from judgearena.benchmarks.mt_bench.mt_bench_utils import run_mt_bench
+from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.registry import (
     BenchmarkAdapter,
-    build_generation_kwargs,
-    build_judge,
     resolve_benchmark_adapter,
 )
-from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
-from judgearena.generate import generate_base, generate_instructions
-from judgearena.instruction_dataset import load_instructions
-from judgearena.instruction_dataset.arena_hard import (
+from judgearena.datasets import load_instructions
+from judgearena.datasets.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.log import (
-    attach_file_handler,
-    get_logger,
-    make_run_log_path,
-)
-from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.repro import write_run_metadata
+from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
+from judgearena.generate import generate_base, generate_instructions
+from judgearena.log import get_logger
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -197,10 +192,9 @@ def run_pairwise(cfg: "RunConfig"):
         name += f"-{cfg.judge.swap_mode}"
         name = name.replace("/", "_")
         run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-        res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
-        res_folder.mkdir(parents=True, exist_ok=True)
-        if not cfg.run.no_log_file:
-            attach_file_handler(make_run_log_path(res_folder))
+        res_folder = prepare_run_directory(
+            cfg, Path(cfg.run.result_folder) / f"{name}-{run_ts}"
+        )
         return run_mt_bench(
             cfg,
             ignore_cache,
@@ -240,10 +234,9 @@ def run_pairwise(cfg: "RunConfig"):
     name += f"-{cfg.judge.swap_mode}"
     name = name.replace("/", "_")
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-    res_folder = Path(cfg.run.result_folder) / f"{name}-{run_ts}"
-    res_folder.mkdir(parents=True, exist_ok=True)
-    if not cfg.run.no_log_file:
-        attach_file_handler(make_run_log_path(res_folder))
+    res_folder = prepare_run_directory(
+        cfg, Path(cfg.run.result_folder) / f"{name}-{run_ts}"
+    )
 
     logger.info(
         "Using task %s and evaluating %s against baseline %s.",
@@ -328,11 +321,6 @@ def run_pairwise(cfg: "RunConfig"):
 
     judge_chat_model = build_judge(cfg)
 
-    # save the resolved config for results analysis (round-trippable via --config_path)
-    from judgearena.config import dump_config
-
-    dump_config(cfg, res_folder / "config.yaml")
-
     logger.info("Saving results to %s", res_folder)
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
@@ -404,25 +392,22 @@ def run_pairwise(cfg: "RunConfig"):
     eval_completions_A = completions_A.head(n_instructions).tolist()
     eval_completions_B = completions_B.head(n_instructions).tolist()
 
-    try:
-        write_run_metadata(
-            output_dir=res_folder,
-            entrypoint="judgearena.generate_and_evaluate.main",
-            run=cfg.model_dump(),
-            results=results,
-            input_payloads={
-                "instruction_index": eval_instruction_index,
-                "instructions": eval_instructions,
-                "completions_A": eval_completions_A,
-                "completions_B": eval_completions_B,
-                "baseline_model_B": baseline_per_eval.tolist(),
-            },
-            judge_system_prompt=resolved_prompt.system_prompt,
-            judge_user_prompt_template=resolved_prompt.user_prompt_template,
-            started_at_utc=run_started_at,
-        )
-    except OSError as e:
-        logger.warning("Failed to write run metadata: %s", e)
+    write_run_metadata_safely(
+        output_dir=res_folder,
+        entrypoint="judgearena.benchmarks.pairwise.runner.main",
+        run=cfg.model_dump(),
+        results=results,
+        input_payloads={
+            "instruction_index": eval_instruction_index,
+            "instructions": eval_instructions,
+            "completions_A": eval_completions_A,
+            "completions_B": eval_completions_B,
+            "baseline_model_B": baseline_per_eval.tolist(),
+        },
+        judge_system_prompt=resolved_prompt.system_prompt,
+        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        started_at_utc=run_started_at,
+    )
 
     return prefs
 

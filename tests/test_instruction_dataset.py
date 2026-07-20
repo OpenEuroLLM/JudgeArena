@@ -3,10 +3,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-import judgearena.generate_and_evaluate as generate_and_evaluate
-import judgearena.instruction_dataset as instruction_dataset
+import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
+import judgearena.datasets as instruction_dataset
 import judgearena.utils as judgearena_utils
-from judgearena.instruction_dataset.arena_hard import (
+from judgearena.datasets.arena_hard import (
     ARENA_HARD_BASELINES,
     _build_instructions,
     _build_model_outputs,
@@ -46,7 +46,7 @@ def test_arena_hard_baselines_mapping_matches_upstream():
 
 
 def test_mt_bench_native_baseline_is_flat_string():
-    from judgearena.instruction_dataset.mt_bench import (
+    from judgearena.datasets.mt_bench import (
         MT_BENCH_BASELINES,
         is_mt_bench_dataset,
         mt_bench_native_baseline,

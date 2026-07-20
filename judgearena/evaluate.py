@@ -10,8 +10,9 @@ from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
 from scipy.optimize import minimize_scalar
 
-from judgearena.instruction_dataset import load_instructions
-from judgearena.instruction_dataset.arena_hard import (
+from judgearena.artifacts import to_jsonable, write_run_metadata_safely
+from judgearena.datasets import load_instructions
+from judgearena.datasets.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
@@ -25,7 +26,6 @@ from judgearena.prompts.registry import (
 from judgearena.prompts.registry import (
     resolve_run_judge_prompt as _resolve_run_judge_prompt,
 )
-from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
     compute_pref_summary,
     data_root,
@@ -309,7 +309,7 @@ def evaluate_completions(
 
     logger.info("%s against %s:\n%s", method_A, method_B, results)
     with open(output_folder / "results.json", "w") as f:
-        json.dump(_to_jsonable(results), f, allow_nan=False)
+        json.dump(to_jsonable(results), f, allow_nan=False)
 
     run_metadata = {
         "dataset": dataset,
@@ -324,24 +324,21 @@ def evaluate_completions(
         "strip_thinking_before_judging": strip_thinking_before_judging,
     }
 
-    try:
-        write_run_metadata(
-            output_dir=output_folder,
-            entrypoint="judgearena.evaluate.evaluate_completions",
-            run=run_metadata,
-            results=results,
-            input_payloads={
-                "instruction_index": instructions.index.tolist(),
-                "instructions": instructions.tolist(),
-                "completions_A": completions_A.loc[instructions.index].tolist(),
-                "completions_B": completions_B.loc[instructions.index].tolist(),
-            },
-            judge_system_prompt=resolved_prompt.system_prompt,
-            judge_user_prompt_template=resolved_prompt.user_prompt_template,
-            started_at_utc=run_started_at,
-        )
-    except OSError as e:
-        logger.warning("Failed to write run metadata: %s", e)
+    write_run_metadata_safely(
+        output_dir=output_folder,
+        entrypoint="judgearena.evaluate.evaluate_completions",
+        run=run_metadata,
+        results=results,
+        input_payloads={
+            "instruction_index": instructions.index.tolist(),
+            "instructions": instructions.tolist(),
+            "completions_A": completions_A.loc[instructions.index].tolist(),
+            "completions_B": completions_B.loc[instructions.index].tolist(),
+        },
+        judge_system_prompt=resolved_prompt.system_prompt,
+        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        started_at_utc=run_started_at,
+    )
 
 
 @dataclass
