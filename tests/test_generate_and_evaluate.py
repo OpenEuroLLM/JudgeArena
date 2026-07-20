@@ -6,10 +6,7 @@ import pytest
 import judgearena.benchmarks.execution as benchmark_execution
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.benchmarks.registry as benchmark_registry
-from judgearena.benchmarks.pairwise.baselines import (
-    LEGACY_PAIRWISE_BASELINES,
-    native_pairwise_baseline,
-)
+from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.benchmarks.pairwise.runner import (
     BaselinePlan,
     _resolve_baseline_plan,
@@ -131,25 +128,6 @@ def test_resolve_plan_alpaca_eval_uses_native_baseline():
     )
     assert plan.is_flat
     assert plan.single_model == "gpt4_1106_preview"
-
-
-def test_alpaca_eval_baseline_is_not_duplicated_in_legacy_registry():
-    assert "alpaca-eval" not in LEGACY_PAIRWISE_BASELINES
-    assert native_pairwise_baseline("alpaca-eval") == "gpt4_1106_preview"
-
-
-def test_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
-    assert "arena-hard-v0.1" not in LEGACY_PAIRWISE_BASELINES
-    assert "arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
-
-
-def test_m_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
-    assert "m-arena-hard-v0.1" not in LEGACY_PAIRWISE_BASELINES
-    assert "m-arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
-
-
-def test_mt_bench_baseline_is_not_duplicated_in_legacy_registry():
-    assert "mt-bench" not in LEGACY_PAIRWISE_BASELINES
 
 
 def test_resolve_plan_explicit_model_b_overrides_native():
