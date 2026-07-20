@@ -58,6 +58,7 @@ def test_default_preset_for_unknown_task():
 
 
 def test_mt_bench_default_is_delegated_fastchat():
+    assert "mt-bench" not in TASK_DEFAULT_PRESET
     resolved = resolve_judge_prompt(task="mt-bench")
 
     assert resolved.preset_name == FASTCHAT_PAIRWISE_PROMPT_PRESET

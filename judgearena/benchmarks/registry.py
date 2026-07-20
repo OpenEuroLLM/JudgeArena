@@ -34,10 +34,14 @@ class BenchmarkAdapter:
 
 
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
-    """Return the registered benchmark implementations."""
+    """Return registered benchmark implementations, specific first."""
+    from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
     from judgearena.benchmarks.pairwise.runner import run_pairwise
 
-    return (BenchmarkAdapter("pairwise", None, run_pairwise),)
+    return (
+        BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
+        BenchmarkAdapter("pairwise", None, run_pairwise),
+    )
 
 
 def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
@@ -49,9 +53,7 @@ def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
         for adapter in adapters:
             if adapter.name == runner_id:
                 return adapter
-        raise ValueError(
-            f"Task {task!r} selects unavailable runner {runner_id!r}."
-        )
+        raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
 
     for adapter in adapters:
         if adapter.supports(task):

@@ -11,6 +11,8 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
 
+REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
+
 
 class SequenceJudge:
     def __init__(self, outputs: list[str]):
@@ -85,7 +87,11 @@ def test_select_prompt_variants(
     expected_name: str,
     expected_ref_based: bool,
 ):
-    prompt = _select_prompt(category, multi_turn=multi_turn)
+    prompt = _select_prompt(
+        category,
+        multi_turn=multi_turn,
+        reference_categories=REFERENCE_CATEGORIES,
+    )
 
     assert prompt.name == expected_name
     assert prompt.ref_based is expected_ref_based
@@ -108,6 +114,7 @@ def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
         swap_mode="both",
         truncate_input_chars=None,
         use_tqdm=False,
+        reference_categories=REFERENCE_CATEGORIES,
     )
 
     assert num_inconsistent == 0

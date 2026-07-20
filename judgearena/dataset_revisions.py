@@ -34,9 +34,7 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
 # Raw-URL pins (e.g. FastChat reference answers fetched as a raw GitHub URL).
 # Mapping is "logical name" -> commit SHA on the upstream repo.  The downloader
 # rewrites the URL to point at the pinned SHA.
-RAW_URL_REVISIONS: dict[str, str | None] = {
-    "lm-sys/FastChat": "587d5cfa1609a43d192cedb8441cac3c17db105d",
-}
+RAW_URL_REVISIONS: dict[str, str | None] = {}
 
 
 def hf_revision(repo_id: str) -> str | None:

@@ -87,10 +87,6 @@ def download_all():
 
     download_fluency_dataset(data_root)
 
-    from judgearena.datasets.mt_bench import download_mt_bench
-
-    download_mt_bench()
-
 
 class Timeblock:
     """Timer context manager"""

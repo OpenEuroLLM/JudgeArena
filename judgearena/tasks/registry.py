@@ -16,12 +16,14 @@ from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
 class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
-    runners: frozenset[str] = frozenset({"pairwise"})
+    runners: frozenset[str] = frozenset({"mt_bench", "pairwise"})
     datasets: frozenset[str] = frozenset(
-        {"arena_hard", "judgearena_tables", "m_arena_hard"}
+        {"arena_hard", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    parsers: frozenset[str] = frozenset({"pairwise_preference"})
+    parsers: frozenset[str] = frozenset(
+        {"fastchat_pairwise_verdict", "pairwise_preference"}
+    )
     scorers: frozenset[str] = frozenset({"pairwise_win_rate"})
 
 

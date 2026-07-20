@@ -151,7 +151,6 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
 
 def test_mt_bench_native_baseline_is_flat_string():
     from judgearena.datasets.mt_bench import (
-        MT_BENCH_BASELINES,
         is_mt_bench_dataset,
         mt_bench_native_baseline,
     )
@@ -160,7 +159,6 @@ def test_mt_bench_native_baseline_is_flat_string():
     assert is_mt_bench_dataset("alpaca-eval") is False
     assert mt_bench_native_baseline("mt-bench") == "gpt-4"
     assert mt_bench_native_baseline("alpaca-eval") is None
-    assert MT_BENCH_BASELINES == {"mt-bench": "gpt-4"}
 
 
 def test_normalize_official_arena_hard_v01_drops_no_category():

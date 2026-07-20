@@ -9,6 +9,59 @@ import judgearena.datasets.mt_bench as mt_bench
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
+from judgearena.tasks.registry import get_packaged_task
+
+
+def test_mt_bench_sources_are_owned_by_task_yaml():
+    task = get_packaged_task("mt-bench")
+    assert task is not None
+
+    benchmark = task.spec.dataset.sources["benchmark"]
+    references = task.spec.dataset.sources["references"]
+    assert benchmark.repo_id == "lmsys/mt-bench"
+    assert benchmark.revision == "a4b674ca573c24143824ac7f60d9173e7081e37d"
+    assert benchmark.allow_patterns == (
+        "data/mt_bench/question.jsonl",
+        "data/mt_bench/model_answer/gpt-4.jsonl",
+    )
+    assert references.repository == "https://github.com/lm-sys/FastChat"
+    assert references.revision == "587d5cfa1609a43d192cedb8441cac3c17db105d"
+    assert mt_bench._git_raw_url(references).endswith(
+        "/587d5cfa1609a43d192cedb8441cac3c17db105d/"
+        "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
+    )
+
+
+def test_mt_bench_adapter_normalizes_questions_and_references(monkeypatch, tmp_path):
+    task = get_packaged_task("mt-bench")
+    assert task is not None
+    question_path = tmp_path / "question.jsonl"
+    reference_path = tmp_path / "reference.jsonl"
+    question_path.write_text(
+        '{"question_id": 1, "category": "math", "turns": ["Q1", "Q2"]}\n'
+    )
+    reference_path.write_text(
+        '{"question_id": 1, "choices": [{"turns": ["R1", "R2"]}]}\n'
+    )
+    monkeypatch.setattr(
+        mt_bench,
+        "_download_mt_bench",
+        lambda _task, _local_dir: (question_path, reference_path),
+    )
+
+    loaded = mt_bench.load_task_instructions(task, tmp_path)
+
+    assert loaded.to_dict(orient="records") == [
+        {
+            "instruction_index": 1,
+            "category": "math",
+            "turn_1": "Q1",
+            "turn_2": "Q2",
+            "reference_turn_1": "R1",
+            "reference_turn_2": "R2",
+            "instruction": "Q1",
+        }
+    ]
 
 
 def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypatch):
@@ -28,8 +81,8 @@ def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypat
     monkeypatch.setattr(mt_bench, "snapshot_download", _snapshot_download_stub)
     monkeypatch.setattr(
         mt_bench,
-        "_download_gpt4_references",
-        lambda _local_dir: reference_path,
+        "_download_references",
+        lambda _task, _local_dir: reference_path,
     )
 
     downloaded_question_path, downloaded_reference_path = mt_bench.download_mt_bench(
@@ -43,7 +96,7 @@ def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypat
 
 def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     hf_datasets = []
-    calls = {"contexts": 0, "mt_bench": 0}
+    calls = {"contexts": 0}
 
     monkeypatch.setattr(utils_io, "data_root", tmp_path)
     monkeypatch.setattr(
@@ -51,16 +104,11 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "download_hf",
         lambda name, local_path: hf_datasets.append((name, local_path)),
     )
+
     def _contexts_snapshot_stub(**_kwargs):
         calls["contexts"] += 1
 
     monkeypatch.setattr(fluency_mod, "snapshot_download", _contexts_snapshot_stub)
-    monkeypatch.setattr(
-        mt_bench,
-        "download_mt_bench",
-        lambda: calls.__setitem__("mt_bench", calls["mt_bench"] + 1),
-    )
-
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
@@ -70,10 +118,10 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "arena-hard-v2.0",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
+        "mt-bench",
     ]
     assert all(path == tables_dir for _, path in hf_datasets)
     assert calls["contexts"] == 1
-    assert calls["mt_bench"] == 1
 
 
 def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):
@@ -510,6 +558,8 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
 
     assert thinking_call["strip_thinking_before_turn_2_prompt"] is True
     assert thinking_call["thinking_token_budget"] == 8192
+    assert thinking_call["temperature_config"]["writing"] == 0.7
+    assert thinking_call["temperature_config"]["math"] == 0.0
     assert plain_call["strip_thinking_before_turn_2_prompt"] is True
     assert "thinking_token_budget" not in plain_call
 
@@ -567,3 +617,9 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     )
 
     assert captured["judge"]["strip_thinking_before_judging"] is True
+    assert captured["judge"]["reference_categories"] == (
+        "math",
+        "reasoning",
+        "coding",
+        "arena-hard-200",
+    )
