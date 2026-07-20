@@ -5,91 +5,70 @@ from typing import Any
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.dataset_revisions import hf_revision
-
-ARENA_HARD_HF_REPO_ID = "lmarena-ai/arena-hard-auto"
-
-# Mirrors upstream's `JUDGE_SETTINGS` baseline assignment in
-# `arena-hard-auto/utils/judge_utils.py` verbatim: v0.1 has a single flat
-# baseline, v2.0 routes per question category. `is_arena_hard_dataset` and
-# the dispatcher in `generate_and_evaluate.py` key off this map.
-#
-# Note: the released v2.0 `question.jsonl` only tags rows as `hard_prompt`
-# (500) or `creative_writing` (250); `coding` and `math` are inert keys
-# upstream ships for forward compatibility (no question carries those
-# labels, so the dispatcher never looks them up). We keep them so any
-# future re-tagging upstream lights up automatically without a code
-# change here.
-ARENA_HARD_BASELINES: dict[str, str | Mapping[str, str]] = {
-    "arena-hard-v0.1": "gpt-4-0314",
-    "arena-hard-v2.0": {
-        "hard_prompt": "o3-mini-2025-01-31",
-        "coding": "o3-mini-2025-01-31",
-        "math": "o3-mini-2025-01-31",
-        "creative_writing": "gemini-2.0-flash-001",
-    },
-}
-
-# Dataset name -> upstream HF `data/<variant>/` directory. Kept private so the
-# public API of this module is just the baseline map and helpers below.
-_ARENA_HARD_HF_VARIANTS: dict[str, str] = {
-    "arena-hard-v0.1": "arena-hard-v0.1",
-    "arena-hard-v2.0": "arena-hard-v2.0",
-}
+from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
 
 def is_arena_hard_dataset(dataset: str) -> bool:
-    return dataset in ARENA_HARD_BASELINES
+    task = get_packaged_task(dataset)
+    return task is not None and task.spec.dataset.adapter == "arena_hard"
 
 
 def arena_hard_native_baseline(
     dataset: str,
 ) -> str | Mapping[str, str] | None:
-    """Dataset-native baseline assignment.
+    """Return the YAML-defined baseline for an Arena-Hard task."""
+    if not is_arena_hard_dataset(dataset):
+        return None
+    from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 
-    Returns a plain string for flat datasets (v0.1), a `{category: model}`
-    mapping for per-category datasets (v2.0), or `None` for datasets that
-    don't ship a native baseline.
-    """
-    return ARENA_HARD_BASELINES.get(dataset)
+    return native_pairwise_baseline(dataset)
 
 
 def normalize_official_arena_hard(
     raw_df: pd.DataFrame, dataset: str
 ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    if dataset not in _ARENA_HARD_HF_VARIANTS:
+    if not is_arena_hard_dataset(dataset):
         raise ValueError(f"Unsupported Arena-Hard dataset: {dataset}")
     df_instructions = _build_instructions(raw_df)
     df_model_outputs = _build_model_outputs(raw_df)
     return df_instructions, df_model_outputs
 
 
-def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
-    """Populate `{dataset}.csv` and `{dataset}.csv.zip` on disk if missing.
+def _source(task: ResolvedTaskSpec) -> HuggingFaceDatasetSource:
+    source = task.spec.dataset.sources.get("examples")
+    if not isinstance(source, HuggingFaceDatasetSource) or source.config is None:
+        raise ValueError(
+            f"Task {task.task!r} must define an 'examples' Hugging Face source "
+            "with its Arena-Hard data variant in 'config'."
+        )
+    return source
+
+
+def download_task_sources(task: ResolvedTaskSpec, local_tables_path: Path) -> None:
+    """Populate canonical instruction and output tables for one task.
 
     Pulls the raw jsonl files directly via `snapshot_download` and reads them
     with pandas: upstream's per-row `messages[].content` oscillates between
     string and dict across answer files, so `datasets.load_dataset` can't
     materialize them into a single Arrow schema.
-
     """
-    if dataset not in _ARENA_HARD_HF_VARIANTS:
-        return
+    if task.spec.dataset.adapter != "arena_hard":
+        raise ValueError(f"Task {task.task!r} does not use the Arena-Hard adapter.")
+    dataset = task.task
     instructions_path = local_tables_path / "instructions" / f"{dataset}.csv"
     model_outputs_path = local_tables_path / "model_outputs" / f"{dataset}.csv.zip"
     if instructions_path.exists() and model_outputs_path.exists():
         return
 
-    variant = _ARENA_HARD_HF_VARIANTS[dataset]
+    source = _source(task)
+    variant = source.config
     snapshot_root = snapshot_download(
-        repo_id=ARENA_HARD_HF_REPO_ID,
+        repo_id=source.repo_id,
         repo_type="dataset",
-        allow_patterns=[
-            f"data/{variant}/question.jsonl",
-            f"data/{variant}/model_answer/*.jsonl",
-        ],
+        allow_patterns=list(source.allow_patterns) or None,
         force_download=False,
-        revision=hf_revision(ARENA_HARD_HF_REPO_ID),
+        revision=source.revision,
     )
     raw_df = _read_arena_hard_jsonl_frames(
         variant_dir=Path(snapshot_root) / "data" / variant
@@ -102,6 +81,30 @@ def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
     df_instructions.to_csv(instructions_path, index=False)
     if df_model_outputs is not None:
         df_model_outputs.to_csv(model_outputs_path, index=False)
+
+
+def load_task_instructions(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame:
+    """Load normalized instructions for a registered Arena-Hard task."""
+    download_task_sources(task, local_tables_path)
+    return pd.read_csv(local_tables_path / "instructions" / f"{task.task}.csv")
+
+
+def load_task_model_outputs(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame | None:
+    """Load normalized reference outputs for a registered Arena-Hard task."""
+    download_task_sources(task, local_tables_path)
+    path = local_tables_path / "model_outputs" / f"{task.task}.csv.zip"
+    return pd.read_csv(path) if path.exists() else None
+
+
+def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
+    """Compatibility wrapper around the registered Arena-Hard adapter."""
+    task = get_packaged_task(dataset)
+    if task is not None and task.spec.dataset.adapter == "arena_hard":
+        download_task_sources(task, local_tables_path)
 
 
 def _read_arena_hard_jsonl_frames(variant_dir: Path) -> pd.DataFrame:

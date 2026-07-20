@@ -16,10 +16,6 @@ from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.datasets import load_instructions
-from judgearena.datasets.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
 from judgearena.datasets.fluency import load_fluency_contexts
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
@@ -58,17 +54,12 @@ def try_load_dataset_completions(
     local_path_tables = data_root / "tables"
     resolved_task = get_packaged_task(dataset)
     if resolved_task is not None:
-        from judgearena.datasets.judgearena_tables import load_task_model_outputs
+        from judgearena.datasets.registry import resolve_dataset_adapter
 
-        df_outputs = load_task_model_outputs(resolved_task, local_path_tables)
+        adapter = resolve_dataset_adapter(resolved_task.spec.dataset.adapter)
+        df_outputs = adapter.load_model_outputs(resolved_task, local_path_tables)
         if df_outputs is None:
             return None
-    elif is_arena_hard_dataset(dataset):
-        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
-        output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
-        if not output_path.exists():
-            return None
-        df_outputs = read_df(output_path)
     else:
         download_hf(name=dataset, local_path=local_path_tables)
         output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"

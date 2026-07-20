@@ -1,0 +1,31 @@
+schema_version: 1
+task_version: 1
+tags: [pairwise, instruction-following, arena-hard]
+
+dataset:
+  adapter: arena_hard
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: lmarena-ai/arena-hard-auto
+      revision: "15f3746e21432264ce9b453999bde4f3c946d2e6"
+  fields:
+    id: instruction_index
+    instruction: instruction
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  judge:
+    default_prompt: default
+    parser: pairwise_preference
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: pairwise_win_rate
+    primary_metric: winrate
+    higher_is_better: true
+
+metadata:
+  reference_implementation: https://github.com/lmarena/arena-hard-auto

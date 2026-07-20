@@ -93,8 +93,6 @@ PRESETS: dict[str, JudgePromptPreset] = {
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
 TASK_DEFAULT_PRESET: dict[str, str] = {
-    "arena-hard-v0.1": DEFAULT_JUDGE_PROMPT_PRESET,
-    "arena-hard-v2.0": DEFAULT_JUDGE_PROMPT_PRESET,
     "mt-bench": FASTCHAT_PAIRWISE_PROMPT_PRESET,
 }
 

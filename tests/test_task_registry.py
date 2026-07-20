@@ -71,16 +71,30 @@ def _write_family(
     return path
 
 
-def test_packaged_registry_discovers_alpaca_eval():
+def test_packaged_registry_discovers_versioned_tasks():
     tasks = load_tasks()
-    resolved = tasks["alpaca-eval"]
+    alpaca = tasks["alpaca-eval"]
+    arena_v01 = tasks["arena-hard-v0.1"]
+    arena_v20 = tasks["arena-hard-v2.0"]
 
-    assert list(tasks) == ["alpaca-eval"]
-    assert resolved.spec.dataset.sources["examples"].revision == (
+    assert list(tasks) == [
+        "alpaca-eval",
+        "arena-hard-v0.1",
+        "arena-hard-v2.0",
+    ]
+    assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
     )
-    assert resolved.spec.protocol.baseline.reference_id == "gpt4_1106_preview"
-    assert resolved.spec.protocol.scoring.primary_metric == "winrate"
+    assert alpaca.spec.protocol.baseline.reference_id == "gpt4_1106_preview"
+    assert arena_v01.spec.protocol.baseline.reference_id == "gpt-4-0314"
+    assert arena_v20.spec.protocol.baseline.references["hard_prompt"] == (
+        "o3-mini-2025-01-31"
+    )
+    assert [resource.path for resource in arena_v20.provenance.resources] == [
+        "arena_hard/_base.yaml",
+        "arena_hard/arena-hard-v2.0.yaml",
+    ]
+    assert alpaca.spec.protocol.scoring.primary_metric == "winrate"
 
 
 def test_find_returns_none_for_unregistered_task():
@@ -225,6 +239,25 @@ def test_official_outputs_must_reference_declared_source(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="not declared in dataset.sources"):
+        load_tasks(tmp_path)
+
+
+def test_category_baseline_uses_declared_category_field(tmp_path):
+    definition = _task_definition()
+    definition["dataset"]["fields"]["category"] = "category"
+    definition["protocol"]["baseline"] = {
+        "strategy": "category_defaults",
+        "category_field": "other_category",
+        "references": {"test": "reference"},
+    }
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="dataset.fields.category"):
         load_tasks(tmp_path)
 
 

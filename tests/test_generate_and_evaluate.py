@@ -138,6 +138,11 @@ def test_alpaca_eval_baseline_is_not_duplicated_in_legacy_registry():
     assert native_pairwise_baseline("alpaca-eval") == "gpt4_1106_preview"
 
 
+def test_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
+    assert "arena-hard-v0.1" not in LEGACY_PAIRWISE_BASELINES
+    assert "arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         task="arena-hard-v2.0",

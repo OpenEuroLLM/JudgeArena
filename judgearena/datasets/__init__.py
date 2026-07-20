@@ -1,9 +1,5 @@
 import pandas as pd
 
-from judgearena.datasets.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.datasets.m_arenahard import (
     load_m_arenahard,
     split_m_arena_hard_dataset,
@@ -18,9 +14,10 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
     resolved_task = get_packaged_task(dataset)
     if resolved_task is not None:
         from judgearena import utils as judgearena_utils
-        from judgearena.datasets.judgearena_tables import load_task_instructions
+        from judgearena.datasets.registry import resolve_dataset_adapter
 
-        df_instructions = load_task_instructions(
+        adapter = resolve_dataset_adapter(resolved_task.spec.dataset.adapter)
+        df_instructions = adapter.load_instructions(
             resolved_task, judgearena_utils.data_root / "tables"
         )
 
@@ -55,20 +52,7 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         )
 
     else:
-        assert dataset in [
-            "arena-hard-v0.1",
-            "arena-hard-v2.0",
-        ]
-        from judgearena import utils as judgearena_utils
-
-        local_path_tables = judgearena_utils.data_root / "tables"
-        if is_arena_hard_dataset(dataset):
-            download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
-        else:
-            judgearena_utils.download_hf(name=dataset, local_path=local_path_tables)
-        df_instructions = judgearena_utils.read_df(
-            local_path_tables / "instructions" / f"{dataset}.csv"
-        )
+        raise ValueError(f"Unsupported instruction dataset {dataset!r}.")
 
     df_instructions = df_instructions.set_index("instruction_index").sort_index()
     logger.info("Loaded %d instructions for %s.", len(df_instructions), dataset)

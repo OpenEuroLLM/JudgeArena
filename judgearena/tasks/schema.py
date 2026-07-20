@@ -171,6 +171,12 @@ class TaskSpec(_StrictFrozenModel):
                 f"official baseline source {baseline.source!r} is not declared "
                 "in dataset.sources"
             )
+        if isinstance(baseline, CategoryDefaultsBaseline) and (
+            self.dataset.fields.category != baseline.category_field
+        ):
+            raise ValueError(
+                "category-default baseline must use dataset.fields.category"
+            )
         return self
 
 

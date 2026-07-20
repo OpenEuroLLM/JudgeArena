@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from judgearena.datasets.arena_hard import ARENA_HARD_BASELINES
 from judgearena.datasets.m_arenahard import (
     M_ARENA_HARD_BASELINES,
     split_m_arena_hard_dataset,
@@ -14,7 +13,6 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import CategoryDefaultsBaseline, TaskDefaultBaseline
 
 LEGACY_PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
-    **ARENA_HARD_BASELINES,
     **M_ARENA_HARD_BASELINES,
     **MT_BENCH_BASELINES,
 }

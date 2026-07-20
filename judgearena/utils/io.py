@@ -11,10 +11,6 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.datasets.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -38,9 +34,11 @@ def download_hf(name: str, local_path: Path):
 
     resolved_task = get_packaged_task(name)
     if resolved_task is not None:
-        from judgearena.datasets.judgearena_tables import download_task_sources
+        from judgearena.datasets.registry import resolve_dataset_adapter
 
-        download_task_sources(resolved_task, local_path)
+        resolve_dataset_adapter(resolved_task.spec.dataset.adapter).download(
+            resolved_task, local_path
+        )
     else:
         local_path.mkdir(exist_ok=True, parents=True)
         snapshot_download(
@@ -85,21 +83,10 @@ def download_all():
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
-    packaged_table_tasks = tuple(
-        task_id
-        for task_id, resolved in load_tasks().items()
-        if resolved.spec.dataset.adapter == "judgearena_tables"
-    )
-    for dataset in (
-        *packaged_table_tasks,
-        "arena-hard-v0.1",
-        "arena-hard-v2.0",
-        *M_ARENA_HARD_BASELINES,
-    ):
-        if is_arena_hard_dataset(dataset):
-            download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
-        else:
-            download_hf(name=dataset, local_path=local_path_tables)
+    for task_id in load_tasks():
+        download_hf(name=task_id, local_path=local_path_tables)
+    for dataset in M_ARENA_HARD_BASELINES:
+        download_hf(name=dataset, local_path=local_path_tables)
 
     download_fluency_dataset(data_root)
 
