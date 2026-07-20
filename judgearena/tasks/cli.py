@@ -44,6 +44,8 @@ def run_task_command(
         elif args.command == "show":
             resolved = registry.get(args.task)
             output = resolved.model_dump()
+            if resolved.selection is not None:
+                output["_selection"] = asdict(resolved.selection)
             if args.resolved:
                 output["_provenance"] = asdict(resolved.provenance)
             print(yaml.safe_dump(output, sort_keys=False).rstrip())

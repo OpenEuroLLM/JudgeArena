@@ -102,6 +102,77 @@ def test_find_returns_none_for_unregistered_task():
     assert TaskRegistry().find("not-packaged-yet") is None
 
 
+def test_registry_resolves_task_family_suffixes(tmp_path):
+    definition = _task_definition("family-v1")
+    definition["variants"] = {
+        "selector": "language",
+        "values": ["de", "en", "uk"],
+        "groups": {"EU": ["de", "en", "uk"]},
+    }
+    _write_family(
+        tmp_path,
+        family="family",
+        filename="family-v1.yaml",
+        definition=definition,
+    )
+    registry = TaskRegistry(tmp_path)
+
+    single = registry.get("family-v1-uk")
+    group = registry.get("family-v1-EU")
+
+    assert single.task == "family-v1-uk"
+    assert single.definition_task == "family-v1"
+    assert single.selection is not None
+    assert single.selection.selector == "language"
+    assert single.selection.values == ("uk",)
+    assert group.selection is not None
+    assert group.selection.name == "EU"
+    assert group.selection.values == ("de", "en", "uk")
+    assert [summary.task for summary in registry.list()] == ["family-v1"]
+    assert registry.find("family-v1-fr") is None
+
+
+def test_registry_rejects_variant_group_with_unknown_value(tmp_path):
+    definition = _task_definition("family-v1")
+    definition["variants"] = {
+        "selector": "language",
+        "values": ["de"],
+        "groups": {"EU": ["de", "fr"]},
+    }
+    _write_family(
+        tmp_path,
+        family="family",
+        filename="family-v1.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="unknown values"):
+        TaskRegistry(tmp_path).validate_all()
+
+
+def test_registry_rejects_variant_id_collision(tmp_path):
+    family = _task_definition("family")
+    family["variants"] = {
+        "selector": "subset",
+        "values": ["mini"],
+    }
+    _write_family(
+        tmp_path,
+        family="family",
+        filename="family.yaml",
+        definition=family,
+    )
+    _write_family(
+        tmp_path,
+        family="other",
+        filename="family-mini.yaml",
+        definition=_task_definition("family-mini"),
+    )
+
+    with pytest.raises(TaskDefinitionError, match="Variant task ID"):
+        TaskRegistry(tmp_path).validate_all()
+
+
 def test_registry_rejects_unpinned_remote_source(tmp_path):
     definition = _task_definition()
     definition["dataset"]["sources"]["examples"]["revision"] = "main"
@@ -310,6 +381,33 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys):
 
     run_task_command(["validate"], registry=registry)
     assert capsys.readouterr().out == "Validated 1 task(s).\n"
+
+
+def test_task_show_reports_resolved_selection(tmp_path, capsys):
+    definition = _task_definition("family")
+    definition["variants"] = {
+        "selector": "language",
+        "values": ["uk"],
+    }
+    _write_family(
+        tmp_path,
+        family="family",
+        filename="family.yaml",
+        definition=definition,
+    )
+
+    run_task_command(
+        ["show", "family-uk", "--resolved"], registry=TaskRegistry(tmp_path)
+    )
+
+    shown = yaml.safe_load(capsys.readouterr().out)
+    assert shown["task"] == "family"
+    assert shown["_selection"] == {
+        "selector": "language",
+        "name": "uk",
+        "values": ["uk"],
+    }
+    assert shown["_provenance"]["resolved_sha256"]
 
 
 def test_main_cli_intercepts_task_commands(monkeypatch, capsys):
