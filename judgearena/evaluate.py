@@ -262,7 +262,7 @@ def annotate_battles(
     ):
         annotations.append(
             JudgeAnnotation(
-                judge_input=judge_input,
+                judge_input=judge_input.to_string(),
                 judge_completion=judge_completion,
                 instruction=instruction,
                 completion_A=completion_A,

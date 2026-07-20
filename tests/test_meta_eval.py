@@ -14,7 +14,7 @@ import judgearena.meta_eval.runner as meta_eval_runner
 import judgearena.meta_eval.sampling as meta_sampling
 from judgearena import cli as cli_module
 from judgearena.arenas_utils import extract_turn_text
-from judgearena.evaluate import JudgeAnnotation, PairScore
+from judgearena.evaluate import JudgeAnnotation, PairScore, annotate_battles
 from judgearena.meta_eval.cache import AnnotationCache, AnnotationEntry, AnnotationKey
 from judgearena.meta_eval.cli_args import CliMetaEvalArgs
 from judgearena.meta_eval.metrics import (
@@ -216,6 +216,23 @@ def test_extract_text_structured_content():
         )
         == "part one"
     )
+
+
+def test_annotate_battles_serializes_judge_input():
+    class FakeJudge:
+        @staticmethod
+        def batch(*, inputs, **_kwargs):
+            return ["score_A: 9\nscore_B: 1"] * len(inputs)
+
+    annotation = annotate_battles(
+        judge_chat_model=FakeJudge(),
+        instructions=["Question"],
+        completions_A=["Answer A"],
+        completions_B=["Answer B"],
+    )[0]
+
+    assert isinstance(annotation.judge_input, str)
+    assert "Question" in annotation.judge_input
 
 
 def test_language_filter_empty_raises(monkeypatch, synthetic_arena_df):
