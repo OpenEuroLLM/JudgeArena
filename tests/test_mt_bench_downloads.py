@@ -3,9 +3,9 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-import judgearena.instruction_dataset.fluency as fluency_mod
-import judgearena.instruction_dataset.mt_bench as mt_bench
-import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
+import judgearena.benchmarks.mt_bench.mt_bench_utils as mt_bench_utils
+import judgearena.datasets.fluency as fluency_mod
+import judgearena.datasets.mt_bench as mt_bench
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
@@ -213,7 +213,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         mt_bench_utils,
-        "write_run_metadata",
+        "write_run_metadata_safely",
         fake_write_run_metadata,
     )
     cfg = RunConfig(
@@ -239,7 +239,10 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
     assert (tmp_path / "mt-bench-test-annotations.csv").exists()
     # The results JSON is now written by report.save() in _finalize_mt_bench_run,
     # not by _save_mt_bench_results (which writes config / annotations / run metadata).
-    assert captured["entrypoint"] == "judgearena.mt_bench.mt_bench_utils.run_mt_bench"
+    assert (
+        captured["entrypoint"]
+        == "judgearena.benchmarks.mt_bench.mt_bench_utils.run_mt_bench"
+    )
     assert captured["input_payloads"] == {"instruction_index": [1]}
     assert captured["judge_system_prompt"] == "system"
     assert captured["judge_user_prompt_template"] == "user"

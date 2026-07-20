@@ -54,7 +54,7 @@ def hf_revision(repo_id: str) -> str | None:
 def all_dataset_revisions() -> dict[str, str | None]:
     """Return a copy of every pin recorded in this module.
 
-    Used by :func:`judgearena.repro.write_run_metadata` to record the
+    Used by :func:`judgearena.artifacts.metadata.write_run_metadata` to record the
     pin table alongside each run so future readers know which version of
     the data was visible at the time of the run.
     """

@@ -80,11 +80,11 @@ class Report(BaseModel, abc.ABC):
         return self.model_dump(by_alias=True, exclude_none=True)
 
     def save(self, path: str | Path) -> Path:
-        from judgearena.repro import _to_jsonable  # lazy: avoid an import cycle
+        from judgearena.artifacts import to_jsonable  # lazy: avoid an import cycle
 
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(_to_jsonable(self.to_dict()), indent=2) + "\n")
+        p.write_text(json.dumps(to_jsonable(self.to_dict()), indent=2) + "\n")
         return p
 
 

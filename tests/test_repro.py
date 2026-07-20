@@ -1,6 +1,6 @@
 import json
 
-import judgearena.repro as repro
+import judgearena.artifacts.metadata as repro
 
 
 def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):

@@ -6,17 +6,19 @@ from typing import Any
 
 import pandas as pd
 
-from judgearena.evaluate import PairScore
-from judgearena.mt_bench.common import (
+from judgearena.benchmarks.mt_bench.common import (
     is_reference_based_category,
     resolve_mt_bench_turn_flags,
 )
-from judgearena.mt_bench.pairwise_judging import (
+from judgearena.benchmarks.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
     build_mt_bench_pairwise_judge_items,
     infer_pairwise_judgments_by_prompt_groups,
 )
-from judgearena.mt_bench.prompt_templates import build_mt_bench_user_prompt_template
+from judgearena.benchmarks.mt_bench.prompt_templates import (
+    build_mt_bench_user_prompt_template,
+)
+from judgearena.evaluate import PairScore
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,

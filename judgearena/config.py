@@ -16,7 +16,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from judgearena.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
 
 # Set by build_run_config() for the duration of RunConfig() construction.

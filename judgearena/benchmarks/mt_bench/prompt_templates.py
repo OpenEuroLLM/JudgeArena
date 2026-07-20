@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+from importlib.resources import files
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts" / "mt_bench"
+_PROMPT_PACKAGE = "judgearena.prompts"
 _USER_SINGLE_BASE_FILE = "user-single-base.txt"
 _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
@@ -10,8 +10,11 @@ _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 
 
 def load_mt_bench_prompt_text(filename: str) -> str:
-    path = _PROMPTS_DIR / filename
-    return path.read_text(encoding="utf-8")
+    return (
+        files(_PROMPT_PACKAGE)
+        .joinpath("mt_bench", filename)
+        .read_text(encoding="utf-8")
+    )
 
 
 def render_mt_bench_prompt_text(filename: str, **kwargs: str) -> str:

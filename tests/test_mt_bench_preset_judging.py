@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from judgearena.mt_bench.preset_judging import (
+from judgearena.benchmarks.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
     _select_preset_prompt,
     judge_mt_bench_with_preset,

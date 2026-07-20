@@ -1,19 +1,19 @@
 import pandas as pd
 import pytest
 
-import judgearena.benchmark as benchmark_module
-import judgearena.generate_and_evaluate as generate_and_evaluate
-from judgearena.baselines import native_pairwise_baseline
-from judgearena.benchmark import resolve_benchmark_adapter
-from judgearena.config import RunConfig
-from judgearena.generate_and_evaluate import (
+import judgearena.benchmarks.execution as benchmark_execution
+import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
+from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.runner import (
     BaselinePlan,
     _benchmark_adapters,
     _resolve_baseline_plan,
 )
-from judgearena.generate_and_evaluate import (
+from judgearena.benchmarks.pairwise.runner import (
     main as main_generate_and_eval,
 )
+from judgearena.benchmarks.registry import resolve_benchmark_adapter
+from judgearena.config import RunConfig
 
 
 def _cfg(
@@ -265,7 +265,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 
         return FakeJudge()
 
-    monkeypatch.setattr(benchmark_module, "make_model", fake_make_model)
+    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
 
     prefs = main_generate_and_eval(
         _cfg(

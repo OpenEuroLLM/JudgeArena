@@ -1,10 +1,10 @@
 import pandas as pd
 
-from judgearena.instruction_dataset.arena_hard import (
+from judgearena.datasets.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
-from judgearena.instruction_dataset.m_arenahard import (
+from judgearena.datasets.m_arenahard import (
     load_m_arenahard,
     split_m_arena_hard_dataset,
 )
@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
     if dataset == "mt-bench":
-        from judgearena.instruction_dataset.mt_bench import load_mt_bench
+        from judgearena.datasets.mt_bench import load_mt_bench
 
         df_instructions = load_mt_bench()
 

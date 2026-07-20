@@ -17,7 +17,7 @@ import pandas as pd
 from datasets import Dataset
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.instruction_dataset import load_instructions
+from judgearena.datasets import load_instructions
 from judgearena.utils import do_inference, make_model
 
 # set_langchain_cache()
