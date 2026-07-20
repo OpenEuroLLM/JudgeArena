@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 
 def _task_protocol(task_id: str) -> MTBenchProtocol:
@@ -345,7 +346,9 @@ def _run_mt_bench_preset(
     )
 
 
-def run_mt_bench_benchmark(cfg: RunConfig):
+def run_mt_bench_benchmark(
+    cfg: RunConfig, _resolved_task: ResolvedTaskSpec | None = None
+):
     """Run the registered MT-Bench generation, judging, and reporting lifecycle."""
     run_started_at = datetime.now(UTC)
     protocol = _task_protocol(cfg.task)
@@ -357,7 +360,6 @@ def run_mt_bench_benchmark(cfg: RunConfig):
             f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
-
     result_name = (
         f"{cfg.task}-{cfg.model.name}-{cfg.model.baseline}-{cfg.judge.model}-"
         f"{cfg.judge.swap_mode}"

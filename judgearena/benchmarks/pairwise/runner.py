@@ -3,8 +3,6 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,14 +11,16 @@ import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
-from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.datasets import load_instructions
 from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
 from judgearena.datasets.fluency import load_fluency_contexts
+from judgearena.datasets.pairwise import PairwiseTaskData, load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import ResolvedTaskSpec
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -37,34 +37,19 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def try_load_dataset_completions(
+def _try_load_legacy_dataset_completions(
     dataset: str, model: str, n_instructions: int | None
 ) -> pd.DataFrame | None:
-    """Try loading pre-existing completions from the dataset.
+    """Try loading pre-existing completions for an unregistered legacy task.
 
-    Some datasets (e.g. alpaca-eval) ship with completions for well-known
-    models such as ``gpt4_1106_preview``.  When ``model`` matches a column in
-    ``model_outputs/{dataset}.csv.zip``, those completions are returned
-    directly so that no model instantiation / generation is needed.
-
-    Returns a DataFrame with columns ``completion`` and ``instruction_index``,
-    or ``None`` when no pre-existing completions are found.
+    Registered tasks load outputs through ``PairwiseTaskData`` instead.
     """
     local_path_tables = data_root / "tables"
-    resolved_task = get_packaged_task(dataset)
-    if resolved_task is not None:
-        from judgearena.datasets.registry import resolve_dataset_adapter
-
-        adapter = resolve_dataset_adapter(resolved_task.spec.dataset.adapter)
-        df_outputs = adapter.load_model_outputs(resolved_task, local_path_tables)
-        if df_outputs is None:
-            return None
-    else:
-        download_hf(name=dataset, local_path=local_path_tables)
-        output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
-        if not output_path.exists():
-            return None
-        df_outputs = read_df(output_path)
+    download_hf(name=dataset, local_path=local_path_tables)
+    output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
+    if not output_path.exists():
+        return None
+    df_outputs = read_df(output_path)
     df_outputs.loc[:, "output"] = df_outputs.loc[:, "output"].fillna("")
     df_outputs = df_outputs.pivot_table(
         index="instruction_index", columns="model", values="output", aggfunc="last"
@@ -85,82 +70,7 @@ def try_load_dataset_completions(
     )
 
 
-@dataclass(frozen=True)
-class BaselinePlan:
-    """Row-aligned baseline assignment for `--model_B`."""
-
-    baseline_by_index: pd.Series
-
-    @classmethod
-    def flat(cls, model: str, *, index: pd.Index) -> "BaselinePlan":
-        return cls(
-            baseline_by_index=pd.Series(model, index=index, name="model_B", dtype=str)
-        )
-
-    @classmethod
-    def per_row(cls, series: pd.Series) -> "BaselinePlan":
-        return cls(baseline_by_index=series.astype(str).rename("model_B"))
-
-    @property
-    def unique_models(self) -> list[str]:
-        return sorted(self.baseline_by_index.dropna().unique().tolist())
-
-    @property
-    def is_flat(self) -> bool:
-        return len(self.unique_models) == 1
-
-    @property
-    def single_model(self) -> str:
-        if not self.is_flat:
-            raise ValueError(
-                "BaselinePlan is per-row; use baseline_by_index for row-level lookups."
-            )
-        return self.unique_models[0]
-
-    @property
-    def display_name(self) -> str:
-        return self.single_model if self.is_flat else "+".join(self.unique_models)
-
-    def aligned_to(self, index: pd.Index) -> pd.Series:
-        return self.baseline_by_index.loc[index]
-
-
-def _resolve_baseline_plan(
-    *, task: str, model_b: str | None, instructions_df: pd.DataFrame
-) -> BaselinePlan:
-    """Resolve explicit or dataset-native baseline assignment."""
-    if model_b is not None:
-        return BaselinePlan.flat(model_b, index=instructions_df.index)
-
-    native = native_pairwise_baseline(task)
-    if native is None:
-        raise ValueError(
-            f"model.baseline is required for task '{task}'; no dataset-native "
-            "baseline is registered."
-        )
-    if isinstance(native, str):
-        return BaselinePlan.flat(native, index=instructions_df.index)
-    if isinstance(native, Mapping):
-        if "category" not in instructions_df.columns:
-            raise ValueError(
-                f"{task} requires a 'category' column for per-category "
-                "baseline routing; re-run dataset download to regenerate the "
-                "instructions table."
-            )
-        per_row = instructions_df["category"].map(native)
-        if per_row.isna().any():
-            unknown = sorted(
-                instructions_df.loc[per_row.isna(), "category"].unique().tolist()
-            )
-            raise ValueError(
-                f"Unknown Arena-Hard categories for {task}: {unknown}. "
-                f"Known: {sorted(native.keys())}"
-            )
-        return BaselinePlan.per_row(per_row)
-    raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
-
-
-def run_pairwise(cfg: "RunConfig"):
+def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
     """
     1) take as input:
      * task (dataset), make sure instruct-completion works
@@ -181,7 +91,16 @@ def run_pairwise(cfg: "RunConfig"):
 
     # Currrently, we run context evaluation
     is_fluency_task = task_is_fluency(cfg.task)
-    if is_fluency_task:
+    resolved_task = resolved_task or get_packaged_task(cfg.task)
+    task_data: PairwiseTaskData | None = None
+    if resolved_task is not None:
+        task_data = load_pairwise_task_data(
+            resolved_task,
+            n_instructions=cfg.generation.n_instructions,
+        )
+        instructions_df = task_data.instructions
+        instructions = instructions_df.loc[:, "instruction"]
+    elif is_fluency_task:
         # if cfg.task = "fluency-french", we map to the "French" config of
         # https://huggingface.co/datasets/geoalgo/multilingual-fluency
         instructions = load_fluency_contexts(data_root, cfg.task)
@@ -202,8 +121,11 @@ def run_pairwise(cfg: "RunConfig"):
         instructions_df = instructions_df.head(n_instructions)
         instructions = instructions.head(n_instructions)
 
-    baseline_plan = _resolve_baseline_plan(
-        task=cfg.task, model_b=cfg.model.baseline, instructions_df=instructions_df
+    baseline_plan = resolve_baseline_plan(
+        task_id=cfg.task,
+        task=resolved_task,
+        runtime_baseline=cfg.model.baseline,
+        instructions=instructions_df,
     )
 
     name = f"{cfg.task}-{cfg.model.name}-{baseline_plan.display_name}-{cfg.judge.model}"
@@ -247,7 +169,14 @@ def run_pairwise(cfg: "RunConfig"):
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
     def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = try_load_dataset_completions(cfg.task, model_spec, n_instructions)
+        if task_data is not None:
+            preloaded = task_data.completions_for(model_spec)
+            if preloaded is not None:
+                return preloaded.loc[instructions.index]
+        else:
+            preloaded = _try_load_legacy_dataset_completions(
+                cfg.task, model_spec, n_instructions
+            )
         if preloaded is not None:
             return _align_completion_series(preloaded)
         # Fold the resolved generation kwargs into the cache key so that changing

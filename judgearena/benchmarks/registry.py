@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import ResolvedTaskSpec
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 class BenchmarkRunner(Protocol):
     """Callable implemented by a benchmark-specific evaluation module."""
 
-    def __call__(self, cfg: RunConfig, /) -> object: ...
+    def __call__(self, cfg: RunConfig, task: ResolvedTaskSpec | None, /) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,14 @@ class BenchmarkAdapter:
         return self.tasks is None or task in self.tasks
 
 
+@dataclass(frozen=True)
+class ResolvedBenchmark:
+    """Runner selection and the task definition resolved during dispatch."""
+
+    adapter: BenchmarkAdapter
+    task: ResolvedTaskSpec | None
+
+
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
     from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
@@ -44,18 +53,23 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     )
 
 
-def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
-    """Resolve a YAML-selected runner, then fall back for unmigrated tasks."""
+def resolve_benchmark(task: str) -> ResolvedBenchmark:
+    """Resolve a runner and task definition with one registry lookup."""
     adapters = benchmark_adapters()
     resolved = get_packaged_task(task)
     if resolved is not None:
         runner_id = resolved.spec.protocol.runner
         for adapter in adapters:
             if adapter.name == runner_id:
-                return adapter
+                return ResolvedBenchmark(adapter=adapter, task=resolved)
         raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
 
     for adapter in adapters:
         if adapter.supports(task):
-            return adapter
+            return ResolvedBenchmark(adapter=adapter, task=None)
     raise ValueError(f"No generate-and-evaluate adapter supports task {task!r}.")
+
+
+def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
+    """Return only the selected adapter for compatibility and inspection."""
+    return resolve_benchmark(task).adapter
