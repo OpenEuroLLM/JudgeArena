@@ -70,18 +70,32 @@ def _write_family(
     return path
 
 
-def test_packaged_registry_discovers_alpaca_eval():
+def test_packaged_registry_discovers_versioned_tasks():
     registry = TaskRegistry()
 
     summary = registry.list()
-    resolved = registry.get("alpaca-eval")
+    alpaca = registry.get("alpaca-eval")
+    arena_v01 = registry.get("arena-hard-v0.1")
+    arena_v20 = registry.get("arena-hard-v2.0")
 
-    assert [task.task for task in summary] == ["alpaca-eval"]
-    assert resolved.spec.dataset.sources["examples"].revision == (
+    assert [task.task for task in summary] == [
+        "alpaca-eval",
+        "arena-hard-v0.1",
+        "arena-hard-v2.0",
+    ]
+    assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
     )
-    assert resolved.spec.protocol.baseline.reference_id == "gpt4_1106_preview"
-    assert resolved.spec.protocol.scoring.primary_metric == "winrate"
+    assert alpaca.spec.protocol.baseline.reference_id == "gpt4_1106_preview"
+    assert arena_v01.spec.protocol.baseline.reference_id == "gpt-4-0314"
+    assert arena_v20.spec.protocol.baseline.references["hard_prompt"] == (
+        "o3-mini-2025-01-31"
+    )
+    assert [resource.path for resource in arena_v20.provenance.resources] == [
+        "arena_hard/_base.yaml",
+        "arena_hard/arena-hard-v2.0.yaml",
+    ]
+    assert alpaca.spec.protocol.scoring.primary_metric == "winrate"
 
 
 def test_find_returns_none_for_unregistered_task():
@@ -226,6 +240,25 @@ def test_official_outputs_must_reference_declared_source(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="not declared in dataset.sources"):
+        TaskRegistry(tmp_path).validate_all()
+
+
+def test_category_baseline_uses_declared_category_field(tmp_path):
+    definition = _task_definition()
+    definition["dataset"]["fields"]["category"] = "category"
+    definition["protocol"]["baseline"] = {
+        "strategy": "category_defaults",
+        "category_field": "other_category",
+        "references": {"test": "reference"},
+    }
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="dataset.fields.category"):
         TaskRegistry(tmp_path).validate_all()
 
 

@@ -30,7 +30,7 @@ def test_safe_parse_int(monkeypatch, raw, expected):
     assert safe_parse_int(var) == expected
 
 
-def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
+def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     calls: list[tuple[str, str, object]] = []
 
     monkeypatch.setattr(utils_io, "data_root", tmp_path)
@@ -38,13 +38,6 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
         utils_io,
         "download_hf",
         lambda name, local_path: calls.append(("hf", name, local_path)),
-    )
-    monkeypatch.setattr(
-        utils_io,
-        "download_arena_hard",
-        lambda dataset, local_tables_path: calls.append(
-            ("arena", dataset, local_tables_path)
-        ),
     )
     monkeypatch.setattr(
         utils_io,
@@ -64,8 +57,8 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
     tables_dir = tmp_path / "tables"
     assert calls[:5] == [
         ("hf", "alpaca-eval", tables_dir),
-        ("arena", "arena-hard-v0.1", tables_dir),
-        ("arena", "arena-hard-v2.0", tables_dir),
+        ("hf", "arena-hard-v0.1", tables_dir),
+        ("hf", "arena-hard-v2.0", tables_dir),
         ("hf", "m-arena-hard-v0.1", tables_dir),
         ("hf", "m-arena-hard-v2.0", tables_dir),
     ]

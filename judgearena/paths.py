@@ -37,9 +37,11 @@ def download_hf(name: str, local_path: Path) -> None:
 
     resolved_task = get_packaged_task(name)
     if resolved_task is not None:
-        from judgearena.datasets.judgearena_tables import download_task_sources
+        from judgearena.datasets.registry import resolve_dataset_adapter
 
-        download_task_sources(resolved_task, local_path)
+        resolve_dataset_adapter(resolved_task.spec.dataset.adapter).download(
+            resolved_task, local_path
+        )
         return
 
     local_path.mkdir(exist_ok=True, parents=True)

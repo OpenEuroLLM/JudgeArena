@@ -29,8 +29,6 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
     "lmsys/mt-bench": "a4b674ca573c24143824ac7f60d9173e7081e37d",
     # Multilingual fluency contexts.
     "geoalgo/multilingual-contexts-to-be-completed": "06e73c95ad18d71a04b5a1b6464ed89d38195039",
-    # Arena-Hard official source (used via datasets.load_dataset).
-    "lmarena-ai/arena-hard-auto": "15f3746e21432264ce9b453999bde4f3c946d2e6",
 }
 
 
