@@ -17,7 +17,9 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = frozenset({"pairwise"})
-    datasets: frozenset[str] = frozenset({"arena_hard", "judgearena_tables"})
+    datasets: frozenset[str] = frozenset(
+        {"arena_hard", "judgearena_tables", "m_arena_hard"}
+    )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     parsers: frozenset[str] = frozenset({"pairwise_preference"})
     scorers: frozenset[str] = frozenset({"pairwise_win_rate"})

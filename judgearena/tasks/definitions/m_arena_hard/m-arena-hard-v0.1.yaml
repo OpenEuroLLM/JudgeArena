@@ -1,0 +1,22 @@
+extends: _base.yaml
+task: m-arena-hard-v0.1
+description: Pairwise multilingual evaluation on m-ArenaHard v0.1.
+
+dataset:
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: CohereLabs/m-ArenaHard
+      revision: "ab393a96cd0b134a1acfa96e080af31e5e73a393"
+      allow_patterns: ["*/test-*.parquet"]
+    outputs:
+      allow_patterns: ["model_outputs/m-arena-hard-v0.1-*.csv.zip"]
+
+protocol:
+  baseline:
+    strategy: task_default
+    reference_id: CohereLabs/aya-expanse-8b
+    allow_runtime_override: true
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/CohereLabs/m-ArenaHard

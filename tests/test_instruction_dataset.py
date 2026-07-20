@@ -7,6 +7,7 @@ import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.judgearena_tables as judgearena_tables
+import judgearena.datasets.m_arenahard as m_arenahard
 from judgearena.datasets.arena_hard import (
     _build_instructions,
     _build_model_outputs,
@@ -75,6 +76,77 @@ def test_arena_hard_source_is_owned_by_task_yaml():
     assert source.repo_id == "lmarena-ai/arena-hard-auto"
     assert source.revision == "15f3746e21432264ce9b453999bde4f3c946d2e6"
     assert source.config == "arena-hard-v2.0"
+
+
+def test_m_arena_hard_sources_and_baselines_are_owned_by_task_yaml():
+    v01 = get_packaged_task("m-arena-hard-v0.1-uk")
+    v20 = get_packaged_task("m-arena-hard-v2.0-EU")
+    assert v01 is not None
+    assert v20 is not None
+
+    assert v01.spec.dataset.sources["examples"].repo_id == "CohereLabs/m-ArenaHard"
+    assert v01.spec.dataset.sources["examples"].revision == (
+        "ab393a96cd0b134a1acfa96e080af31e5e73a393"
+    )
+    assert v01.spec.protocol.baseline.reference_id == "CohereLabs/aya-expanse-8b"
+    assert v20.spec.dataset.sources["examples"].repo_id == (
+        "CohereLabs/m-ArenaHard-v2.0"
+    )
+    assert v20.spec.protocol.baseline.reference_id == "google/gemini-2.5-flash"
+
+
+def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_path):
+    task = get_packaged_task("m-arena-hard-v2.0-EU")
+    assert task is not None
+    source = task.spec.dataset.sources["examples"]
+    source_root = tmp_path / "_sources" / source.repo_id.replace("/", "--")
+    for language in ("cs", "uk", "ar"):
+        language_dir = source_root / language
+        language_dir.mkdir(parents=True)
+        (language_dir / "test.parquet").touch()
+
+    frames = {
+        "cs": pd.DataFrame({"question_id": ["q1"], "prompt": ["Czech"]}),
+        "uk": pd.DataFrame({"question_id": ["q1"], "prompt": ["Ukrainian"]}),
+        "ar": pd.DataFrame({"question_id": ["q1"], "prompt": ["Arabic"]}),
+    }
+    monkeypatch.setattr(
+        m_arenahard, "_download_source", lambda _task, _name, _path, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        m_arenahard.pd,
+        "read_parquet",
+        lambda path: frames[path.parent.name].copy(),
+    )
+
+    loaded = m_arenahard.load_task_instructions(task, tmp_path)
+
+    assert loaded["instruction_index"].tolist() == ["q1-cs", "q1-uk"]
+    assert loaded["instruction"].tolist() == ["Czech", "Ukrainian"]
+    assert loaded["lang"].tolist() == ["cs", "uk"]
+
+
+def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp_path):
+    task = get_packaged_task("m-arena-hard-v0.1-uk")
+    assert task is not None
+    output_path = tmp_path / "model_outputs" / f"{task.task}.csv.zip"
+    output_path.parent.mkdir()
+    expected = pd.DataFrame(
+        {
+            "instruction_index": ["q1-uk"],
+            "model": ["CohereLabs/aya-expanse-8b"],
+            "output": ["answer"],
+        }
+    )
+    expected.to_csv(output_path, index=False)
+    monkeypatch.setattr(
+        m_arenahard, "_download_source", lambda _task, _name, _path, **_kwargs: None
+    )
+
+    loaded = m_arenahard.load_task_model_outputs(task, tmp_path)
+
+    assert loaded is not None
+    pd.testing.assert_frame_equal(loaded, expected)
 
 
 def test_mt_bench_native_baseline_is_flat_string():

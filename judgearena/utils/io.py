@@ -78,15 +78,12 @@ def safe_parse_int(env_var: str) -> int | None:
 
 def download_all():
     from judgearena.datasets.fluency import download_fluency_dataset
-    from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
     from judgearena.tasks.registry import load_tasks
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
     for task_id in load_tasks():
         download_hf(name=task_id, local_path=local_path_tables)
-    for dataset in M_ARENA_HARD_BASELINES:
-        download_hf(name=dataset, local_path=local_path_tables)
 
     download_fluency_dataset(data_root)
 

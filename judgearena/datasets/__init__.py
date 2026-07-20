@@ -1,9 +1,5 @@
 import pandas as pd
 
-from judgearena.datasets.m_arenahard import (
-    load_m_arenahard,
-    split_m_arena_hard_dataset,
-)
 from judgearena.log import get_logger
 from judgearena.tasks.registry import get_packaged_task
 
@@ -25,31 +21,6 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
         from judgearena.datasets.mt_bench import load_mt_bench
 
         df_instructions = load_mt_bench()
-
-    elif (parsed := split_m_arena_hard_dataset(dataset)) is not None:
-        from judgearena import utils as judgearena_utils
-
-        version_key, lang_or_subset = parsed
-        logger.info(
-            "Loading %s with language specification set to %s",
-            version_key,
-            lang_or_subset,
-        )
-        df_instructions = load_m_arenahard(
-            local_path=judgearena_utils.data_root,
-            version=version_key,
-            language=lang_or_subset,
-        )
-        # sort by question_id, then language so that we get multiple languages if we truncate
-        df_instructions.sort_values(["question_id", "lang"], inplace=True)
-        df_instructions.rename(
-            {
-                "question_id": "instruction_index",
-                "prompt": "instruction",
-            },
-            axis=1,
-            inplace=True,
-        )
 
     else:
         raise ValueError(f"Unsupported instruction dataset {dataset!r}.")
