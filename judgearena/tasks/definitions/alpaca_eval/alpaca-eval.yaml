@@ -1,0 +1,38 @@
+schema_version: 1
+task: alpaca-eval
+task_version: 1
+description: Pairwise evaluation on the AlpacaEval instruction set.
+tags: [pairwise, instruction-following]
+
+dataset:
+  adapter: judgearena_tables
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: judge-arena/judge-arena-dataset
+      revision: "004c4a992956eeefffd36b63ade470f32fd0a582"
+      allow_patterns: ["*alpaca-eval*"]
+  fields:
+    id: instruction_index
+    instruction: instruction
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  baseline:
+    strategy: task_default
+    reference_id: gpt4_1106_preview
+    allow_runtime_override: true
+  judge:
+    default_prompt: default
+    parser: pairwise_preference
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: pairwise_win_rate
+    primary_metric: winrate
+    higher_is_better: true
+
+metadata:
+  reference_implementation: https://github.com/tatsu-lab/alpaca_eval
