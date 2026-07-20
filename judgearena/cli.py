@@ -1,11 +1,12 @@
-"""Unified CLI entrypoint for judgearena.
+"""Unified CLI entrypoint for JudgeArena.
 
-Builds a ``RunConfig`` from CLI flags (derived from the config model) and/or a
-``--config_path`` YAML, then dispatches to the ELO or generate-and-judge flow
-based on ``--task`` (``elo-`` prefix runs the ELO rating flow).
+Task-management subcommands are handled before the existing model-driven run
+configuration and benchmark dispatch.
 """
 
 from __future__ import annotations
+
+import sys
 
 from pydantic import ValidationError
 
@@ -27,8 +28,15 @@ def _format_config_error(exc: ValidationError) -> str:
 
 
 def cli(argv: list[str] | None = None) -> None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["tasks"]:
+        from judgearena.tasks.cli import run_task_command
+
+        run_task_command(args[1:])
+        return
+
     try:
-        cfg = build_run_config(argv)
+        cfg = build_run_config(args)
     except ValidationError as exc:
         raise SystemExit(_format_config_error(exc)) from exc
 
