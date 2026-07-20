@@ -221,6 +221,28 @@ def _compact_results(results: dict[str, Any] | None) -> dict[str, Any]:
     return payload
 
 
+def _task_definition_metadata(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Return compact provenance when ``run.task`` is a packaged task."""
+    task_id = run.get("task")
+    if not isinstance(task_id, str):
+        return None
+
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved = get_packaged_task(task_id)
+    if resolved is None:
+        return None
+    return {
+        "schema_version": resolved.spec.schema_version,
+        "task_version": resolved.spec.task_version,
+        "resolved_sha256": resolved.provenance.resolved_sha256,
+        "resources": [
+            {"path": resource.path, "sha256": resource.sha256}
+            for resource in resolved.provenance.resources
+        ],
+    }
+
+
 def write_run_metadata(
     *,
     output_dir: str | Path,
@@ -262,6 +284,10 @@ def write_run_metadata(
             start_path=Path(__file__).resolve().parent
         ),
     }
+    task_definition = _task_definition_metadata(run)
+    if task_definition is not None:
+        metadata["task_definition"] = task_definition
+
     git_hash = _get_git_hash(start_path=Path(__file__).resolve().parent)
     if git_hash:
         metadata["git_hash"] = git_hash

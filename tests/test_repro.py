@@ -95,3 +95,22 @@ def test_write_run_metadata_omits_optional_fields_when_inputs_missing(
     assert "instruction_indices_sha256" not in metadata
     assert "judge_system_prompt_sha256" not in metadata
     assert "judge_user_prompt_template_sha256" not in metadata
+
+
+def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(repro, "_get_dependency_versions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: None)
+
+    metadata_path = repro.write_run_metadata(
+        output_dir=tmp_path,
+        entrypoint="judgearena.test.entrypoint",
+        run={"task": "alpaca-eval"},
+    )
+
+    task_definition = json.loads(metadata_path.read_text())["task_definition"]
+    assert task_definition["schema_version"] == 1
+    assert task_definition["task_version"] == 1
+    assert len(task_definition["resolved_sha256"]) == 64
+    assert task_definition["resources"][0]["path"] == (
+        "alpaca_eval/alpaca-eval.yaml"
+    )
