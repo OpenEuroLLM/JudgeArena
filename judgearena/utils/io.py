@@ -95,10 +95,6 @@ def download_all():
         force_download=False,
     )
 
-    from judgearena.datasets.mt_bench import download_mt_bench
-
-    download_mt_bench()
-
 
 class Timeblock:
     """Timer context manager"""

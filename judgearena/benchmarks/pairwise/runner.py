@@ -13,7 +13,6 @@ import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
-from judgearena.benchmarks.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.datasets import load_instructions
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
@@ -182,24 +181,6 @@ def run_pairwise(cfg: "RunConfig"):
     # if not cfg.run.ignore_cache:
     #     set_langchain_cache()
     ignore_cache = cfg.run.ignore_cache
-
-    if cfg.task == "mt-bench":
-        model_b = cfg.model.baseline or native_pairwise_baseline(cfg.task)
-        if not isinstance(model_b, str):
-            raise ValueError("MT-Bench requires a flat native baseline.")
-        name = f"{cfg.task}-{cfg.model.name}-{model_b}-{cfg.judge.model}"
-        name += f"-{cfg.judge.swap_mode}"
-        name = name.replace("/", "_")
-        run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-        res_folder = prepare_run_directory(
-            cfg, Path(cfg.run.result_folder) / f"{name}-{run_ts}"
-        )
-        return run_mt_bench(
-            cfg,
-            ignore_cache,
-            res_folder=res_folder,
-            result_name=name,
-        )
 
     # Currrently, we run context evaluation
     is_fluency_task = "fluency" in cfg.task

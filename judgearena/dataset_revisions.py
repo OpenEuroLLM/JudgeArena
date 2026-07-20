@@ -22,8 +22,6 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
     "lmarena-ai/arena-human-preference-55k": "18c298340948c0e7f7727399fd459cca6ce0ca6f",
     # ComparIA (already pinned via the legacy comparia_revision argument).
     "ministere-culture/comparia-votes": "7a40bce496c1f2aa3be4001da85a49cb4743042b",
-    # MT-Bench questions (LMSYS Space).
-    "lmsys/mt-bench": "a4b674ca573c24143824ac7f60d9173e7081e37d",
     # Multilingual fluency contexts.
     "geoalgo/multilingual-contexts-to-be-completed": "06e73c95ad18d71a04b5a1b6464ed89d38195039",
 }
@@ -32,9 +30,7 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
 # Raw-URL pins (e.g. FastChat reference answers fetched as a raw GitHub URL).
 # Mapping is "logical name" -> commit SHA on the upstream repo.  The downloader
 # rewrites the URL to point at the pinned SHA.
-RAW_URL_REVISIONS: dict[str, str | None] = {
-    "lm-sys/FastChat": "587d5cfa1609a43d192cedb8441cac3c17db105d",
-}
+RAW_URL_REVISIONS: dict[str, str | None] = {}
 
 
 def hf_revision(repo_id: str) -> str | None:

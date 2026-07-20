@@ -1,6 +1,5 @@
 import pytest
 
-import judgearena.datasets.mt_bench as mt_bench_mod
 import judgearena.models as utils_models
 import judgearena.utils as utils
 import judgearena.utils.io as utils_io
@@ -46,23 +45,18 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
             ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
         ),
     )
-    monkeypatch.setattr(
-        mt_bench_mod,
-        "download_mt_bench",
-        lambda local_dir=None: None,
-    )
-
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
-    assert calls[:5] == [
+    assert calls[:6] == [
         ("hf", "alpaca-eval", tables_dir),
         ("hf", "arena-hard-v0.1", tables_dir),
         ("hf", "arena-hard-v2.0", tables_dir),
         ("hf", "m-arena-hard-v0.1", tables_dir),
         ("hf", "m-arena-hard-v2.0", tables_dir),
+        ("hf", "mt-bench", tables_dir),
     ]
-    assert calls[5] == (
+    assert calls[6] == (
         "snapshot",
         "geoalgo/multilingual-contexts-to-be-completed",
         tmp_path / "contexts",

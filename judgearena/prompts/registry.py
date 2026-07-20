@@ -92,9 +92,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
 
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
-TASK_DEFAULT_PRESET: dict[str, str] = {
-    "mt-bench": FASTCHAT_PAIRWISE_PROMPT_PRESET,
-}
+TASK_DEFAULT_PRESET: dict[str, str] = {}
 
 
 def default_preset_for_task(task: str | None) -> str:

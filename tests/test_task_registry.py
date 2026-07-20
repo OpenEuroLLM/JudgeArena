@@ -79,6 +79,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     arena_v20 = registry.get("arena-hard-v2.0")
     m_arena_v01 = registry.get("m-arena-hard-v0.1")
     m_arena_eu = registry.get("m-arena-hard-v2.0-EU")
+    mt_bench = registry.get("mt-bench")
 
     assert [task.task for task in summary] == [
         "alpaca-eval",
@@ -86,6 +87,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "arena-hard-v2.0",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
+        "mt-bench",
     ]
     assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
@@ -121,6 +123,19 @@ def test_packaged_registry_discovers_versioned_tasks():
         "pt",
         "ro",
         "uk",
+    )
+    assert mt_bench.spec.protocol.runner == "mt_bench"
+    assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
+    assert mt_bench.spec.protocol.baseline.reference_id == "gpt-4"
+    assert mt_bench.spec.protocol.judge.default_prompt == "fastchat-pairwise"
+    assert mt_bench.spec.protocol.judge.reference_categories == (
+        "math",
+        "reasoning",
+        "coding",
+        "arena-hard-200",
+    )
+    assert mt_bench.spec.dataset.sources["benchmark"].revision == (
+        "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
     assert alpaca.spec.protocol.scoring.primary_metric == "winrate"
 

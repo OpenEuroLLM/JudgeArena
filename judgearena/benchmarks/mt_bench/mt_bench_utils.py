@@ -15,23 +15,20 @@ import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
-    FASTCHAT_TEMPERATURE_CONFIG,
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
-    mt_bench_native_baseline,
 )
 from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
 from judgearena.models import is_thinking_model, make_model
-from judgearena.prompts.registry import (
-    DEFAULT_JUDGE_PROMPT_PRESET,
-    ResolvedJudgePrompt,
-    resolve_run_judge_prompt,
-)
+from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
+from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MTBenchProtocol
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -43,6 +40,13 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+
+
+def _task_protocol(task_id: str) -> MTBenchProtocol:
+    task = get_packaged_task(task_id)
+    if task is None or not isinstance(task.spec.protocol, MTBenchProtocol):
+        raise ValueError(f"Task {task_id!r} does not define an MT-Bench protocol.")
+    return task.spec.protocol
 
 
 def _align_mt_bench_completions(
@@ -89,7 +93,8 @@ def _generate_mt_bench_completions(
     questions_df: pd.DataFrame,
     ignore_cache: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cache_prefix = "mt-bench"
+    cache_prefix = cfg.task
+    protocol = _task_protocol(cfg.task)
 
     def _run_generation(
         model_name: str, *, generation_kwargs: dict[str, object]
@@ -98,7 +103,9 @@ def _generate_mt_bench_completions(
         # not explicitly pinned a per-role temperature; otherwise the config
         # override should win for reproducibility.
         temperature_config = (
-            None if "temperature" in generation_kwargs else FASTCHAT_TEMPERATURE_CONFIG
+            None
+            if "temperature" in generation_kwargs
+            else dict(protocol.generation.category_temperatures)
         )
         return generate_multiturn(
             questions=questions_df,
@@ -259,6 +266,7 @@ def _run_mt_bench_fastchat(
     fastchat_prompt_preset: str,
     started_at_utc: datetime,
 ) -> pd.Series:
+    protocol = _task_protocol(cfg.task)
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
             judge_chat_model=judge_chat_model,
@@ -268,10 +276,11 @@ def _run_mt_bench_fastchat(
             completions_b=completions_b,
             model_a=cfg.model.name,
             model_b=cfg.model.baseline,
-            turns_mode="both",
+            turns_mode=protocol.judge.turns_mode,
             swap_mode=cfg.judge.swap_mode,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
+            reference_categories=protocol.judge.reference_categories,
             prompt_preset=fastchat_prompt_preset,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         )
@@ -304,6 +313,7 @@ def _run_mt_bench_preset(
     resolved_prompt: ResolvedJudgePrompt,
     started_at_utc: datetime,
 ) -> pd.Series:
+    protocol = _task_protocol(cfg.task)
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
         judge_model=cfg.judge.model,
@@ -312,10 +322,11 @@ def _run_mt_bench_preset(
         completions_b=completions_b,
         model_a=cfg.model.name,
         model_b=cfg.model.baseline,
-        turns_mode="both",
+        turns_mode=protocol.judge.turns_mode,
         swap_mode=cfg.judge.swap_mode,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
+        reference_categories=protocol.judge.reference_categories,
         prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
         provide_explanation=cfg.judge.provide_explanation,
         system_file=cfg.judge.system_prompt_file,
@@ -346,15 +357,17 @@ def run_mt_bench(
 ):
     """MT-Bench pipeline with preset or FastChat-original pairwise judging."""
     run_started_at = datetime.now(UTC)
+    protocol = _task_protocol(cfg.task)
     if cfg.model.baseline is None:
-        cfg.model.baseline = mt_bench_native_baseline(cfg.task)
+        baseline = native_pairwise_baseline(cfg.task)
+        cfg.model.baseline = baseline if isinstance(baseline, str) else None
     if cfg.model.baseline is None:
         raise ValueError(
             f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
     questions_df = load_instructions(
-        "mt-bench", n_instructions=cfg.generation.n_instructions
+        cfg.task, n_instructions=cfg.generation.n_instructions
     )
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
@@ -377,7 +390,9 @@ def run_mt_bench(
         fallback_chat_template=cfg.model.chat_template,
     )
     if resolved_prompt.delegated and cfg.judge.temperature is None:
-        judge_model_kwargs.setdefault("temperature", 0.0)
+        judge_model_kwargs.setdefault(
+            "temperature", protocol.judge.fastchat_temperature
+        )
     judge_chat_model = make_model(model=cfg.judge.model, **judge_model_kwargs)
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
@@ -389,7 +404,7 @@ def run_mt_bench(
             completions_b=completions_b,
             judge_chat_model=judge_chat_model,
             resolved_prompt=resolved_prompt,
-            fastchat_prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
+            fastchat_prompt_preset=protocol.judge.fastchat_prompt_preset,
             started_at_utc=run_started_at,
         )
     return _run_mt_bench_preset(

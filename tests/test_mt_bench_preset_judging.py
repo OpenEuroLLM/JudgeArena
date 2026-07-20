@@ -10,6 +10,8 @@ from judgearena.benchmarks.mt_bench.preset_judging import (
 )
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 
+REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
+
 
 class SequenceJudge:
     def __init__(self, outputs: list[str]):
@@ -51,6 +53,7 @@ def test_select_preset_prompt_rejects_delegated_preset():
         _select_preset_prompt(
             "writing",
             multi_turn=False,
+            reference_categories=REFERENCE_CATEGORIES,
             prompt_preset=FASTCHAT_PAIRWISE_PROMPT_PRESET,
             provide_explanation=False,
         )
@@ -74,6 +77,7 @@ def test_select_preset_prompt_variants(
     prompt = _select_preset_prompt(
         category,
         multi_turn=multi_turn,
+        reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
         provide_explanation=False,
     )
@@ -93,6 +97,7 @@ def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
         eval_single=True,
         eval_multi=True,
         truncate_input_chars=None,
+        reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
         provide_explanation=False,
     )
@@ -136,6 +141,7 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         swap_mode="both",
         truncate_input_chars=None,
         use_tqdm=False,
+        reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
     )
 

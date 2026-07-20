@@ -148,6 +148,10 @@ def test_m_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
     assert "m-arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
 
 
+def test_mt_bench_baseline_is_not_duplicated_in_legacy_registry():
+    assert "mt-bench" not in LEGACY_PAIRWISE_BASELINES
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         task="arena-hard-v2.0",
@@ -174,8 +178,15 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
     assert native_pairwise_baseline(task) == expected
 
 
-def test_benchmark_adapter_resolution():
-    assert resolve_benchmark_adapter("alpaca-eval").name == "pairwise"
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("alpaca-eval", "pairwise"),
+        ("mt-bench", "mt_bench"),
+    ],
+)
+def test_benchmark_adapter_resolution(task: str, expected: str):
+    assert resolve_benchmark_adapter(task).name == expected
 
 
 def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):

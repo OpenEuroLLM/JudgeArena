@@ -4,13 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from judgearena.datasets.mt_bench import MT_BENCH_BASELINES
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import CategoryDefaultsBaseline, TaskDefaultBaseline
 
-LEGACY_PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
-    **MT_BENCH_BASELINES,
-}
+LEGACY_PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {}
 
 
 def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,12 +64,13 @@ def _select_preset_prompt(
     category: str | None,
     multi_turn: bool,
     *,
+    reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
 ) -> MTBenchPresetPrompt:
-    ref_based = is_reference_based_category(category)
+    ref_based = is_reference_based_category(category, reference_categories)
     resolved_prompt = resolve_judge_prompt(
         preset=prompt_preset,
         system_file=system_file,
@@ -107,6 +109,7 @@ def _build_mt_bench_preset_items(
     eval_single: bool,
     eval_multi: bool,
     truncate_input_chars: int | None,
+    reference_categories: Collection[str],
     prompt_preset: str,
     provide_explanation: bool,
     system_file: str | None = None,
@@ -123,6 +126,7 @@ def _build_mt_bench_preset_items(
         select_prompt=lambda category, multi_turn: _select_preset_prompt(
             category,
             multi_turn=multi_turn,
+            reference_categories=reference_categories,
             prompt_preset=prompt_preset,
             provide_explanation=provide_explanation,
             system_file=system_file,
@@ -151,6 +155,7 @@ def judge_mt_bench_with_preset(
     swap_mode: str,
     truncate_input_chars: int | None,
     use_tqdm: bool,
+    reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     provide_explanation: bool = False,
     system_file: str | None = None,
@@ -167,6 +172,7 @@ def judge_mt_bench_with_preset(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
+        reference_categories=reference_categories,
         prompt_preset=prompt_preset,
         provide_explanation=provide_explanation,
         system_file=system_file,
