@@ -10,3 +10,11 @@ judge:
   model: OpenRouter/google/gemma-4-31b-it
 generation:
   n_instructions: 10
+# Optional unified inference cache (disabled unless store_root is set):
+# cache:
+#   store_root: ~/judgearena-data/cache
+#   cache_mode: use
+#   cache_hf_repo: judge-arena/judge-arena-cache
+#   # cache_fetch: true   # prefetch on login node via judgearena-cache instead
+#   # cache_push: true    # or judgearena-cache push after the run
+#   pushed_by: your-user
