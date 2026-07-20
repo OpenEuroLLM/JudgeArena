@@ -45,6 +45,25 @@ def _install_fake_vllm(monkeypatch):
         "vllm.config.reasoning",
         SimpleNamespace(ReasoningConfig=FakeReasoningConfig),
     )
+
+    class FakeAutoTokenizer:
+        @staticmethod
+        def from_pretrained(model, trust_remote_code=True):
+            return SimpleNamespace(chat_template="{{ messages }}")
+
+    class FakeAutoConfig:
+        @staticmethod
+        def from_pretrained(model, trust_remote_code=True):
+            return SimpleNamespace(max_position_embeddings=8192)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoTokenizer=FakeAutoTokenizer,
+            AutoConfig=FakeAutoConfig,
+        ),
+    )
     return captured, FakeReasoningConfig
 
 
