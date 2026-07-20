@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import getpass
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +13,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
+    CliImplicitFlag,
     CliSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
@@ -17,7 +21,21 @@ from pydantic_settings import (
 )
 
 from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA, META_EVAL_TASK
-from judgearena.generate_and_evaluate import native_pairwise_baseline
+from judgearena.inference_cache import InferenceCache
+from judgearena.pairwise_baselines import native_pairwise_baseline
+from judgearena.store_sync import DEFAULT_CACHE_REPO
+
+CacheMode = Literal["use", "off", "refresh"]
+
+_CACHE_CLI_SHORTCUTS = {
+    "cache.store_root": "store_root",
+    "cache.cache_mode": "cache_mode",
+    "cache.cache_hf_repo": "cache_hf_repo",
+    "cache.cache_fetch": "cache_fetch",
+    "cache.cache_push": "cache_push",
+    "cache.cache_create_pr": "cache_create_pr",
+    "cache.pushed_by": "pushed_by",
+}
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -26,6 +44,10 @@ _ACTIVE_CLI_ARGS: list[str] | None = None
 
 def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
     return {k: v for k, v in kwargs.items() if v is not None}
+
+
+def default_pushed_by() -> str:
+    return getpass.getuser()
 
 
 class ModelArgs(BaseModel):
@@ -369,8 +391,63 @@ class MetaEvalArgs(BaseModel):
     """Include human-labeled ties in the primary agreement view."""
 
 
+class CacheArgs(BaseModel):
+    """Unified inference cache settings (SQLite cells with optional HF sync)."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    store_root: str | None = None
+    """Local root for inference cache cells. When unset, caching is disabled."""
+
+    cache_mode: CacheMode = "use"
+    """``use``: read and insert rows. ``off``: always infer. ``refresh``: replace rows."""
+
+    cache_hf_repo: str = DEFAULT_CACHE_REPO
+    """Hugging Face dataset repo used when ``cache_fetch`` or ``cache_push`` is set."""
+
+    cache_fetch: CliImplicitFlag[bool] = False
+    """Explicit opt-in to fetch remote cache cells before inference."""
+
+    cache_push: CliImplicitFlag[bool] = False
+    """Explicit opt-in to push locally produced cache rows after a successful run."""
+
+    cache_create_pr: CliImplicitFlag[bool] = False
+    """Push cache updates through a Hugging Face pull request (requires ``cache_push``)."""
+
+    pushed_by: str = Field(default_factory=lambda: default_pushed_by())
+    """Provenance label recorded on locally produced cache rows."""
+
+    @model_validator(mode="after")
+    def _validate_cache_options(self) -> CacheArgs:
+        if self.store_root is not None and not self.store_root.strip():
+            raise ValueError("cache.store_root must be non-empty when provided.")
+        if self.cache_fetch or self.cache_push or self.cache_create_pr:
+            if not self.store_root:
+                raise ValueError(
+                    "cache.store_root is required when cache_fetch, cache_push, "
+                    "or cache_create_pr is enabled."
+                )
+        if self.cache_fetch or self.cache_push:
+            if not self.cache_hf_repo.strip():
+                raise ValueError(
+                    "cache.cache_hf_repo must be non-empty when cache_fetch or "
+                    "cache_push is enabled."
+                )
+        if self.cache_create_pr and not self.cache_push:
+            raise ValueError(
+                "cache.cache_push is required when cache_create_pr is enabled."
+            )
+        if self.cache_mode == "off" and (self.cache_fetch or self.cache_push):
+            raise ValueError(
+                "cache_fetch and cache_push cannot be enabled when cache_mode is off."
+            )
+        if self.cache_mode == "refresh" and not self.store_root:
+            raise ValueError("cache.store_root is required when cache_mode is refresh.")
+        return self
+
+
 class RunArgs(BaseModel):
-    """Run-level settings: seed, output location, caching, and logging."""
+    """Run-level settings: seed, output location, and logging."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -380,9 +457,6 @@ class RunArgs(BaseModel):
     result_folder: str = "results"
     """Directory where annotations, results, and the resolved ``config.yaml``
     are written (under a per-run subfolder)."""
-
-    ignore_cache: bool = False
-    """If set, ignore cached completions and regenerate them."""
 
     use_tqdm: bool = False
     """Show a tqdm progress bar (not compatible with vLLM)."""
@@ -403,6 +477,7 @@ class RunConfig(BaseSettings):
         protected_namespaces=(),
         nested_model_default_partial_update=True,
         cli_avoid_json=False,
+        cli_shortcuts=_CACHE_CLI_SHORTCUTS,
         use_attribute_docstrings=True,
     )
 
@@ -428,7 +503,10 @@ class RunConfig(BaseSettings):
     """Judge meta-evaluation settings (only for ``meta-eval``)."""
 
     run: RunArgs = Field(default_factory=RunArgs)
-    """Run-level settings (seed, output, caching, logging)."""
+    """Run-level settings (seed, output, logging)."""
+
+    cache: CacheArgs = Field(default_factory=CacheArgs)
+    """Unified inference cache settings."""
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
@@ -545,3 +623,48 @@ def dump_config(cfg: RunConfig, path: str | Path) -> None:
     Path(path).write_text(
         yaml.safe_dump(cfg.model_dump(), sort_keys=False), encoding="utf-8"
     )
+
+
+def meta_eval_cache_task(reference_arena: str) -> str:
+    """Return the single-segment cache namespace for one meta-eval reference arena."""
+    sanitized_arena = reference_arena.replace("/", "_").replace("\\", "_")
+    return f"{META_EVAL_TASK}-{sanitized_arena}"
+
+
+def inference_cache_task(cfg: RunConfig) -> str:
+    """Return the cache namespace for a run configuration."""
+    if cfg.task == META_EVAL_TASK:
+        if cfg.meta_eval is None:
+            raise ValueError("meta_eval config is required for the meta-eval task.")
+        return meta_eval_cache_task(cfg.meta_eval.reference_arena)
+    return cfg.task
+
+
+@contextmanager
+def open_inference_cache(
+    cache_args: CacheArgs,
+    task: str,
+) -> Iterator[InferenceCache | None]:
+    """Open a run-scoped inference cache, or yield ``None`` when disabled."""
+    if cache_args.store_root is None:
+        yield None
+        return
+
+    with InferenceCache(
+        store_root=cache_args.store_root,
+        task=task,
+        mode=cache_args.cache_mode,
+        fetch=cache_args.cache_fetch,
+        push=cache_args.cache_push,
+        create_pr=cache_args.cache_create_pr,
+        cache_hf_repo=cache_args.cache_hf_repo,
+        pushed_by=cache_args.pushed_by,
+    ) as cache:
+        yield cache
+
+
+@contextmanager
+def inference_cache_session(cfg: RunConfig) -> Iterator[InferenceCache | None]:
+    """Open a run-scoped inference cache, or yield ``None`` when disabled."""
+    with open_inference_cache(cfg.cache, inference_cache_task(cfg)) as cache:
+        yield cache

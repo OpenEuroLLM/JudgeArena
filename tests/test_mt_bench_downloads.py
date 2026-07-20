@@ -4,9 +4,11 @@ import pandas as pd
 import pytest
 
 import judgearena.instruction_dataset.mt_bench as mt_bench
+import judgearena.models as models_module
 import judgearena.mt_bench.mt_bench_utils as mt_bench_utils
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
+from judgearena.inference_cache import InferenceCache
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 
 
@@ -64,7 +66,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
 
     monkeypatch.setattr(utils_io, "snapshot_download", _contexts_snapshot_stub)
     monkeypatch.setattr(
-        mt_bench,
+        utils_io,
         "download_mt_bench",
         lambda: calls.__setitem__("mt_bench", calls["mt_bench"] + 1),
     )
@@ -115,13 +117,11 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         index=pd.Index([1, 2], name="instruction_index"),
     )
     generated_models = []
-
-    monkeypatch.setattr(
-        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
-    )
+    cache_values: list[object | None] = []
 
     def fake_generate_multiturn(**kwargs):
         generated_models.append(kwargs["model"])
+        cache_values.append(kwargs.get("cache"))
         return pd.DataFrame(
             {
                 "instruction_index": [1, 2],
@@ -158,13 +158,15 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         generation={"n_instructions": 2},
     )
 
-    completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
-        cfg=cfg,
-        questions_df=questions_df,
-        ignore_cache=False,
-    )
+    with InferenceCache("/tmp/unused", "mt-bench", mode="off") as cache:
+        completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
+            cfg=cfg,
+            questions_df=questions_df,
+            cache=cache,
+        )
 
     assert generated_models == ["VLLM/example/model-a"]
+    assert cache_values == [cache]
     assert completions_a.loc[1, "completion_turn_1"] == "Gen A1"
     assert completions_b.loc[1, "completion_turn_1"] == "Base A1"
     assert completions_b.loc[2, "completion_turn_2"] == "Base B2"
@@ -199,7 +201,6 @@ def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch
         mt_bench_utils._generate_mt_bench_completions(
             cfg=cfg,
             questions_df=questions_df,
-            ignore_cache=False,
         )
 
 
@@ -262,7 +263,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df, cache=None: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -308,7 +309,6 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
 
     mt_bench_utils.run_mt_bench(
         cfg,
-        ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
@@ -338,7 +338,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df, cache=None: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -381,7 +381,6 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
 
     mt_bench_utils.run_mt_bench(
         cfg,
-        ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
@@ -408,7 +407,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df, cache=None: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -451,7 +450,6 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
 
     mt_bench_utils.run_mt_bench(
         cfg,
-        ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
@@ -469,9 +467,6 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
     )
     captured: dict[str, dict] = {}
 
-    monkeypatch.setattr(
-        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
-    )
     monkeypatch.setattr(
         mt_bench_utils,
         "load_mt_bench_model_answers",
@@ -508,7 +503,6 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
     mt_bench_utils._generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
-        ignore_cache=False,
     )
 
     thinking_call = captured["VLLM/Qwen/Qwen3.5-9B"]
@@ -535,7 +529,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_utils,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df, cache=None: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -567,9 +561,118 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
 
     mt_bench_utils.run_mt_bench(
         cfg,
-        ignore_cache=False,
         res_folder=tmp_path,
         result_name="mt-bench-test",
     )
 
     assert captured["judge"]["strip_thinking_before_judging"] is True
+
+
+def test_run_mt_bench_forwards_cache_to_generation_and_judging(monkeypatch, tmp_path):
+    questions_df = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    captured: dict[str, object | None] = {}
+
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_instructions",
+        lambda dataset, n_instructions=None: questions_df,
+    )
+
+    def fake_generate(**kwargs):
+        captured["generation_cache"] = kwargs.get("cache")
+        return pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": ["A1"],
+                "completion_turn_2": ["A2"],
+            }
+        )
+
+    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate)
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: None,
+    )
+    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+    monkeypatch.setattr(
+        mt_bench_utils, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
+    )
+
+    def fake_judge(**kwargs):
+        captured["judge_cache"] = kwargs.get("cache")
+        return pd.Series([0.0], dtype=float), [], [], 0
+
+    monkeypatch.setattr(mt_bench_utils, "judge_mt_bench_pairwise_fastchat", fake_judge)
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "VLLM/example/model-a"},
+        judge={"model": "VLLM/Judge"},
+        generation={"n_instructions": 1},
+        run={"result_folder": str(tmp_path)},
+    )
+
+    with InferenceCache("/tmp/unused", "mt-bench", mode="off") as cache:
+        mt_bench_utils.run_mt_bench(
+            cfg,
+            cache=cache,
+            res_folder=tmp_path,
+            result_name="mt-bench-test",
+        )
+
+    assert captured["generation_cache"] is cache
+    assert captured["judge_cache"] is cache
+
+
+def test_generate_mt_bench_completions_reuses_inference_cache(tmp_path, monkeypatch):
+    questions_df = pd.DataFrame(
+        {
+            "category": ["writing"],
+            "turn_1": ["Q1"],
+            "turn_2": ["Q2"],
+        },
+        index=pd.Index([1], name="instruction_index"),
+    )
+    backend_inputs: list[int] = []
+    real_uncached = models_module._do_inference_uncached
+
+    def counting_uncached(chat_model, inputs, *, use_tqdm=False):
+        backend_inputs.append(len(inputs))
+        return real_uncached(chat_model, inputs, use_tqdm=use_tqdm)
+
+    monkeypatch.setattr(models_module, "_do_inference_uncached", counting_uncached)
+    monkeypatch.setattr(
+        mt_bench_utils,
+        "load_mt_bench_model_answers",
+        lambda model, n_instructions=None: None,
+    )
+
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "Dummy/mt-cache-a", "baseline": "Dummy/mt-cache-b"},
+        judge={"model": "Dummy/J"},
+        generation={"n_instructions": 1},
+    )
+
+    with InferenceCache(tmp_path, "mt-bench", mode="refresh") as cache:
+        first_a, _first_b = mt_bench_utils._generate_mt_bench_completions(
+            cfg=cfg,
+            questions_df=questions_df,
+            cache=cache,
+        )
+
+    assert sum(backend_inputs) == 4
+
+    with InferenceCache(tmp_path, "mt-bench", mode="use") as cache:
+        second_a, _second_b = mt_bench_utils._generate_mt_bench_completions(
+            cfg=cfg,
+            questions_df=questions_df,
+            cache=cache,
+        )
+
+    assert sum(backend_inputs) == 4
+    assert first_a.loc[1, "completion_turn_1"] == second_a.loc[1, "completion_turn_1"]

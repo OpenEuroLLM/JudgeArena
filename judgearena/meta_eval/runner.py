@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 
+from judgearena.config import meta_eval_cache_task, open_inference_cache
 from judgearena.log import attach_file_handler, get_logger, make_run_log_path
 from judgearena.meta_eval.annotate import annotate_sample
 from judgearena.meta_eval.cli_args import CliMetaEvalArgs
@@ -182,7 +182,7 @@ def main(args: CliMetaEvalArgs) -> dict:
         attach_file_handler(make_run_log_path(res_folder))
 
     with open(res_folder / "args.json", "w", encoding="utf-8") as handle:
-        json.dump(asdict(args), handle, indent=2)
+        json.dump(args.to_jsonable(), handle, indent=2)
 
     prompt_spec = resolve_prompt_mode(
         args.prompt_mode,
@@ -215,38 +215,43 @@ def main(args: CliMetaEvalArgs) -> dict:
         len(top_models),
     )
 
-    df_ann = annotate_sample(
-        df_sample,
-        args,
-        judge_chat_model=judge_chat_model,
-        prompt_spec=prompt_spec,
-    )
-    df_ann.to_parquet(res_folder / "annotations.parquet", index=False)
+    cache_task = meta_eval_cache_task(args.reference_arena)
+    with open_inference_cache(args.cache, cache_task) as cache:
+        df_ann = annotate_sample(
+            df_sample,
+            args,
+            judge_chat_model=judge_chat_model,
+            prompt_spec=prompt_spec,
+            cache=cache,
+        )
+        df_ann.to_parquet(res_folder / "annotations.parquet", index=False)
 
-    results = _compute_results(
-        args=args,
-        top_models=top_models,
-        df_top=df_top,
-        df_sample=df_sample,
-        df_ann=df_ann,
-    )
+        results = _compute_results(
+            args=args,
+            top_models=top_models,
+            df_top=df_top,
+            df_sample=df_sample,
+            df_ann=df_ann,
+        )
 
-    with open(res_folder / "results.json", "w", encoding="utf-8") as handle:
-        json.dump(_to_jsonable(results), handle, indent=2, allow_nan=False)
+        with open(res_folder / "results.json", "w", encoding="utf-8") as handle:
+            json.dump(_to_jsonable(results), handle, indent=2, allow_nan=False)
 
-    summary_csv = _build_summary_csv(results["language_summary"])
-    summary_csv.to_csv(res_folder / "summary.csv", index=False)
+        summary_csv = _build_summary_csv(results["language_summary"])
+        summary_csv.to_csv(res_folder / "summary.csv", index=False)
 
-    write_run_metadata(
-        output_dir=res_folder,
-        entrypoint="judgearena.meta_eval.runner",
-        run=asdict(args),
-        results=results,
-        input_payloads={"question_id": df_sample["question_id"].astype(str).tolist()},
-        judge_system_prompt=prompt_spec.system_prompt,
-        judge_user_prompt_template=prompt_spec.user_prompt_template,
-        started_at_utc=started_at,
-    )
+        write_run_metadata(
+            output_dir=res_folder,
+            entrypoint="judgearena.meta_eval.runner",
+            run=args.to_jsonable(),
+            results=results,
+            input_payloads={
+                "question_id": df_sample["question_id"].astype(str).tolist()
+            },
+            judge_system_prompt=prompt_spec.system_prompt,
+            judge_user_prompt_template=prompt_spec.user_prompt_template,
+            started_at_utc=started_at,
+        )
 
     logger.info("Meta-eval results saved to %s", res_folder)
     return results

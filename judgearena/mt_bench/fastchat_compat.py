@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 
@@ -24,6 +24,9 @@ from judgearena.mt_bench.prompt_templates import (
 )
 from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.utils import strip_thinking_tags
+
+if TYPE_CHECKING:
+    from judgearena.inference_cache import InferenceCache
 
 FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
     "writing": 0.7,
@@ -347,6 +350,7 @@ def judge_mt_bench_pairwise_fastchat(
     use_tqdm: bool,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
+    cache: InferenceCache | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
     """Run FastChat-style MT-Bench pairwise judging with bracketed verdict outputs."""
     assert swap_mode in ("fixed", "both")
@@ -368,6 +372,7 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        cache=cache,
     )
 
     g2_judgments: list[str] | None = None
@@ -377,6 +382,7 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
+            cache=cache,
         )
 
     annotations: list[dict[str, Any]] = []

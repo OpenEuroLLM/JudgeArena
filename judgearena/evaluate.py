@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -19,6 +22,22 @@ from judgearena.prompts.registry import (
 from judgearena.utils import strip_thinking_tags, truncate
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from judgearena.inference_cache import InferenceCache
+
+
+def _oriented_row_metadata(
+    base: list[dict[str, Any] | None] | None,
+    orientation: str,
+    n: int,
+) -> list[dict[str, Any]]:
+    oriented: list[dict[str, Any]] = []
+    for index in range(n):
+        row = dict(base[index]) if base and base[index] is not None else {}
+        row["orientation"] = orientation
+        oriented.append(row)
+    return oriented
 
 
 class PairScore:
@@ -172,6 +191,60 @@ class JudgeAnnotation:
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
 
 
+def render_judge_inputs(
+    instructions: list[str],
+    completions_A: list[str],
+    completions_B: list[str],
+    *,
+    system_prompt: str | None = None,
+    user_prompt_template: str | None = None,
+    truncate_input_chars: int | None = 8192,
+    provide_explanation: bool = False,
+    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
+    strip_thinking_before_judging: bool = False,
+    task: str | None = None,
+    system_file: str | None = None,
+    user_file: str | None = None,
+    multi_turn: bool = False,
+) -> list:
+    """Render judge chat prompt values without running inference."""
+    assert len(instructions) == len(completions_A) == len(completions_B)
+
+    resolved_prompt = resolve_judge_prompts(
+        provide_explanation=provide_explanation,
+        multi_turn=multi_turn,
+        prompt_preset=prompt_preset,
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        task=task,
+        system_file=system_file,
+        user_file=user_file,
+    )
+
+    message_templates: list[tuple[str, str]] = []
+    if resolved_prompt.system_prompt is not None:
+        message_templates.append(("system", resolved_prompt.system_prompt))
+    message_templates.append(("user", resolved_prompt.user_prompt_template))
+    prompt_template = ChatPromptTemplate.from_messages(message_templates)
+
+    if strip_thinking_before_judging:
+        completions_A = [strip_thinking_tags(c) for c in completions_A]
+        completions_B = [strip_thinking_tags(c) for c in completions_B]
+
+    return prompt_template.batch(
+        [
+            {
+                "user_prompt": user_prompt,
+                "completion_A": truncate(completion_A, max_len=truncate_input_chars),
+                "completion_B": truncate(completion_B, max_len=truncate_input_chars),
+            }
+            for user_prompt, completion_A, completion_B in zip(
+                instructions, completions_A, completions_B, strict=True
+            )
+        ]
+    )
+
+
 def annotate_battles(
     judge_chat_model,
     instructions: list[str],
@@ -184,6 +257,12 @@ def annotate_battles(
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
+    cache: InferenceCache | None = None,
+    row_metadata: list[dict[str, Any] | None] | None = None,
+    task: str | None = None,
+    system_file: str | None = None,
+    user_file: str | None = None,
+    multi_turn: bool = False,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -212,43 +291,41 @@ def annotate_battles(
     :param use_tqdm:
     :return:
     """
-    # alternatively pass list of tuples
-    assert len(instructions) == len(completions_A) == len(completions_B)
-
     resolved_prompt = resolve_judge_prompts(
         provide_explanation=provide_explanation,
+        multi_turn=multi_turn,
         prompt_preset=prompt_preset,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
+        task=task,
+        system_file=system_file,
+        user_file=user_file,
     )
 
-    message_templates: list[tuple[str, str]] = []
-    if resolved_prompt.system_prompt is not None:
-        message_templates.append(("system", resolved_prompt.system_prompt))
-    message_templates.append(("user", resolved_prompt.user_prompt_template))
-    prompt_template = ChatPromptTemplate.from_messages(message_templates)
-    if strip_thinking_before_judging:
-        completions_A = [strip_thinking_tags(c) for c in completions_A]
-        completions_B = [strip_thinking_tags(c) for c in completions_B]
-
-    inputs = prompt_template.batch(
-        [
-            {
-                "user_prompt": user_prompt,
-                "completion_A": truncate(completion_A, max_len=truncate_input_chars),
-                "completion_B": truncate(completion_B, max_len=truncate_input_chars),
-            }
-            for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B, strict=True
-            )
-        ]
+    inputs = render_judge_inputs(
+        instructions,
+        completions_A,
+        completions_B,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        truncate_input_chars=truncate_input_chars,
+        provide_explanation=provide_explanation,
+        prompt_preset=prompt_preset,
+        strip_thinking_before_judging=strip_thinking_before_judging,
+        task=task,
+        system_file=system_file,
+        user_file=user_file,
+        multi_turn=multi_turn,
     )
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
+    cache_meta = {"metadata": row_metadata} if row_metadata is not None else None
     judge_completions = do_inference(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        cache=cache,
+        cache_meta=cache_meta,
     )
 
     annotations = []
@@ -299,7 +376,9 @@ def judge_and_parse_prefs(
     parser_mode: str = "score",
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
-    score_parser: "PairScore | None" = None,
+    score_parser: PairScore | None = None,
+    cache: InferenceCache | None = None,
+    row_metadata: list[dict[str, Any] | None] | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -318,6 +397,9 @@ def judge_and_parse_prefs(
             judge_chat_model,
         )
 
+    n = len(instructions)
+    direct_metadata = _oriented_row_metadata(row_metadata, "direct", n)
+
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
@@ -330,10 +412,13 @@ def judge_and_parse_prefs(
         prompt_preset=prompt_preset,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
+        cache=cache,
+        row_metadata=direct_metadata,
     )
 
     annotations_reversed = None
     if swap_mode == "both":
+        reversed_metadata = _oriented_row_metadata(row_metadata, "reversed", n)
         annotations_reversed = annotate_battles(
             judge_chat_model=judge_chat_model,
             instructions=instructions,
@@ -346,6 +431,8 @@ def judge_and_parse_prefs(
             prompt_preset=prompt_preset,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
+            cache=cache,
+            row_metadata=reversed_metadata,
         )
 
     def _none_to_nan(x):

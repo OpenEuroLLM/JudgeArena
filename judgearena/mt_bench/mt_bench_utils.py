@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.config import dump_config
 from judgearena.generate import generate_multiturn
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.mt_bench import (
@@ -32,17 +33,14 @@ from judgearena.prompts.registry import (
     resolve_run_judge_prompt,
 )
 from judgearena.repro import write_run_metadata
-from judgearena.utils import (
-    cache_function_dataframe,
-    compute_pref_summary,
-    generation_cache_token,
-)
+from judgearena.utils import compute_pref_summary
 from judgearena.utils.eval import BattleReport, _compute_grouped_stats
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+    from judgearena.inference_cache import InferenceCache
 
 
 def _align_mt_bench_completions(
@@ -87,29 +85,8 @@ def _build_mt_bench_generation_kwargs(
 def _generate_mt_bench_completions(
     cfg: RunConfig,
     questions_df: pd.DataFrame,
-    ignore_cache: bool,
+    cache: InferenceCache | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cache_prefix = "mt-bench"
-
-    def _run_generation(
-        model_name: str, *, generation_kwargs: dict[str, object]
-    ) -> pd.DataFrame:
-        # MT-Bench's category-aware temperatures only kick in when the user has
-        # not explicitly pinned a per-role temperature; otherwise the config
-        # override should win for reproducibility.
-        temperature_config = (
-            None if "temperature" in generation_kwargs else FASTCHAT_TEMPERATURE_CONFIG
-        )
-        return generate_multiturn(
-            questions=questions_df,
-            model=model_name,
-            truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            temperature_config=temperature_config,
-            strip_thinking_before_turn_2_prompt=cfg.judge.strip_thinking_before_judging,
-            **generation_kwargs,
-        )
-
     def _load_or_generate(model_name: str, *, role: str) -> pd.DataFrame:
         loaded_answers = load_mt_bench_model_answers(
             model_name, n_instructions=cfg.generation.n_instructions
@@ -120,19 +97,24 @@ def _generate_mt_bench_completions(
                 completions=loaded_answers,
                 model_name=model_name,
             )
-        # Fold the resolved generation kwargs into the cache key so changing any
-        # sampling param busts cached completions instead of reusing a stale run.
         generation_kwargs = _build_mt_bench_generation_kwargs(
             cfg=cfg, model_spec=model_name, role=role
         )
-        sampling_token = generation_cache_token(generation_kwargs)
-        generated_answers = cache_function_dataframe(
-            lambda: _run_generation(model_name, generation_kwargs=generation_kwargs),
-            ignore_cache=ignore_cache,
-            cache_name=(
-                f"{cache_prefix}_{model_name}_{cfg.generation.n_instructions}_"
-                f"{sampling_token}"
-            ),
+        # MT-Bench's category-aware temperatures only kick in when the user has
+        # not explicitly pinned a per-role temperature; otherwise the config
+        # override should win for reproducibility.
+        temperature_config = (
+            None if "temperature" in generation_kwargs else FASTCHAT_TEMPERATURE_CONFIG
+        )
+        generated_answers = generate_multiturn(
+            questions=questions_df,
+            model=model_name,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
+            temperature_config=temperature_config,
+            strip_thinking_before_turn_2_prompt=cfg.judge.strip_thinking_before_judging,
+            cache=cache,
+            **generation_kwargs,
         )
         return _align_mt_bench_completions(
             questions_df=questions_df,
@@ -176,8 +158,6 @@ def _save_mt_bench_results(
 ) -> None:
     """Persist MT-Bench arguments, annotations, aggregate results, and metadata."""
     res_folder.mkdir(parents=True, exist_ok=True)
-
-    from judgearena.config import dump_config
 
     dump_config(cfg, res_folder / "config.yaml")
 
@@ -262,6 +242,7 @@ def _run_mt_bench_fastchat(
     resolved_prompt: ResolvedJudgePrompt,
     fastchat_prompt_preset: str,
     started_at_utc: datetime,
+    cache: InferenceCache | None = None,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
@@ -278,6 +259,7 @@ def _run_mt_bench_fastchat(
             use_tqdm=cfg.run.use_tqdm,
             prompt_preset=fastchat_prompt_preset,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+            cache=cache,
         )
     )
     return _finalize_mt_bench_run(
@@ -307,6 +289,7 @@ def _run_mt_bench_preset(
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
     started_at_utc: datetime,
+    cache: InferenceCache | None = None,
 ) -> pd.Series:
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
@@ -325,6 +308,7 @@ def _run_mt_bench_preset(
         system_file=cfg.judge.system_prompt_file,
         user_file=cfg.judge.user_prompt_file,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        cache=cache,
     )
     return _finalize_mt_bench_run(
         cfg=cfg,
@@ -343,7 +327,7 @@ def _run_mt_bench_preset(
 
 def run_mt_bench(
     cfg: RunConfig,
-    ignore_cache: bool,
+    cache: InferenceCache | None = None,
     *,
     res_folder: Path,
     result_name: str,
@@ -368,7 +352,7 @@ def run_mt_bench(
     completions_a, completions_b = _generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
-        ignore_cache=ignore_cache,
+        cache=cache,
     )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
     if resolved_prompt.delegated and not cfg.judge.provide_explanation:
@@ -395,6 +379,7 @@ def run_mt_bench(
             resolved_prompt=resolved_prompt,
             fastchat_prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
             started_at_utc=run_started_at,
+            cache=cache,
         )
     return _run_mt_bench_preset(
         cfg=cfg,
@@ -406,4 +391,5 @@ def run_mt_bench(
         judge_chat_model=judge_chat_model,
         resolved_prompt=resolved_prompt,
         started_at_utc=run_started_at,
+        cache=cache,
     )

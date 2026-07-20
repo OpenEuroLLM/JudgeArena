@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -22,6 +22,9 @@ from judgearena.prompts.registry import (
     ResolvedJudgePrompt,
     resolve_judge_prompt,
 )
+
+if TYPE_CHECKING:
+    from judgearena.inference_cache import InferenceCache
 
 
 @dataclass(frozen=True)
@@ -154,6 +157,7 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
     strip_thinking_before_judging: bool = False,
+    cache: InferenceCache | None = None,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
@@ -176,6 +180,7 @@ def judge_mt_bench_with_preset(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        cache=cache,
     )
 
     annotations: list[dict[str, Any]] = []
@@ -238,6 +243,7 @@ def judge_mt_bench_with_preset(
                 items=items,
                 use_tqdm=use_tqdm,
                 swap_answers=True,
+                cache=cache,
             )
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)

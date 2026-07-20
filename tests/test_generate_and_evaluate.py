@@ -78,13 +78,6 @@ def mock_external_data_and_cache(monkeypatch):
         lambda dataset, model, n_instructions: None,
     )
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        generate_and_evaluate, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _instructions(ids: list[str], categories: list[str] | None = None) -> pd.DataFrame:
     data = {"instruction": list(ids)}

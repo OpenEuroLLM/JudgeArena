@@ -14,8 +14,9 @@ import judgearena.meta_eval.runner as meta_eval_runner
 import judgearena.meta_eval.sampling as meta_sampling
 from judgearena import cli as cli_module
 from judgearena.arenas_utils import extract_turn_text
+from judgearena.config import meta_eval_cache_task
 from judgearena.evaluate import JudgeAnnotation, PairScore, annotate_battles
-from judgearena.meta_eval.cache import AnnotationCache, AnnotationEntry, AnnotationKey
+from judgearena.inference_cache import InferenceCache
 from judgearena.meta_eval.cli_args import CliMetaEvalArgs
 from judgearena.meta_eval.metrics import (
     compute_agreement_metrics,
@@ -357,75 +358,7 @@ def test_agreement_metrics_on_fixture():
     assert metrics["n_nt"] == 3
 
 
-def _cache_key(**overrides) -> AnnotationKey:
-    values = {
-        "benchmark": "LMArena-140k",
-        "instruction_id": "q-1",
-        "model_a": "model-a",
-        "model_b": "model-b",
-        "judge": "Dummy/judge",
-    }
-    values.update(overrides)
-    return AnnotationKey(**values)
-
-
-def _cache_entry(completion: str = "score_A: 9\nscore_B: 1", **overrides):
-    key = _cache_key(**overrides)
-    return AnnotationEntry(
-        **key.__dict__,
-        judge_input="judge prompt",
-        judge_completion=completion,
-    )
-
-
-def test_annotation_cache_persists_and_preserves_batch_order(tmp_path):
-    db_dir = tmp_path / "db"
-    first = AnnotationCache(db_dir)
-    first.batch_put(
-        [
-            _cache_entry(instruction_id="q-2", completion="second"),
-            _cache_entry(instruction_id="q-1", completion="first"),
-        ]
-    )
-    first.close()
-
-    second = AnnotationCache(db_dir)
-    entries = second.batch_get_annotations(
-        [
-            _cache_key(instruction_id="q-1"),
-            _cache_key(instruction_id="q-2"),
-            _cache_key(instruction_id="missing"),
-        ]
-    )
-    assert [entry.judge_completion if entry else None for entry in entries] == [
-        "first",
-        "second",
-        None,
-    ]
-    second.close()
-
-
-def test_annotation_cache_distinguishes_prompt_mode_and_model_order(tmp_path):
-    cache = AnnotationCache(tmp_path / "db")
-    cache.batch_put(
-        [
-            _cache_entry(judge="Dummy/judge::arena-hard"),
-            _cache_entry(model_a="model-b", model_b="model-a"),
-        ]
-    )
-    entries = cache.batch_get_annotations(
-        [
-            _cache_key(judge="Dummy/judge"),
-            _cache_key(judge="Dummy/judge::arena-hard"),
-            _cache_key(model_a="model-b", model_b="model-a"),
-        ]
-    )
-    assert entries[0] is None
-    assert all(entry is not None for entry in entries[1:])
-    cache.close()
-
-
-def test_annotate_sample_uses_cache_and_inverts_swapped_pass(
+def test_annotate_sample_inverts_swapped_pass(
     monkeypatch,
     synthetic_arena_df,
     meta_args,
@@ -440,20 +373,24 @@ def test_annotate_sample_uses_cache_and_inverts_swapped_pass(
     monkeypatch.setattr(meta_annotate, "annotate_battles", fake_annotate_battles)
     meta_args.swap_mode = "both"
     sample = synthetic_arena_df.iloc[:1]
-    cache = AnnotationCache(tmp_path / "db")
     prompt_spec = PromptModeSpec(
         name="standard",
         system_prompt="system",
         user_prompt_template="user",
     )
 
-    annotations = meta_annotate.annotate_sample(
-        sample,
-        meta_args,
-        judge_chat_model=object(),
-        prompt_spec=prompt_spec,
-        annotation_cache=cache,
-    )
+    with InferenceCache(
+        tmp_path / "cache",
+        meta_eval_cache_task(meta_args.reference_arena),
+        mode="off",
+    ) as cache:
+        annotations = meta_annotate.annotate_sample(
+            sample,
+            meta_args,
+            judge_chat_model=object(),
+            prompt_spec=prompt_spec,
+            cache=cache,
+        )
     assert len(annotations) == 2
     assert annotations["orientation"].tolist() == ["forward", "swapped"]
     assert annotations["winner"].tolist() == [sample.iloc[0]["winner"]] * 2
@@ -469,26 +406,6 @@ def test_annotate_sample_uses_cache_and_inverts_swapped_pass(
         == annotations.iloc[0]["completion_b"]
     )
     assert calls["count"] == 2
-
-    meta_annotate.annotate_sample(
-        sample,
-        meta_args,
-        judge_chat_model=object(),
-        prompt_spec=prompt_spec,
-        annotation_cache=cache,
-    )
-    assert calls["count"] == 2
-
-    meta_args.ignore_cache = True
-    meta_annotate.annotate_sample(
-        sample,
-        meta_args,
-        judge_chat_model=object(),
-        prompt_spec=prompt_spec,
-        annotation_cache=cache,
-    )
-    assert calls["count"] == 4
-    cache.close()
 
 
 def test_cost_uses_offline_reference_pricing(monkeypatch, tmp_path):
@@ -592,11 +509,8 @@ def test_swap_mode_both_artifact_reproduces_overall_agreement(
     stub_meta_eval_runner,
     tmp_path,
 ):
-    cache_class = AnnotationCache
-    monkeypatch.setattr(
-        meta_annotate,
-        "AnnotationCache",
-        lambda: cache_class(tmp_path / "cache"),
+    meta_args.cache = meta_args.cache.model_copy(
+        update={"store_root": str(tmp_path / "cache")}
     )
     monkeypatch.setattr(meta_annotate, "annotate_battles", _judge_annotations)
     meta_args.swap_mode = "both"

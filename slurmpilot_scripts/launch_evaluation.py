@@ -17,7 +17,6 @@ job_info = JobCreationInfo(
         "method_B": "gpt4_1106_preview",
         "judge_model": "VLLM/meta-llama/Meta-Llama-3-8B-instruct",
         "n_instructions": 10,
-        # "ignore_cache": None,
     },
     src_dir=str(Path(__file__).parent.parent / "judgearena/"),
     n_cpus=1,

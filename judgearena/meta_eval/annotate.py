@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.evaluate import JudgeAnnotation, annotate_battles
-from judgearena.meta_eval.cache import (
-    AnnotationCache,
-    AnnotationEntry,
-    AnnotationKey,
-)
+from judgearena.inference_cache import InferenceCache
 from judgearena.meta_eval.cli_args import CliMetaEvalArgs
 from judgearena.meta_eval.cost import (
     estimate_annotation_cost_usd,
@@ -43,7 +41,7 @@ def _swap_batch(df_batch: pd.DataFrame) -> pd.DataFrame:
 
 def _annotations_to_frame(
     df_batch: pd.DataFrame,
-    annotations,
+    annotations: list[JudgeAnnotation],
     *,
     prompt_mode: str,
     judge_model: str,
@@ -78,110 +76,51 @@ def _annotations_to_frame(
     return add_parsed_columns(pd.DataFrame(rows), prompt_mode)
 
 
-def _judge_cache_name(args: CliMetaEvalArgs) -> str:
-    if args.prompt_mode == "standard":
-        return args.judge_model
-    return f"{args.judge_model}::{args.prompt_mode}"
-
-
-def _cache_keys(
+def _row_metadata(
     df_batch: pd.DataFrame,
+    args: CliMetaEvalArgs,
     *,
-    judge: str,
-) -> list[AnnotationKey]:
+    orientation: str,
+) -> list[dict[str, Any]]:
     return [
-        AnnotationKey(
-            benchmark=str(battle["benchmark"]),
-            instruction_id=str(battle["question_id"]),
-            model_a=str(battle["model_a"]),
-            model_b=str(battle["model_b"]),
-            judge=judge,
-        )
+        {
+            "reference_arena": args.reference_arena,
+            "benchmark": str(battle["benchmark"]),
+            "question_id": str(battle["question_id"]),
+            "presented_model_a": str(battle["model_a"]),
+            "presented_model_b": str(battle["model_b"]),
+            "prompt_mode": args.prompt_mode,
+            "orientation": orientation,
+        }
         for _, battle in df_batch.iterrows()
     ]
 
 
-def _annotation_from_entry(
-    entry: AnnotationEntry,
-    *,
-    instruction: str,
-    completion_a: str,
-    completion_b: str,
-) -> JudgeAnnotation:
-    return JudgeAnnotation(
-        instruction=instruction,
-        completion_A=completion_a,
-        completion_B=completion_b,
-        judge_completion=entry.judge_completion,
-        judge_input=entry.judge_input,
-    )
-
-
-def _run_cached_batch(
+def _run_batch(
     df_batch: pd.DataFrame,
     args: CliMetaEvalArgs,
     *,
     judge_chat_model,
-    annotation_cache: AnnotationCache,
     prompt_spec,
+    cache: InferenceCache | None,
     swapped: bool,
 ) -> pd.DataFrame:
     working = _swap_batch(df_batch) if swapped else df_batch
     instructions, completions_a, completions_b = _battle_texts(working)
-    judge = _judge_cache_name(args)
-    keys = _cache_keys(working, judge=judge)
-    cached_entries = (
-        [None] * len(keys)
-        if args.ignore_cache
-        else annotation_cache.batch_get_annotations(keys)
+    orientation = "swapped" if swapped else "forward"
+    annotations = annotate_battles(
+        judge_chat_model=judge_chat_model,
+        instructions=instructions,
+        completions_A=completions_a,
+        completions_B=completions_b,
+        system_prompt=prompt_spec.system_prompt,
+        user_prompt_template=prompt_spec.user_prompt_template,
+        truncate_input_chars=args.truncate_judge_input_chars,
+        provide_explanation=args.provide_explanation,
+        strip_thinking_before_judging=args.strip_thinking_before_judging,
+        cache=cache,
+        row_metadata=_row_metadata(working, args, orientation=orientation),
     )
-    missing_indices = [
-        index for index, entry in enumerate(cached_entries) if entry is None
-    ]
-
-    if missing_indices:
-        new_annotations = annotate_battles(
-            judge_chat_model=judge_chat_model,
-            instructions=[instructions[index] for index in missing_indices],
-            completions_A=[completions_a[index] for index in missing_indices],
-            completions_B=[completions_b[index] for index in missing_indices],
-            system_prompt=prompt_spec.system_prompt,
-            user_prompt_template=prompt_spec.user_prompt_template,
-            truncate_input_chars=args.truncate_judge_input_chars,
-            provide_explanation=args.provide_explanation,
-        )
-        new_entries = [
-            AnnotationEntry(
-                **key.__dict__,
-                judge_input=annotation.judge_input or "",
-                judge_completion=annotation.judge_completion,
-            )
-            for key, annotation in zip(
-                [keys[index] for index in missing_indices],
-                new_annotations,
-                strict=True,
-            )
-        ]
-        annotation_cache.batch_put(new_entries)
-        for index, entry in zip(missing_indices, new_entries, strict=True):
-            cached_entries[index] = entry
-
-    annotations = [
-        _annotation_from_entry(
-            entry,
-            instruction=instruction,
-            completion_a=completion_a,
-            completion_b=completion_b,
-        )
-        for entry, instruction, completion_a, completion_b in zip(
-            cached_entries,
-            instructions,
-            completions_a,
-            completions_b,
-            strict=True,
-        )
-        if entry is not None
-    ]
     return _annotations_to_frame(
         working,
         annotations,
@@ -221,53 +160,47 @@ def annotate_sample(
     *,
     judge_chat_model,
     prompt_spec,
-    annotation_cache: AnnotationCache | None = None,
+    cache: InferenceCache | None = None,
 ) -> pd.DataFrame:
     n_total = len(df_sample)
     n_batches = (n_total + args.batch_size - 1) // args.batch_size
     parts: list[pd.DataFrame] = []
-    owns_cache = annotation_cache is None
-    cache = annotation_cache or AnnotationCache()
 
-    try:
-        for batch_idx in range(n_batches):
-            start = batch_idx * args.batch_size
-            end = min(start + args.batch_size, n_total)
-            df_batch = df_sample.iloc[start:end].copy()
-            batch_df = _run_cached_batch(
+    for batch_idx in range(n_batches):
+        start = batch_idx * args.batch_size
+        end = min(start + args.batch_size, n_total)
+        df_batch = df_sample.iloc[start:end].copy()
+        batch_df = _run_batch(
+            df_batch,
+            args,
+            judge_chat_model=judge_chat_model,
+            prompt_spec=prompt_spec,
+            cache=cache,
+            swapped=False,
+        )
+        parts.append(
+            _normalize_pass_frame(
+                batch_df,
+                df_batch,
+                orientation="forward",
+            )
+        )
+
+        if args.swap_mode == "both":
+            swapped_df = _run_batch(
                 df_batch,
                 args,
                 judge_chat_model=judge_chat_model,
-                annotation_cache=cache,
                 prompt_spec=prompt_spec,
-                swapped=False,
+                cache=cache,
+                swapped=True,
             )
             parts.append(
                 _normalize_pass_frame(
-                    batch_df,
+                    swapped_df,
                     df_batch,
-                    orientation="forward",
+                    orientation="swapped",
                 )
             )
-
-            if args.swap_mode == "both":
-                swapped_df = _run_cached_batch(
-                    df_batch,
-                    args,
-                    judge_chat_model=judge_chat_model,
-                    annotation_cache=cache,
-                    prompt_spec=prompt_spec,
-                    swapped=True,
-                )
-                parts.append(
-                    _normalize_pass_frame(
-                        swapped_df,
-                        df_batch,
-                        orientation="swapped",
-                    )
-                )
-    finally:
-        if owns_cache:
-            cache.close()
 
     return pd.concat(parts, ignore_index=True)

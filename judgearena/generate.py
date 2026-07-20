@@ -1,8 +1,48 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.models import do_inference, make_model
 from judgearena.utils import strip_thinking_tags, truncate
+
+if TYPE_CHECKING:
+    from judgearena.inference_cache import InferenceCache
+
+
+def _instruction_index_metadata(indices: list[Any]) -> list[dict[str, Any]]:
+    return [{"instruction_index": str(index)} for index in indices]
+
+
+def _mt_bench_generation_metadata(
+    questions: pd.DataFrame,
+    idxs: list[Any],
+    *,
+    turn: int,
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for idx in idxs:
+        row = questions.loc[idx]
+        category = row.get("category")
+        metadata.append(
+            {
+                "instruction_index": str(idx),
+                "turn": turn,
+                "category": None if category is None else str(category),
+            }
+        )
+    return metadata
+
+
+def _subset_metadata(
+    row_metadata: list[dict[str, Any] | None] | None,
+    idxs: list[int],
+) -> list[dict[str, Any] | None] | None:
+    if row_metadata is None:
+        return None
+    return [row_metadata[i] for i in idxs]
 
 
 def generate_instructions(
@@ -12,6 +52,8 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
+    cache: InferenceCache | None = None,
+    row_metadata: list[dict[str, Any] | None] | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
     chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
@@ -25,6 +67,7 @@ def generate_instructions(
         [("system", system_prompt), ("user", "{user_prompt}")]
     )
 
+    idxs = instructions.index.tolist()
     inputs = prompt_template.batch(
         [
             {
@@ -38,11 +81,17 @@ def generate_instructions(
         chat_model=chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        cache=cache,
+        cache_meta={
+            "metadata": row_metadata
+            if row_metadata is not None
+            else _instruction_index_metadata(idxs)
+        },
     )
     df_outputs = pd.DataFrame(
         data={
             "completion": completions,
-            "instruction_index": instructions.index.tolist(),
+            "instruction_index": idxs,
         },
     )
     return df_outputs
@@ -66,6 +115,8 @@ def _infer_grouped_by_temperature(
     inputs: list,
     temperatures: list[float],
     use_tqdm: bool,
+    cache: InferenceCache | None = None,
+    row_metadata: list[dict[str, Any] | None] | None = None,
 ) -> list[str]:
     outputs: list[str] = [""] * len(inputs)
     groups: dict[float, list[int]] = {}
@@ -75,6 +126,7 @@ def _infer_grouped_by_temperature(
     for temp in sorted(groups.keys()):
         idxs = groups[temp]
         group_inputs = [inputs[i] for i in idxs]
+        group_metadata = _subset_metadata(row_metadata, idxs)
 
         if provider in {"VLLM", "LlamaCpp"}:
             _set_temperature_on_model(base_model, temp)
@@ -88,6 +140,10 @@ def _infer_grouped_by_temperature(
             chat_model=group_model,
             inputs=group_inputs,
             use_tqdm=use_tqdm,
+            cache=cache,
+            cache_meta={"metadata": group_metadata}
+            if group_metadata is not None
+            else None,
         )
         for i, out in zip(idxs, group_outs, strict=True):
             outputs[i] = out
@@ -103,6 +159,7 @@ def generate_multiturn(
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
     strip_thinking_before_turn_2_prompt: bool = False,
+    cache: InferenceCache | None = None,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -135,6 +192,7 @@ def generate_multiturn(
             for _, row in questions.iterrows()
         ]
     )
+    turn1_metadata = _mt_bench_generation_metadata(questions, idxs, turn=1)
 
     if use_category_temperatures:
         completions_turn_1 = _infer_grouped_by_temperature(
@@ -146,12 +204,16 @@ def generate_multiturn(
             inputs=turn1_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
+            cache=cache,
+            row_metadata=turn1_metadata,
         )
     else:
         completions_turn_1 = do_inference(
             chat_model=chat_model,
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
+            cache=cache,
+            cache_meta={"metadata": turn1_metadata},
         )
 
     turn2_inputs = []
@@ -174,7 +236,7 @@ def generate_multiturn(
             # Strip <think>...</think> from the turn-1 answer before the
             # character cap fires so a long cap lands on the visible answer
             # rather than deep inside a reasoning block (which would destroy
-            # the </think> closer and push the thinking fragment into turn 2).
+            # the </think> closer and push the thinking fragment into turn 2.
             t1_answer_str = str(t1_answer)
             if strip_thinking_before_turn_2_prompt:
                 t1_answer_str = strip_thinking_tags(t1_answer_str)
@@ -190,6 +252,8 @@ def generate_multiturn(
                 )
             )
 
+    turn2_metadata = _mt_bench_generation_metadata(questions, idxs, turn=2)
+
     if use_category_temperatures:
         completions_turn_2 = _infer_grouped_by_temperature(
             model_spec=model,
@@ -200,12 +264,16 @@ def generate_multiturn(
             inputs=turn2_inputs,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
+            cache=cache,
+            row_metadata=turn2_metadata,
         )
     else:
         completions_turn_2 = do_inference(
             chat_model=chat_model,
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
+            cache=cache,
+            cache_meta={"metadata": turn2_metadata},
         )
 
     return pd.DataFrame(
@@ -223,25 +291,29 @@ def generate_base(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 32768,
     use_tqdm: bool = False,
+    cache: InferenceCache | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
 
+    idxs = instructions.index.tolist()
     inputs = [
         truncate(instruction, max_len=truncate_input_chars)
         for instruction in instructions
     ]
 
-    completions = model.batch(
+    completions = do_inference(
+        chat_model=chat_model,
         inputs=inputs,
-        max_tokens=max_tokens,
+        use_tqdm=use_tqdm,
+        cache=cache,
+        cache_meta={"metadata": _instruction_index_metadata(idxs)},
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
 
     df_outputs = pd.DataFrame(
         data={
             "completion": completions,
-            "instruction_index": instructions.index.tolist(),
+            "instruction_index": idxs,
         },
     )
 

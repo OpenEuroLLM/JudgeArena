@@ -2,9 +2,8 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,6 +11,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import extract_turn_text, load_arena_dataframe
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
+from judgearena.config import RunConfig, inference_cache_session
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -21,14 +21,12 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.generate_and_evaluate import _build_generation_kwargs
+from judgearena.inference_cache import InferenceCache
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
 from judgearena.repro import write_run_metadata
-from judgearena.utils import cache_function_dataframe, compute_pref_summary
+from judgearena.utils import compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
-
-if TYPE_CHECKING:
-    from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
 
@@ -159,23 +157,6 @@ def select_seeded_random_arena_battles(
         "sample_fingerprint": _sample_fingerprint(sampled),
     }
     return sampled.reset_index(drop=True), metadata
-
-
-def _sampling_cache_token(
-    sampling_metadata: dict[str, object],
-    *,
-    n_instructions: int | None,
-    n_instructions_per_language: int | None,
-) -> str:
-    mode = sampling_metadata.get("sampling_mode")
-    if mode == "seeded_random":
-        return (
-            "seeded-random_"
-            f"{sampling_metadata['requested_rows']}_"
-            f"seed-{sampling_metadata['random_seed']}_"
-            f"{str(sampling_metadata['sample_fingerprint'])[:12]}"
-        )
-    return f"head_{n_instructions}_{n_instructions_per_language}"
 
 
 def _slugify(value: str) -> str:
@@ -328,6 +309,130 @@ def _prefs_to_battle_results(
     return df
 
 
+def _battle_identity_fallback(
+    *,
+    instruction: str,
+    focal_model: str,
+    opponent_model: str,
+    position: str,
+) -> str:
+    payload = {
+        "instruction": instruction,
+        "focal_model": focal_model,
+        "opponent_model": opponent_model,
+        "position": position,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _elo_generation_row_metadata(
+    *,
+    arena: str,
+    df_battles: pd.DataFrame,
+    instructions: list[str],
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for index, instruction in enumerate(instructions):
+        row: dict[str, Any] = {
+            "arena": arena,
+            "source": "elo-generation",
+        }
+        question_id = (
+            df_battles.iloc[index]["question_id"]
+            if "question_id" in df_battles.columns
+            else None
+        )
+        if question_id is not None and pd.notna(question_id):
+            row["question_id"] = str(question_id)
+        else:
+            row["instruction_sha256"] = hashlib.sha256(
+                instruction.encode("utf-8")
+            ).hexdigest()
+        metadata.append(row)
+    return metadata
+
+
+def _elo_judge_row_metadata(
+    *,
+    arena: str,
+    df_battles: pd.DataFrame,
+    instructions: list[str],
+    focal_model: str,
+    opponent_models: list[str],
+    our_model_is_position_a: np.ndarray,
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for index, opponent_model in enumerate(opponent_models):
+        position = "A" if our_model_is_position_a[index] else "B"
+        row: dict[str, Any] = {
+            "arena": arena,
+            "source": "elo-judge",
+            "focal_model": focal_model,
+            "opponent_model": opponent_model,
+            "position": position,
+        }
+        question_id = (
+            df_battles.iloc[index]["question_id"]
+            if "question_id" in df_battles.columns
+            else None
+        )
+        if question_id is not None and pd.notna(question_id):
+            row["question_id"] = str(question_id)
+        else:
+            row["battle_identity"] = _battle_identity_fallback(
+                instruction=instructions[index],
+                focal_model=focal_model,
+                opponent_model=opponent_model,
+                position=position,
+            )
+        metadata.append(row)
+    return metadata
+
+
+def _elo_calibration_row_metadata(
+    *,
+    arena: str,
+    cal_battles: pd.DataFrame,
+) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for row_index in cal_battles.index:
+        row: dict[str, Any] = {
+            "arena": arena,
+            "source": "elo-calibration",
+            "purpose": "temperature_calibration",
+        }
+        question_id = (
+            cal_battles.loc[row_index, "question_id"]
+            if "question_id" in cal_battles.columns
+            else None
+        )
+        if question_id is not None and pd.notna(question_id):
+            row["question_id"] = str(question_id)
+        else:
+            row["arena_row_index"] = (
+                int(row_index)
+                if isinstance(row_index, int | np.integer)
+                else str(row_index)
+            )
+        metadata.append(row)
+    return metadata
+
+
+def _parse_prefs_from_judge_completions(
+    judge_completions: list[str],
+    *,
+    swap_mode: str,
+    score_parser: PairScore,
+) -> list[float]:
+    parsed = pd.Series(
+        [score_parser.parse_model_raw(completion) for completion in judge_completions]
+    ).apply(lambda value: float("nan") if value is None else value)
+    if swap_mode == "both":
+        n_half = len(judge_completions) // 2
+        return combine_swapped_prefs(parsed[:n_half], parsed[n_half:]).tolist()
+    return parsed.tolist()
+
+
 def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
     """Human anchor battles from a loaded arena frame.
 
@@ -352,8 +457,14 @@ def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def main(cfg: "RunConfig") -> dict:
+def main(cfg: RunConfig) -> dict:
     assert cfg.elo is not None  # main is dispatched only for elo tasks
+    with inference_cache_session(cfg) as cache:
+        return _run_elo(cfg, cache=cache)
+
+
+def _run_elo(cfg: RunConfig, *, cache: InferenceCache | None) -> dict:
+    assert cfg.elo is not None
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
@@ -417,47 +528,20 @@ def main(cfg: "RunConfig") -> dict:
     # previously called evaluated_generation_kwargs() directly and silently
     # dropped battle_thinking_token_budget).
     extra_kwargs = _build_generation_kwargs(cfg, cfg.model.name, role="A")
-    use_tqdm = False
-    gen_fun = partial(
-        generate_instructions,
+    use_tqdm = cfg.run.use_tqdm
+    instruction_text = instructions.tolist()
+    completions_df = generate_instructions(
+        instructions=instructions,
+        model=cfg.model.name,
         truncate_input_chars=cfg.generation.truncate_all_input_chars,
         use_tqdm=use_tqdm,
+        cache=cache,
+        row_metadata=_elo_generation_row_metadata(
+            arena=cfg.elo.arena,
+            df_battles=df_battles,
+            instructions=instruction_text,
+        ),
         **extra_kwargs,
-    )
-
-    def replace_slash(s: str) -> str:
-        return s.replace("/", "_")
-
-    languages_str = "-".join(sorted(cfg.elo.languages)) if cfg.elo.languages else "all"
-    extra_kwargs_str = (
-        "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
-        if extra_kwargs
-        else ""
-    )
-    sampling_cache_token = _sampling_cache_token(
-        sampling_metadata,
-        n_instructions=cfg.generation.n_instructions,
-        n_instructions_per_language=cfg.elo.n_instructions_per_language,
-    )
-    cache_suffix = (
-        f"{cfg.elo.arena}_{replace_slash(cfg.model.name)}_"
-        f"{sampling_cache_token}_"
-        f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{extra_kwargs['max_tokens']}"
-        + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
-    )
-    if len(cache_suffix) > 100:
-        cache_hash = hashlib.sha256(cache_suffix.encode()).hexdigest()[:16]
-        logger.debug(
-            "Cache suffix too long (%d chars), using hash: %s (full: %s)",
-            len(cache_suffix),
-            cache_hash,
-            cache_suffix,
-        )
-        cache_suffix = cache_hash
-    completions_df = cache_function_dataframe(
-        lambda: gen_fun(instructions=instructions, model=cfg.model.name),
-        ignore_cache=cfg.run.ignore_cache,
-        cache_name=f"elo/{cache_suffix}",
     ).set_index("instruction_index")
     completions = completions_df.loc[:, "completion"]
 
@@ -503,112 +587,55 @@ def main(cfg: "RunConfig") -> dict:
             fallback_chat_template=cfg.model.chat_template,
         ),
     )
-
-    def run_judge() -> pd.DataFrame:
-        judge_chat_model = make_model(
-            model=cfg.judge.model,
-            **judge_extra_kwargs,
-        )
-        annotations, annotations_reversed, prefs = judge_and_parse_prefs(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions.tolist(),
-            completions_A=completions_A,
-            completions_B=completions_B,
-            swap_mode=cfg.judge.swap_mode,
-            provide_explanation=cfg.judge.provide_explanation,
-            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-            system_prompt=resolved_prompt.system_prompt,
-            user_prompt_template=resolved_prompt.user_prompt_template,
-            prompt_preset=resolved_prompt.preset_name,
-            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-            use_tqdm=use_tqdm,
-        )
-        if annotations_reversed is None:
-            row_annotations = list(annotations)
-            row_use_model_a = use_model_a_as_opponent
-            row_our_pos_a = our_model_is_position_a
-            row_opponents = list(opponent_models)
-        else:
-            # swap_mode="both": dataframe carries 2n rows (AB then BA).
-            # Position metadata is duplicated; prefs are already oriented
-            # consistently by judge_and_parse_prefs as [pref_AB, 1 - pref_BA].
-            row_annotations = list(annotations) + list(annotations_reversed)
-            row_use_model_a = np.concatenate(
-                [use_model_a_as_opponent, use_model_a_as_opponent]
-            )
-            row_our_pos_a = np.concatenate(
-                [our_model_is_position_a, our_model_is_position_a]
-            )
-            row_opponents = list(opponent_models) + list(opponent_models)
-        return pd.DataFrame(
-            {
-                "judge_completion": [a.judge_completion for a in row_annotations],
-                "instruction": [a.instruction for a in row_annotations],
-                "completion_A": [a.completion_A for a in row_annotations],
-                "completion_B": [a.completion_B for a in row_annotations],
-                "pref": prefs,
-                "use_model_a_as_opponent": row_use_model_a,
-                "our_model_is_position_a": row_our_pos_a,
-                "opponent_model": row_opponents,
-            }
-        )
-
-    # Stripping reasoning traces changes the judged text but not the cached
-    # completions, so it must be part of the judge cache key. Only append when
-    # enabled so prior (non-stripped) runs keep their existing cache hashes.
-    judge_cache_suffix = f"judge_{cache_suffix}"
-    if cfg.judge.strip_thinking_before_judging:
-        judge_cache_suffix += "_stripthinking"
-    df_judge = cache_function_dataframe(
-        run_judge,
-        ignore_cache=cfg.run.ignore_cache,
-        cache_name=f"elo/{judge_cache_suffix}",
+    judge_chat_model = make_model(
+        model=cfg.judge.model,
+        **judge_extra_kwargs,
     )
+    row_metadata = _elo_judge_row_metadata(
+        arena=cfg.elo.arena,
+        df_battles=df_battles,
+        instructions=instruction_text,
+        focal_model=cfg.model.name,
+        opponent_models=opponent_models,
+        our_model_is_position_a=our_model_is_position_a,
+    )
+    annotations, annotations_reversed, _ = judge_and_parse_prefs(
+        judge_chat_model=judge_chat_model,
+        instructions=instruction_text,
+        completions_A=completions_A,
+        completions_B=completions_B,
+        swap_mode=cfg.judge.swap_mode,
+        provide_explanation=cfg.judge.provide_explanation,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        system_prompt=resolved_prompt.system_prompt,
+        user_prompt_template=resolved_prompt.user_prompt_template,
+        prompt_preset=resolved_prompt.preset_name,
+        parser_mode=resolved_prompt.parser_mode,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=use_tqdm,
+        cache=cache,
+        row_metadata=row_metadata,
+    )
+    if annotations_reversed is None:
+        row_annotations = list(annotations)
+    else:
+        row_annotations = list(annotations) + list(annotations_reversed)
+    judge_completions = [annotation.judge_completion for annotation in row_annotations]
 
-    # Restore position arrays and prefs from cache (in case loaded from disk)
-    use_model_a_as_opponent = df_judge["use_model_a_as_opponent"].to_numpy()
-    our_model_is_position_a = df_judge["our_model_is_position_a"].to_numpy()
-    opponent_models = df_judge["opponent_model"].tolist()
-    prefs = df_judge["pref"].tolist()
-
-    # Instruction-index join key per judged battle, so the saved battles link
-    # back to the arena initial table / completion cache without copying text.
-    # df_judge repeats the n sampled battles once (AB) or twice (AB then BA for
-    # swap_mode="both"), so tile the ids to its actual length.
     if "question_id" in df_battles.columns and len(df_battles):
         qids = df_battles["question_id"].tolist()
-        n_rep = (len(df_judge) + len(qids) - 1) // len(qids)
-        question_ids = (qids * n_rep)[: len(df_judge)]
+        n_rep = (len(row_annotations) + len(qids) - 1) // len(qids)
+        question_ids = (qids * n_rep)[: len(row_annotations)]
     else:
-        question_ids = [None] * len(df_judge)
+        question_ids = [None] * len(row_annotations)
 
-    logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
+    logger.debug("First judge output:\n%s", judge_completions[0][:500])
 
-    # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
-    df_llm_judge = _prefs_to_battle_results(
-        prefs,
-        our_model_is_position_a,
-        opponent_models,
-        model_name,
-        judge_model=cfg.judge.model,
-        question_ids=question_ids,
-    )
-
-    # Normalize prefs so pref < 0.5 always means our model wins, then summarise
-    prefs_normalized = pd.Series(
-        [
-            p if (p is None or is_pos_a) else (1 - p)
-            for p, is_pos_a in zip(prefs, our_model_is_position_a, strict=True)
-        ]
-    )
-    summary = compute_pref_summary(prefs_normalized)
 
     # Anchor the llm-judge battles against the human arena battles. These are
     # rebuilt from the (revision-pinned) arena, not persisted per run.
     df_arena = arena_anchor_battles(df_arena_all)
-
-    df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Compute human-only BT ratings as ground-truth reference
     human_elo = fit_bradley_terry(
@@ -653,19 +680,26 @@ def main(cfg: "RunConfig") -> dict:
                 for i in cal_battles.index
             ]
 
-            judge_chat_model_cal = make_model(
-                model=cfg.judge.model,
-                max_tokens=cfg.judge.max_out_tokens,
-                **judge_extra_kwargs,
+            cal_row_metadata = _elo_calibration_row_metadata(
+                arena=cfg.elo.arena,
+                cal_battles=cal_battles,
             )
-            cal_annotations, _, cal_prefs = judge_and_parse_prefs(
-                judge_chat_model=judge_chat_model_cal,
+            cal_annotations, _, _ = judge_and_parse_prefs(
+                judge_chat_model=judge_chat_model,
                 instructions=cal_instructions,
                 completions_A=cal_completions_a,
                 completions_B=cal_completions_b,
                 swap_mode=cfg.judge.swap_mode,
                 provide_explanation=cfg.judge.provide_explanation,
+                strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+                system_prompt=resolved_prompt.system_prompt,
+                user_prompt_template=resolved_prompt.user_prompt_template,
+                prompt_preset=resolved_prompt.preset_name,
+                parser_mode=resolved_prompt.parser_mode,
                 truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+                use_tqdm=use_tqdm,
+                cache=cache,
+                row_metadata=cal_row_metadata,
             )
 
             # Build (delta_s, y) pairs from calibration battles.
@@ -700,43 +734,44 @@ def main(cfg: "RunConfig") -> dict:
                     cfg.elo.soft_elo_temperature,
                 )
 
-    # Build the score parser used for the main evaluation run.
     score_parser = PairScore(
         temperature=calibrated_temperature
         if calibrated_temperature is not None
-        else cfg.elo.soft_elo_temperature
+        else cfg.elo.soft_elo_temperature,
+        parser_mode=resolved_prompt.parser_mode,
+    )
+    prefs = _parse_prefs_from_judge_completions(
+        judge_completions,
+        swap_mode=cfg.judge.swap_mode,
+        score_parser=score_parser,
     )
 
-    # The prefs cached in df_judge were parsed at the default T=0.3, and the
-    # judge cache key ignores temperature, so they cannot reflect
-    # --soft-elo-temperature (or a calibrated T*).  Re-parse from the stored
-    # judge completions with this run's score_parser so the soft-ELO bootstrap
-    # uses the requested temperature.
-    if cfg.elo.soft_elo:
-        new_prefs_ab = pd.Series(
-            [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
-        ).apply(lambda x: float("nan") if x is None else x)
-
-        if cfg.judge.swap_mode == "both":
-            # df_judge stores AB then BA completions; re-orient the halves the
-            # same way run_judge() did.
-            n_half = len(df_judge) // 2
-            prefs = combine_swapped_prefs(
-                new_prefs_ab[:n_half], new_prefs_ab[n_half:]
-            ).tolist()
-        else:
-            prefs = new_prefs_ab.tolist()
-
-        # Rebuild battle results with the re-parsed prefs.
-        df_llm_judge = _prefs_to_battle_results(
-            prefs,
-            our_model_is_position_a,
-            opponent_models,
-            model_name,
-            judge_model=cfg.judge.model,
-            question_ids=question_ids,
+    if cfg.judge.swap_mode == "both":
+        battle_our_pos_a = np.concatenate(
+            [our_model_is_position_a, our_model_is_position_a]
         )
-        df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+        battle_opponents = list(opponent_models) + list(opponent_models)
+    else:
+        battle_our_pos_a = our_model_is_position_a
+        battle_opponents = opponent_models
+
+    df_llm_judge = _prefs_to_battle_results(
+        prefs,
+        battle_our_pos_a,
+        battle_opponents,
+        model_name,
+        judge_model=cfg.judge.model,
+        question_ids=question_ids,
+    )
+    df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+
+    prefs_normalized = pd.Series(
+        [
+            p if (p is None or is_pos_a) else (1 - p)
+            for p, is_pos_a in zip(prefs, battle_our_pos_a, strict=True)
+        ]
+    )
+    summary = compute_pref_summary(prefs_normalized)
 
     n_bootstraps = cfg.elo.n_bootstraps
     use_soft = cfg.elo.soft_elo

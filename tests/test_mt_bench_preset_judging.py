@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+import judgearena.mt_bench.preset_judging as preset_module
+from judgearena.inference_cache import InferenceCache
 from judgearena.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
     _select_preset_prompt,
@@ -151,3 +153,47 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         {"question_id": 1, "category": "writing", "turn": 1},
         {"question_id": 1, "category": "writing", "turn": 1},
     ]
+
+
+def test_judge_mt_bench_with_preset_forwards_cache(monkeypatch):
+    captured: list[object | None] = []
+
+    def fake_infer(*, cache, items, swap_answers=False, **kwargs):
+        captured.append(cache)
+        used_kwargs = [dict(item.prompt_kwargs) for item in items]
+        if swap_answers:
+            used_kwargs = [
+                {
+                    **kwargs_,
+                    "answer_a": kwargs_.get("answer_b", ""),
+                    "answer_b": kwargs_.get("answer_a", ""),
+                }
+                for kwargs_ in used_kwargs
+            ]
+        n = len(items)
+        return (["score_A: 10\nscore_B: 0"] * n, used_kwargs)
+
+    monkeypatch.setattr(
+        preset_module,
+        "infer_pairwise_judgments_by_prompt_groups",
+        fake_infer,
+    )
+
+    with InferenceCache("/tmp/unused", "mt-judge", mode="off") as cache:
+        judge_mt_bench_with_preset(
+            judge_chat_model=object(),
+            judge_model="judge",
+            questions=_questions_df(category="writing"),
+            completions_a=_completions_df("A"),
+            completions_b=_completions_df("B"),
+            model_a="model-a",
+            model_b="model-b",
+            turns_mode="single",
+            swap_mode="both",
+            truncate_input_chars=None,
+            use_tqdm=False,
+            prompt_preset="default",
+            cache=cache,
+        )
+
+    assert captured == [cache, cache]

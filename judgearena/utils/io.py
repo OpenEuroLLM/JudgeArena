@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
@@ -16,6 +14,8 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
+from judgearena.instruction_dataset.mt_bench import download_mt_bench
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -70,8 +70,6 @@ def safe_parse_int(env_var: str) -> int | None:
 
 
 def download_all():
-    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
-
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
     for dataset in (
@@ -94,8 +92,6 @@ def download_all():
         local_dir=data_root / "contexts",
         force_download=False,
     )
-
-    from judgearena.instruction_dataset.mt_bench import download_mt_bench
 
     download_mt_bench()
 
@@ -123,80 +119,6 @@ class Timeblock:
         name = self.name if self.name else "block"
         msg = f"{name} took {self.duration} seconds"
         return msg
-
-
-def generation_cache_token(kwargs: dict[str, object]) -> str:
-    """Short, deterministic token of generation kwargs for cache-key busting.
-
-    Folds the resolved per-role generation kwargs (sampling params, max_tokens,
-    chat_template, ...) into a stable 16-char hash so that changing any of them
-    invalidates cached completions. Hashing keeps the cache name bounded even
-    when a long ``chat_template`` is present.
-    """
-    serialized = "_".join(f"{k}={kwargs[k]!r}" for k in sorted(kwargs))
-    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
-
-
-def cache_function_dataframe(
-    fun: Callable[[], pd.DataFrame],
-    cache_name: str,
-    ignore_cache: bool = False,
-    cache_path: Path | None = None,
-    parquet: bool = False,
-) -> pd.DataFrame:
-    """
-    :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
-    :param ignore_cache: whether to recompute even if the cache is present
-    :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
-    :param parquet: whether to store the data in parquet, if not specified use csv.zip
-    :return: result of fun()
-    """
-    if cache_path is None:
-        cache_path = data_root / "cache"
-
-    if parquet:
-        cache_file = cache_path / (cache_name + ".parquet")
-    else:
-        cache_file = cache_path / (cache_name + ".csv.zip")
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    if cache_file.exists() and not ignore_cache:
-        logger.info("Loading cache %s", cache_file)
-        if parquet:
-            return pd.read_parquet(cache_file)
-        else:
-            return pd.read_csv(cache_file)
-    else:
-        logger.info(
-            "Cache %s not found or ignore_cache set to True, regenerating the file",
-            cache_file,
-        )
-        with Timeblock("Evaluate function."):
-            df = fun()
-            assert isinstance(df, pd.DataFrame)
-            if parquet:
-                # object cols cannot be saved easily in parquet; numpy arrays must be
-                # deep-converted to plain Python so str() produces ast.literal_eval-safe
-                # repr (no "array([...])" syntax, which breaks literal_eval)
-                import numpy as np
-
-                def _to_python(x):
-                    """Recursively convert numpy arrays/scalars to Python lists/dicts."""
-                    if isinstance(x, np.ndarray):
-                        return [_to_python(i) for i in x]
-                    if isinstance(x, dict):
-                        return {k: _to_python(v) for k, v in x.items()}
-                    if isinstance(x, list):
-                        return [_to_python(i) for i in x]
-                    return x
-
-                for col in df.select_dtypes(include="object").columns:
-                    df[col] = df[col].apply(_to_python).astype(str)
-                df.to_parquet(cache_file, index=False)
-                return pd.read_parquet(cache_file)
-            else:
-                df.to_csv(cache_file, index=False)
-                return pd.read_csv(cache_file)
 
 
 if __name__ == "__main__":

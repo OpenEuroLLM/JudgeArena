@@ -74,13 +74,6 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
     monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", mock_generate)
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        estimate_elo_ratings, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     arena = kwargs.pop("arena", "ComparIA")
@@ -256,9 +249,13 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
         completions_A,
         completions_B,
         swap_mode="fixed",
+        cache=None,
+        row_metadata=None,
         **kwargs,
     ):
         captured["swap_mode"] = swap_mode
+        captured["cache"] = cache
+        captured["row_metadata"] = row_metadata
         n = len(instructions)
         dummy = JudgeAnnotation(
             judge_completion="score A: 0 score B: 10",
@@ -266,6 +263,8 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
             completion_A="",
             completion_B="",
         )
+        if swap_mode == "both":
+            return [dummy] * n, [dummy] * n, pd.Series([1.0] * (2 * n))
         return [dummy] * n, None, pd.Series([1.0] * n)
 
     monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
@@ -281,9 +280,13 @@ def _spy_judge_capturing(captured):
         completions_B,
         swap_mode="fixed",
         strip_thinking_before_judging=False,
+        cache=None,
+        row_metadata=None,
         **kwargs,
     ):
         captured["strip_thinking_before_judging"] = strip_thinking_before_judging
+        captured["cache"] = cache
+        captured["row_metadata"] = row_metadata
         n = len(instructions)
         dummy = JudgeAnnotation(
             judge_completion="score A: 0 score B: 10",
@@ -320,8 +323,9 @@ def test_main_strip_thinking_defaults_off(monkeypatch, tmp_path):
 
 
 def _spy_generate_capturing(captured):
-    def spy_generate(instructions, model, **kwargs):
+    def spy_generate(instructions, model, cache=None, **kwargs):
         captured["gen_kwargs"] = kwargs
+        captured["cache"] = cache
         return pd.DataFrame(
             {
                 "completion": [f"c{i}" for i in range(len(instructions))],
@@ -330,6 +334,24 @@ def _spy_generate_capturing(captured):
         )
 
     return spy_generate
+
+
+def test_main_generation_cache_metadata_includes_arena_question_identity(
+    monkeypatch, tmp_path
+):
+    captured = {}
+    monkeypatch.setattr(
+        estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
+    )
+
+    main(_default_args(result_folder=str(tmp_path), arena="ComparIA"))
+
+    row_metadata = captured["gen_kwargs"]["row_metadata"]
+    assert len(row_metadata) == 10
+    assert all(row["arena"] == "ComparIA" for row in row_metadata)
+    assert [row["question_id"] for row in row_metadata] == [
+        f"q{index}" for index in range(10)
+    ]
 
 
 def test_main_thinking_budget_injected_for_thinking_model(monkeypatch, tmp_path):

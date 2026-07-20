@@ -75,7 +75,6 @@ for language in [
                 "model_B": model,
                 "judge_model": "VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8",
                 "n_instructions": 100,
-                # "ignore_cache": None,
             }
             for model in multisynt_models + qwen_models
         ],

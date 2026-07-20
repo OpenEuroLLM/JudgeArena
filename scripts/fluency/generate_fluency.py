@@ -2,18 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 from datasets import Dataset
-from langchain_community.cache import SQLiteCache
-from langchain_core.globals import set_llm_cache
 
 from judgearena.models import do_inference, make_model
-from judgearena.utils import data_root
-
-
-def set_langchain_cache():
-    set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
-
-
-set_langchain_cache()
 
 dataset_name = "geoalgo/multilingual-fluency"
 model = "OpenRouter/openai/gpt-5-mini"
@@ -90,14 +80,14 @@ def generate_contexts(
     model: str,
     languages: list[str],
     n_sentences_to_generate: int,
-    ignore_cache: bool = False,
+    overwrite_existing: bool = False,
 ):
 
     for target_language in languages:
         data_path = Path(__file__).parent / "data" / f"{target_language}-contexts.csv"
         data_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if not data_path.exists() or ignore_cache:
+        if not data_path.exists() or overwrite_existing:
             judge_chat_model = make_model(model, max_tokens=65536)
 
             print(

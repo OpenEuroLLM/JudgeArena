@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
-from judgearena.config import RunConfig
+from judgearena.config import CacheArgs, RunConfig
+from judgearena.model_adapters import normalize_constructor_settings
 
 PROMPT_MODES = (
     "standard",
@@ -32,7 +34,7 @@ class CliMetaEvalArgs:
     exclude_human_ties: bool = True
     provide_explanation: bool = False
     swap_mode: str = "fixed"
-    ignore_cache: bool = False
+    strip_thinking_before_judging: bool = False
     truncate_judge_input_chars: int | None = None
     max_out_tokens_judge: int = 32768
     max_model_len: int | None = None
@@ -40,6 +42,7 @@ class CliMetaEvalArgs:
     result_folder: str = "results"
     engine_kwargs: dict[str, object] = field(default_factory=dict)
     no_log_file: bool = False
+    cache: CacheArgs = field(default_factory=CacheArgs)
 
     def __post_init__(self) -> None:
         if self.swap_mode not in {"fixed", "both"}:
@@ -49,6 +52,14 @@ class CliMetaEvalArgs:
                 f"Unsupported prompt_mode {self.prompt_mode!r}; "
                 f"expected one of {PROMPT_MODES}."
             )
+
+    def to_jsonable(self) -> dict[str, Any]:
+        """Serialize runtime args for ``args.json`` without secret values."""
+        payload = asdict(self)
+        payload["cache"] = self.cache.model_dump()
+        sanitized_engine_kwargs = normalize_constructor_settings(self.engine_kwargs)
+        payload["engine_kwargs"] = sanitized_engine_kwargs or {}
+        return payload
 
 
 def meta_eval_args_from_config(cfg: RunConfig) -> CliMetaEvalArgs:
@@ -76,7 +87,7 @@ def meta_eval_args_from_config(cfg: RunConfig) -> CliMetaEvalArgs:
         exclude_human_ties=not cfg.meta_eval.include_human_ties,
         provide_explanation=cfg.judge.provide_explanation,
         swap_mode=cfg.judge.swap_mode,
-        ignore_cache=cfg.run.ignore_cache,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         truncate_judge_input_chars=cfg.generation.truncate_judge_input_chars,
         max_out_tokens_judge=max_out_tokens_judge,
         max_model_len=max_model_len,
@@ -84,4 +95,5 @@ def meta_eval_args_from_config(cfg: RunConfig) -> CliMetaEvalArgs:
         result_folder=cfg.run.result_folder,
         engine_kwargs=judge_kwargs,
         no_log_file=cfg.run.no_log_file,
+        cache=cfg.cache.model_copy(),
     )

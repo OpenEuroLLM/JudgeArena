@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
@@ -10,6 +10,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from judgearena.models import do_inference
 from judgearena.mt_bench.common import iter_mt_bench_pairwise_rows
 from judgearena.utils import strip_thinking_tags
+
+if TYPE_CHECKING:
+    from judgearena.inference_cache import InferenceCache
 
 
 class MTBenchPairwisePrompt(Protocol):
@@ -70,12 +73,27 @@ def build_pairwise_chat_prompt_template(
     return ChatPromptTemplate.from_messages(message_templates)
 
 
+def _mt_bench_judge_metadata(
+    item: MTBenchJudgeItem,
+    *,
+    swap_answers: bool,
+) -> dict[str, Any]:
+    return {
+        "question_id": str(item.question_id),
+        "category": item.category,
+        "turn": item.turn,
+        "prompt": item.prompt_name,
+        "orientation": "reversed" if swap_answers else "direct",
+    }
+
+
 def infer_pairwise_judgments_by_prompt_groups(
     *,
     judge_chat_model,
     items: list[MTBenchJudgeItem],
     use_tqdm: bool,
     swap_answers: bool,
+    cache: InferenceCache | None = None,
 ) -> tuple[list[str], list[dict[str, str]]]:
     judgments: list[str] = [""] * len(items)
     used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
@@ -83,6 +101,7 @@ def infer_pairwise_judgments_by_prompt_groups(
         prompt = items[idxs[0]].prompt
         prompt_template = build_pairwise_chat_prompt_template(prompt)
         batch_kwargs: list[dict[str, str]] = []
+        batch_metadata: list[dict[str, Any]] = []
         for item_index in idxs:
             prompt_kwargs = dict(items[item_index].prompt_kwargs)
             if swap_answers:
@@ -91,11 +110,16 @@ def infer_pairwise_judgments_by_prompt_groups(
                     multi_turn=prompt.multi_turn,
                 )
             batch_kwargs.append(prompt_kwargs)
+            batch_metadata.append(
+                _mt_bench_judge_metadata(items[item_index], swap_answers=swap_answers)
+            )
         prompt_inputs = prompt_template.batch(batch_kwargs)
         outputs = do_inference(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
+            cache=cache,
+            cache_meta={"metadata": batch_metadata},
         )
         for item_index, output, prompt_kwargs in zip(
             idxs, outputs, batch_kwargs, strict=True

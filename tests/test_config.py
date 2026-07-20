@@ -254,3 +254,109 @@ def test_build_run_config_elo_arena_derived():
         ]
     )
     assert cfg.elo is not None and cfg.elo.arena == "ComparIA"
+
+
+def test_cache_defaults():
+    cfg = RunConfig(**_base_generate())
+    assert cfg.cache.store_root is None
+    assert cfg.cache.cache_mode == "use"
+    assert cfg.cache.cache_hf_repo == "judge-arena/judge-arena-cache"
+    assert cfg.cache.cache_fetch is False
+    assert cfg.cache.cache_push is False
+    assert cfg.cache.cache_create_pr is False
+
+
+def test_cache_pushed_by_defaults_to_getuser(monkeypatch):
+    monkeypatch.setattr("judgearena.config.default_pushed_by", lambda: "test-user")
+    cfg = RunConfig(**_base_generate())
+    assert cfg.cache.pushed_by == "test-user"
+
+
+def test_cache_yaml_load(tmp_path):
+    from judgearena.config import load_config
+
+    yaml_path = tmp_path / "cache.yaml"
+    yaml_path.write_text(
+        "task: alpaca-eval\n"
+        "model: {name: Dummy/a, baseline: Dummy/b}\n"
+        "judge: {model: Dummy/j}\n"
+        "cache:\n"
+        "  store_root: /data/cache\n"
+        "  cache_mode: refresh\n"
+        "  cache_fetch: true\n"
+        "  cache_push: true\n"
+        "  pushed_by: yaml-user\n"
+    )
+    cfg = load_config(yaml_path)
+    assert cfg.cache.store_root == "/data/cache"
+    assert cfg.cache.cache_mode == "refresh"
+    assert cfg.cache.cache_fetch is True
+    assert cfg.cache.cache_push is True
+    assert cfg.cache.pushed_by == "yaml-user"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"cache_fetch": True},
+            "cache.store_root is required",
+        ),
+        (
+            {"store_root": "/tmp", "cache_fetch": True, "cache_hf_repo": "  "},
+            "cache_hf_repo must be non-empty",
+        ),
+        (
+            {"store_root": "/tmp", "cache_create_pr": True},
+            "cache_push is required",
+        ),
+        (
+            {"store_root": "/tmp", "cache_mode": "off", "cache_fetch": True},
+            "cache_fetch and cache_push cannot be enabled",
+        ),
+        (
+            {"cache_mode": "refresh"},
+            "cache.store_root is required when cache_mode is refresh",
+        ),
+        (
+            {"store_root": "   "},
+            "cache.store_root must be non-empty",
+        ),
+    ],
+)
+def test_cache_validation_rejects_invalid_combinations(kwargs, match):
+    data = _base_generate()
+    data["cache"] = kwargs
+    with pytest.raises(ValidationError, match=match):
+        RunConfig(**data)
+
+
+def test_inference_cache_session_yields_none_without_store_root():
+    from judgearena.config import inference_cache_session
+
+    cfg = RunConfig(**_base_generate())
+    with inference_cache_session(cfg) as cache:
+        assert cache is None
+
+
+def test_inference_cache_session_opens_cache(tmp_path, monkeypatch):
+    from judgearena.config import inference_cache_session, inference_cache_task
+
+    monkeypatch.setattr("getpass.getuser", lambda: "session-user")
+    data = _base_generate()
+    data["cache"] = {
+        "store_root": str(tmp_path / "store"),
+        "cache_mode": "refresh",
+        "cache_fetch": True,
+        "cache_push": True,
+        "pushed_by": "session-user",
+    }
+    cfg = RunConfig(**data)
+    with inference_cache_session(cfg) as cache:
+        assert cache is not None
+        assert cache.store_root == tmp_path / "store"
+        assert cache.task == inference_cache_task(cfg)
+        assert cache.mode == "refresh"
+        assert cache.fetch is True
+        assert cache.push is True
+        assert cache.pushed_by == "session-user"
