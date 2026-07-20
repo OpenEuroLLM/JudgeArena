@@ -11,6 +11,12 @@ from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 from judgearena.tasks.registry import get_packaged_task
 
 
+def _mt_bench_task():
+    task = get_packaged_task("mt-bench")
+    assert task is not None
+    return task
+
+
 def test_mt_bench_sources_are_owned_by_task_yaml():
     task = get_packaged_task("mt-bench")
     assert task is not None
@@ -29,6 +35,72 @@ def test_mt_bench_sources_are_owned_by_task_yaml():
         "/587d5cfa1609a43d192cedb8441cac3c17db105d/"
         "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
     )
+
+
+def test_mt_bench_runner_reuses_resolved_task_and_resolves_baseline_once(
+    monkeypatch, tmp_path
+):
+    task = _mt_bench_task()
+    captured = {}
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "candidate"},
+        judge={"model": "judge"},
+        run={"result_folder": str(tmp_path)},
+    )
+
+    monkeypatch.setattr(
+        mt_bench_runner,
+        "get_packaged_task",
+        lambda _task: pytest.fail("the dispatcher already resolved this task"),
+    )
+    monkeypatch.setattr(
+        mt_bench_runner,
+        "prepare_run_directory",
+        lambda _cfg, path: path,
+    )
+    monkeypatch.setattr(
+        mt_bench_runner,
+        "load_instructions",
+        lambda resolved_task, n_instructions=None: (
+            captured.update(task=resolved_task)
+            or pd.DataFrame(
+                {"turn_1": ["Q1"], "turn_2": ["Q2"]},
+                index=pd.Index([1], name="instruction_index"),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        mt_bench_runner,
+        "_generate_mt_bench_completions",
+        lambda cfg, questions_df, protocol: (
+            captured.update(protocol=protocol)
+            or (
+                pd.DataFrame(
+                    {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
+                    index=questions_df.index,
+                ),
+                pd.DataFrame(
+                    {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
+                    index=questions_df.index,
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(mt_bench_runner, "make_model", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        mt_bench_runner,
+        "_run_mt_bench_fastchat",
+        lambda **kwargs: captured.update(runner=kwargs) or "result",
+    )
+
+    result = mt_bench_runner.run_mt_bench_benchmark(cfg, task)
+
+    assert result == "result"
+    assert cfg.model.baseline == "gpt-4"
+    assert captured["task"] is task
+    assert captured["protocol"] is task.spec.protocol
+    assert captured["runner"]["protocol"] is task.spec.protocol
 
 
 def test_mt_bench_adapter_normalizes_questions_and_references(monkeypatch, tmp_path):
@@ -185,6 +257,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     completions_a, completions_b = mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
+        protocol=_mt_bench_task().spec.protocol,
     )
 
     assert generated_models == ["VLLM/example/model-a"]
@@ -222,6 +295,7 @@ def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch
         mt_bench_runner._generate_mt_bench_completions(
             cfg=cfg,
             questions_df=questions_df,
+            protocol=_mt_bench_task().spec.protocol,
         )
 
 
@@ -284,7 +358,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, questions_df, protocol: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -328,7 +402,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, _mt_bench_task())
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
@@ -355,7 +429,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, questions_df, protocol: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -396,7 +470,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, _mt_bench_task())
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["temperature"] == 0.0
@@ -420,7 +494,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, questions_df, protocol: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -461,7 +535,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, _mt_bench_task())
 
     assert captured["preset"]["resolved_prompt"].preset_name == (
         "default_with_explanation"
@@ -515,6 +589,7 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
     mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
+        protocol=_mt_bench_task().spec.protocol,
     )
 
     thinking_call = captured["VLLM/Qwen/Qwen3.5-9B"]
@@ -543,7 +618,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, questions_df, protocol: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -573,7 +648,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, _mt_bench_task())
 
     assert captured["judge"]["strip_thinking_before_judging"] is True
     assert captured["judge"]["reference_categories"] == (

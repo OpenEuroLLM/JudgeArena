@@ -7,6 +7,8 @@ from importlib.resources import files
 from importlib.resources.abc import Traversable
 
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
+from judgearena.benchmarks.registry import BENCHMARK_ADAPTER_NAMES
+from judgearena.datasets.registry import DATASET_ADAPTER_NAMES
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
 from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
@@ -16,10 +18,8 @@ from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
 class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
-    runners: frozenset[str] = frozenset({"mt_bench", "pairwise"})
-    datasets: frozenset[str] = frozenset(
-        {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
-    )
+    runners: frozenset[str] = BENCHMARK_ADAPTER_NAMES
+    datasets: frozenset[str] = DATASET_ADAPTER_NAMES
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
 

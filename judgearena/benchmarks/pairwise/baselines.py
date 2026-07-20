@@ -74,7 +74,14 @@ def resolve_baseline_plan(
 
     baseline = task.spec.protocol.baseline
     if isinstance(baseline, TaskDefaultBaseline):
-        return BaselinePlan.flat(baseline.reference_id, index=instructions.index)
+        return BaselinePlan.flat(
+            resolve_flat_baseline(
+                task_id=task_id,
+                task=task,
+                runtime_baseline=runtime_baseline,
+            ),
+            index=instructions.index,
+        )
 
     if isinstance(baseline, CategoryDefaultsBaseline):
         if "category" not in instructions.columns:
@@ -100,9 +107,27 @@ def resolve_baseline_plan(
     )
 
 
-def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
+def resolve_flat_baseline(
+    *,
+    task_id: str,
+    task: ResolvedTaskSpec | None,
+    runtime_baseline: str | None,
+) -> str:
+    """Resolve an override or a task-owned baseline that is one model."""
+    if runtime_baseline is not None:
+        return runtime_baseline
+    if task is not None and isinstance(
+        task.spec.protocol.baseline, TaskDefaultBaseline
+    ):
+        return task.spec.protocol.baseline.reference_id
+    raise ValueError(f"Task {task_id!r} requires a flat baseline model.")
+
+
+def native_pairwise_baseline(
+    task: str | ResolvedTaskSpec | None,
+) -> str | Mapping[str, str] | None:
     """Return the baseline declared by a registered task."""
-    resolved = get_packaged_task(task)
+    resolved = get_packaged_task(task) if isinstance(task, str) else task
     if resolved is not None:
         baseline = resolved.spec.protocol.baseline
         if isinstance(baseline, TaskDefaultBaseline):

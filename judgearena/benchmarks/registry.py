@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import TYPE_CHECKING, Protocol
-
-from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import ResolvedTaskSpec
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 
 class BenchmarkRunner(Protocol):
@@ -38,15 +37,53 @@ class ResolvedBenchmark:
     task: ResolvedTaskSpec | None
 
 
+@dataclass(frozen=True)
+class _BenchmarkRegistration:
+    """Lazy runner registration kept import-safe for task validation."""
+
+    name: str
+    tasks: frozenset[str]
+    module: str
+    function: str
+
+
+_BENCHMARK_REGISTRATIONS = (
+    _BenchmarkRegistration(
+        "mt_bench",
+        frozenset(),
+        "judgearena.benchmarks.mt_bench.runner",
+        "run_mt_bench_benchmark",
+    ),
+    _BenchmarkRegistration(
+        "pairwise",
+        frozenset(),
+        "judgearena.benchmarks.pairwise.runner",
+        "run_pairwise",
+    ),
+)
+
+BENCHMARK_ADAPTER_NAMES = frozenset(
+    registration.name for registration in _BENCHMARK_REGISTRATIONS
+)
+
+
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
-    from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
-    from judgearena.benchmarks.pairwise.runner import run_pairwise
-
-    return (
-        BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
-        BenchmarkAdapter("pairwise", frozenset(), run_pairwise),
+    return tuple(
+        BenchmarkAdapter(
+            registration.name,
+            registration.tasks,
+            getattr(import_module(registration.module), registration.function),
+        )
+        for registration in _BENCHMARK_REGISTRATIONS
     )
+
+
+def get_packaged_task(task: str) -> ResolvedTaskSpec | None:
+    """Resolve lazily so task validation can import adapter names safely."""
+    from judgearena.tasks.registry import get_packaged_task as lookup
+
+    return lookup(task)
 
 
 def resolve_benchmark(task: str) -> ResolvedBenchmark:

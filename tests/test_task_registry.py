@@ -8,9 +8,14 @@ import pytest
 import yaml
 
 from judgearena import cli as cli_module
+from judgearena.benchmarks.registry import (
+    BENCHMARK_ADAPTER_NAMES,
+    benchmark_adapters,
+)
+from judgearena.datasets.registry import DATASET_ADAPTER_NAMES, dataset_adapters
 from judgearena.tasks.cli import run_task_command
 from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import TaskRegistry, UnknownTaskError
+from judgearena.tasks.registry import AdapterCatalog, TaskRegistry, UnknownTaskError
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
@@ -145,6 +150,15 @@ def test_packaged_registry_discovers_versioned_tasks():
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
     assert alpaca.spec.protocol.scoring.adapter == "pairwise_win_rate"
+
+
+def test_runtime_registries_own_task_adapter_names():
+    catalog = AdapterCatalog()
+
+    assert catalog.runners == BENCHMARK_ADAPTER_NAMES
+    assert catalog.datasets == DATASET_ADAPTER_NAMES
+    assert {adapter.name for adapter in benchmark_adapters()} == catalog.runners
+    assert {adapter.name for adapter in dataset_adapters()} == catalog.datasets
 
 
 def test_find_returns_none_for_unregistered_task():

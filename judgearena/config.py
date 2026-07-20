@@ -436,7 +436,7 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required.")
             if (
                 self.model.baseline is None
-                and native_pairwise_baseline(self.task) is None
+                and native_pairwise_baseline(resolved_task) is None
             ):
                 raise ValueError(f"model.baseline is required for task {self.task!r}.")
         return self
