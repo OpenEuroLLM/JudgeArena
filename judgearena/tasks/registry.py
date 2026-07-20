@@ -9,7 +9,7 @@ from importlib.resources.abc import Traversable
 
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
-from judgearena.tasks.schema import ResolvedTaskSpec
+from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ def _discover_tasks(
             )
         _validate_adapter_ids(resolved, adapters)
         tasks[resolved.task] = resolved
+    _validate_variant_ids(tasks)
     return dict(sorted(tasks.items()))
 
 
@@ -78,6 +79,70 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
             )
 
 
+def _validate_variant_ids(tasks: dict[str, ResolvedTaskSpec]) -> None:
+    """Reject a family-variant ID that collides with a real task or each other."""
+    aliases: dict[str, str] = {}
+    for task_id, resolved in tasks.items():
+        variants = resolved.spec.variants
+        if variants is None:
+            continue
+        for suffix in (*variants.values, *variants.groups):
+            alias = f"{task_id}{variants.separator}{suffix}"
+            owner = aliases.get(alias)
+            if alias in tasks or owner is not None:
+                other = alias if alias in tasks else owner
+                raise TaskDefinitionError(
+                    f"Variant task ID {alias!r} from {task_id!r} conflicts "
+                    f"with {other!r}."
+                )
+            aliases[alias] = task_id
+
+
+def resolve_task(
+    tasks: dict[str, ResolvedTaskSpec], task_id: str
+) -> ResolvedTaskSpec | None:
+    """Resolve ``task_id`` against ``tasks``, or ``None`` when it is unknown.
+
+    A ``task_id`` matches either a definition directly, or a task family:
+    ``family-v1-uk`` selects the ``uk`` view of the ``family-v1`` definition,
+    where ``uk`` is a single value or a named group declared under ``variants``.
+    """
+    exact = tasks.get(task_id)
+    if exact is not None:
+        return exact
+
+    # Longest definition name first, so a longer base wins over a shorter one
+    # that is a prefix of it (e.g. ``a-b`` before ``a``).
+    for base in sorted(tasks.values(), key=lambda t: len(t.task), reverse=True):
+        variants = base.spec.variants
+        if variants is None:
+            continue
+        prefix = f"{base.task}{variants.separator}"
+        if not task_id.startswith(prefix):
+            continue
+        suffix = task_id[len(prefix) :]
+        if suffix in variants.values:
+            values: tuple[str, ...] = (suffix,)
+        elif suffix in variants.groups:
+            values = variants.groups[suffix]
+        else:
+            continue
+        return ResolvedTaskSpec(
+            spec=base.spec,
+            provenance=base.provenance,
+            invocation_task=task_id,
+            selection=TaskSelection(
+                selector=variants.selector,
+                name=suffix,
+                values=values,
+            ),
+        )
+    return None
+
+
 def get_packaged_task(task_id: str) -> ResolvedTaskSpec | None:
-    """Look up a task from JudgeArena's installed YAML definitions."""
-    return load_tasks().get(task_id)
+    """Look up a task from JudgeArena's installed YAML definitions.
+
+    Family variants (e.g. ``family-v1-uk``) are resolved from their definition.
+    """
+    return resolve_task(load_tasks(), task_id)

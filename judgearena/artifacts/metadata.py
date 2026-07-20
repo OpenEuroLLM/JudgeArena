@@ -232,7 +232,7 @@ def _task_definition_metadata(run: dict[str, Any]) -> dict[str, Any] | None:
     resolved = get_packaged_task(task_id)
     if resolved is None:
         return None
-    return {
+    metadata = {
         "schema_version": resolved.spec.schema_version,
         "task_version": resolved.spec.task_version,
         "resolved_sha256": resolved.provenance.resolved_sha256,
@@ -241,6 +241,13 @@ def _task_definition_metadata(run: dict[str, Any]) -> dict[str, Any] | None:
             for resource in resolved.provenance.resources
         ],
     }
+    if resolved.selection is not None:
+        metadata["selection"] = {
+            "selector": resolved.selection.selector,
+            "name": resolved.selection.name,
+            "values": list(resolved.selection.values),
+        }
+    return metadata
 
 
 def write_run_metadata(

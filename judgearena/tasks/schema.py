@@ -145,6 +145,41 @@ class TaskMetadata(_StrictFrozenModel):
     paper: str | None = None
 
 
+class SuffixVariants(_StrictFrozenModel):
+    """Validated suffixes selecting views of one task definition."""
+
+    selector: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    separator: Literal["-"] = "-"
+    values: tuple[str, ...] = Field(min_length=1)
+    groups: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_variants(self) -> SuffixVariants:
+        if any(not value for value in self.values):
+            raise ValueError("variant values must not be empty")
+        if any(not group for group in self.groups):
+            raise ValueError("variant group names must not be empty")
+        if len(set(self.values)) != len(self.values):
+            raise ValueError("variant values must not contain duplicates")
+        overlap = set(self.values) & set(self.groups)
+        if overlap:
+            raise ValueError(f"variant values and groups overlap: {sorted(overlap)}")
+        known = set(self.values)
+        for group, members in self.groups.items():
+            if not members:
+                raise ValueError(f"variant group {group!r} must not be empty")
+            if len(set(members)) != len(members):
+                raise ValueError(
+                    f"variant group {group!r} must not contain duplicates"
+                )
+            unknown = sorted(set(members) - known)
+            if unknown:
+                raise ValueError(
+                    f"variant group {group!r} references unknown values: {unknown}"
+                )
+        return self
+
+
 class TaskSpec(_StrictFrozenModel):
     """Complete validated definition of one registered task."""
 
@@ -155,6 +190,7 @@ class TaskSpec(_StrictFrozenModel):
     tags: tuple[str, ...] = ()
     dataset: DatasetSpec
     protocol: PairwiseProtocol
+    variants: SuffixVariants | None = None
     metadata: TaskMetadata = Field(default_factory=TaskMetadata)
 
     @model_validator(mode="after")
@@ -199,14 +235,30 @@ class TaskProvenance:
 
 
 @dataclass(frozen=True)
+class TaskSelection:
+    """Runtime selector resolved from a task-family suffix."""
+
+    selector: str
+    name: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ResolvedTaskSpec:
     """Validated task plus the provenance of its resolved YAML."""
 
     spec: TaskSpec
     provenance: TaskProvenance
+    invocation_task: str | None = None
+    selection: TaskSelection | None = None
 
     @property
     def task(self) -> str:
+        return self.invocation_task or self.spec.task
+
+    @property
+    def definition_task(self) -> str:
+        """Task ID written in the source YAML, before suffix selection."""
         return self.spec.task
 
     def model_dump(self) -> dict[str, object]:
