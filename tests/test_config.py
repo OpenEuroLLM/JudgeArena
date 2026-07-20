@@ -146,7 +146,7 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     monkeypatch.setattr(cli_module, "main_elo", lambda a: captured.setdefault("elo", a))
     monkeypatch.setattr(
         cli_module,
-        "main_generate_and_evaluate",
+        "run_benchmark",
         lambda a: captured.setdefault("ge", a),
     )
     yaml_path = tmp_path / "e.yaml"
