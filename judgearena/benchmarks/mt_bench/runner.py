@@ -19,6 +19,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.scoring import resolve_pairwise_scorer
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -31,7 +32,6 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MTBenchProtocol
 from judgearena.utils import (
     cache_function_dataframe,
-    compute_pref_summary,
     generation_cache_token,
 )
 from judgearena.utils.eval import BattleReport, _compute_grouped_stats
@@ -211,7 +211,9 @@ def _finalize_mt_bench_run(
     started_at_utc: datetime,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
-    stats = compute_pref_summary(prefs)
+    protocol = _task_protocol(cfg.task)
+    scorer = resolve_pairwise_scorer(protocol.scoring.adapter)
+    stats = scorer.summarize(prefs)
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,

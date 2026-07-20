@@ -26,13 +26,10 @@ protocol:
     allow_runtime_override: true
   judge:
     default_prompt: default
-    parser: pairwise_preference
     default_swap_mode: fixed
     allowed_swap_modes: [fixed, both]
   scoring:
     adapter: pairwise_win_rate
-    primary_metric: winrate
-    higher_is_better: true
 
 metadata:
   reference_implementation: https://github.com/tatsu-lab/alpaca_eval

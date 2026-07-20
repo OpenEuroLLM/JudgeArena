@@ -31,7 +31,6 @@ SwapMode = Literal["fixed", "both"]
 
 class PairwiseJudgeSpec(StrictFrozenModel):
     default_prompt: str = Field(min_length=1)
-    parser: str = Field(min_length=1)
     default_swap_mode: SwapMode = "fixed"
     allowed_swap_modes: tuple[SwapMode, ...] = ("fixed", "both")
     default_temperature: float | None = None
@@ -49,8 +48,6 @@ class PairwiseJudgeSpec(StrictFrozenModel):
 
 class ScoringSpec(StrictFrozenModel):
     adapter: str = Field(min_length=1)
-    primary_metric: str = Field(min_length=1)
-    higher_is_better: bool
 
 
 class PairwiseProtocol(StrictFrozenModel):

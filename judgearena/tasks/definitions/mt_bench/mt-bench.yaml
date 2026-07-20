@@ -44,7 +44,6 @@ protocol:
     allow_runtime_override: true
   judge:
     default_prompt: fastchat-pairwise
-    parser: fastchat_pairwise_verdict
     default_swap_mode: fixed
     allowed_swap_modes: [fixed, both]
     turns_mode: both
@@ -53,8 +52,6 @@ protocol:
     reference_categories: [math, reasoning, coding, arena-hard-200]
   scoring:
     adapter: pairwise_win_rate
-    primary_metric: winrate
-    higher_is_better: true
 
 metadata:
   reference_implementation: https://github.com/lm-sys/FastChat/tree/master/fastchat/llm_judge

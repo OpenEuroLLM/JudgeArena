@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
 from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
@@ -20,10 +21,7 @@ class AdapterCatalog:
         {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    parsers: frozenset[str] = frozenset(
-        {"fastchat_pairwise_verdict", "pairwise_preference"}
-    )
-    scorers: frozenset[str] = frozenset({"pairwise_win_rate"})
+    scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
 
 
 @dataclass(frozen=True)
@@ -162,7 +160,6 @@ class TaskRegistry:
             "runner": (spec.protocol.runner, self._adapters.runners),
             "dataset adapter": (spec.dataset.adapter, self._adapters.datasets),
             "prompt": (spec.protocol.judge.default_prompt, self._adapters.prompts),
-            "parser": (spec.protocol.judge.parser, self._adapters.parsers),
             "scorer": (spec.protocol.scoring.adapter, self._adapters.scorers),
         }
         for kind, (adapter_id, available) in references.items():

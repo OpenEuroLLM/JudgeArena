@@ -59,11 +59,8 @@ protocol:
     reference_id: example-baseline
   judge:
     default_prompt: default
-    parser: pairwise_preference
   scoring:
     adapter: pairwise_win_rate
-    primary_metric: winrate
-    higher_is_better: true
 ```
 
 Reuse a private `_base.yaml` with `extends: _base.yaml` when several versions
@@ -85,6 +82,10 @@ runner code.
 
 Keep task YAML boring: declarative facts belong in YAML, while downloading,
 format conversion, and scoring algorithms belong in Python.
+
+The judge prompt preset owns the expected output format and its parser. The
+scoring adapter owns the calculation, primary metric, and metric direction;
+task YAML only selects those components by ID.
 
 If an upstream dataset has a new format, implement a dataset adapter under
 `judgearena/datasets/` and register its ID in both the dataset registry and the

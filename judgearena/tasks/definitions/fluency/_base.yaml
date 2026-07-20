@@ -21,13 +21,10 @@ protocol:
     strategy: runtime_required
   judge:
     default_prompt: fluency
-    parser: pairwise_preference
     default_swap_mode: fixed
     allowed_swap_modes: [fixed, both]
   scoring:
     adapter: pairwise_win_rate
-    primary_metric: winrate
-    higher_is_better: true
 
 metadata:
   reference_implementation: https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed
