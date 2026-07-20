@@ -1,4 +1,4 @@
-"""Task-to-runner registry for generate-and-evaluate benchmarks."""
+"""Registry of benchmark task names and their runners."""
 
 from __future__ import annotations
 
@@ -31,11 +31,16 @@ class BenchmarkAdapter:
         return self.tasks is None or task in self.tasks
 
 
-def resolve_benchmark_adapter(
-    task: str, adapters: tuple[BenchmarkAdapter, ...]
-) -> BenchmarkAdapter:
+def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
+    """Return the registered benchmark implementations."""
+    from judgearena.benchmarks.pairwise.runner import run_pairwise
+
+    return (BenchmarkAdapter("pairwise", None, run_pairwise),)
+
+
+def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
     """Return the first adapter supporting ``task``."""
-    for adapter in adapters:
+    for adapter in benchmark_adapters():
         if adapter.supports(task):
             return adapter
     raise ValueError(f"No generate-and-evaluate adapter supports task {task!r}.")

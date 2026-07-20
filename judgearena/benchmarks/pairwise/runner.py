@@ -15,10 +15,6 @@ from judgearena.artifacts import prepare_run_directory, write_run_metadata_safel
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.registry import (
-    BenchmarkAdapter,
-    resolve_benchmark_adapter,
-)
 from judgearena.datasets import load_instructions
 from judgearena.datasets.arena_hard import (
     download_arena_hard,
@@ -394,7 +390,7 @@ def run_pairwise(cfg: "RunConfig"):
 
     write_run_metadata_safely(
         output_dir=res_folder,
-        entrypoint="judgearena.benchmarks.pairwise.runner.main",
+        entrypoint="judgearena.benchmarks.pairwise.runner.run_pairwise",
         run=cfg.model_dump(),
         results=results,
         input_payloads={
@@ -410,15 +406,3 @@ def run_pairwise(cfg: "RunConfig"):
     )
 
     return prefs
-
-
-def _benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
-    """Return the registered generate-and-evaluate implementations."""
-    return (BenchmarkAdapter("pairwise", None, run_pairwise),)
-
-
-def main(cfg: "RunConfig"):
-    """Run a task through its registered generate-and-evaluate adapter."""
-    adapter = resolve_benchmark_adapter(cfg.task, _benchmark_adapters())
-    logger.info("Using %s benchmark adapter for %s.", adapter.name, cfg.task)
-    return adapter.runner(cfg)

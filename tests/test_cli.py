@@ -22,7 +22,7 @@ def capture_mains(monkeypatch):
         captured["cfg"] = cfg
 
     monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "main_generate_and_evaluate", fake_main_ge)
+    monkeypatch.setattr(cli_module, "run_benchmark", fake_main_ge)
     monkeypatch.setattr(cli_module, "main_elo", fake_main_elo)
     return captured
 

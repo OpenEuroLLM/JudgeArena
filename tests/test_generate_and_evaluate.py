@@ -6,11 +6,8 @@ import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.benchmarks.pairwise.runner import (
     BaselinePlan,
-    _benchmark_adapters,
     _resolve_baseline_plan,
-)
-from judgearena.benchmarks.pairwise.runner import (
-    main as main_generate_and_eval,
+    run_pairwise,
 )
 from judgearena.benchmarks.registry import resolve_benchmark_adapter
 from judgearena.config import RunConfig
@@ -157,9 +154,7 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
 
 
 def test_benchmark_adapter_resolution():
-    assert resolve_benchmark_adapter("alpaca-eval", _benchmark_adapters()).name == (
-        "pairwise"
-    )
+    assert resolve_benchmark_adapter("alpaca-eval").name == "pairwise"
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
@@ -214,7 +209,7 @@ def test_baseline_plan_per_row_preserves_order():
     ],
 )
 def test_generate_and_evaluate_context_completion(task: str, tmp_path):
-    prefs = main_generate_and_eval(
+    prefs = run_pairwise(
         _cfg(
             task=task,
             model_A="Dummy/no answer",
@@ -237,7 +232,7 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
     Since the judge favors model B regardless of the order and the completions, the average
     preference should be 0.5.
     """
-    prefs = main_generate_and_eval(
+    prefs = run_pairwise(
         _cfg(
             task="alpaca-eval",
             model_A="Dummy/no answer",
@@ -267,7 +262,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 
     monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
 
-    prefs = main_generate_and_eval(
+    prefs = run_pairwise(
         _cfg(
             task="alpaca-eval",
             model_A="Dummy/no answer",
@@ -290,7 +285,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 def test_run_writes_roundtrippable_config(tmp_path):
     from judgearena.config import load_config
 
-    main_generate_and_eval(
+    run_pairwise(
         _cfg(
             task="alpaca-eval",
             model_A="Dummy/no answer",
