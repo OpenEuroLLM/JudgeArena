@@ -65,26 +65,6 @@ def mock_external_data_and_cache(monkeypatch):
 
     monkeypatch.setattr(
         generate_and_evaluate,
-        "load_instructions",
-        lambda dataset, n_instructions=None: (
-            instructions.head(n_instructions)
-            if n_instructions is not None
-            else instructions
-        ),
-    )
-    monkeypatch.setattr(
-        generate_and_evaluate,
-        "load_contexts",
-        lambda dataset: instructions.loc[:, "instruction"],
-    )
-
-    monkeypatch.setattr(
-        generate_and_evaluate,
-        "_try_load_legacy_dataset_completions",
-        lambda dataset, model, n_instructions: None,
-    )
-    monkeypatch.setattr(
-        generate_and_evaluate,
         "load_pairwise_task_data",
         lambda task, n_instructions=None: PairwiseTaskData(
             instructions=(
@@ -178,6 +158,7 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
     ("task", "expected"),
     [
         ("alpaca-eval", "pairwise"),
+        ("fluency-french", "pairwise"),
         ("mt-bench", "mt_bench"),
     ],
 )
@@ -185,15 +166,17 @@ def test_benchmark_adapter_resolution(task: str, expected: str):
     assert resolve_benchmark_adapter(task).name == expected
 
 
-def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
-    fallback = BenchmarkAdapter("fallback", None, lambda _cfg: None)
-    pairwise = BenchmarkAdapter("pairwise", frozenset(), lambda _cfg: None)
+def test_unregistered_task_has_no_pairwise_fallback():
+    with pytest.raises(ValueError, match="No generate-and-evaluate adapter"):
+        resolve_benchmark_adapter("not-a-registered-task")
+
+
+def test_registered_task_selects_its_declared_runner(monkeypatch):
+    pairwise = BenchmarkAdapter("pairwise", frozenset(), lambda _cfg, _task: None)
     resolved = SimpleNamespace(
         spec=SimpleNamespace(protocol=SimpleNamespace(runner="pairwise"))
     )
-    monkeypatch.setattr(
-        benchmark_registry, "benchmark_adapters", lambda: (fallback, pairwise)
-    )
+    monkeypatch.setattr(benchmark_registry, "benchmark_adapters", lambda: (pairwise,))
     monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
 
     assert benchmark_registry.resolve_benchmark_adapter("yaml-task") is pairwise
@@ -223,7 +206,7 @@ def test_resolve_plan_task_without_native_baseline_requires_model_b():
     with pytest.raises(ValueError, match="baseline"):
         resolve_baseline_plan(
             task_id="fluency-french",
-            task=None,
+            task=get_packaged_task("fluency-french"),
             runtime_baseline=None,
             instructions=_instructions(["q1"]),
         )
@@ -288,6 +271,39 @@ def test_generate_and_evaluate_context_completion(task: str, tmp_path):
 
     avg_pref = sum(prefs) / len(prefs)
     assert avg_pref >= 0.9
+
+
+def test_fluency_uses_base_completion_generation(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_generate_base(*, instructions, model, **kwargs):
+        calls.append(model)
+        return pd.DataFrame(
+            {
+                "completion": [f"continued-{index}" for index in instructions.index],
+                "instruction_index": instructions.index,
+            }
+        )
+
+    monkeypatch.setattr(generate_and_evaluate, "generate_base", fake_generate_base)
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "generate_instructions",
+        lambda **kwargs: pytest.fail("fluency must not use chat generation"),
+    )
+
+    run_pairwise(
+        _cfg(
+            task="fluency-french",
+            model_A="Dummy/A",
+            model_B="Dummy/B",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
+
+    assert calls == ["Dummy/A", "Dummy/B"]
 
 
 def test_generate_and_evaluate_correct_order_bias(tmp_path):

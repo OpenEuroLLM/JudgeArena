@@ -17,7 +17,7 @@ class AdapterCatalog:
 
     runners: frozenset[str] = frozenset({"mt_bench", "pairwise"})
     datasets: frozenset[str] = frozenset(
-        {"arena_hard", "judgearena_tables", "m_arena_hard", "mt_bench"}
+        {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     parsers: frozenset[str] = frozenset(

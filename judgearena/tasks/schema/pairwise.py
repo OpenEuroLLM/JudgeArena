@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -12,6 +12,18 @@ from judgearena.tasks.schema.baselines import BaselineSpec
 
 class SingleTurnGeneration(StrictFrozenModel):
     mode: Literal["single_turn_chat"]
+
+
+class BaseCompletionGeneration(StrictFrozenModel):
+    """Continue raw text without applying a chat template."""
+
+    mode: Literal["base_completion"]
+
+
+PairwiseGenerationSpec = Annotated[
+    SingleTurnGeneration | BaseCompletionGeneration,
+    Field(discriminator="mode"),
+]
 
 
 SwapMode = Literal["fixed", "both"]
@@ -45,7 +57,7 @@ class PairwiseProtocol(StrictFrozenModel):
     """Task-owned generation, baseline, judging, and scoring behavior."""
 
     runner: Literal["pairwise"]
-    generation: SingleTurnGeneration
+    generation: PairwiseGenerationSpec
     baseline: BaselineSpec
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec

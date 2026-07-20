@@ -1,0 +1,8 @@
+extends: _base.yaml
+task: fluency-german
+description: Base-model sentence-completion fluency evaluation in German.
+
+dataset:
+  sources:
+    examples:
+      allow_patterns: [german-contexts.csv]

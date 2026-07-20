@@ -1,0 +1,8 @@
+extends: _base.yaml
+task: fluency-spanish
+description: Base-model sentence-completion fluency evaluation in Spanish.
+
+dataset:
+  sources:
+    examples:
+      allow_patterns: [spanish-contexts.csv]

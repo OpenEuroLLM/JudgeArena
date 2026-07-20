@@ -6,6 +6,7 @@ import pytest
 
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.arena_hard as arena_hard
+import judgearena.datasets.fluency as fluency
 import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.m_arenahard as m_arenahard
 import judgearena.datasets.pairwise as pairwise_data
@@ -17,6 +18,43 @@ from judgearena.datasets.arena_hard import (
     normalize_official_arena_hard,
 )
 from judgearena.tasks.registry import get_packaged_task
+
+
+def test_fluency_download_uses_task_source(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        fluency, "snapshot_download", lambda **kwargs: captured.update(kwargs)
+    )
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+
+    fluency.download_task_sources(task, tmp_path / "tables")
+
+    assert captured["repo_id"] == "geoalgo/multilingual-contexts-to-be-completed"
+    assert captured["revision"] == "06e73c95ad18d71a04b5a1b6464ed89d38195039"
+    assert captured["allow_patterns"] == ["french-contexts.csv"]
+    assert captured["local_dir"] == tmp_path / "contexts"
+
+
+def test_fluency_loader_normalizes_context_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(fluency, "download_task_sources", lambda task, path: None)
+    contexts_dir = tmp_path / "contexts"
+    contexts_dir.mkdir()
+    pd.DataFrame(
+        {
+            "type": ["general", "narrative"],
+            "instruction": ["Le soleil", "Il était une fois"],
+        }
+    ).to_csv(contexts_dir / "french-contexts.csv", index=False)
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+
+    loaded = fluency.load_task_instructions(task, tmp_path / "tables")
+
+    assert loaded.to_dict(orient="list") == {
+        "instruction_index": [0, 1],
+        "instruction": ["Le soleil", "Il était une fois"],
+    }
 
 
 def test_alpaca_eval_table_download_uses_yaml_source(monkeypatch, tmp_path):

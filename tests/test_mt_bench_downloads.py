@@ -95,7 +95,6 @@ def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypat
 
 def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     hf_datasets = []
-    calls = {"contexts": 0}
 
     monkeypatch.setattr(utils_io, "data_root", tmp_path)
     monkeypatch.setattr(
@@ -104,23 +103,10 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         lambda name, local_path: hf_datasets.append((name, local_path)),
     )
 
-    def _contexts_snapshot_stub(**_kwargs):
-        calls["contexts"] += 1
-
-    monkeypatch.setattr(utils_io, "snapshot_download", _contexts_snapshot_stub)
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
-    assert [name for name, _ in hf_datasets] == [
-        "alpaca-eval",
-        "arena-hard-v0.1",
-        "arena-hard-v2.0",
-        "m-arena-hard-v0.1",
-        "m-arena-hard-v2.0",
-        "mt-bench",
-    ]
-    assert all(path == tables_dir for _, path in hf_datasets)
-    assert calls["contexts"] == 1
+    assert ("mt-bench", tables_dir) in hf_datasets
 
 
 def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):

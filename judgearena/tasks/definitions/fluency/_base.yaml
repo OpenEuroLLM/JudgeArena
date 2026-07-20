@@ -1,0 +1,33 @@
+schema_version: 1
+task_version: 1
+tags: [pairwise, fluency, multilingual, base-model]
+
+dataset:
+  adapter: fluency
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: geoalgo/multilingual-contexts-to-be-completed
+      revision: "06e73c95ad18d71a04b5a1b6464ed89d38195039"
+  fields:
+    id: instruction_index
+    instruction: instruction
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: base_completion
+  baseline:
+    strategy: runtime_required
+  judge:
+    default_prompt: fluency
+    parser: pairwise_preference
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: pairwise_win_rate
+    primary_metric: winrate
+    higher_is_better: true
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/geoalgo/multilingual-contexts-to-be-completed

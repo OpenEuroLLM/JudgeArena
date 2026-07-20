@@ -41,7 +41,8 @@ def test_arena_hard_prompt_defaults_are_not_duplicated_in_legacy_registry():
     assert default_preset_for_task("arena-hard-v2.0") == "default"
 
 
-def test_default_preset_for_fluency_prefix():
+def test_fluency_prompt_defaults_are_owned_by_task_yaml():
+    assert not any(key.startswith("fluency") for key in TASK_DEFAULT_PRESET)
     assert default_preset_for_task("fluency-french") == FLUENCY_JUDGE_PROMPT_PRESET
     assert default_preset_for_task("fluency-spanish") == FLUENCY_JUDGE_PROMPT_PRESET
 

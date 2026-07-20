@@ -38,29 +38,22 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
         "download_hf",
         lambda name, local_path: calls.append(("hf", name, local_path)),
     )
-    monkeypatch.setattr(
-        utils_io,
-        "snapshot_download",
-        lambda **kwargs: calls.append(
-            ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
-        ),
-    )
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
-    assert calls[:6] == [
+    assert calls == [
         ("hf", "alpaca-eval", tables_dir),
         ("hf", "arena-hard-v0.1", tables_dir),
         ("hf", "arena-hard-v2.0", tables_dir),
+        ("hf", "fluency-finnish", tables_dir),
+        ("hf", "fluency-french", tables_dir),
+        ("hf", "fluency-german", tables_dir),
+        ("hf", "fluency-spanish", tables_dir),
+        ("hf", "fluency-swedish", tables_dir),
         ("hf", "m-arena-hard-v0.1", tables_dir),
         ("hf", "m-arena-hard-v2.0", tables_dir),
         ("hf", "mt-bench", tables_dir),
     ]
-    assert calls[6] == (
-        "snapshot",
-        "geoalgo/multilingual-contexts-to-be-completed",
-        tmp_path / "contexts",
-    )
 
 
 def test_strip_thinking_tags_removes_full_reasoning_block():

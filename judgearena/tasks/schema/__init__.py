@@ -20,6 +20,8 @@ from judgearena.tasks.schema.mt_bench import (
     MultiTurnGeneration,
 )
 from judgearena.tasks.schema.pairwise import (
+    BaseCompletionGeneration,
+    PairwiseGenerationSpec,
     PairwiseJudgeSpec,
     PairwiseProtocol,
     ScoringSpec,
@@ -48,6 +50,7 @@ from judgearena.tasks.schema.task import (
 
 __all__ = [
     "BaselineSpec",
+    "BaseCompletionGeneration",
     "CategoryDefaultsBaseline",
     "DatasetFields",
     "DatasetSpec",
@@ -61,6 +64,7 @@ __all__ = [
     "NoBaseline",
     "OfficialOutputsBaseline",
     "PairwiseJudgeSpec",
+    "PairwiseGenerationSpec",
     "PairwiseProtocol",
     "ProtocolSpec",
     "ResolvedTaskSpec",

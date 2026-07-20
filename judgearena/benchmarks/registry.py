@@ -20,18 +20,14 @@ class BenchmarkRunner(Protocol):
 
 @dataclass(frozen=True)
 class BenchmarkAdapter:
-    """Route a set of task names to one benchmark runner.
-
-    ``tasks=None`` defines the fallback adapter and should therefore be last.
-    Adding a benchmark only requires its runner and one registry entry.
-    """
+    """Route explicitly named or YAML-selected tasks to one runner."""
 
     name: str
-    tasks: frozenset[str] | None
+    tasks: frozenset[str]
     runner: BenchmarkRunner
 
     def supports(self, task: str) -> bool:
-        return self.tasks is None or task in self.tasks
+        return task in self.tasks
 
 
 @dataclass(frozen=True)
@@ -49,7 +45,7 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
 
     return (
         BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
-        BenchmarkAdapter("pairwise", None, run_pairwise),
+        BenchmarkAdapter("pairwise", frozenset(), run_pairwise),
     )
 
 

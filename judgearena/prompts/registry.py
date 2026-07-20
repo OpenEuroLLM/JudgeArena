@@ -106,8 +106,6 @@ def default_preset_for_task(task: str | None) -> str:
         return resolved.spec.protocol.judge.default_prompt
     if task in TASK_DEFAULT_PRESET:
         return TASK_DEFAULT_PRESET[task]
-    if task.startswith("fluency"):
-        return FLUENCY_JUDGE_PROMPT_PRESET
     return DEFAULT_JUDGE_PROMPT_PRESET
 
 

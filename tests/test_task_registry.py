@@ -77,6 +77,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     alpaca = registry.get("alpaca-eval")
     arena_v01 = registry.get("arena-hard-v0.1")
     arena_v20 = registry.get("arena-hard-v2.0")
+    fluency = registry.get("fluency-french")
     m_arena_v01 = registry.get("m-arena-hard-v0.1")
     m_arena_eu = registry.get("m-arena-hard-v2.0-EU")
     mt_bench = registry.get("mt-bench")
@@ -85,6 +86,11 @@ def test_packaged_registry_discovers_versioned_tasks():
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
+        "fluency-finnish",
+        "fluency-french",
+        "fluency-german",
+        "fluency-spanish",
+        "fluency-swedish",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",
@@ -96,6 +102,12 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert arena_v01.spec.protocol.baseline.reference_id == "gpt-4-0314"
     assert arena_v20.spec.protocol.baseline.references["hard_prompt"] == (
         "o3-mini-2025-01-31"
+    )
+    assert fluency.spec.protocol.generation.mode == "base_completion"
+    assert fluency.spec.protocol.baseline.strategy == "runtime_required"
+    assert fluency.spec.protocol.judge.default_prompt == "fluency"
+    assert fluency.spec.dataset.sources["examples"].allow_patterns == (
+        "french-contexts.csv",
     )
     assert [resource.path for resource in arena_v20.provenance.resources] == [
         "arena_hard/_base.yaml",

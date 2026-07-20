@@ -1,9 +1,12 @@
-"""Pinned upstream revisions for every dataset/space JudgeArena downloads.
+"""Pinned revisions for external data not owned by packaged task YAML.
 
 Pinning lets the run metadata answer "exactly which version of the data did
 this run see?".  When upstream rewrites a dataset (e.g. ComparIA periodically
 republishes), an unpinned ``snapshot_download`` will silently start returning
 different bytes; pinned revisions force callers to opt into upgrades.
+
+Sources used by declarative tasks keep their revision beside the task under
+``judgearena/tasks/definitions`` instead of duplicating it here.
 
 To bump a revision, paste the new commit SHA from the dataset's HuggingFace
 revision page (or the GitHub commit page for the FastChat raw URL).

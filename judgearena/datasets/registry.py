@@ -24,7 +24,13 @@ class DatasetAdapter:
 
 def dataset_adapters() -> tuple[DatasetAdapter, ...]:
     """Return registered dataset implementations."""
-    from judgearena.datasets import arena_hard, judgearena_tables, m_arenahard, mt_bench
+    from judgearena.datasets import (
+        arena_hard,
+        fluency,
+        judgearena_tables,
+        m_arenahard,
+        mt_bench,
+    )
 
     return (
         DatasetAdapter(
@@ -38,6 +44,12 @@ def dataset_adapters() -> tuple[DatasetAdapter, ...]:
             arena_hard.download_task_sources,
             arena_hard.load_task_instructions,
             arena_hard.load_task_model_outputs,
+        ),
+        DatasetAdapter(
+            "fluency",
+            fluency.download_task_sources,
+            fluency.load_task_instructions,
+            fluency.load_task_model_outputs,
         ),
         DatasetAdapter(
             "m_arena_hard",
