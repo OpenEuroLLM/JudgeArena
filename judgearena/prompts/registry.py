@@ -93,7 +93,6 @@ PRESETS: dict[str, JudgePromptPreset] = {
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
 TASK_DEFAULT_PRESET: dict[str, str] = {
-    "alpaca-eval": DEFAULT_JUDGE_PROMPT_PRESET,
     "arena-hard-v0.1": DEFAULT_JUDGE_PROMPT_PRESET,
     "arena-hard-v2.0": DEFAULT_JUDGE_PROMPT_PRESET,
     "mt-bench": FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -103,6 +102,12 @@ TASK_DEFAULT_PRESET: dict[str, str] = {
 def default_preset_for_task(task: str | None) -> str:
     if task is None:
         return DEFAULT_JUDGE_PROMPT_PRESET
+    # Import lazily: task validation uses the prompt catalog in this module.
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved = get_packaged_task(task)
+    if resolved is not None:
+        return resolved.spec.protocol.judge.default_prompt
     if task in TASK_DEFAULT_PRESET:
         return TASK_DEFAULT_PRESET[task]
     if task.startswith("m-arena-hard"):
