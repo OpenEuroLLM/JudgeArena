@@ -5,6 +5,7 @@ import pytest
 
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.datasets as instruction_dataset
+import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.utils as judgearena_utils
 from judgearena.datasets.arena_hard import (
     ARENA_HARD_BASELINES,
@@ -14,6 +15,45 @@ from judgearena.datasets.arena_hard import (
     arena_hard_native_baseline,
     normalize_official_arena_hard,
 )
+from judgearena.tasks.registry import get_packaged_task
+
+
+def test_alpaca_eval_table_download_uses_yaml_source(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(
+        judgearena_tables,
+        "snapshot_download",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    task = get_packaged_task("alpaca-eval")
+    assert task is not None
+
+    judgearena_tables.download_task_sources(task, tmp_path)
+
+    assert captured["repo_id"] == "judge-arena/judge-arena-dataset"
+    assert captured["revision"] == "004c4a992956eeefffd36b63ade470f32fd0a582"
+    assert captured["allow_patterns"] == ["*alpaca-eval*"]
+
+
+def test_alpaca_eval_table_loader_uses_yaml_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        judgearena_tables, "download_task_sources", lambda _task, _path: None
+    )
+    instructions_dir = tmp_path / "instructions"
+    instructions_dir.mkdir()
+    pd.DataFrame(
+        {
+            "instruction_index": [1, 2],
+            "instruction": ["First", "Second"],
+        }
+    ).to_csv(instructions_dir / "alpaca-eval.csv", index=False)
+    task = get_packaged_task("alpaca-eval")
+    assert task is not None
+
+    loaded = judgearena_tables.load_task_instructions(task, tmp_path)
+
+    assert loaded["instruction_index"].tolist() == [1, 2]
+    assert loaded["instruction"].tolist() == ["First", "Second"]
 
 
 def test_arena_hard_native_baseline_v01_is_flat_string():

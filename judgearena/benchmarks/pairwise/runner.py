@@ -23,6 +23,7 @@ from judgearena.datasets.arena_hard import (
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
+from judgearena.tasks.registry import get_packaged_task
 from judgearena.utils import (
     cache_function_dataframe,
     compute_pref_summary,
@@ -53,14 +54,25 @@ def try_load_dataset_completions(
     or ``None`` when no pre-existing completions are found.
     """
     local_path_tables = data_root / "tables"
-    if is_arena_hard_dataset(dataset):
+    resolved_task = get_packaged_task(dataset)
+    if resolved_task is not None:
+        from judgearena.datasets.judgearena_tables import load_task_model_outputs
+
+        df_outputs = load_task_model_outputs(resolved_task, local_path_tables)
+        if df_outputs is None:
+            return None
+    elif is_arena_hard_dataset(dataset):
         download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
+        output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
+        if not output_path.exists():
+            return None
+        df_outputs = read_df(output_path)
     else:
         download_hf(name=dataset, local_path=local_path_tables)
-    output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
-    if not output_path.exists():
-        return None
-    df_outputs = read_df(output_path)
+        output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
+        if not output_path.exists():
+            return None
+        df_outputs = read_df(output_path)
     df_outputs.loc[:, "output"] = df_outputs.loc[:, "output"].fillna("")
     df_outputs = df_outputs.pivot_table(
         index="instruction_index", columns="model", values="output", aggfunc="last"

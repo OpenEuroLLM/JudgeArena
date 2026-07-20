@@ -32,7 +32,16 @@ data_root: Path = _data_root_path()
 
 
 def download_hf(name: str, local_path: Path) -> None:
-    """Download AlpacaEval-style instruction/output tables into ``local_path``."""
+    """Download a registered or legacy instruction-table dataset."""
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved_task = get_packaged_task(name)
+    if resolved_task is not None:
+        from judgearena.datasets.judgearena_tables import download_task_sources
+
+        download_task_sources(resolved_task, local_path)
+        return
+
     local_path.mkdir(exist_ok=True, parents=True)
     repo_id = "judge-arena/judge-arena-dataset"
     snapshot_download(

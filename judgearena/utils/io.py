@@ -32,6 +32,15 @@ data_root = _data_root_path()
 
 
 def download_hf(name: str, local_path: Path):
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved_task = get_packaged_task(name)
+    if resolved_task is not None:
+        from judgearena.datasets.judgearena_tables import download_task_sources
+
+        download_task_sources(resolved_task, local_path)
+        return
+
     local_path.mkdir(exist_ok=True, parents=True)
     # downloads the model from huggingface into `local_path` folder
     snapshot_download(
@@ -71,11 +80,18 @@ def safe_parse_int(env_var: str) -> int | None:
 
 def download_all():
     from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
+    from judgearena.tasks.registry import TaskRegistry
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
+    registry = TaskRegistry()
+    packaged_table_tasks = tuple(
+        summary.task
+        for summary in registry.list()
+        if registry.get(summary.task).spec.dataset.adapter == "judgearena_tables"
+    )
     for dataset in (
-        "alpaca-eval",
+        *packaged_table_tasks,
         "arena-hard-v0.1",
         "arena-hard-v2.0",
         *M_ARENA_HARD_BASELINES,
