@@ -46,7 +46,8 @@ def test_default_preset_for_fluency_prefix():
     assert default_preset_for_task("fluency-spanish") == FLUENCY_JUDGE_PROMPT_PRESET
 
 
-def test_default_preset_for_m_arena_hard_prefix():
+def test_m_arena_hard_prompt_defaults_are_owned_by_task_yaml():
+    assert not any(key.startswith("m-arena-hard") for key in TASK_DEFAULT_PRESET)
     assert default_preset_for_task("m-arena-hard-v0.1-uk") == "default"
     assert default_preset_for_task("m-arena-hard-v2.0-EU") == "default"
 

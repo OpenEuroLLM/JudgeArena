@@ -77,11 +77,15 @@ def test_packaged_registry_discovers_versioned_tasks():
     alpaca = registry.get("alpaca-eval")
     arena_v01 = registry.get("arena-hard-v0.1")
     arena_v20 = registry.get("arena-hard-v2.0")
+    m_arena_v01 = registry.get("m-arena-hard-v0.1")
+    m_arena_eu = registry.get("m-arena-hard-v2.0-EU")
 
     assert [task.task for task in summary] == [
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
+        "m-arena-hard-v0.1",
+        "m-arena-hard-v2.0",
     ]
     assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
@@ -95,6 +99,29 @@ def test_packaged_registry_discovers_versioned_tasks():
         "arena_hard/_base.yaml",
         "arena_hard/arena-hard-v2.0.yaml",
     ]
+    assert m_arena_v01.spec.dataset.sources["examples"].revision == (
+        "ab393a96cd0b134a1acfa96e080af31e5e73a393"
+    )
+    assert m_arena_v01.spec.protocol.baseline.reference_id == (
+        "CohereLabs/aya-expanse-8b"
+    )
+    assert m_arena_eu.definition_task == "m-arena-hard-v2.0"
+    assert m_arena_eu.selection is not None
+    assert m_arena_eu.selection.name == "EU"
+    assert m_arena_eu.selection.values == (
+        "cs",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fr",
+        "it",
+        "nl",
+        "pl",
+        "pt",
+        "ro",
+        "uk",
+    )
     assert alpaca.spec.protocol.scoring.primary_metric == "winrate"
 
 

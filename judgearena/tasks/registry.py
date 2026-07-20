@@ -16,7 +16,9 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = frozenset({"pairwise"})
-    datasets: frozenset[str] = frozenset({"arena_hard", "judgearena_tables"})
+    datasets: frozenset[str] = frozenset(
+        {"arena_hard", "judgearena_tables", "m_arena_hard"}
+    )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     parsers: frozenset[str] = frozenset({"pairwise_preference"})
     scorers: frozenset[str] = frozenset({"pairwise_win_rate"})
@@ -71,9 +73,7 @@ class TaskRegistry:
         if resolved is not None:
             return resolved
         known = ", ".join(sorted(self._load_all())) or "none"
-        raise UnknownTaskError(
-            f"Unknown task {task_id!r}; registered tasks: {known}"
-        )
+        raise UnknownTaskError(f"Unknown task {task_id!r}; registered tasks: {known}")
 
     def find(self, task_id: str) -> ResolvedTaskSpec | None:
         """Return a task definition, or ``None`` when it is not registered."""
@@ -82,7 +82,9 @@ class TaskRegistry:
         if exact is not None:
             return exact
 
-        for task in sorted(tasks.values(), key=lambda item: len(item.task), reverse=True):
+        for task in sorted(
+            tasks.values(), key=lambda item: len(item.task), reverse=True
+        ):
             variants = task.spec.variants
             if variants is None:
                 continue

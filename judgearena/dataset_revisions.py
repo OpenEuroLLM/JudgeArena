@@ -22,9 +22,6 @@ HF_DATASET_REVISIONS: dict[str, str | None] = {
     "lmarena-ai/arena-human-preference-55k": "18c298340948c0e7f7727399fd459cca6ce0ca6f",
     # ComparIA (already pinned via the legacy comparia_revision argument).
     "ministere-culture/comparia-votes": "7a40bce496c1f2aa3be4001da85a49cb4743042b",
-    # m-ArenaHard (Cohere release)
-    "CohereLabs/m-ArenaHard": "ab393a96cd0b134a1acfa96e080af31e5e73a393",
-    "CohereLabs/m-ArenaHard-v2.0": "24c65eff42cec85e30dd5db99d1a702c7ebaa8ab",
     # MT-Bench questions (LMSYS Space).
     "lmsys/mt-bench": "a4b674ca573c24143824ac7f60d9173e7081e37d",
     # Multilingual fluency contexts.

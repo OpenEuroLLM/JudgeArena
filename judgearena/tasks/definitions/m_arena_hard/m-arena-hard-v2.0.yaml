@@ -1,0 +1,22 @@
+extends: _base.yaml
+task: m-arena-hard-v2.0
+description: Pairwise multilingual evaluation on m-ArenaHard v2.0.
+
+dataset:
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: CohereLabs/m-ArenaHard-v2.0
+      revision: "24c65eff42cec85e30dd5db99d1a702c7ebaa8ab"
+      allow_patterns: ["*/test-*.parquet"]
+    outputs:
+      allow_patterns: ["model_outputs/m-arena-hard-v2.0-*.csv.zip"]
+
+protocol:
+  baseline:
+    strategy: task_default
+    reference_id: google/gemini-2.5-flash
+    allow_runtime_override: true
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/CohereLabs/m-ArenaHard-v2.0

@@ -77,7 +77,6 @@ def safe_parse_int(env_var: str) -> int | None:
 
 
 def download_all():
-    from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
     from judgearena.tasks.registry import TaskRegistry
 
     logger.info("Downloading all datasets in %s", data_root)
@@ -85,8 +84,6 @@ def download_all():
     registry = TaskRegistry()
     for summary in registry.list():
         download_hf(name=summary.task, local_path=local_path_tables)
-    for dataset in M_ARENA_HARD_BASELINES:
-        download_hf(name=dataset, local_path=local_path_tables)
 
     contexts_repo = "geoalgo/multilingual-contexts-to-be-completed"
     snapshot_download(

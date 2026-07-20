@@ -143,6 +143,11 @@ def test_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
     assert "arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
 
 
+def test_m_arena_hard_baselines_are_not_duplicated_in_legacy_registry():
+    assert "m-arena-hard-v0.1" not in LEGACY_PAIRWISE_BASELINES
+    assert "m-arena-hard-v2.0" not in LEGACY_PAIRWISE_BASELINES
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         task="arena-hard-v2.0",
@@ -182,9 +187,7 @@ def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
     monkeypatch.setattr(
         benchmark_registry, "benchmark_adapters", lambda: (fallback, pairwise)
     )
-    monkeypatch.setattr(
-        benchmark_registry, "get_packaged_task", lambda _task: resolved
-    )
+    monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
 
     assert benchmark_registry.resolve_benchmark_adapter("yaml-task") is pairwise
 
