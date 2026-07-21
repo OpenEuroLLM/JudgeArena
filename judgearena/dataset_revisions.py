@@ -19,14 +19,7 @@ from __future__ import annotations
 # do not yet have a stable pin and is recorded as such in the metadata so
 # the gap is visible.
 HF_DATASET_REVISIONS: dict[str, str | None] = {
-    # LMArena human-preference battles
-    "lmarena-ai/arena-human-preference-100k": "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a",
-    "lmarena-ai/arena-human-preference-140k": "6322995ab34d7c2693e3f47dd13fa5caa0789a74",
-    "lmarena-ai/arena-human-preference-55k": "18c298340948c0e7f7727399fd459cca6ce0ca6f",
-    # ComparIA (already pinned via the legacy comparia_revision argument).
-    "ministere-culture/comparia-votes": "7a40bce496c1f2aa3be4001da85a49cb4743042b",
-    # Multilingual fluency contexts.
-    "geoalgo/multilingual-contexts-to-be-completed": "06e73c95ad18d71a04b5a1b6464ed89d38195039",
+    # Sources used by packaged tasks are pinned in their task YAML definitions.
 }
 
 
