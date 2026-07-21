@@ -83,6 +83,8 @@ def test_packaged_registry_discovers_versioned_tasks():
     m_arena_v01 = registry.get("m-arena-hard-v0.1")
     m_arena_eu = registry.get("m-arena-hard-v2.0-EU")
     mt_bench = registry.get("mt-bench")
+    wildbench_reward = registry.get("wildbench-reward")
+    wildbench_score = registry.get("wildbench-score")
 
     assert [task.task for task in summary] == [
         "alpaca-eval",
@@ -100,6 +102,8 @@ def test_packaged_registry_discovers_versioned_tasks():
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",
+        "wildbench-reward",
+        "wildbench-score",
     ]
     assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
@@ -164,6 +168,17 @@ def test_packaged_registry_discovers_versioned_tasks():
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
     assert alpaca.spec.protocol.scoring.adapter == "pairwise_win_rate"
+    assert wildbench_score.spec.protocol.mode == "score"
+    assert wildbench_score.spec.protocol.scoring.adapter == "wildbench-score-v2"
+    assert wildbench_reward.spec.protocol.mode == "reward"
+    assert wildbench_reward.spec.protocol.baseline.references == (
+        "gpt-4-turbo-2024-04-09",
+        "claude-3-haiku-20240307",
+        "Llama-2-70b-chat-hf",
+    )
+    assert wildbench_reward.spec.dataset.sources["official_outputs"].revision == (
+        "d6755bc68220df853c0825a733430f73f5af2501"
+    )
 
 
 def test_runtime_registries_own_task_adapter_names():
@@ -413,6 +428,24 @@ def test_registry_rejects_scorer_from_another_protocol(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="unknown scorer"):
+        TaskRegistry(tmp_path).validate_all()
+
+
+def test_registry_rejects_wildbench_scorer_from_another_mode(tmp_path):
+    definition = (
+        TaskRegistry()
+        .get("wildbench-score")
+        .spec.model_dump(mode="json", exclude_none=True)
+    )
+    definition["protocol"]["scoring"]["adapter"] = "wildbench-reward-v2"
+    _write_family(
+        tmp_path,
+        family="wildbench",
+        filename="wildbench-score.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="cannot use reward scorer"):
         TaskRegistry(tmp_path).validate_all()
 
 

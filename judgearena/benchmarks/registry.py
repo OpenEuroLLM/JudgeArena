@@ -61,6 +61,12 @@ _BENCHMARK_REGISTRATIONS = (
         "run_mt_bench_benchmark",
     ),
     _BenchmarkRegistration(
+        "wildbench",
+        frozenset(),
+        "judgearena.benchmarks.wildbench.runner",
+        "run_wildbench",
+    ),
+    _BenchmarkRegistration(
         "pairwise",
         frozenset(),
         "judgearena.benchmarks.pairwise.runner",

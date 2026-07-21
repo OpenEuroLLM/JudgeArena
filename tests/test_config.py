@@ -24,6 +24,14 @@ def _base_elo() -> dict:
     }
 
 
+def _base_wildbench(task: str = "wildbench-score") -> dict:
+    return {
+        "task": task,
+        "model": {"name": "Dummy/m"},
+        "judge": {"model": "Dummy/j"},
+    }
+
+
 def test_generate_config_constructs():
     cfg = RunConfig(**_base_generate())
     assert cfg.task == "alpaca-eval"
@@ -47,9 +55,7 @@ def _registered_task(
                     allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
                 ),
-                baseline=SimpleNamespace(
-                    allow_runtime_override=allow_runtime_override
-                ),
+                baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
         )
     )
@@ -131,6 +137,54 @@ def test_elo_block_rejected_on_generate_task():
     data = _base_generate()
     data["elo"] = {"n_bootstraps": 5}
     with pytest.raises(ValidationError):
+        RunConfig(**data)
+
+
+def test_wildbench_config_uses_task_defaults():
+    cfg = RunConfig(**_base_wildbench())
+
+    assert cfg.wildbench is not None
+    assert cfg.wildbench.max_words_to_eval == 1000
+    assert cfg.wildbench.length_penalty_chars is None
+    assert cfg.judge.temperature == 0.0
+    assert cfg.judge.swap_mode == "fixed"
+
+
+def test_wildbench_reward_accepts_runtime_baseline_and_penalty():
+    data = _base_wildbench("wildbench-reward")
+    data["model"]["baseline"] = "Dummy/reference"
+    data["judge"]["swap_mode"] = "both"
+    data["wildbench"] = {"length_penalty_chars": 100}
+
+    cfg = RunConfig(**data)
+
+    assert cfg.model.baseline == "Dummy/reference"
+    assert cfg.judge.swap_mode == "both"
+    assert cfg.wildbench is not None
+    assert cfg.wildbench.length_penalty_chars == 100
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("model", "baseline", "Dummy/reference"),
+        ("judge", "swap_mode", "both"),
+        ("wildbench", "length_penalty_chars", 100),
+    ],
+)
+def test_wildbench_score_rejects_reward_only_settings(section, field, value):
+    data = _base_wildbench()
+    data.setdefault(section, {})[field] = value
+
+    with pytest.raises(ValidationError):
+        RunConfig(**data)
+
+
+def test_wildbench_config_rejected_on_another_protocol():
+    data = _base_generate()
+    data["wildbench"] = {"max_words_to_eval": 10}
+
+    with pytest.raises(ValidationError, match="only valid for WildBench"):
         RunConfig(**data)
 
 

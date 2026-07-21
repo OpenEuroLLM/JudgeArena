@@ -75,6 +75,19 @@ def test_elo_task_dispatches(capture_mains, task: str, expected_arena: str):
     assert cfg.model.name == "Dummy/X"
 
 
+@pytest.mark.parametrize("task", ["wildbench-score", "wildbench-reward"])
+def test_wildbench_task_dispatches(capture_mains, task: str):
+    cli_module.cli(
+        ["--task", task, "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
+    )
+
+    assert capture_mains["module"] == "benchmark"
+    cfg = capture_mains["cfg"]
+    assert isinstance(cfg, RunConfig)
+    assert cfg.task == task
+    assert cfg.wildbench is not None
+
+
 def test_config_path_dispatches_and_cli_overrides(tmp_path, capture_mains):
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(

@@ -1,0 +1,14 @@
+extends: _base.yaml
+task: wildbench-score
+description: WildBench V2 checklist-based absolute-score evaluation.
+
+protocol:
+  mode: score
+  baseline:
+    strategy: none
+  judge:
+    default_prompt: wildbench-score-v2
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed]
+  scoring:
+    adapter: wildbench-score-v2

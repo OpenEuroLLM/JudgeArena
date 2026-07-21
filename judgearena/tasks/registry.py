@@ -9,6 +9,14 @@ from importlib.resources.abc import Traversable
 from judgearena.benchmarks.elo.scoring import ELO_SCORER_NAMES
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
 from judgearena.benchmarks.registry import BENCHMARK_ADAPTER_NAMES
+from judgearena.benchmarks.wildbench.prompting import (
+    WILDBENCH_PROMPT_NAMES,
+    resolve_wildbench_prompt,
+)
+from judgearena.benchmarks.wildbench.scoring import (
+    WILDBENCH_SCORER_NAMES,
+    resolve_wildbench_scorer,
+)
 from judgearena.datasets.registry import (
     BATTLE_DATASET_ADAPTER_NAMES,
     DATASET_ADAPTER_NAMES,
@@ -16,7 +24,12 @@ from judgearena.datasets.registry import (
 )
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
-from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec, TaskSelection
+from judgearena.tasks.schema import (
+    EloProtocol,
+    ResolvedTaskSpec,
+    TaskSelection,
+    WildBenchProtocol,
+)
 
 
 @dataclass(frozen=True)
@@ -28,13 +41,15 @@ class AdapterCatalog:
     instruction_datasets: frozenset[str] = INSTRUCTION_DATASET_ADAPTER_NAMES
     battle_datasets: frozenset[str] = BATTLE_DATASET_ADAPTER_NAMES
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
+    wildbench_prompts: frozenset[str] = WILDBENCH_PROMPT_NAMES
     pairwise_scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
     elo_scorers: frozenset[str] = ELO_SCORER_NAMES
+    wildbench_scorers: frozenset[str] = WILDBENCH_SCORER_NAMES
 
     @property
     def scorers(self) -> frozenset[str]:
         """All scorer IDs available across registered protocol families."""
-        return self.pairwise_scorers | self.elo_scorers
+        return self.pairwise_scorers | self.elo_scorers | self.wildbench_scorers
 
 
 @dataclass(frozen=True)
@@ -169,26 +184,45 @@ class TaskRegistry:
 
     def _validate_adapter_ids(self, resolved: ResolvedTaskSpec) -> None:
         spec = resolved.spec
-        scorer_names = (
-            self._adapters.elo_scorers
-            if isinstance(spec.protocol, EloProtocol)
-            else self._adapters.pairwise_scorers
-        )
-        dataset_names = (
-            self._adapters.battle_datasets
-            if isinstance(spec.protocol, EloProtocol)
-            else self._adapters.instruction_datasets
-        )
+        if isinstance(spec.protocol, EloProtocol):
+            scorer_names = self._adapters.elo_scorers
+            prompt_names = self._adapters.prompts
+            dataset_names = self._adapters.battle_datasets
+        elif isinstance(spec.protocol, WildBenchProtocol):
+            scorer_names = self._adapters.wildbench_scorers
+            prompt_names = self._adapters.wildbench_prompts
+            dataset_names = self._adapters.instruction_datasets
+        else:
+            scorer_names = self._adapters.pairwise_scorers
+            prompt_names = self._adapters.prompts
+            dataset_names = self._adapters.instruction_datasets
         references = {
             "runner": (spec.protocol.runner, self._adapters.runners),
             "dataset adapter": (spec.dataset.adapter, dataset_names),
-            "prompt": (spec.protocol.judge.default_prompt, self._adapters.prompts),
+            "prompt": (spec.protocol.judge.default_prompt, prompt_names),
             "scorer": (spec.protocol.scoring.adapter, scorer_names),
         }
         for kind, (adapter_id, available) in references.items():
             if adapter_id not in available:
                 raise TaskDefinitionError(
                     f"{resolved.provenance.source_path}: unknown {kind} {adapter_id!r}"
+                )
+        if isinstance(spec.protocol, WildBenchProtocol):
+            try:
+                resolve_wildbench_prompt(
+                    spec.protocol.judge.default_prompt,
+                    mode=spec.protocol.mode,
+                )
+                scorer = resolve_wildbench_scorer(spec.protocol.scoring.adapter)
+            except ValueError as exc:
+                raise TaskDefinitionError(
+                    f"{resolved.provenance.source_path}: {exc}"
+                ) from exc
+            if scorer.mode != spec.protocol.mode:
+                raise TaskDefinitionError(
+                    f"{resolved.provenance.source_path}: WildBench "
+                    f"{spec.protocol.mode} mode cannot use {scorer.mode} scorer "
+                    f"{scorer.name!r}"
                 )
 
     @staticmethod

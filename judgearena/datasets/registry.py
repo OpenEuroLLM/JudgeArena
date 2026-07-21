@@ -58,6 +58,7 @@ _DATASET_REGISTRATIONS = (
     _DatasetRegistration("fluency", "judgearena.datasets.fluency"),
     _DatasetRegistration("m_arena_hard", "judgearena.datasets.m_arenahard"),
     _DatasetRegistration("mt_bench", "judgearena.datasets.mt_bench"),
+    _DatasetRegistration("wildbench", "judgearena.datasets.wildbench"),
 )
 
 DATASET_ADAPTER_NAMES = frozenset(
