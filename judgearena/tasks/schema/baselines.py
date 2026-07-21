@@ -31,6 +31,8 @@ class CategoryDefaultsBaseline(StrictFrozenModel):
 class OfficialOutputsBaseline(StrictFrozenModel):
     strategy: Literal["official_outputs"]
     source: str = Field(min_length=1)
+    references: tuple[str, ...] = ()
+    allow_runtime_override: bool = False
 
 
 BaselineSpec = Annotated[

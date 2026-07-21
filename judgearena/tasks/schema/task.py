@@ -15,9 +15,10 @@ from judgearena.tasks.schema.dataset import DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol
 from judgearena.tasks.schema.mt_bench import MTBenchProtocol
 from judgearena.tasks.schema.pairwise import PairwiseProtocol
+from judgearena.tasks.schema.wildbench import WildBenchProtocol
 
 ProtocolSpec = Annotated[
-    PairwiseProtocol | MTBenchProtocol | EloProtocol,
+    PairwiseProtocol | MTBenchProtocol | WildBenchProtocol | EloProtocol,
     Field(discriminator="runner"),
 ]
 
