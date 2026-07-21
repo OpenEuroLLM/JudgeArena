@@ -49,15 +49,19 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
-    assert calls[:6] == [
+    assert calls[:10] == [
         ("hf", "alpaca-eval", tables_dir),
         ("hf", "arena-hard-v0.1", tables_dir),
         ("hf", "arena-hard-v2.0", tables_dir),
+        ("hf", "elo-comparia", tables_dir),
+        ("hf", "elo-lmarena", tables_dir),
+        ("hf", "elo-lmarena-100k", tables_dir),
+        ("hf", "elo-lmarena-140k", tables_dir),
         ("hf", "m-arena-hard-v0.1", tables_dir),
         ("hf", "m-arena-hard-v2.0", tables_dir),
         ("hf", "mt-bench", tables_dir),
     ]
-    assert calls[6] == (
+    assert calls[10] == (
         "snapshot",
         "geoalgo/multilingual-fluency",
         tmp_path / "multilingual-fluency",

@@ -1,0 +1,17 @@
+extends: _base.yaml
+task: elo-comparia
+description: Arena-anchored ELO evaluation using ComparIA human preference battles.
+
+dataset:
+  sources:
+    comparia:
+      type: huggingface_dataset
+      repo_id: ministere-culture/comparia-votes
+      revision: "7a40bce496c1f2aa3be4001da85a49cb4743042b"
+      allow_patterns: [votes.parquet]
+
+protocol:
+  arena: ComparIA
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/ministere-culture/comparia-votes

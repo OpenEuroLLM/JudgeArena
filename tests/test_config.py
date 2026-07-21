@@ -97,6 +97,27 @@ def test_elo_config_derives_arena():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
     assert cfg.elo.arena == "ComparIA"
+    assert cfg.elo.soft_elo is True
+    assert cfg.elo.soft_elo_temperature == 0.3
+
+
+def test_elo_config_rejects_arena_that_conflicts_with_task():
+    data = _base_elo()
+    data["elo"] = {"arena": "LMArena-100k"}
+
+    with pytest.raises(ValidationError, match="does not match task"):
+        RunConfig(**data)
+
+
+def test_elo_config_allows_runtime_scoring_overrides():
+    data = _base_elo()
+    data["elo"] = {"soft_elo": False, "soft_elo_temperature": 0.7}
+
+    cfg = RunConfig(**data)
+
+    assert cfg.elo is not None
+    assert cfg.elo.soft_elo is False
+    assert cfg.elo.soft_elo_temperature == 0.7
 
 
 def test_elo_requires_model_path():
@@ -207,21 +228,19 @@ def test_cli_yaml_equivalence_elo(tmp_path):
 def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "main_elo", lambda a: captured.setdefault("elo", a))
     monkeypatch.setattr(
         cli_module,
         "run_benchmark",
-        lambda a: captured.setdefault("ge", a),
+        lambda a: captured.setdefault("benchmark", a),
     )
     yaml_path = tmp_path / "e.yaml"
     yaml_path.write_text(
         "task: elo-comparia\nmodel: {name: Dummy/m}\njudge: {model: Dummy/j}\n"
     )
     cli_module.cli(["--config_path", str(yaml_path)])
-    assert "ge" not in captured
-    assert isinstance(captured["elo"], RunConfig)
-    assert captured["elo"].elo is not None
-    assert captured["elo"].elo.arena == "ComparIA"
+    assert isinstance(captured["benchmark"], RunConfig)
+    assert captured["benchmark"].elo is not None
+    assert captured["benchmark"].elo.arena == "ComparIA"
 
 
 def test_build_run_config_cli_only():

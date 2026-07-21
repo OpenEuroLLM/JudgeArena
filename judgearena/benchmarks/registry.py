@@ -44,10 +44,12 @@ class ResolvedBenchmark:
 
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
+    from judgearena.benchmarks.elo.runner import run_elo
     from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
     from judgearena.benchmarks.pairwise.runner import run_pairwise
 
     return (
+        BenchmarkAdapter("elo", frozenset(), run_elo),
         BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
         BenchmarkAdapter("pairwise", None, run_pairwise),
     )

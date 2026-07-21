@@ -1,7 +1,7 @@
 # Example JudgeArena ELO-rating run config.
 # Run with:  judgearena --config_path configs/elo_comparia.yaml
 # ELO tasks rate a single model (model.name) against arena opponents; the
-# arena is derived from the elo-* task, so elo.arena does not need to be set.
+# arena and pinned battle sources come from the packaged task definition.
 task: elo-comparia
 model:
   name: Together/meta-llama/Llama-3.3-70B-Instruct-Turbo

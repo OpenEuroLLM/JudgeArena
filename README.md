@@ -240,7 +240,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; ELO tasks (`elo-*`) estimate a single model's ELO rating against human-annotated arena opponents.
+Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; tasks using the ELO protocol estimate a single model's rating against human-annotated arena opponents.
 
 ### Generate + judge (pairwise)
 
@@ -289,7 +289,7 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
 The LLM judge scores each battle, and the resulting ratings are computed using the Bradley-Terry model anchored against the human-annotated arena leaderboard.
 
-Pass an `elo-<arena>` value to `--task` to trigger the ELO flow. ELO tasks take a single `--model.name` whose opponents are sampled from the arena (matching the pairwise CLI shape; `--model.baseline` is reserved for a future extension).
+Select one of the packaged ELO tasks with `--task`. Its task definition selects the ELO runner, canonical arena, pinned battle sources, judge defaults, and Bradley-Terry scoring adapter. ELO tasks take a single `--model.name`; experiment settings such as sampling, filtering, bootstrapping, and calibration remain runtime options. `--model.baseline` is not used because opponents come from the selected arena.
 
 ### Quick start
 
@@ -305,7 +305,7 @@ judgearena \
 
 | Flag | Default | Description |
 |---|---|---|
-| `--task elo-<arena>` | *(required)* | Arena to sample opponents from: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
+| `--task` | *(required)* | Packaged ELO task: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
 | `--model.name` | *(required)* | Model under evaluation (same format as pairwise tasks) |
 | `--judge.model` | *(required)* | LLM judge (same format as pairwise tasks) |
 | `--generation.n_instructions` | all | Number of arena battles to use for evaluation |
