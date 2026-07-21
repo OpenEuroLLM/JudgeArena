@@ -6,12 +6,17 @@ from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
+from judgearena.benchmarks.elo.scoring import ELO_SCORER_NAMES
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
 from judgearena.benchmarks.registry import BENCHMARK_ADAPTER_NAMES
-from judgearena.datasets.registry import DATASET_ADAPTER_NAMES
+from judgearena.datasets.registry import (
+    BATTLE_DATASET_ADAPTER_NAMES,
+    DATASET_ADAPTER_NAMES,
+    INSTRUCTION_DATASET_ADAPTER_NAMES,
+)
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
-from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
+from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec, TaskSelection
 
 
 @dataclass(frozen=True)
@@ -20,8 +25,16 @@ class AdapterCatalog:
 
     runners: frozenset[str] = BENCHMARK_ADAPTER_NAMES
     datasets: frozenset[str] = DATASET_ADAPTER_NAMES
+    instruction_datasets: frozenset[str] = INSTRUCTION_DATASET_ADAPTER_NAMES
+    battle_datasets: frozenset[str] = BATTLE_DATASET_ADAPTER_NAMES
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
+    pairwise_scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
+    elo_scorers: frozenset[str] = ELO_SCORER_NAMES
+
+    @property
+    def scorers(self) -> frozenset[str]:
+        """All scorer IDs available across registered protocol families."""
+        return self.pairwise_scorers | self.elo_scorers
 
 
 @dataclass(frozen=True)
@@ -156,11 +169,21 @@ class TaskRegistry:
 
     def _validate_adapter_ids(self, resolved: ResolvedTaskSpec) -> None:
         spec = resolved.spec
+        scorer_names = (
+            self._adapters.elo_scorers
+            if isinstance(spec.protocol, EloProtocol)
+            else self._adapters.pairwise_scorers
+        )
+        dataset_names = (
+            self._adapters.battle_datasets
+            if isinstance(spec.protocol, EloProtocol)
+            else self._adapters.instruction_datasets
+        )
         references = {
             "runner": (spec.protocol.runner, self._adapters.runners),
-            "dataset adapter": (spec.dataset.adapter, self._adapters.datasets),
+            "dataset adapter": (spec.dataset.adapter, dataset_names),
             "prompt": (spec.protocol.judge.default_prompt, self._adapters.prompts),
-            "scorer": (spec.protocol.scoring.adapter, self._adapters.scorers),
+            "scorer": (spec.protocol.scoring.adapter, scorer_names),
         }
         for kind, (adapter_id, available) in references.items():
             if adapter_id not in available:

@@ -49,6 +49,12 @@ class _BenchmarkRegistration:
 
 _BENCHMARK_REGISTRATIONS = (
     _BenchmarkRegistration(
+        "elo",
+        frozenset(),
+        "judgearena.benchmarks.elo.runner",
+        "run_elo",
+    ),
+    _BenchmarkRegistration(
         "mt_bench",
         frozenset(),
         "judgearena.benchmarks.mt_bench.runner",

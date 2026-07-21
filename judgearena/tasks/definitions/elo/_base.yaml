@@ -1,0 +1,25 @@
+schema_version: 1
+task_version: 1
+tags: [elo, arena, rating]
+
+dataset:
+  adapter: arena_battles
+  fields:
+    id: question_id
+    instruction: conversation_a
+    category: lang
+
+protocol:
+  runner: elo
+  generation:
+    mode: single_turn_chat
+  baseline:
+    strategy: none
+  judge:
+    default_prompt: default
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: bradley_terry
+    default_soft: true
+    default_temperature: 0.3

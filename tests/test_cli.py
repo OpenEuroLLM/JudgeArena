@@ -10,20 +10,15 @@ from judgearena.config import RunConfig
 
 @pytest.fixture
 def capture_mains(monkeypatch):
-    """Replace both main functions (and logging) with spies recording the config."""
+    """Replace benchmark execution and logging with a config spy."""
     captured: dict[str, object] = {}
 
-    def fake_main_ge(cfg: RunConfig) -> None:
-        captured["module"] = "generate_and_evaluate"
-        captured["cfg"] = cfg
-
-    def fake_main_elo(cfg: RunConfig) -> None:
-        captured["module"] = "elo"
+    def fake_run_benchmark(cfg: RunConfig) -> None:
+        captured["module"] = "benchmark"
         captured["cfg"] = cfg
 
     monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "run_benchmark", fake_main_ge)
-    monkeypatch.setattr(cli_module, "main_elo", fake_main_elo)
+    monkeypatch.setattr(cli_module, "run_benchmark", fake_run_benchmark)
     return captured
 
 
@@ -37,7 +32,7 @@ def capture_mains(monkeypatch):
         "mt-bench",
     ],
 )
-def test_task_dispatches_to_generate_and_evaluate(capture_mains, task: str):
+def test_task_dispatches_to_benchmark_registry(capture_mains, task: str):
     cli_module.cli(
         [
             "--task",
@@ -50,7 +45,7 @@ def test_task_dispatches_to_generate_and_evaluate(capture_mains, task: str):
             "Dummy/J",
         ]
     )
-    assert capture_mains["module"] == "generate_and_evaluate"
+    assert capture_mains["module"] == "benchmark"
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
     assert cfg.task == task
@@ -72,7 +67,7 @@ def test_elo_task_dispatches(capture_mains, task: str, expected_arena: str):
     cli_module.cli(
         ["--task", task, "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
     )
-    assert capture_mains["module"] == "elo"
+    assert capture_mains["module"] == "benchmark"
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
     assert cfg.elo is not None
@@ -113,12 +108,12 @@ def test_missing_judge_errors(capture_mains):
 
 
 def test_elo_requires_model_path(capture_mains):
-    with pytest.raises(SystemExit, match="model.name is required for elo"):
+    with pytest.raises(SystemExit, match="model.name is required for ELO"):
         cli_module.cli(["--task", "elo-comparia", "--judge.model", "Dummy/J"])
 
 
 def test_elo_rejects_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is not supported for elo"):
+    with pytest.raises(SystemExit, match="model.baseline is not supported for ELO"):
         cli_module.cli(
             [
                 "--task",
@@ -134,7 +129,7 @@ def test_elo_rejects_model_path_b(capture_mains):
 
 
 def test_unknown_elo_task_errors(capture_mains):
-    with pytest.raises(SystemExit, match="Unknown elo task"):
+    with pytest.raises(SystemExit, match="Unknown task"):
         cli_module.cli(
             ["--task", "elo-foo", "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
         )
