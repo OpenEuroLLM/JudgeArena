@@ -1,0 +1,10 @@
+task: wildbench-score
+model:
+  name: OpenRouter/google/gemma-3-4b-it
+judge:
+  model: OpenRouter/openai/gpt-4.1-mini
+  engine_kwargs:
+    model_kwargs:
+      response_format: {type: json_object}
+generation:
+  n_instructions: 10

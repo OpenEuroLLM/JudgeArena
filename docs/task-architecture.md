@@ -31,11 +31,11 @@ CLI flags + run config YAML
             | protocol.runner
             v
      Benchmark registry
-       |       |       |
-       v       v       v
-   pairwise  mt_bench  elo
-       |       |       |
-       +-------+-------+
+       |       |         |       |
+       v       v         v       v
+   pairwise  mt_bench  wildbench  elo
+       |       |         |       |
+       +-------+---------+-------+
                |
                v
     dataset + prompt + scorer
@@ -64,7 +64,7 @@ not rediscover benchmark identity from prefixes or duplicate task maps.
 | Loading | `judgearena/tasks/loader.py` | YAML safety, inheritance, normalization, and hashes |
 | Task registry | `judgearena/tasks/registry.py` | Discovery, task and variant lookup, and referenced-component validation |
 | Dispatch | `judgearena/benchmarks/registry.py`, `judgearena/benchmarks/runner.py` | Mapping `protocol.runner` to executable workflows |
-| Benchmark runners | `judgearena/benchmarks/` | Evaluation control flow for pairwise, MT-Bench, and ELO |
+| Benchmark runners | `judgearena/benchmarks/` | Evaluation control flow for pairwise, MT-Bench, WildBench, and ELO |
 | Dataset adapters | `judgearena/datasets/` | Downloading upstream resources and normalizing their data shape |
 | Prompt presets | `judgearena/prompts/` | Judge prompts, output format, and parsing policy |
 | Scoring adapters | `judgearena/benchmarks/*/scoring.py` | Metric calculation and result summaries |
@@ -172,6 +172,10 @@ generates one focal model's responses, combines LLM judgments with human
 anchors, and fits Bradley-Terry ratings. Arena identity, battle sources, judge
 defaults, and scoring defaults live in ELO task YAML; sampling, filtering,
 calibration, and bootstrapping remain runtime options.
+
+### WildBench
+
+WildBench keeps a specialized runner because WB-Score and WB-Reward use checklist-aware official prompts, conversation inputs, official reference outputs, and benchmark-specific aggregation. Its two public YAML definitions share a family base and select their mode, baseline policy, prompt, and versioned scorer without adding task-name branches to shared execution code.
 
 Use the shared pairwise runner by default. Add a specialized protocol and
 runner only when the data shape or evaluation algorithm genuinely changes.

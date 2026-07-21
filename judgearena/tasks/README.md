@@ -140,7 +140,7 @@ For a genuinely different evaluation algorithm:
 3. Implement and register its runner under `judgearena/benchmarks/`.
 4. Keep algorithm-specific task fields in that protocol schema.
 
-`MTBenchProtocol` and `EloProtocol` are examples of specialized protocols.
+`MTBenchProtocol`, `WildBenchProtocol`, and `EloProtocol` are examples of specialized protocols.
 Single-turn pairwise datasets should continue to use `PairwiseProtocol` and the
 shared pairwise runner.
 

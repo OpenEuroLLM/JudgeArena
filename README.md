@@ -256,6 +256,8 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
+| `wildbench-score`            | WildBench V2 checklist-based absolute-score evaluation                                          |
+| `wildbench-reward`           | WildBench V2 pairwise reward against official reference outputs                                 |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
