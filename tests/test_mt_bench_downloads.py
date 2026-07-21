@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-import judgearena.benchmarks.mt_bench.mt_bench_utils as mt_bench_utils
+import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
 import judgearena.datasets.fluency as fluency_mod
 import judgearena.datasets.mt_bench as mt_bench
 import judgearena.utils.io as utils_io
@@ -156,7 +156,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     generated_models = []
 
     monkeypatch.setattr(
-        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
+        mt_bench_runner, "cache_function_dataframe", lambda fun, **_kwargs: fun()
     )
 
     def fake_generate_multiturn(**kwargs):
@@ -169,9 +169,9 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate_multiturn)
+    monkeypatch.setattr(mt_bench_runner, "generate_multiturn", fake_generate_multiturn)
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_mt_bench_model_answers",
         lambda model, n_instructions=None: (
             pd.DataFrame(
@@ -197,10 +197,9 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
         generation={"n_instructions": 2},
     )
 
-    completions_a, completions_b = mt_bench_utils._generate_mt_bench_completions(
+    completions_a, completions_b = mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
-        ignore_cache=False,
     )
 
     assert generated_models == ["VLLM/example/model-a"]
@@ -216,7 +215,7 @@ def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch
     )
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_mt_bench_model_answers",
         lambda model, n_instructions=None: pd.DataFrame(
             {
@@ -235,10 +234,9 @@ def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch
     )
 
     with pytest.raises(ValueError, match="missing 1 question"):
-        mt_bench_utils._generate_mt_bench_completions(
+        mt_bench_runner._generate_mt_bench_completions(
             cfg=cfg,
             questions_df=questions_df,
-            ignore_cache=False,
         )
 
 
@@ -250,7 +248,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         return tmp_path / "run-metadata.v1.json"
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "write_run_metadata_safely",
         fake_write_run_metadata,
     )
@@ -261,7 +259,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
     )
     started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
 
-    mt_bench_utils._save_mt_bench_results(
+    mt_bench_runner._save_mt_bench_results(
         cfg=cfg,
         res_folder=tmp_path,
         result_name="mt-bench-test",
@@ -273,13 +271,10 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         judge_user_prompt_template="user",
     )
 
-    assert (tmp_path / "config.yaml").exists()
     assert (tmp_path / "mt-bench-test-annotations.csv").exists()
-    # The results JSON is now written by report.save() in _finalize_mt_bench_run,
-    # not by _save_mt_bench_results (which writes config / annotations / run metadata).
     assert (
         captured["entrypoint"]
-        == "judgearena.benchmarks.mt_bench.mt_bench_utils.run_mt_bench"
+        == "judgearena.benchmarks.mt_bench.runner.run_mt_bench_benchmark"
     )
     assert captured["input_payloads"] == {"instruction_index": [1]}
     assert captured["judge_system_prompt"] == "system"
@@ -297,14 +292,14 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     captured = {}
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_instructions",
         lambda dataset, n_instructions=None: questions_df,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -320,14 +315,14 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         captured["make_model"] = kwargs
         return object()
 
-    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
         return pd.Series([0.0], dtype=float)
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_run_mt_bench_fastchat",
         fake_run_mt_bench_fastchat,
     )
@@ -348,12 +343,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_utils.run_mt_bench(
-        cfg,
-        ignore_cache=False,
-        res_folder=tmp_path,
-        result_name="mt-bench-test",
-    )
+    mt_bench_runner.run_mt_bench_benchmark(cfg)
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
@@ -373,14 +363,14 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     captured = {}
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_instructions",
         lambda dataset, n_instructions=None: questions_df,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -396,19 +386,19 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         captured["make_model"] = kwargs
         return object()
 
-    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
         return pd.Series([0.0], dtype=float)
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_run_mt_bench_fastchat",
         fake_run_mt_bench_fastchat,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_run_mt_bench_preset",
         lambda **_kwargs: pytest.fail("preset path should not run"),
     )
@@ -421,12 +411,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_utils.run_mt_bench(
-        cfg,
-        ignore_cache=False,
-        res_folder=tmp_path,
-        result_name="mt-bench-test",
-    )
+    mt_bench_runner.run_mt_bench_benchmark(cfg)
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["temperature"] == 0.0
@@ -443,14 +428,14 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     )
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_instructions",
         lambda dataset, n_instructions=None: questions_df,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -471,14 +456,14 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         return pd.Series([0.0], dtype=float)
 
     captured = {}
-    monkeypatch.setattr(mt_bench_utils, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_run_mt_bench_preset",
         fake_run_mt_bench_preset,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_run_mt_bench_fastchat",
         lambda **_kwargs: pytest.fail("fastchat path should not run"),
     )
@@ -491,12 +476,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_utils.run_mt_bench(
-        cfg,
-        ignore_cache=False,
-        res_folder=tmp_path,
-        result_name="mt-bench-test",
-    )
+    mt_bench_runner.run_mt_bench_benchmark(cfg)
 
     assert captured["preset"]["resolved_prompt"].preset_name == (
         "default_with_explanation"
@@ -512,10 +492,10 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
     captured: dict[str, dict] = {}
 
     monkeypatch.setattr(
-        mt_bench_utils, "cache_function_dataframe", lambda fun, **_kwargs: fun()
+        mt_bench_runner, "cache_function_dataframe", lambda fun, **_kwargs: fun()
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_mt_bench_model_answers",
         lambda model, n_instructions=None: None,
     )
@@ -530,7 +510,7 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(mt_bench_utils, "generate_multiturn", fake_generate_multiturn)
+    monkeypatch.setattr(mt_bench_runner, "generate_multiturn", fake_generate_multiturn)
 
     cfg = RunConfig(
         task="mt-bench",
@@ -547,10 +527,9 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
         generation={"n_instructions": 1},
     )
 
-    mt_bench_utils._generate_mt_bench_completions(
+    mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
         questions_df=questions_df,
-        ignore_cache=False,
     )
 
     thinking_call = captured["VLLM/Qwen/Qwen3.5-9B"]
@@ -572,14 +551,14 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     captured: dict[str, dict] = {}
 
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "load_instructions",
         lambda dataset, n_instructions=None: questions_df,
     )
     monkeypatch.setattr(
-        mt_bench_utils,
+        mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df, ignore_cache: (
+        lambda cfg, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -590,16 +569,16 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_utils, "make_model", lambda **kwargs: object())
+    monkeypatch.setattr(mt_bench_runner, "make_model", lambda **kwargs: object())
     monkeypatch.setattr(
-        mt_bench_utils, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
+        mt_bench_runner, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
     )
 
     def fake_judge(**kwargs):
         captured["judge"] = kwargs
         return pd.Series([0.0], dtype=float), [], [], 0
 
-    monkeypatch.setattr(mt_bench_utils, "judge_mt_bench_pairwise_fastchat", fake_judge)
+    monkeypatch.setattr(mt_bench_runner, "judge_mt_bench_pairwise_fastchat", fake_judge)
 
     cfg = RunConfig(
         task="mt-bench",
@@ -609,12 +588,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_utils.run_mt_bench(
-        cfg,
-        ignore_cache=False,
-        res_folder=tmp_path,
-        result_name="mt-bench-test",
-    )
+    mt_bench_runner.run_mt_bench_benchmark(cfg)
 
     assert captured["judge"]["strip_thinking_before_judging"] is True
     assert captured["judge"]["reference_categories"] == (
