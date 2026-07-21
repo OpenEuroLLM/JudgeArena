@@ -1,14 +1,52 @@
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
 
-from judgearena.dataset_revisions import hf_revision
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
+
+
+class ArenaDatasetSource(Protocol):
+    """Pinned Hugging Face source fields consumed by the arena loader."""
+
+    repo_id: str
+    revision: str
+    allow_patterns: tuple[str, ...]
+
+
+def _download_arena_dataset(
+    *,
+    repo_id: str,
+    default_allow_patterns: str | tuple[str, ...],
+    default_revision: str | None,
+    dataset_sources: Mapping[str, ArenaDatasetSource] | None,
+) -> str:
+    """Download one arena source, preferring its resolved task definition."""
+    if dataset_sources is None:
+        revision = default_revision
+        allow_patterns = default_allow_patterns
+    else:
+        try:
+            source = dataset_sources[repo_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"Arena task does not declare required dataset source {repo_id!r}."
+            ) from exc
+        revision = source.revision
+        allow_patterns = source.allow_patterns or default_allow_patterns
+    return snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        allow_patterns=allow_patterns,
+        force_download=False,
+        revision=revision,
+    )
 
 
 def _extract_instruction_text(turn: dict) -> str:
@@ -27,17 +65,19 @@ KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
 
 
 def _load_arena_dataframe(
-    arena: str, comparia_revision: str | None = None
+    arena: str,
+    comparia_revision: str | None = None,
+    *,
+    dataset_sources: Mapping[str, ArenaDatasetSource] | None = None,
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
     if arena == "LMArena-55k":
         repo_id = "lmarena-ai/arena-human-preference-55k"
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id=repo_id,
-            repo_type="dataset",
-            allow_patterns="*.csv",
-            force_download=False,
-            revision=hf_revision(repo_id),
+            default_allow_patterns="*.csv",
+            default_revision=None,
+            dataset_sources=dataset_sources,
         )
         df = pd.read_csv(Path(path) / "train.csv")
 
@@ -74,12 +114,11 @@ def _load_arena_dataframe(
     elif "LMArena" in arena:
         size = arena.split("-")[1]  # "100k" or "140k"
         repo_id = f"lmarena-ai/arena-human-preference-{size}"
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id=repo_id,
-            repo_type="dataset",
-            allow_patterns="*parquet",
-            force_download=False,
-            revision=hf_revision(repo_id),
+            default_allow_patterns="*parquet",
+            default_revision=None,
+            dataset_sources=dataset_sources,
         )
         parquet_files = sorted((Path(path) / "data").glob("*.parquet"))
         df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
@@ -101,12 +140,11 @@ def _load_arena_dataframe(
         df["benchmark"] = arena
 
     else:
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id="ministere-culture/comparia-votes",
-            repo_type="dataset",
-            allow_patterns="*",
-            revision=comparia_revision,
-            force_download=False,
+            default_allow_patterns="*",
+            default_revision=comparia_revision,
+            dataset_sources=dataset_sources,
         )
 
         df = pd.read_parquet(Path(path) / "votes.parquet")
@@ -176,18 +214,18 @@ def _load_arena_dataframe(
     return df
 
 
-_DEFAULT_COMPARIA_REVISION = hf_revision("ministere-culture/comparia-votes")
-
-
 def load_arena_dataframe(
     arena: str | None,
-    comparia_revision: str | None = _DEFAULT_COMPARIA_REVISION,
+    comparia_revision: str | None = None,
+    *,
+    dataset_sources: Mapping[str, ArenaDatasetSource] | None = None,
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 
     :param arena: one of "LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"
                   (concatenation of both LMArena variants), or None (all arenas).
-    :param comparia_revision: pinned revision for the ComparIA dataset.
+    :param comparia_revision: optional revision for a standalone ComparIA load.
+                              Packaged tasks pass all pinned sources explicitly.
     :return: dataframe containing battles for the arena(s) selected.
     """
     if arena is None:
@@ -195,9 +233,20 @@ def load_arena_dataframe(
     elif arena == "LMArena":
         arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
-        return _load_arena_dataframe(arena, comparia_revision)
+        return _load_arena_dataframe(
+            arena,
+            comparia_revision,
+            dataset_sources=dataset_sources,
+        )
     return pd.concat(
-        [_load_arena_dataframe(a, comparia_revision) for a in arenas],
+        [
+            _load_arena_dataframe(
+                a,
+                comparia_revision,
+                dataset_sources=dataset_sources,
+            )
+            for a in arenas
+        ],
         ignore_index=True,
     )
 
