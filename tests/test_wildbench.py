@@ -26,7 +26,9 @@ from judgearena.benchmarks.wildbench.scoring import (
     parse_wildbench_score,
 )
 from judgearena.config import RunConfig
+from judgearena.datasets import wildbench as wildbench_dataset
 from judgearena.datasets.wildbench import normalize_wildbench
+from judgearena.tasks.registry import get_packaged_task
 
 
 def _examples() -> pd.DataFrame:
@@ -74,6 +76,60 @@ def test_normalize_wildbench_multiturn_example():
     assert row["task_categories"] == [
         "Math & Data Analysis",
         "Planning & Reasoning",
+    ]
+
+
+def test_dataset_adapter_consumes_pinned_task_sources(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        root = Path(kwargs["local_dir"])
+        if kwargs["repo_id"] == "allenai/WildBench":
+            path = root / "v2" / "examples.parquet"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                {
+                    "session_id": ["s1"],
+                    "conversation_input": [[{"role": "user", "content": "Question"}]],
+                    "checklist": [["Correct?"]],
+                    "primary_tag": ["Math"],
+                    "secondary_tags": [["Reasoning"]],
+                }
+            ).to_parquet(path, index=False)
+        else:
+            for model in (
+                "gpt-4-turbo-2024-04-09",
+                "claude-3-haiku-20240307",
+                "Llama-2-70b-chat-hf",
+            ):
+                path = root / model / "outputs.parquet"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(
+                    {"session_id": ["s1"], "output": [[f"{model} answer"]]}
+                ).to_parquet(path, index=False)
+        return str(root)
+
+    monkeypatch.setattr(wildbench_dataset, "snapshot_download", fake_snapshot_download)
+    task = get_packaged_task("wildbench-reward")
+    assert task is not None
+
+    examples = wildbench_dataset.load_task_instructions(task, tmp_path)
+    outputs = wildbench_dataset.load_task_model_outputs(task, tmp_path)
+
+    assert examples.loc[0, "instruction_index"] == "s1"
+    assert examples.loc[0, "instruction"] == "Question"
+    assert outputs is not None
+    assert set(outputs["model"]) == set(task.spec.protocol.baseline.references)
+    assert [(call["repo_id"], call["revision"]) for call in calls] == [
+        (
+            "allenai/WildBench",
+            "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec",
+        ),
+        (
+            "allenai/WildBench-V2-Model-Outputs",
+            "d6755bc68220df853c0825a733430f73f5af2501",
+        ),
     ]
 
 
