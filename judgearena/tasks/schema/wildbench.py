@@ -20,7 +20,7 @@ class ConversationGeneration(StrictFrozenModel):
 class WildBenchJudgeSpec(PairwiseJudgeSpec):
     """Official-prompt limits shared by WildBench judge modes."""
 
-    max_words_to_evaluate: int = Field(default=1000, gt=0)
+    max_words_to_eval: int = Field(default=1000, gt=0)
 
 
 class WildBenchScoringSpec(StrictFrozenModel):

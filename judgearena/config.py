@@ -18,7 +18,7 @@ from pydantic_settings import (
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, WildBenchProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -329,6 +329,20 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class WildBenchArgs(BaseModel):
+    """Runtime overrides supported by WildBench tasks."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    max_words_to_eval: int | None = Field(default=None, gt=0)
+    """Maximum words retained from each official judge-prompt field. Unset
+    uses the task definition's default."""
+
+    length_penalty_chars: int | None = Field(default=None, ge=0)
+    """WB-Reward length margin in characters. Unset uses the task definition's
+    default; WB-Score does not support this option."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -382,6 +396,9 @@ class RunConfig(BaseSettings):
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
 
+    wildbench: WildBenchArgs | None = None
+    """Runtime settings used only by tasks with a WildBench protocol."""
+
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
 
@@ -421,7 +438,10 @@ class RunConfig(BaseSettings):
             )
 
         is_elo = isinstance(protocol, EloProtocol)
+        is_wildbench = isinstance(protocol, WildBenchProtocol)
         if is_elo:
+            if self.wildbench is not None:
+                raise ValueError("wildbench config is only valid for WildBench tasks.")
             if self.elo is None:
                 self.elo = EloArgs()
             if self.elo.arena is not None and self.elo.arena != protocol.arena:
@@ -438,9 +458,34 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
                 raise ValueError("model.baseline is not supported for ELO tasks.")
+        elif is_wildbench:
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for ELO tasks.")
+            if self.wildbench is None:
+                self.wildbench = WildBenchArgs()
+            if self.wildbench.max_words_to_eval is None:
+                self.wildbench.max_words_to_eval = protocol.judge.max_words_to_eval
+            if "length_penalty_chars" not in self.wildbench.model_fields_set:
+                self.wildbench.length_penalty_chars = (
+                    protocol.scoring.default_length_penalty_chars
+                )
+            if protocol.mode == "score":
+                if self.model.baseline is not None:
+                    raise ValueError(
+                        "model.baseline is not used by WildBench score tasks."
+                    )
+                if self.wildbench.length_penalty_chars is not None:
+                    raise ValueError(
+                        "wildbench.length_penalty_chars is only valid for "
+                        "WildBench reward tasks."
+                    )
+            if self.model.name is None:
+                raise ValueError("model.name is required for WildBench tasks.")
         else:
             if self.elo is not None:
                 raise ValueError("elo config is only valid for ELO tasks.")
+            if self.wildbench is not None:
+                raise ValueError("wildbench config is only valid for WildBench tasks.")
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (

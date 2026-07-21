@@ -29,7 +29,7 @@ def _protocol(mode: str) -> dict[str, object]:
             "default_swap_mode": "fixed",
             "allowed_swap_modes": ["fixed", "both"],
             "default_temperature": 0.0,
-            "max_words_to_evaluate": 1000,
+            "max_words_to_eval": 1000,
         },
         "scoring": {"adapter": f"wildbench-{mode}-v2"},
     }
@@ -41,7 +41,7 @@ def test_wildbench_protocol_accepts_supported_modes(mode):
 
     assert protocol.mode == mode
     assert protocol.generation.mode == "conversation_chat"
-    assert protocol.judge.max_words_to_evaluate == 1000
+    assert protocol.judge.max_words_to_eval == 1000
 
 
 def test_wildbench_score_rejects_official_baselines():
