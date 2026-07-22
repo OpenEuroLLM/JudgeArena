@@ -1,0 +1,15 @@
+# Base config: ELO rating against the LMArena-100k arena, with a local vLLM judge.
+# Run:  judgearena --config_path elo-lmarena-100k --model.name VLLM/<your-model>
+# Your model plays battles against the arena's models; its rating is estimated
+# relative to them. The arena is derived from the task; ELO defaults apply
+# (n_bootstraps=20, all languages, soft_elo). Override any field with a CLI flag.
+# Note: the arena battle dataset downloads on first run — prefetch it on an
+# online node before an offline run.
+task: elo-lmarena-100k
+judge:
+  model: VLLM/google/gemma-4-12b-it
+  engine_kwargs:
+    gpu_memory_utilization: 0.45
+model:
+  engine_kwargs:
+    gpu_memory_utilization: 0.45

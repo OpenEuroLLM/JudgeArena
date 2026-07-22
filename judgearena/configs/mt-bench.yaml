@@ -1,0 +1,13 @@
+# Base config: mt-bench with a local vLLM judge.
+# Run:  judgearena --config_path mt-bench --model.name VLLM/<your-model>
+# The candidate is supplied via --model.name; the task's native baseline is used
+# automatically. Judge and candidate share one GPU (memory split 0.45 each).
+# Override any field with a CLI flag, e.g. --judge.model or --generation.n_instructions.
+task: mt-bench
+judge:
+  model: VLLM/google/gemma-4-12b-it
+  engine_kwargs:
+    gpu_memory_utilization: 0.45
+model:
+  engine_kwargs:
+    gpu_memory_utilization: 0.45
