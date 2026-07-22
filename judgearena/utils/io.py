@@ -18,38 +18,12 @@ from judgearena.instruction_dataset.arena_hard import (
 )
 from judgearena.log import get_logger
 
+# Re-exported from the leaf ``judgearena.paths`` module so that
+# ``from judgearena.utils import data_root`` / ``download_hf`` / ``read_df``
+# keep working while the definitions live in a single place.
+from judgearena.paths import data_root, download_hf, read_df  # noqa: F401  (re-export)
+
 logger = get_logger(__name__)
-
-
-def _data_root_path() -> Path:
-    raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
-    if raw:
-        return Path(raw).expanduser()
-    return Path("~/judgearena-data/").expanduser()
-
-
-data_root = _data_root_path()
-
-
-def download_hf(name: str, local_path: Path):
-    local_path.mkdir(exist_ok=True, parents=True)
-    # downloads the model from huggingface into `local_path` folder
-    snapshot_download(
-        repo_id="judge-arena/judge-arena-dataset",
-        repo_type="dataset",
-        allow_patterns=f"*{name}*",
-        local_dir=local_path,
-        force_download=False,
-    )
-
-
-def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
-    assert filename.exists(), f"Dataframe file not found at {filename}"
-    if filename.name.endswith(".csv.zip") or filename.name.endswith(".csv"):
-        return pd.read_csv(filename, **pandas_kwargs)
-    else:
-        assert filename.name.endswith(".parquet"), f"Unsupported extension {filename}"
-        return pd.read_parquet(filename, **pandas_kwargs)
 
 
 def safe_parse_int(env_var: str) -> int | None:
@@ -67,6 +41,24 @@ def safe_parse_int(env_var: str) -> int | None:
     except ValueError:
         logger.warning("Ignoring malformed %s=%r; expected an integer.", env_var, raw)
         return None
+
+
+def download_dataset(name: str) -> None:
+    """Download a single task's instruction datasets into the data root.
+
+    Covers the standalone tasks (``alpaca-eval``, ``arena-hard-*``,
+    ``mt-bench``). For the full set, including the shared multilingual
+    ``contexts`` snapshot, use :func:`download_all`.
+    """
+    tables = data_root / "tables"
+    if name == "mt-bench":
+        from judgearena.instruction_dataset.mt_bench import download_mt_bench
+
+        download_mt_bench()
+    elif is_arena_hard_dataset(name):
+        download_arena_hard(dataset=name, local_tables_path=tables)
+    else:
+        download_hf(name=name, local_path=tables)
 
 
 def download_all():

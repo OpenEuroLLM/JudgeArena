@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.cli:cli"
+judgearena-download = "judgearena.cli:download"
 
 [project]
 name = "judgearena"

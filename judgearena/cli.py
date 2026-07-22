@@ -40,5 +40,26 @@ def cli(argv: list[str] | None = None) -> None:
         main_generate_and_evaluate(cfg)
 
 
+def download(argv: list[str] | None = None) -> None:
+    """Prefetch task datasets into the data root.
+
+    ``judgearena-download`` fetches everything; ``judgearena-download TASK...``
+    (e.g. ``alpaca-eval mt-bench``) fetches only the named tasks.
+    """
+    import sys
+
+    from judgearena.utils.io import data_root, download_all, download_dataset
+
+    names = list(argv) if argv is not None else sys.argv[1:]
+    configure_logging()
+    if names:
+        for name in names:
+            logger.info("Downloading %s into %s", name, data_root)
+            download_dataset(name)
+    else:
+        logger.info("Downloading all JudgeArena datasets into %s", data_root)
+        download_all()
+
+
 if __name__ == "__main__":
     cli()
