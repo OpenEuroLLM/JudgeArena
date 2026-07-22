@@ -33,15 +33,16 @@ lithuanian, slovene, latvian, albanian, macedonian, estonian, basque,
 galician, bosnian, serbian, icelandic, maltese, irish
 ```
 
-You can also check the list at `judgearena/instruction_dataset/fluency.py`.
+The list of available languages is available at `judgearena/instruction_dataset/fluency.py`.
 
 ## Validation against human annotations
 
 The LLM judge used for fluency (`judgearena.prompts.registry`'s `"fluency"`
 prompt preset) is validated against **human fluency annotations in
-Norwegian** — [`ltg/normistral-fluency-annotation`](https://huggingface.co/datasets/ltg/normistral-fluency-annotation),
+Norwegian**.
 
-907 pairwise comparisons (5 annotators) where a human picked which of two
+We use [`ltg/normistral-fluency-annotation`](https://huggingface.co/datasets/ltg/normistral-fluency-annotation) dataset
+with 907 pairwise comparisons (5 annotators) where a human picked which of two
 model completions was more fluent, or called it a tie, see more details in the [paper](https://arxiv.org/pdf/2512.08777)
 which introduced this dataset. As in the original paper, we exclude ties.
 
@@ -82,24 +83,3 @@ LLM judge accuracy against each annotator (non-tie pairs only):
 
 The judge tracks all five annotators fairly consistently (0.67–0.75), so this
 isn't a case of matching one annotator's taste while missing the others.
-
-The one consistent failure mode: **the judge almost never predicts a tie**
-(47/907 = 5% of judge labels vs. 281/907 = 31% of human labels — accuracy on
-human-labeled ties is just 16/281 = 0.057). Since ties are a third of the
-dataset, this alone caps overall accuracy well below the non-tie figure
-regardless of judge quality; worth revisiting (e.g. a score-gap-to-tie
-threshold in `judgearena.evaluate.PairScore`) if overall accuracy needs to
-improve further.
-
-Other judge models tried on this dataset: `OpenRouter/deepseek/deepseek-v3.2`
-produced frequent malformed score output (e.g. `score_A: offshore`,
-`score_A: x`) on these prompts — 6+ parse failures per 100 rows and
-near-chance accuracy (0.484 on non-tie pairs) even after bias correction —
-so it's not currently recommended as a fluency judge; `gemma-4-31b-it` was
-reliable (0 parse failures) and is the current default.
-
-## Next steps
-
-* Schedule evaluations on several models across the full 43-language
-  `geoalgo/multilingual-fluency` dataset.
-* Consider a tie-aware scoring rule to close the accuracy gap on ties.

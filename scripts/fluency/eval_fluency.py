@@ -2,10 +2,7 @@
 Evaluate LLM judge accuracy on the ltg/normistral-fluency-annotation dataset.
 
 Downloads the dataset, runs an LLM judge on each pair, and computes accuracy
-against human annotations. Judging uses judgearena's own "fluency" prompt
-preset (``judgearena.prompts.registry``) -- the same prompt used in
-production by ``judgearena --task fluency-*`` -- rather than a standalone
-prompt maintained in this script.
+against human annotations.
 
 Usage:
     python scripts/fluency/eval_fluency.py --judge_model OpenRouter/google/gemma-4-31b-it
@@ -75,7 +72,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def choice_to_label(choice: str) -> str | None:
+def human_choice_to_label(choice: str) -> str | None:
     """Map human annotation choice string to 'A', 'B', or 'tie'."""
     choice_lower = choice.lower().strip()
     if "a" in choice_lower and "more fluent" in choice_lower:
@@ -180,7 +177,7 @@ def main():
         how="left",
     )
     df["judge_label"] = [preference_to_label(p) for p in df["judge_preference"]]
-    df["human_label"] = [choice_to_label(c) for c in df["choice"]]
+    df["human_label"] = [human_choice_to_label(c) for c in df["choice"]]
 
     # Restrict to non-tie comparisons with parseable judge output. Following
     # the methodology of the paper that introduced this dataset, ties are
