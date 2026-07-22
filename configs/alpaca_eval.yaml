@@ -4,8 +4,8 @@
 # the built-in defaults. CLI flags (e.g. --judge.model X) override this file.
 task: alpaca-eval
 model:
-  name: gpt4_1106_preview
-  baseline: VLLM/utter-project/EuroLLM-9B
+  name: VLLM/utter-project/EuroLLM-9B
+  baseline: gpt4_1106_preview
 judge:
   model: OpenRouter/google/gemma-4-31b-it
 generation:
