@@ -78,19 +78,3 @@ The script judges each unique `(prompt, response_a, response_b)` pair once in
 each order (bias-corrected via `--both`, on by default) using judgearena's own
 `"fluency"` prompt preset — no standalone/duplicated prompt logic — and
 compares the resulting label (`A` / `B` / `tie`) against each human choice.
-
-429/626 = **0.685**.
-
-LLM judge accuracy against each annotator (non-tie pairs only):
-
-| Annotator | Judge accuracy | n (non-tie) |
-|-----------|-----------------|-----|
-| A         | 0.670           | 91  |
-| B         | 0.672           | 229 |
-| C         | 0.746           | 59  |
-| D         | 0.686           | 175 |
-| E         | 0.694           | 72  |
-| **Average** | **0.694**     | 626 |
-
-The judge tracks all five annotators fairly consistently (0.67–0.75), so this
-isn't a case of matching one annotator's taste while missing the others.
