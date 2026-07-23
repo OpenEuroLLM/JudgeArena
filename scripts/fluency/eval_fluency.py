@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import itertools
 
 import pandas as pd
 from datasets import load_dataset
@@ -84,6 +85,32 @@ def human_choice_to_label(choice: str) -> str | None:
     return None
 
 
+def inter_annotator_agreement_by_annotator(
+    df: pd.DataFrame,
+) -> dict[str, tuple[int, int]]:
+    """Pairwise human-vs-human agreement (excluding ties), per annotator.
+
+    For each (prompt, response_a, response_b) comparison labeled by 2+
+    annotators, compares every ordered pair of different annotators' non-tie
+    labels, attributing the comparison to the first annotator's tally. This is
+    a genuine human-only baseline -- independent of any judge or prompt.
+    """
+    tallies: dict[str, list[int]] = {}
+    for _, group in df.groupby(["prompt", "response_a", "response_b"]):
+        rows = [
+            (annotator, label)
+            for annotator, label in zip(
+                group["annotator_id"], group["human_label"], strict=True
+            )
+            if label in ("A", "B")
+        ]
+        for (annotator_a, label_a), (_, label_b) in itertools.permutations(rows, 2):
+            agree, total = tallies.setdefault(annotator_a, [0, 0])
+            tallies[annotator_a][1] = total + 1
+            tallies[annotator_a][0] = agree + (label_a == label_b)
+    return {annotator: (agree, total) for annotator, (agree, total) in tallies.items()}
+
+
 def preference_to_label(pref: float | None) -> str:
     """Convert a preference score to 'A', 'B', or 'tie'."""
     if pref is None:
@@ -109,6 +136,8 @@ def main():
     if args.n_samples is not None:
         df = df.head(args.n_samples)
         print(f"Using first {len(df)} samples.")
+
+    df["human_label"] = [human_choice_to_label(c) for c in df["choice"]]
 
     # The dataset has many exact-duplicate (prompt, response_a, response_b) rows
     # -- e.g. the same pair judged by multiple annotators -- so judge only the
@@ -177,7 +206,6 @@ def main():
         how="left",
     )
     df["judge_label"] = [preference_to_label(p) for p in df["judge_preference"]]
-    df["human_label"] = [human_choice_to_label(c) for c in df["choice"]]
 
     # Restrict to non-tie comparisons with parseable judge output. Following
     # the methodology of the paper that introduced this dataset, ties are
@@ -201,8 +229,22 @@ def main():
     )
 
     if "annotator_id" in df.columns:
+        print("\nInter-annotators agreement (human vs human, excluding ties):")
+        human_tallies = inter_annotator_agreement_by_annotator(df)
+        human_accs = []
+        for annotator, (agree, total) in sorted(human_tallies.items()):
+            if total == 0:
+                continue
+            acc = agree / total
+            human_accs.append(acc)
+            print(f"  {annotator}: {agree}/{total} = {acc:.3f}")
+        if human_accs:
+            print(
+                f"  Average annotator accuracy: {sum(human_accs) / len(human_accs):.3f}"
+            )
+
+        print("\nLLM / Human agreement (excluding ties):")
         annotator_accs = []
-        print("\nAccuracy per annotator (excluding ties):")
         for annotator, group in agreed.groupby("annotator_id"):
             acc = (group["judge_label"] == group["human_label"]).sum() / len(group)
             annotator_accs.append(acc)
@@ -211,7 +253,7 @@ def main():
             )
         if annotator_accs:
             print(
-                f"  Average annotator accuracy: {sum(annotator_accs) / len(annotator_accs):.3f}"
+                f"  Average LLM accuracy: {sum(annotator_accs) / len(annotator_accs):.3f}"
             )
 
     # Distribution of human labels (excluding ties)

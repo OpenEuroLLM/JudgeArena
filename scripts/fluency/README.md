@@ -46,15 +46,26 @@ with 907 pairwise comparisons (5 annotators) where a human picked which of two
 model completions was more fluent, or called it a tie, see more details in the [paper](https://arxiv.org/pdf/2512.08777)
 which introduced this dataset. As in the original paper, we exclude ties.
 
-On this dataset, we have an accuracy for our judge of **68.5%** while the average human annotator accuracy is 69.4%.
+On this dataset, we have an accuracy for our judge of **81.4%** while the average human annotator accuracy is 93.4%.
 
+Here are inter-annotators agreement (human vs human, excluding ties):
 ```
-  annotator_A: 61/91 = 0.670
-  annotator_B: 154/229 = 0.672
-  annotator_C: 44/59 = 0.746
-  annotator_D: 120/175 = 0.686
-  annotator_E: 50/72 = 0.694
-  Average annotator accuracy: 0.694
+annotator_A: 78/84 = 0.929
+annotator_B: 164/173 = 0.948
+annotator_C: 58/62 = 0.935
+annotator_D: 146/154 = 0.948
+annotator_E: 70/77 = 0.909
+Average annotator accuracy: 0.934
+```
+
+and LLM / Human agreement (excluding ties):
+```
+annotator_A: 78/91 = 0.857
+annotator_B: 187/229 = 0.817
+annotator_C: 46/59 = 0.780
+annotator_D: 147/175 = 0.840
+annotator_E: 56/72 = 0.778
+Average LLM accuracy: 0.814
 ```
 
 Rerun with:
