@@ -7,7 +7,7 @@
 task: mt-bench
 
 model:
-  # Candidate under test: --model.name VLLM/<your-model>
+  name: VLLM/utter-project/EuroLLM-9B  # default candidate under test — override with --model.name
   baseline: gpt-4                   # opponent to score against — MT-Bench's native baseline
   engine_kwargs:
     gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)

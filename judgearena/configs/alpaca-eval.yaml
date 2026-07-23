@@ -9,7 +9,7 @@
 task: alpaca-eval
 
 model:
-  # The candidate under test is passed on the CLI (--model.name VLLM/<your-model>).
+  name: VLLM/utter-project/EuroLLM-9B  # default candidate under test — override with --model.name
   baseline: gpt4_1106_preview       # opponent to score against — AlpacaEval's native baseline
   engine_kwargs:
     gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
