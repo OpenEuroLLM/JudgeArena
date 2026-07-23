@@ -1,6 +1,6 @@
 # JudgeArena container
 
-This image installs JudgeArena on top of a vLLM base image, so `judgearena` runs inside the container against a local vLLM model and a local vLLM judge. It is also the image the [oellm-eval](https://github.com/OpenEuroLLM/oellm-eval) integration runs.
+This image installs JudgeArena on top of a vLLM base image, so `judgearena` runs inside the container against a local vLLM model and a local vLLM judge.
 
 ## Definition
 
@@ -87,31 +87,3 @@ They land in the data root, resolved in this order:
 3. `~/judgearena-data` otherwise.
 
 **Offline clusters:** compute nodes usually have no internet. Prefetch models and datasets on a node that does (`judgearena-download`, `huggingface-cli download <model>`), then run with `HF_HUB_OFFLINE=1`.
-
-## Running via oellm-eval
-
-[oellm-eval](https://github.com/OpenEuroLLM/oellm-eval) can schedule JudgeArena as an eval suite across clusters. JudgeArena ships the image; oellm-eval runs `judgearena` inside `EVAL_CONTAINER_IMAGE`.
-
-Prerequisites:
-- The image reachable at `$EVAL_BASE_DIR/<EVAL_CONTAINER_IMAGE>`.
-- A judge config (`JUDGEARENA_CONFIG`) carrying the judge model and engine settings.
-- Prefetched datasets on a bound path (`JUDGEARENA_DATA`, or under `HF_HOME`).
-
-```bash
-export EVAL_CONTAINER_IMAGE=judgearena-rocm.sif   # placed under $EVAL_BASE_DIR
-export SINGULARITY_ARGS=""                         # AMD/ROCm image: no --rocm (glibc)
-export JUDGEARENA_CONFIG=<judge.yaml>
-export JUDGEARENA_DATA=<prefetched data dir>
-export JUDGEARENA_EXTRA_BINDS=<extra host paths, if config/data live outside the default binds>
-export HF_HOME=<model cache>; export HF_HUB_OFFLINE=1
-
-oellm-eval schedule --models "<hf-model-id>" --task_groups judgearena-suite \
-  --slurm_template_var '{"GPUS_PER_NODE":"2"}'
-oellm-eval collect --results_dir "$EVAL_BASE_DIR" --output_csv results.csv
-```
-
-Notes:
-- Pass `--models` **without** a `VLLM/` prefix — the suite prepends it. oellm-eval schedules offline GPU jobs, so the model must run locally under vLLM; that's why the backend is always `VLLM/`.
-- Task groups: `judgearena-alpaca` (single task) or `judgearena-suite` (alpaca-eval, arena-hard-v2.0, mt-bench).
-- The judge config carries everything except `--task`, `--model.name`, and `--run.result_folder`, which oellm-eval injects.
-- oellm-eval binds only `EVAL_BASE_DIR`, `HF_HOME`, and `HF_DATASETS_CACHE`, so the config and data must live under one of those or be added via `JUDGEARENA_EXTRA_BINDS`.
