@@ -59,7 +59,7 @@ singularity exec --bind <host paths> judgearena-rocm.sif \
 
 `VLLM/` selects JudgeArena's local vLLM backend for the model under test (other backends exist, e.g. `OpenRouter/<model>` for an API model). On an offline GPU node only the local backend works.
 
-Available base configs: `alpaca-eval`, `arena-hard-v2.0`, `mt-bench` (win-rate vs the task's native baseline), and `elo-lmarena-100k` (ELO rating against an arena). Each sets the task and a local vLLM judge (`google/gemma-4-12b-it`, sharing the GPU with the candidate). `--config_path` also accepts a path to your own YAML file. Override any field from the CLI — no need to edit the config:
+Available base configs: `alpaca-eval`, `arena-hard-v2.0`, `mt-bench` (win-rate vs the task's native baseline), and `elo-lmarena-100k` (ELO rating against an arena). Each sets the task and a local vLLM judge (`google/gemma-4-31b-it`, sharing the GPU with the candidate). `--config_path` also accepts a path to your own YAML file. Override any field from the CLI — no need to edit the config:
 
 ```bash
 singularity exec --bind <host paths> judgearena-rocm.sif \

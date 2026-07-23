@@ -1,15 +1,27 @@
-# Base config: ELO rating against the LMArena-100k arena, with a local vLLM judge.
+# elo-lmarena-100k — ELO rating against the LMArena-100k arena.
+# Unlike the win-rate tasks there is NO single baseline: your model plays battles
+# against the arena's many models and gets a Bradley-Terry / Soft-ELO rating on
+# the arena's scale (anchored to it). The full per-model leaderboard is written to
+# the run folder (results-*.json -> mean_ratings, and elo_ratings.json).
+#
 # Run:  judgearena --config_path elo-lmarena-100k --model.name VLLM/<your-model>
-# Your model plays battles against the arena's models; its rating is estimated
-# relative to them. The arena is derived from the task; ELO defaults apply
-# (n_bootstraps=20, all languages, soft_elo). Override any field with a CLI flag.
-# Note: the arena battle dataset downloads on first run — prefetch it on an
-# online node before an offline run.
+# The arena is derived from the task name. Prefetch it before an offline run:
+#   judgearena-download elo-lmarena-100k
+
 task: elo-lmarena-100k
-judge:
-  model: VLLM/google/gemma-4-12b-it
-  engine_kwargs:
-    gpu_memory_utilization: 0.45
+
 model:
+  # Candidate under test: --model.name VLLM/<your-model>
+  engine_kwargs:
+    gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
+
+judge:
+  model: VLLM/google/gemma-4-31b-it # local vLLM judge that scores the arena battles
   engine_kwargs:
     gpu_memory_utilization: 0.45
+
+elo:
+  # ELO defaults shown explicitly so they're easy to tune:
+  n_bootstraps: 20                  # resamples used for the rating mean/CI
+  languages: null                   # null = all arena languages; e.g. ["en"] to restrict
+  soft_elo: true                    # use soft (probabilistic) preferences, not hard win/lose

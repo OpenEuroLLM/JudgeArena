@@ -1,13 +1,20 @@
-# Base config: alpaca-eval with a local vLLM judge.
+# alpaca-eval — pairwise generate-and-judge win rate.
+# Your model answers the AlpacaEval instructions; the judge compares each answer
+# to the baseline's answer and reports how often yours is preferred (win rate).
+#
 # Run:  judgearena --config_path alpaca-eval --model.name VLLM/<your-model>
-# The candidate is supplied via --model.name; the task's native baseline is used
-# automatically. Judge and candidate share one GPU (memory split 0.45 each).
-# Override any field with a CLI flag, e.g. --judge.model or --generation.n_instructions.
+# Any field can be overridden on the CLI, e.g.
+#   --judge.model VLLM/<other>   --generation.n_instructions 20
+
 task: alpaca-eval
-judge:
-  model: VLLM/google/gemma-4-12b-it
-  engine_kwargs:
-    gpu_memory_utilization: 0.45
+
 model:
+  # The candidate under test is passed on the CLI (--model.name VLLM/<your-model>).
+  baseline: gpt4_1106_preview       # opponent to score against — AlpacaEval's native baseline
+  engine_kwargs:
+    gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
+
+judge:
+  model: VLLM/google/gemma-4-31b-it # local vLLM judge that scores each pairwise battle
   engine_kwargs:
     gpu_memory_utilization: 0.45

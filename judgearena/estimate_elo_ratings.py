@@ -191,6 +191,8 @@ class EloReport(Report):
     ``elo_ratings.json`` via :class:`judgearena.battles.Leaderboard`.
     """
 
+    task: str
+    """The ELO task that produced this report (e.g. ``elo-lmarena-100k``)."""
     arena: str
     """Arena/benchmark the focal model is rated against."""
     judge_model: str
@@ -787,6 +789,7 @@ def main(cfg: "RunConfig") -> dict:
     )
 
     report = EloReport(
+        task=cfg.task,
         arena=cfg.elo.arena,
         judge_model=cfg.judge.model,
         summary=summary,
