@@ -26,6 +26,36 @@ def _extract_instruction_text(turn: dict) -> str:
 KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
 
 
+def download_arena(arena: str, comparia_revision: str | None = None) -> str:
+    """Download an arena's battle dataset and return its local snapshot path.
+
+    Mirrors the snapshot parameters used by ``_load_arena_dataframe`` so that a
+    prefetch (e.g. ``judgearena-download elo-lmarena-100k``) caches exactly what
+    the ELO run later loads. Keep the two in sync.
+    """
+    assert arena in KNOWN_ARENAS
+    if arena == "LMArena-55k":
+        repo_id = "lmarena-ai/arena-human-preference-55k"
+        patterns, revision = "*.csv", hf_revision(repo_id)
+    elif "LMArena" in arena:
+        size = arena.split("-")[1]
+        repo_id = f"lmarena-ai/arena-human-preference-{size}"
+        patterns, revision = "*parquet", hf_revision(repo_id)
+    else:
+        repo_id, patterns, revision = (
+            "ministere-culture/comparia-votes",
+            "*",
+            comparia_revision,
+        )
+    return snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        allow_patterns=patterns,
+        force_download=False,
+        revision=revision,
+    )
+
+
 def _load_arena_dataframe(
     arena: str, comparia_revision: str | None = None
 ) -> pd.DataFrame:

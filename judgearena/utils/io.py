@@ -44,12 +44,23 @@ def safe_parse_int(env_var: str) -> int | None:
 
 
 def download_dataset(name: str) -> None:
-    """Download a single task's instruction datasets into the data root.
+    """Download a single task's datasets into the data root.
 
-    Covers the standalone tasks (``alpaca-eval``, ``arena-hard-*``,
-    ``mt-bench``). For the full set, including the shared multilingual
+    Covers the standalone generate+judge tasks (``alpaca-eval``,
+    ``arena-hard-*``, ``mt-bench``) and ELO tasks (``elo-*``, whose arena battle
+    dataset is fetched). For the full set, including the shared multilingual
     ``contexts`` snapshot, use :func:`download_all`.
     """
+    from judgearena.constants import ELO_TASK_TO_ARENA
+
+    if name in ELO_TASK_TO_ARENA:
+        from judgearena.arenas_utils import KNOWN_ARENAS, download_arena
+
+        arena = ELO_TASK_TO_ARENA[name]
+        if arena in KNOWN_ARENAS:
+            download_arena(arena)
+        return
+
     tables = data_root / "tables"
     if name == "mt-bench":
         from judgearena.instruction_dataset.mt_bench import download_mt_bench
@@ -90,6 +101,13 @@ def download_all():
     from judgearena.instruction_dataset.mt_bench import download_mt_bench
 
     download_mt_bench()
+
+    # ELO arena battle datasets (so `elo-*` tasks run without a separate fetch)
+    from judgearena.arenas_utils import KNOWN_ARENAS, download_arena
+    from judgearena.constants import ELO_TASK_TO_ARENA
+
+    for arena in sorted({a for a in ELO_TASK_TO_ARENA.values() if a in KNOWN_ARENAS}):
+        download_arena(arena)
 
 
 class Timeblock:

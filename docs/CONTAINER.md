@@ -57,6 +57,8 @@ singularity exec --bind <host paths> judgearena-rocm.sif \
   judgearena --config_path alpaca-eval --model.name VLLM/<your-model>
 ```
 
+`VLLM/` selects JudgeArena's local vLLM backend for the model under test (other backends exist, e.g. `OpenRouter/<model>` for an API model). On an offline GPU node only the local backend works.
+
 Available base configs: `alpaca-eval`, `arena-hard-v2.0`, `mt-bench` (win-rate vs the task's native baseline), and `elo-lmarena-100k` (ELO rating against an arena). Each sets the task and a local vLLM judge (`google/gemma-4-12b-it`, sharing the GPU with the candidate). `--config_path` also accepts a path to your own YAML file. Override any field from the CLI — no need to edit the config:
 
 ```bash
@@ -71,11 +73,11 @@ Results (annotations, win-rate report, the resolved `config.yaml`) land in `run.
 
 ## Datasets
 
-`judgearena-download` fetches task datasets — everything, or just the tasks you name:
+`judgearena-download` fetches task datasets — win-rate task data *and* the ELO arena battles — so a task runs once its data is present. Get everything, or just the tasks you name:
 
 ```bash
-singularity exec judgearena-rocm.sif judgearena-download                       # all tasks
-singularity exec judgearena-rocm.sif judgearena-download alpaca-eval mt-bench  # only these
+singularity exec judgearena-rocm.sif judgearena-download                             # all tasks
+singularity exec judgearena-rocm.sif judgearena-download alpaca-eval elo-lmarena-100k  # only these
 ```
 
 They land in the data root, resolved in this order:
@@ -109,7 +111,7 @@ oellm-eval collect --results_dir "$EVAL_BASE_DIR" --output_csv results.csv
 ```
 
 Notes:
-- Pass `--models` **without** a `VLLM/` prefix — the suite prepends it.
+- Pass `--models` **without** a `VLLM/` prefix — the suite prepends it. oellm-eval schedules offline GPU jobs, so the model must run locally under vLLM; that's why the backend is always `VLLM/`.
 - Task groups: `judgearena-alpaca` (single task) or `judgearena-suite` (alpaca-eval, arena-hard-v2.0, mt-bench).
 - The judge config carries everything except `--task`, `--model.name`, and `--run.result_folder`, which oellm-eval injects.
 - oellm-eval binds only `EVAL_BASE_DIR`, `HF_HOME`, and `HF_DATASETS_CACHE`, so the config and data must live under one of those or be added via `JUDGEARENA_EXTRA_BINDS`.
