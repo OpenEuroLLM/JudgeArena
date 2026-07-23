@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -18,10 +20,12 @@ from judgearena.evaluate import (
     resolve_run_judge_prompt,
 )
 from judgearena.generate import generate_instructions
+from judgearena.generate_and_evaluate import _build_generation_kwargs
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
-from judgearena.repro import _to_jsonable
+from judgearena.repro import write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
+from judgearena.utils.eval import PrefSummary, Report
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -179,23 +183,97 @@ def _slugify(value: str) -> str:
     return slug or "model"
 
 
-def write_elo_result(
-    *,
-    result_folder: str | Path,
-    summary: dict[str, object],
-    bootstrap_ratings: list[dict[str, float]],
-) -> Path:
-    model = str(summary["model_A"])
-    arena = str(summary["arena"])
-    output_dir = Path(result_folder) / f"elo-{_slugify(arena)}-{_slugify(model)}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"results-{_slugify(model)}.json"
-    payload = {
-        "summary": summary,
-        "bootstrap_ratings": bootstrap_ratings,
-    }
-    path.write_text(json.dumps(_to_jsonable(payload), indent=2) + "\n")
-    return path
+class EloReport(Report):
+    """Bradley-Terry / Soft-ELO ratings for one focal model against an arena.
+
+    This is the console/``results-*.json`` run report. The narrower per-model
+    leaderboard with bootstrap CIs is persisted separately as
+    ``elo_ratings.json`` via :class:`judgearena.battles.Leaderboard`.
+    """
+
+    arena: str
+    """Arena/benchmark the focal model is rated against."""
+    judge_model: str
+    """LLM judge that scored the battles."""
+    summary: PrefSummary
+    """Win/loss/tie stats for the focal model's LLM-judged battles."""
+    num_battles: int
+    """Total battles (LLM-judged + human-anchor)."""
+    llm_judged_battles: int
+    """Battles the LLM judged for the focal model."""
+    human_anchor_battles: int
+    """Human-annotated battles anchoring the other arena models."""
+    elo_mean: float
+    """Focal model's mean ELO across bootstrap samples."""
+    elo_std: float
+    """Std of the focal model's ELO across bootstrap samples."""
+    elo_n_bootstraps: int
+    """Bootstrap samples that rated the focal model (≤ n_bootstraps); the n behind elo_mean/elo_std."""
+    mae_vs_human: float
+    """Mean absolute error of estimated vs human ELO over overlapping models."""
+    method: str
+    """Rating method label (e.g. "Soft-ELO")."""
+    n_bootstraps: int
+    """Total bootstrap iterations run."""
+    model_name: str
+    """Focal model under evaluation."""
+    mean_ratings: dict[str, float]
+    """Per-model mean ELO across bootstraps."""
+    battle_counts: dict[str, int]
+    """Per-model battle count."""
+    human_elo: dict[str, float]
+    """Per-model human-derived ELO (anchors)."""
+    bootstrap_ratings: list[dict[str, float]]
+    """One model→ELO dict per bootstrap sample."""
+    sampling_metadata: dict[str, object]
+    """Instruction-sampling parameters for the run."""
+
+    def render(self) -> None:
+        s = self.summary
+        print(f"\n=== Results for {self.model_name} ===")
+        print(
+            f"Battles: {self.llm_judged_battles} | Wins: {s.num_wins} | "
+            f"Losses: {s.num_losses} | Ties: {s.num_ties}"
+        )
+        print(f"Win rate: {s.winrate:.2%}")
+
+        print(
+            f"\n=== {self.method} Ratings (Bradley-Terry, "
+            f"{self.n_bootstraps} bootstraps) ==="
+        )
+        print(
+            f"Estimating {self.method} Ratings with {self.llm_judged_battles} "
+            f"LLM-judges for model {self.model_name} and {self.human_anchor_battles} "
+            "human annotations for other models. Number of battles is indicated in "
+            "parenthesis and confidence intervals are reported by computing ELO on "
+            f"{self.n_bootstraps} samples of instructions."
+        )
+
+        if not self.mean_ratings:
+            print("  Not enough data to compute ELO ratings.")
+            return
+
+        # Percentile CIs (not mean ± std): matches the bounds persisted in
+        # elo_ratings.json so the console and the saved leaderboard never disagree.
+        for e in summarize_bootstrap(
+            self.bootstrap_ratings, self.battle_counts, self.model_name
+        ):
+            suffix = " <-----" if e.model == self.model_name else ""
+            print(
+                f"  {e.model}  ({e.n_battles}){suffix}: "
+                f"{e.rating:.1f} [{e.ci_low:.1f}, {e.ci_high:.1f}]"
+            )
+
+        overlap = [
+            m for m in self.mean_ratings if m in self.human_elo and m != self.model_name
+        ]
+        if overlap:
+            print(
+                f"\n  MAE vs Human-ELO ({len(overlap)} arena models): "
+                f"{self.mae_vs_human:.1f}"
+            )
+        else:
+            print("\n  No overlapping arena models to compute MAE.")
 
 
 def _prefs_to_battle_results(
@@ -203,6 +281,9 @@ def _prefs_to_battle_results(
     our_model_is_position_a,
     opponent_models,
     model_name: str,
+    *,
+    judge_model: str | None = None,
+    question_ids=None,
 ) -> pd.DataFrame:
     """Map per-battle judge prefs into model-name-level battle rows.
 
@@ -239,11 +320,41 @@ def _prefs_to_battle_results(
             }
         rec["pref_hard"] = _winner_to_pref(winner)
         records.append(rec)
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+    df["source"] = "llm-judge"
+    df["judge_model"] = judge_model
+    if question_ids is not None:
+        df["question_id"] = question_ids
+    return df
+
+
+def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
+    """Human anchor battles from a loaded arena frame.
+
+    Keeps battles between models with at least 500 human votes and shapes them
+    like the persisted rows (``pref``/``pref_hard`` from the hard winner label,
+    ``source="human"``).
+
+    These anchors are a deterministic function of the (revision-pinned) arena,
+    so runs persist only their own llm-judge battles; recompute ELO with
+    ``arena_anchor_battles(load_arena_dataframe(arena))`` + the run's saved
+    ``battles.parquet``. The original ``df_arena_all`` index is preserved so
+    callers can still look up the full conversation rows by row label.
+    """
+    df = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
+    counts = pd.concat([df["model_a"], df["model_b"]]).value_counts()
+    well_represented = set(counts[counts >= 500].index)
+    df = df[df["model_a"].isin(well_represented) & df["model_b"].isin(well_represented)]
+    # Hard human labels → pref ∈ {0, 0.5, 1}; pref_hard == pref.
+    df["pref"] = df["winner"].map(_winner_to_pref)
+    df["pref_hard"] = df["pref"]
+    df["source"] = "human"
+    return df
 
 
 def main(cfg: "RunConfig") -> dict:
     assert cfg.elo is not None  # main is dispatched only for elo tasks
+    run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
     # Step 1: Load arena battles
@@ -301,7 +412,11 @@ def main(cfg: "RunConfig") -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", cfg.model.name)
 
-    extra_kwargs = cfg.model.evaluated_generation_kwargs()
+    # Mirror the benchmark generation path so Elo battles honor the
+    # thinking-token sub-budget for thinking models (the Elo entrypoint
+    # previously called evaluated_generation_kwargs() directly and silently
+    # dropped battle_thinking_token_budget).
+    extra_kwargs = _build_generation_kwargs(cfg, cfg.model.name, role="A")
     use_tqdm = False
     gen_fun = partial(
         generate_instructions,
@@ -401,6 +516,7 @@ def main(cfg: "RunConfig") -> dict:
             completions_B=completions_B,
             swap_mode=cfg.judge.swap_mode,
             provide_explanation=cfg.judge.provide_explanation,
+            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
             prompt_preset=resolved_prompt.preset_name,
@@ -437,7 +553,12 @@ def main(cfg: "RunConfig") -> dict:
             }
         )
 
+    # Stripping reasoning traces changes the judged text but not the cached
+    # completions, so it must be part of the judge cache key. Only append when
+    # enabled so prior (non-stripped) runs keep their existing cache hashes.
     judge_cache_suffix = f"judge_{cache_suffix}"
+    if cfg.judge.strip_thinking_before_judging:
+        judge_cache_suffix += "_stripthinking"
     df_judge = cache_function_dataframe(
         run_judge,
         ignore_cache=cfg.run.ignore_cache,
@@ -450,12 +571,28 @@ def main(cfg: "RunConfig") -> dict:
     opponent_models = df_judge["opponent_model"].tolist()
     prefs = df_judge["pref"].tolist()
 
+    # Instruction-index join key per judged battle, so the saved battles link
+    # back to the arena initial table / completion cache without copying text.
+    # df_judge repeats the n sampled battles once (AB) or twice (AB then BA for
+    # swap_mode="both"), so tile the ids to its actual length.
+    if "question_id" in df_battles.columns and len(df_battles):
+        qids = df_battles["question_id"].tolist()
+        n_rep = (len(df_judge) + len(qids) - 1) // len(qids)
+        question_ids = (qids * n_rep)[: len(df_judge)]
+    else:
+        question_ids = [None] * len(df_judge)
+
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
     df_llm_judge = _prefs_to_battle_results(
-        prefs, our_model_is_position_a, opponent_models, model_name
+        prefs,
+        our_model_is_position_a,
+        opponent_models,
+        model_name,
+        judge_model=cfg.judge.model,
+        question_ids=question_ids,
     )
 
     # Normalize prefs so pref < 0.5 always means our model wins, then summarise
@@ -466,33 +603,10 @@ def main(cfg: "RunConfig") -> dict:
         ]
     )
     summary = compute_pref_summary(prefs_normalized)
-    our_wins = summary["num_wins"]
-    our_losses = summary["num_losses"]
-    our_ties = summary["num_ties"]
-    winrate = summary["winrate"]
 
-    print(f"\n=== Results for {model_name} ===")
-    print(
-        f"Battles: {len(df_llm_judge)} | Wins: {our_wins} | "
-        f"Losses: {our_losses} | Ties: {our_ties}"
-    )
-    print(f"Win rate: {winrate:.2%}")
-
-    # Combine LLM-judge battles with human-annotated arena battles,
-    # keeping only arena models with at least 500 human battles
-    df_arena = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
-    human_battle_counts = pd.concat(
-        [df_arena["model_a"], df_arena["model_b"]]
-    ).value_counts()
-    well_represented = set(human_battle_counts[human_battle_counts >= 500].index)
-    df_arena = df_arena[
-        df_arena["model_a"].isin(well_represented)
-        & df_arena["model_b"].isin(well_represented)
-    ]
-    # Add pref column to arena battles (hard labels → 0.0 / 1.0 / 0.5).
-    # Human labels are already hard, so pref_hard == pref.
-    df_arena["pref"] = df_arena["winner"].map(_winner_to_pref)
-    df_arena["pref_hard"] = df_arena["pref"]
+    # Anchor the llm-judge battles against the human arena battles. These are
+    # rebuilt from the (revision-pinned) arena, not persisted per run.
+    df_arena = arena_anchor_battles(df_arena_all)
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -615,7 +729,12 @@ def main(cfg: "RunConfig") -> dict:
 
         # Rebuild battle results with the re-parsed prefs.
         df_llm_judge = _prefs_to_battle_results(
-            prefs, our_model_is_position_a, opponent_models, model_name
+            prefs,
+            our_model_is_position_a,
+            opponent_models,
+            model_name,
+            judge_model=cfg.judge.model,
+            question_ids=question_ids,
         )
         df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -625,14 +744,6 @@ def main(cfg: "RunConfig") -> dict:
     n_llm = len(df_llm_judge)
     n_human = len(df_arena)
     method_label = "Soft-ELO" if use_soft else "ELO"
-    print(
-        f"\n=== {method_label} Ratings (Bradley-Terry, {n_bootstraps} bootstraps) ==="
-    )
-    print(
-        f"Estimating {method_label} Ratings with {n_llm} LLM-judges for model {model_name} "
-        f"and {n_human} human annotations for other models. Number of battles is indicated in parenthesis and "
-        f"confidence intervals are reported by computing ELO on {n_bootstraps} samples of instructions."
-    )
 
     # Count battles per model across the combined results
     battle_counts: dict[str, int] = {}
@@ -651,32 +762,19 @@ def main(cfg: "RunConfig") -> dict:
         )
         bootstrap_ratings.append(ratings)
 
+    # One percentile-CI summary, reused for the console report, the MAE
+    # calculation below, and the persisted elo_ratings.json leaderboard so
+    # none of the three can disagree.
+    entries: list = []
+    mean_ratings: dict[str, float] = {}
+    mae = np.nan
     if bootstrap_ratings:
-        all_model_names = sorted(
-            set(df_results["model_a"]) | set(df_results["model_b"])
-        )
-        mean_ratings = {
-            m: np.nanmean([r.get(m, np.nan) for r in bootstrap_ratings])
-            for m in all_model_names
-        }
-        for m in sorted(all_model_names, key=lambda x: -mean_ratings[x]):
-            vals = [r[m] for r in bootstrap_ratings if m in r]
-            suffix = " <-----" if m == model_name else ""
-            count = battle_counts.get(m, 0)
-            print(f"  {m}  ({count}){suffix}: {np.mean(vals):.1f} ± {np.std(vals):.1f}")
-
-        # MAE vs human-only ELO for overlapping arena models
-        overlap = [m for m in all_model_names if m in human_elo and m != model_name]
+        entries = summarize_bootstrap(bootstrap_ratings, battle_counts, model_name)
+        mean_ratings = {e.model: e.rating for e in entries}
+        overlap = [m for m in mean_ratings if m in human_elo and m != model_name]
         if overlap:
             abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
             mae = np.mean(abs_errors)
-            print(f"\n  MAE vs Human-ELO ({len(overlap)} arena models): {mae:.1f}")
-        else:
-            mae = np.nan
-            print("\n  No overlapping arena models to compute MAE.")
-    else:
-        print("  Not enough data to compute ELO ratings.")
-        mae = np.nan
 
     model_rating_values = [
         rating[model_name] for rating in bootstrap_ratings if model_name in rating
@@ -687,33 +785,94 @@ def main(cfg: "RunConfig") -> dict:
     elo_std = (
         float(np.std(model_rating_values)) if model_rating_values else float("nan")
     )
-    result_summary = {
-        **summary,
-        "arena": cfg.elo.arena,
-        "model_A": model_name,
-        "judge_model": cfg.judge.model,
-        "num_battles": n,
-        "llm_judged_battles": n_llm,
-        "human_anchor_battles": n_human,
-        "sampling_metadata": sampling_metadata,
-        "elo_mean": elo_mean,
-        "elo_std": elo_std,
-        "elo_num_bootstraps": len(model_rating_values),
-        "source_battle_counts": battle_counts,
-    }
-    result_path = write_elo_result(
-        result_folder=cfg.run.result_folder,
-        summary=result_summary,
+
+    report = EloReport(
+        arena=cfg.elo.arena,
+        judge_model=cfg.judge.model,
+        summary=summary,
+        num_battles=n,
+        llm_judged_battles=n_llm,
+        human_anchor_battles=n_human,
+        elo_mean=elo_mean,
+        elo_std=elo_std,
+        elo_n_bootstraps=len(model_rating_values),
+        mae_vs_human=mae,
+        method=method_label,
+        n_bootstraps=n_bootstraps,
+        model_name=model_name,
+        mean_ratings=mean_ratings,
+        battle_counts=battle_counts,
+        human_elo=human_elo,
         bootstrap_ratings=bootstrap_ratings,
+        sampling_metadata=sampling_metadata,
+    )
+    results = report.to_dict()
+    report.render()
+    # ELO artifacts (ratings, battles, bootstrap CSV, metadata) are judge-specific,
+    # so key the folder on the judge too — otherwise re-running the same
+    # arena/model under a different judge silently overwrites the previous run.
+    result_path = report.save(
+        Path(cfg.run.result_folder)
+        / f"elo-{_slugify(cfg.elo.arena)}-{_slugify(model_name)}-{_slugify(cfg.judge.model)}"
+        / f"results-{_slugify(model_name)}.json"
     )
 
+    # Persist only the run's own llm-judge battles (a few KB). The human arena
+    # anchors are identical across every run, so we do not duplicate them per
+    # experiment — recompute ELO by recombining with
+    # arena_anchor_battles(load_arena_dataframe(arena)). question_id is the
+    # instruction-index join key back to the arena initial table / completion
+    # cache. battles.parquet keeps pref_hard so both hard and soft ELO recompute.
+    res_dir = result_path.parent
+    battle_cols = [
+        "model_a",
+        "model_b",
+        "winner",
+        "pref",
+        "pref_hard",
+        "source",
+        "judge_model",
+        "question_id",
+    ]
+    write_battles(
+        res_dir / "battles.parquet",
+        df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
+    )
+    if bootstrap_ratings:
+        pd.DataFrame(bootstrap_ratings).to_csv(
+            res_dir / "bootstrap_ratings.csv", index=False
+        )
+        Leaderboard(
+            arena=cfg.elo.arena,
+            model=model_name,
+            judge_model=cfg.judge.model,
+            n_bootstraps=n_bootstraps,
+            seed=cfg.run.seed,
+            ratings=entries,
+        ).write(res_dir / "elo_ratings.json")
+
+    # Reproducibility manifest (git hash, dependency versions, timings) — parity
+    # with the other entrypoints, all of which write run-metadata. Best-effort:
+    # a metadata-write failure should not sink an already-completed run.
+    try:
+        write_run_metadata(
+            output_dir=res_dir,
+            entrypoint="judgearena.estimate_elo_ratings.main",
+            run=cfg.model_dump(),
+            results=results,
+            input_payloads=(
+                {"question_id": df_battles["question_id"].tolist()}
+                if "question_id" in df_battles.columns
+                else None
+            ),
+            judge_system_prompt=resolved_prompt.system_prompt,
+            judge_user_prompt_template=resolved_prompt.user_prompt_template,
+            started_at_utc=run_started_at,
+        )
+    except OSError as e:
+        logger.warning("Failed to write run metadata: %s", e)
+
     return {
-        **result_summary,
-        "bootstrap_ratings": bootstrap_ratings,
-        "human_elo": human_elo,
-        "mae_vs_human": mae,
-        "model_name": model_name,
+        **results,
         "result_path": str(result_path),
-        "method": method_label,
-        "calibrated_temperature": calibrated_temperature,
     }
