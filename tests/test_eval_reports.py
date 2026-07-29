@@ -193,3 +193,47 @@ def test_eloreport_to_dict_envelope():
     assert d["report_type"] == "EloReport"
     assert d["arena"] == "chatbot-arena"
     assert d["model_name"] == "my-model"
+
+
+def test_to_envelope_shapes_and_strips_backend_prefix():
+    from judgearena.estimate_elo_ratings import EloReport
+
+    battle = BattleReport(
+        task="alpaca-eval",
+        model_a="VLLM/org/my-model",
+        model_b="gpt4",
+        judge_model="judge",
+        summary=_summary(winrate=0.7),
+    )
+    assert battle.to_envelope() == {
+        "config_general": {"model_name": "org/my-model"},
+        "results": {"alpaca-eval": {"winrate": 0.7}},
+        "n-shot": {"alpaca-eval": 0},
+    }
+
+    elo = EloReport(
+        task="elo-lmarena-100k",
+        arena="chatbot-arena",
+        judge_model="judge",
+        summary=_summary(),
+        num_battles=10,
+        llm_judged_battles=10,
+        human_anchor_battles=5,
+        elo_mean=1000.0,
+        elo_std=10.0,
+        elo_n_bootstraps=100,
+        mae_vs_human=5.0,
+        method="Soft-ELO",
+        n_bootstraps=100,
+        model_name="VLLM/org/my-model",
+        mean_ratings={"VLLM/org/my-model": 1000.0},
+        battle_counts={"VLLM/org/my-model": 10},
+        human_elo={"gpt4": 1100.0},
+        bootstrap_ratings=[{"VLLM/org/my-model": 1000.0}],
+        sampling_metadata={"sampling_mode": "head"},
+    )
+    assert elo.to_envelope() == {
+        "config_general": {"model_name": "org/my-model"},
+        "results": {"elo-lmarena-100k": {"elo_rating": 1000.0}},
+        "n-shot": {"elo-lmarena-100k": 0},
+    }

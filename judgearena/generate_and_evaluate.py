@@ -457,7 +457,9 @@ def main(cfg: "RunConfig"):
         cfg.judge.model,
     )
     report.render()
-    report.save(res_folder / f"results-{name}.json")
+    saved = report.save(res_folder / f"results-{name}.json")
+    if cfg.run.emit_envelope:
+        report.save_envelope(saved.parent)
 
     eval_instructions = instructions.head(n_instructions).tolist()
     eval_completions_A = completions_A.head(n_instructions).tolist()

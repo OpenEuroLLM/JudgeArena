@@ -87,6 +87,34 @@ class Report(BaseModel, abc.ABC):
         p.write_text(json.dumps(_to_jsonable(self.to_dict()), indent=2) + "\n")
         return p
 
+    def _envelope_entry(self) -> tuple[str, str, str, float] | None:
+        """(model, task, metric, value) for the results envelope, or None."""
+        return None
+
+    def to_envelope(self) -> dict | None:
+        """The report as an lm-eval-harness results envelope, or None if the
+        report has no single headline metric. The model's backend prefix
+        (e.g. ``VLLM/``) is dropped so the id matches the underlying model."""
+        entry = self._envelope_entry()
+        if entry is None:
+            return None
+        model, task, metric, value = entry
+        model = model.partition("/")[2] or model
+        return {
+            "config_general": {"model_name": model},
+            "results": {task: {metric: value}},
+            "n-shot": {task: 0},
+        }
+
+    def save_envelope(self, directory: str | Path) -> Path | None:
+        env = self.to_envelope()
+        if env is None:
+            return None
+        p = Path(directory) / "results.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(env, indent=2) + "\n")
+        return p
+
 
 class BattleReport(Report):
     """Pairwise battle results for the arena and MT-Bench pipelines."""
@@ -165,6 +193,9 @@ class BattleReport(Report):
         if self.result_folder:
             print(f"📁 Results: {self.result_folder}")
         print("=" * 60 + "\n")
+
+    def _envelope_entry(self) -> tuple[str, str, str, float] | None:
+        return self.model_a, self.task, "winrate", self.summary.winrate
 
 
 def _compute_grouped_stats(

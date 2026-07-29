@@ -277,6 +277,9 @@ class EloReport(Report):
         else:
             print("\n  No overlapping arena models to compute MAE.")
 
+    def _envelope_entry(self) -> tuple[str, str, str, float] | None:
+        return self.model_name, self.task, "elo_rating", self.elo_mean
+
 
 def _prefs_to_battle_results(
     prefs,
@@ -819,6 +822,8 @@ def main(cfg: "RunConfig") -> dict:
         / f"elo-{_slugify(cfg.elo.arena)}-{_slugify(model_name)}-{_slugify(cfg.judge.model)}"
         / f"results-{_slugify(model_name)}.json"
     )
+    if cfg.run.emit_envelope:
+        report.save_envelope(result_path.parent)
 
     # Persist only the run's own llm-judge battles (a few KB). The human arena
     # anchors are identical across every run, so we do not duplicate them per

@@ -340,6 +340,10 @@ class RunArgs(BaseModel):
     """Directory where annotations, results, and the resolved ``config.yaml``
     are written (under a per-run subfolder)."""
 
+    emit_envelope: bool = False
+    """Also write a standard lm-eval-harness ``results.json`` next to the report,
+    for downstream collectors that read that format."""
+
     ignore_cache: bool = False
     """If set, ignore cached completions and regenerate them."""
 
