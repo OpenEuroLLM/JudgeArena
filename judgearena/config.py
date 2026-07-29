@@ -437,6 +437,23 @@ class RunConfig(BaseSettings):
         return tuple(sources) or (init_settings,)
 
 
+def _resolve_config_path(path: str | None) -> str | None:
+    """Resolve ``--config_path`` to a file path.
+
+    An existing filesystem path is used as-is. Otherwise the value is treated
+    as the name of a bundled base config (``judgearena/configs/*.yaml``), so
+    ``--config_path alpaca-eval`` works from anywhere, including inside the
+    container where the repo's ``configs/`` dir is absent.
+    """
+    if path is None or Path(path).is_file():
+        return path
+    from importlib.resources import files
+
+    name = path if path.endswith(".yaml") else f"{path}.yaml"
+    bundled = files("judgearena.configs") / Path(name).name
+    return str(bundled) if bundled.is_file() else path
+
+
 def build_run_config(argv: list[str] | None = None) -> RunConfig:
     """Build a RunConfig from CLI flags and an optional --config_path YAML.
 
@@ -449,7 +466,7 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     pre.add_argument("-q", "--quiet", action="store_true")
     pre_args, rest = pre.parse_known_args(argv)
 
-    _ACTIVE_CONFIG_PATH = pre_args.config_path
+    _ACTIVE_CONFIG_PATH = _resolve_config_path(pre_args.config_path)
     _ACTIVE_CLI_ARGS = rest
     try:
         cfg = RunConfig()

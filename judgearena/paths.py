@@ -25,6 +25,9 @@ def _data_root_path() -> Path:
     raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
     if raw:
         return Path(raw).expanduser()
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home).expanduser() / "judgearena-data"
     return Path("~/judgearena-data/").expanduser()
 
 
