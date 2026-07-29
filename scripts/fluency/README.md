@@ -16,11 +16,11 @@ To evaluate fluency, run:
 ```
 judgearena \
   --task fluency-french \
-  --model_A "LlamaCpp/./models/gemma4-4b.gguf" \
-  --model_B "LlamaCpp/./models/smollm3-3b.gguf" \
-  --judge_model "OpenRouter/google/gemma-4-31b-it" \
-  --n_instructions 1 --max_out_tokens_models 512 --max_out_tokens_judge 512 \
- ```
+  --model.name "LlamaCpp/./models/gemma3-1b-pt.gguf" \
+  --model.baseline "LlamaCpp/./models/smollm3-3b-base.gguf" \
+  --judge.model "OpenRouter/google/gemma-4-31b-it" \
+  --generation.n_instructions 1 --model.max_out_tokens 512 --judge.max_out_tokens 512
+```
 
 Where `{lang}` can be any of:
 
@@ -46,7 +46,7 @@ with 907 pairwise comparisons (5 annotators) where a human picked which of two
 model completions was more fluent, or called it a tie, see more details in the [paper](https://arxiv.org/pdf/2512.08777)
 which introduced this dataset. As in the original paper, we exclude ties.
 
-On this dataset, we have an accuracy for our judge of **81.4%** while the average human annotator accuracy is 93.4%.
+On this dataset, we have an judge-human accuracy of **81.4%** while the average human-human annotator accuracy is 93.4%.
 
 Here are inter-annotators agreement (human vs human, excluding ties):
 ```
