@@ -1,0 +1,23 @@
+# arena-hard-v2.0 — pairwise generate-and-judge win rate on hard prompts.
+# Your model answers Arena-Hard v2.0 prompts; the judge compares each answer to
+# the baseline's and reports your win rate.
+#
+# This task's baseline is *per category*, selected automatically (leave
+# model.baseline unset to use it):
+#   hard_prompt / coding / math -> o3-mini-2025-01-31
+#   creative_writing            -> gemini-2.0-flash-001
+#
+# Run:  judgearena --config_path arena-hard-v2.0 --model.name VLLM/<your-model>
+
+task: arena-hard-v2.0
+
+model:
+  name: VLLM/utter-project/EuroLLM-9B  # default candidate under test — override with --model.name
+  # baseline: intentionally unset -> the per-category native baselines above.
+  engine_kwargs:
+    gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
+
+judge:
+  model: VLLM/google/gemma-4-31b-it # local vLLM judge that scores each pairwise battle
+  engine_kwargs:
+    gpu_memory_utilization: 0.45

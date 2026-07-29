@@ -168,6 +168,7 @@ def test_eloreport_to_dict_envelope():
     from judgearena.estimate_elo_ratings import EloReport
 
     report = EloReport(
+        task="elo-lmarena-100k",
         arena="chatbot-arena",
         judge_model="judge",
         summary=_summary(),

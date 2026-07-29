@@ -1,0 +1,27 @@
+# elo-lmarena-100k — ELO rating against the LMArena-100k arena.
+# Unlike the win-rate tasks there is NO single baseline: your model plays battles
+# against the arena's many models and gets a Bradley-Terry / Soft-ELO rating on
+# the arena's scale (anchored to it). The full per-model leaderboard is written to
+# the run folder (results-*.json -> mean_ratings, and elo_ratings.json).
+#
+# Run:  judgearena --config_path elo-lmarena-100k --model.name VLLM/<your-model>
+# The arena is derived from the task name. Prefetch it before an offline run:
+#   judgearena-download elo-lmarena-100k
+
+task: elo-lmarena-100k
+
+model:
+  name: VLLM/utter-project/EuroLLM-9B  # default candidate under test — override with --model.name
+  engine_kwargs:
+    gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
+
+judge:
+  model: VLLM/google/gemma-4-31b-it # local vLLM judge that scores the arena battles
+  engine_kwargs:
+    gpu_memory_utilization: 0.45
+
+elo:
+  # ELO defaults shown explicitly so they're easy to tune:
+  n_bootstraps: 20                  # resamples used for the rating mean/CI
+  languages: null                   # null = all arena languages; e.g. ["en"] to restrict
+  soft_elo: true                    # use soft (probabilistic) preferences, not hard win/lose

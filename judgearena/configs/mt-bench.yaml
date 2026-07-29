@@ -1,0 +1,18 @@
+# mt-bench — pairwise generate-and-judge win rate on MT-Bench prompts.
+# Your model answers the MT-Bench prompts; the judge compares each answer to the
+# baseline's and reports how often yours is preferred (win rate).
+#
+# Run:  judgearena --config_path mt-bench --model.name VLLM/<your-model>
+
+task: mt-bench
+
+model:
+  name: VLLM/utter-project/EuroLLM-9B  # default candidate under test — override with --model.name
+  baseline: gpt-4                   # opponent to score against — MT-Bench's native baseline
+  engine_kwargs:
+    gpu_memory_utilization: 0.45    # candidate shares one GPU with the judge (0.45 each)
+
+judge:
+  model: VLLM/google/gemma-4-31b-it # local vLLM judge that scores each pairwise battle
+  engine_kwargs:
+    gpu_memory_utilization: 0.45
