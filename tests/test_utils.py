@@ -1,5 +1,6 @@
 import pytest
 
+import judgearena.instruction_dataset.fluency as fluency_mod
 import judgearena.instruction_dataset.mt_bench as mt_bench_mod
 import judgearena.models as utils_models
 import judgearena.utils as utils
@@ -47,7 +48,7 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(
-        utils_io,
+        fluency_mod,
         "snapshot_download",
         lambda **kwargs: calls.append(
             ("snapshot", kwargs["repo_id"], kwargs["local_dir"])
@@ -71,8 +72,8 @@ def test_download_all_dispatches_arena_hard_versions(monkeypatch, tmp_path):
     ]
     assert calls[5] == (
         "snapshot",
-        "geoalgo/multilingual-contexts-to-be-completed",
-        tmp_path / "contexts",
+        "geoalgo/multilingual-fluency",
+        tmp_path / "multilingual-fluency",
     )
 
 

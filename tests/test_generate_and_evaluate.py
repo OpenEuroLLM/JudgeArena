@@ -68,8 +68,8 @@ def mock_external_data_and_cache(monkeypatch):
     )
     monkeypatch.setattr(
         generate_and_evaluate,
-        "load_contexts",
-        lambda dataset: instructions.loc[:, "instruction"],
+        "load_fluency_contexts",
+        lambda local_path, task: instructions.loc[:, "instruction"],
     )
 
     monkeypatch.setattr(

@@ -244,19 +244,19 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 
 ### Generate + judge (pairwise)
 
-| Task                         | Description                                                                                    |
-|------------------------------|------------------------------------------------------------------------------------------------|
-| `alpaca-eval`                | General instruction-following benchmark                                                        |
-| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                              |
-| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                       |
-| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                   |
-| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                        |
-| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                 |
-| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages          |
-| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
-| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
-| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
-| `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
+| Task                         | Description                                                                                                                                                                     |
+|------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `alpaca-eval`                | General instruction-following benchmark                                                                                                                                         |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                                                                                               |
+| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                                                                                        |
+| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                                                                                    |
+| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                                                                                         |
+| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                                                                                                  |
+| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages                                                                                           |
+| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                                                                                                    |
+| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                                                                                                  |
+| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
+| `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
