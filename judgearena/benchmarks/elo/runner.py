@@ -10,7 +10,7 @@ import pandas as pd
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.artifacts import (
     prepare_run_directory,
-    slugify,
+    safe_filename,
     write_run_metadata_safely,
 )
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
@@ -597,10 +597,10 @@ def main(cfg: "RunConfig") -> dict:
     res_dir = prepare_run_directory(
         cfg,
         Path(cfg.run.result_folder)
-        / f"elo-{slugify(cfg.elo.arena)}-{slugify(model_name)}-"
-        f"{slugify(cfg.judge.model)}",
+        / f"elo-{safe_filename(cfg.elo.arena)}-{safe_filename(model_name)}-"
+        f"{safe_filename(cfg.judge.model)}",
     )
-    result_path = report.save(res_dir / f"results-{slugify(model_name)}.json")
+    result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
 
     # Persist only the run's own llm-judge battles (a few KB). The human arena
     # anchors are identical across every run, so we do not duplicate them per

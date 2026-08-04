@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def slugify(value: str) -> str:
+def safe_filename(value: str) -> str:
     """Return a filesystem-safe model, task, or benchmark name."""
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return slug or "value"
