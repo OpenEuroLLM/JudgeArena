@@ -92,8 +92,6 @@ PRESETS: dict[str, JudgePromptPreset] = {
 
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
-TASK_DEFAULT_PRESET: dict[str, str] = {}
-
 
 def default_preset_for_task(task: str | None) -> str:
     if task is None:
@@ -104,10 +102,6 @@ def default_preset_for_task(task: str | None) -> str:
     resolved = get_packaged_task(task)
     if resolved is not None:
         return resolved.spec.protocol.judge.default_prompt
-    if task in TASK_DEFAULT_PRESET:
-        return TASK_DEFAULT_PRESET[task]
-    if task.startswith("fluency"):
-        return FLUENCY_JUDGE_PROMPT_PRESET
     return DEFAULT_JUDGE_PROMPT_PRESET
 
 

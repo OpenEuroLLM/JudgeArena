@@ -9,7 +9,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
-from huggingface_hub import snapshot_download
 
 from judgearena.log import get_logger
 
@@ -27,27 +26,17 @@ data_root = _data_root_path()
 
 
 def download_hf(name: str, local_path: Path):
-    # A `name` is either a packaged task (download the HF sources declared in
-    # its task YAML) or a legacy dataset name (pattern-matched out of the
-    # monolithic judge-arena-dataset repo).
+    """Download the HF sources a packaged task declares in its YAML."""
     from judgearena.tasks.registry import get_packaged_task
 
     resolved_task = get_packaged_task(name)
-    if resolved_task is not None:
-        from judgearena.datasets.registry import resolve_download_adapter
+    if resolved_task is None:
+        raise ValueError(f"Unknown task {name!r}.")
+    from judgearena.datasets.registry import resolve_download_adapter
 
-        resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
-            resolved_task, local_path
-        )
-    else:
-        local_path.mkdir(exist_ok=True, parents=True)
-        snapshot_download(
-            repo_id="judge-arena/judge-arena-dataset",
-            repo_type="dataset",
-            allow_patterns=f"*{name}*",
-            local_dir=local_path,
-            force_download=False,
-        )
+    resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
+        resolved_task, local_path
+    )
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
@@ -77,15 +66,12 @@ def safe_parse_int(env_var: str) -> int | None:
 
 
 def download_all():
-    from judgearena.datasets.fluency import download_fluency_dataset
     from judgearena.tasks.registry import load_tasks
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
     for task_id in load_tasks():
         download_hf(name=task_id, local_path=local_path_tables)
-
-    download_fluency_dataset(data_root)
 
 
 class Timeblock:

@@ -4,7 +4,6 @@ import pandas as pd
 import pytest
 
 import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
-import judgearena.datasets.fluency as fluency_mod
 import judgearena.datasets.mt_bench as mt_bench
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
@@ -96,7 +95,6 @@ def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypat
 
 def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     hf_datasets = []
-    calls = {"contexts": 0}
 
     monkeypatch.setattr(utils_io, "data_root", tmp_path)
     monkeypatch.setattr(
@@ -105,10 +103,6 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         lambda name, local_path: hf_datasets.append((name, local_path)),
     )
 
-    def _contexts_snapshot_stub(**_kwargs):
-        calls["contexts"] += 1
-
-    monkeypatch.setattr(fluency_mod, "snapshot_download", _contexts_snapshot_stub)
     utils_io.download_all()
 
     tables_dir = tmp_path / "tables"
@@ -126,7 +120,6 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "mt-bench",
     ]
     assert all(path == tables_dir for _, path in hf_datasets)
-    assert calls["contexts"] == 1
 
 
 def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):
