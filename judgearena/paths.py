@@ -7,7 +7,7 @@ This is a tiny leaf module so it can be imported by every other module
 
 Symbols here are re-exported from :mod:`judgearena.utils` for backward
 compatibility, so existing ``from judgearena.utils import data_root`` /
-``from judgearena.utils import download_hf, read_df`` callers keep working.
+``from judgearena.utils import read_df`` callers keep working.
 """
 
 from __future__ import annotations
@@ -16,9 +16,6 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from huggingface_hub import snapshot_download
-
-from judgearena.dataset_revisions import hf_revision
 
 
 def _data_root_path() -> Path:
@@ -29,29 +26,6 @@ def _data_root_path() -> Path:
 
 
 data_root: Path = _data_root_path()
-
-
-def download_hf(name: str, local_path: Path) -> None:
-    """Download a registered or legacy instruction-table dataset."""
-    from judgearena.tasks.registry import get_packaged_task
-
-    resolved_task = get_packaged_task(name)
-    if resolved_task is not None:
-        from judgearena.datasets.judgearena_tables import download_task_sources
-
-        download_task_sources(resolved_task, local_path)
-        return
-
-    local_path.mkdir(exist_ok=True, parents=True)
-    repo_id = "judge-arena/judge-arena-dataset"
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        allow_patterns=f"*{name}*",
-        local_dir=local_path,
-        force_download=False,
-        revision=hf_revision(repo_id),
-    )
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
