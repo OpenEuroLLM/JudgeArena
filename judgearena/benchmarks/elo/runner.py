@@ -453,7 +453,6 @@ def run_elo(
 
             judge_chat_model_cal = make_model(
                 model=cfg.judge.model,
-                max_tokens=cfg.judge.max_out_tokens,
                 **judge_extra_kwargs,
             )
             cal_annotations, _, cal_prefs = judge_and_parse_prefs(
