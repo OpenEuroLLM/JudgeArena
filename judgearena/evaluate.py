@@ -1,5 +1,4 @@
 import json
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,45 +36,11 @@ from judgearena.utils import (
 
 logger = get_logger(__name__)
 
-
-class PairScore:
-    def __init__(self, *, temperature: float = 0.3, parser_mode: str = "score"):
-        super(PairScore).__init__()
-        self.temperature = temperature
-        self.parser_mode = parser_mode
-
-    def preference_from_scores(self, score_a: float, score_b: float) -> float:
-        return 1 - np.exp(self.temperature * score_a) / (
-            np.exp(self.temperature * np.array([score_a, score_b])).sum()
-        )
-
-    def parse_model_raw(self, judge_completion: str) -> float | None:
-        if self.parser_mode != "score":
-            raise ValueError(f"Unsupported parser_mode '{self.parser_mode}'.")
-        score_a, score_b = self.parse_raw_scores(judge_completion)
-        if score_a is None or score_b is None:
-            return None
-        return float(self.preference_from_scores(score_a, score_b))
-
-    @staticmethod
-    def parse_raw_scores(
-        judge_completion: str,
-    ) -> tuple[float | None, float | None]:
-        """Extract the raw A and B scores from a judge completion (no temperature)."""
-        # Strip thinking-model <think> blocks, then lower-case to avoid confusion
-        # (e.g. when "a" is used instead of "A").
-        text = strip_thinking_tags(judge_completion).lower()
-        score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
-        score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
-        return score_a, score_b
-
-    @staticmethod
-    def get_regexp_match(s: str, regex: str, group_index: int = 1):
-        m = re.search(re.compile(regex), s)
-        if m is None:
-            return None
-        else:
-            return float(m.group(group_index).strip(" "))
+# Re-exported for existing callers; implementations live with the presets.
+from judgearena.prompts.parsing import (  # noqa: E402
+    JudgeParser,
+    PairScore,
+)
 
 
 def calibrate_temperature(
@@ -156,7 +121,7 @@ def resolve_judge_prompts(
     if system_prompt is not None and user_prompt_template is not None:
         return ResolvedJudgePrompt(
             preset_name=prompt_preset or "custom",
-            parser_mode="score",
+            parse=PairScore(),
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             source="override",
@@ -294,12 +259,8 @@ def evaluate_completions(
     )
 
     # Pairwise judge results
-    score_parser = PairScore(parser_mode=resolved_prompt.parser_mode)
     prefs = pd.Series(
-        [
-            score_parser.parse_model_raw(annotation.judge_completion)
-            for annotation in annotations
-        ]
+        [resolved_prompt.parse(annotation.judge_completion) for annotation in annotations]
     )
     results = {
         **compute_pref_summary(prefs).to_dict(),
@@ -476,10 +437,9 @@ def judge_and_parse_prefs(
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    parser_mode: str = "score",
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
-    score_parser: "PairScore | None" = None,
+    parse: JudgeParser | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -531,11 +491,11 @@ def judge_and_parse_prefs(
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    if score_parser is None:
-        score_parser = PairScore(parser_mode=parser_mode)
+    if parse is None:
+        parse = PairScore()
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        results = [score_parser.parse_model_raw(a.judge_completion) for a in ann_list]
+        results = [parse(a.judge_completion) for a in ann_list]
         n_failed = sum(1 for r in results if r is None)
         if n_failed:
             logger.warning(

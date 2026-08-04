@@ -1,4 +1,4 @@
-from judgearena.evaluate import PairScore
+from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
@@ -48,7 +48,7 @@ def test_default_prompt_preset_renders_answer_labels():
         provide_explanation=False,
     )
 
-    assert resolved.parser_mode == "score"
+    assert isinstance(resolved.parse, PairScore)
     assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
 
 

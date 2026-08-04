@@ -6,7 +6,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-JudgeParserMode = Literal["score"]
+from judgearena.prompts.parsing import JudgeParser, PairScore
+
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
@@ -34,7 +35,8 @@ FLUENCY_SYSTEM_PROMPT = (
 @dataclass(frozen=True)
 class JudgePromptPreset:
     name: str
-    parser_mode: JudgeParserMode = "score"
+    parse: JudgeParser | None = None
+    """Parser for this preset's judge-output format; None only when delegated."""
     system_file: str | None = None
     user_file: str | None = None
     inline_system: str | None = None
@@ -45,7 +47,7 @@ class JudgePromptPreset:
 @dataclass(frozen=True)
 class ResolvedJudgePrompt:
     preset_name: str
-    parser_mode: JudgeParserMode
+    parse: JudgeParser | None
     system_prompt: str | None
     user_prompt_template: str
     source: PromptSource
@@ -67,20 +69,25 @@ class ResolvedJudgePrompt:
         }
 
 
+SCORE_PARSER = PairScore()
+
 PRESETS: dict[str, JudgePromptPreset] = {
     DEFAULT_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=DEFAULT_JUDGE_PROMPT_PRESET,
+        parse=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt.txt",
     ),
     DEFAULT_WITH_EXPLANATION_PRESET: JudgePromptPreset(
         name=DEFAULT_WITH_EXPLANATION_PRESET,
+        parse=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt-with-explanation.txt",
         with_explanation=True,
     ),
     FLUENCY_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=FLUENCY_JUDGE_PROMPT_PRESET,
+        parse=SCORE_PARSER,
         inline_system=FLUENCY_SYSTEM_PROMPT,
         user_file="prompt.txt",
     ),
@@ -144,7 +151,7 @@ def _resolve_file_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=f"file:{system_path.name}+{user_path.name}",
-        parser_mode="score",
+        parse=SCORE_PARSER,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="file",
@@ -197,7 +204,7 @@ def resolve_judge_prompt(
     if spec.delegated:
         return ResolvedJudgePrompt(
             preset_name=spec.name,
-            parser_mode=spec.parser_mode,
+            parse=spec.parse,
             system_prompt=None,
             user_prompt_template="",
             source="delegated",
@@ -219,7 +226,7 @@ def resolve_judge_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=spec.name,
-        parser_mode=spec.parser_mode,
+        parse=spec.parse,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="preset",
