@@ -409,6 +409,11 @@ class RunConfig(BaseSettings):
             and task_judge.default_temperature is not None
         ):
             self.judge.temperature = task_judge.default_temperature
+        if (
+            "max_out_tokens" not in self.judge.model_fields_set
+            and task_judge.default_max_out_tokens is not None
+        ):
+            self.judge.max_out_tokens = task_judge.default_max_out_tokens
 
         baseline = protocol.baseline
         if (
