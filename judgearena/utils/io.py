@@ -81,15 +81,14 @@ def safe_parse_int(env_var: str) -> int | None:
 def download_all():
     from judgearena.datasets.fluency import download_fluency_dataset
     from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
-    from judgearena.tasks.registry import TaskRegistry
+    from judgearena.tasks.registry import load_tasks
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
-    registry = TaskRegistry()
     packaged_table_tasks = tuple(
-        summary.task
-        for summary in registry.list()
-        if registry.get(summary.task).spec.dataset.adapter == "judgearena_tables"
+        task_id
+        for task_id, resolved in load_tasks().items()
+        if resolved.spec.dataset.adapter == "judgearena_tables"
     )
     for dataset in (
         *packaged_table_tasks,

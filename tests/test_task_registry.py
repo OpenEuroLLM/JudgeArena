@@ -10,7 +10,7 @@ import yaml
 from judgearena import cli as cli_module
 from judgearena.tasks.cli import run_task_command
 from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import TaskRegistry, UnknownTaskError
+from judgearena.tasks.registry import load_tasks
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
@@ -71,12 +71,10 @@ def _write_family(
 
 
 def test_packaged_registry_discovers_alpaca_eval():
-    registry = TaskRegistry()
+    tasks = load_tasks()
+    resolved = tasks["alpaca-eval"]
 
-    summary = registry.list()
-    resolved = registry.get("alpaca-eval")
-
-    assert [task.task for task in summary] == ["alpaca-eval"]
+    assert list(tasks) == ["alpaca-eval"]
     assert resolved.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
     )
@@ -85,7 +83,7 @@ def test_packaged_registry_discovers_alpaca_eval():
 
 
 def test_find_returns_none_for_unregistered_task():
-    assert TaskRegistry().find("not-packaged-yet") is None
+    assert load_tasks().get("not-packaged-yet") is None
 
 
 def test_registry_rejects_unpinned_remote_source(tmp_path):
@@ -99,7 +97,7 @@ def test_registry_rejects_unpinned_remote_source(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="revision"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_registry_rejects_duplicate_yaml_keys(tmp_path):
@@ -112,7 +110,7 @@ def test_registry_rejects_duplicate_yaml_keys(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="duplicate key 'task'"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_registry_resolves_private_base_and_records_provenance(tmp_path):
@@ -138,7 +136,7 @@ def test_registry_resolves_private_base_and_records_provenance(tmp_path):
         },
     )
 
-    resolved = TaskRegistry(tmp_path).get("test-task")
+    resolved = load_tasks(tmp_path)["test-task"]
 
     assert resolved.spec.description == "Resolved child."
     assert resolved.spec.tags == ("child",)
@@ -170,7 +168,7 @@ def test_registry_rejects_inheritance_cycle(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="inheritance cycle"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_registry_rejects_extends_path_escape(tmp_path):
@@ -182,7 +180,7 @@ def test_registry_rejects_extends_path_escape(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="path escapes"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_registry_rejects_duplicate_task_ids(tmp_path):
@@ -195,7 +193,7 @@ def test_registry_rejects_duplicate_task_ids(tmp_path):
         )
 
     with pytest.raises(TaskDefinitionError, match="Duplicate task ID 'same-task'"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_registry_rejects_unknown_adapter_id(tmp_path):
@@ -209,7 +207,7 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="unknown dataset adapter"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_official_outputs_must_reference_declared_source(tmp_path):
@@ -226,7 +224,7 @@ def test_official_outputs_must_reference_declared_source(tmp_path):
     )
 
     with pytest.raises(TaskDefinitionError, match="not declared in dataset.sources"):
-        TaskRegistry(tmp_path).validate_all()
+        load_tasks(tmp_path)
 
 
 def test_resolved_hash_ignores_yaml_formatting(tmp_path):
@@ -237,25 +235,27 @@ def test_resolved_hash_ignores_yaml_formatting(tmp_path):
         filename="test-task.yaml",
         definition=definition,
     )
-    first = TaskRegistry(tmp_path).get("test-task")
+    first = load_tasks(tmp_path)["test-task"]
 
     path.write_text("# formatting-only change\n" + yaml.safe_dump(definition))
-    second = TaskRegistry(tmp_path).get("test-task")
+    second = load_tasks(tmp_path)["test-task"]
 
     assert first.provenance.source_sha256 != second.provenance.source_sha256
     assert first.provenance.resolved_sha256 == second.provenance.resolved_sha256
 
 
-def test_unknown_task_error_lists_registered_tasks(tmp_path):
+def test_unknown_task_lists_registered_tasks(tmp_path, capsys):
     _write_family(
         tmp_path,
         family="example",
         filename="test-task.yaml",
         definition=_task_definition(),
     )
+    tasks = load_tasks(tmp_path)
 
-    with pytest.raises(UnknownTaskError, match="test-task"):
-        TaskRegistry(tmp_path).get("missing")
+    with pytest.raises(SystemExit):
+        run_task_command(["show", "missing"], tasks=tasks)
+    assert "test-task" in capsys.readouterr().err
 
 
 def test_task_commands_list_show_and_validate(tmp_path, capsys):
@@ -265,17 +265,17 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys):
         filename="test-task.yaml",
         definition=_task_definition(),
     )
-    registry = TaskRegistry(tmp_path)
+    tasks = load_tasks(tmp_path)
 
-    run_task_command(["list"], registry=registry)
+    run_task_command(["list"], tasks=tasks)
     assert capsys.readouterr().out.startswith("test-task\tv1\t")
 
-    run_task_command(["show", "test-task", "--resolved"], registry=registry)
+    run_task_command(["show", "test-task", "--resolved"], tasks=tasks)
     shown = yaml.safe_load(capsys.readouterr().out)
     assert shown["task"] == "test-task"
     assert shown["_provenance"]["resolved_sha256"]
 
-    run_task_command(["validate"], registry=registry)
+    run_task_command(["validate"], tasks=tasks)
     assert capsys.readouterr().out == "Validated 1 task(s).\n"
 
 

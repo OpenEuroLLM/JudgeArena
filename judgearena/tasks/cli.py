@@ -9,7 +9,8 @@ from dataclasses import asdict
 import yaml
 
 from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import TaskRegistry, UnknownTaskError
+from judgearena.tasks.registry import load_tasks
+from judgearena.tasks.schema import ResolvedTaskSpec
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -31,28 +32,39 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run_task_command(
-    argv: Sequence[str], *, registry: TaskRegistry | None = None
+    argv: Sequence[str], *, tasks: dict[str, ResolvedTaskSpec] | None = None
 ) -> None:
     """Run a task-registry command without starting an evaluation."""
     parser = _parser()
     args = parser.parse_args(list(argv))
-    registry = registry or TaskRegistry()
     try:
+        tasks = load_tasks() if tasks is None else tasks
         if args.command == "list":
-            for task in registry.list():
-                print(f"{task.task}\tv{task.task_version}\t{task.description}")
+            for resolved in tasks.values():
+                spec = resolved.spec
+                print(f"{spec.task}\tv{spec.task_version}\t{spec.description}")
         elif args.command == "show":
-            resolved = registry.get(args.task)
+            resolved = _require(parser, tasks, args.task)
             output = resolved.model_dump()
             if args.resolved:
                 output["_provenance"] = asdict(resolved.provenance)
             print(yaml.safe_dump(output, sort_keys=False).rstrip())
         elif args.command == "validate":
             if args.task is not None:
-                registry.get(args.task)
+                _require(parser, tasks, args.task)
                 print(f"Validated task {args.task!r}.")
             else:
-                report = registry.validate_all()
-                print(f"Validated {report.count} task(s).")
-    except (TaskDefinitionError, UnknownTaskError) as exc:
+                print(f"Validated {len(tasks)} task(s).")
+    except TaskDefinitionError as exc:
         parser.error(str(exc))
+
+
+def _require(
+    parser: argparse.ArgumentParser,
+    tasks: dict[str, ResolvedTaskSpec],
+    task_id: str,
+) -> ResolvedTaskSpec:
+    if task_id not in tasks:
+        known = ", ".join(sorted(tasks)) or "none"
+        parser.error(f"unknown task {task_id!r}; registered tasks: {known}")
+    return tasks[task_id]
