@@ -36,6 +36,7 @@ def cli(argv: list[str] | None = None) -> None:
     if args[:1] == ["tasks"]:
         from judgearena.tasks.cli import run_task_command
 
+        configure_logging()
         run_task_command(args[1:])
         return
 

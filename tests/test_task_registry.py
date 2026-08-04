@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -258,7 +259,7 @@ def test_unknown_task_lists_registered_tasks(tmp_path, capsys):
     assert "test-task" in capsys.readouterr().err
 
 
-def test_task_commands_list_show_and_validate(tmp_path, capsys):
+def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
     _write_family(
         tmp_path,
         family="example",
@@ -275,8 +276,10 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys):
     assert shown["task"] == "test-task"
     assert shown["_provenance"]["resolved_sha256"]
 
+    caplog.set_level(logging.INFO, logger="judgearena")
     run_task_command(["validate"], tasks=tasks)
-    assert capsys.readouterr().out == "Validated 1 task(s).\n"
+    assert capsys.readouterr().out == ""
+    assert "Validated 1 task(s)." in caplog.text
 
 
 def test_main_cli_intercepts_task_commands(monkeypatch, capsys):
