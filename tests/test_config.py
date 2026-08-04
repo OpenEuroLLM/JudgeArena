@@ -37,6 +37,7 @@ def _registered_task(
     default_swap_mode: str = "both",
     allowed_swap_modes: tuple[str, ...] = ("both",),
     default_temperature: float | None = 0.25,
+    default_max_out_tokens: int | None = 4096,
     allow_runtime_override: bool = True,
 ):
     return SimpleNamespace(
@@ -46,6 +47,7 @@ def _registered_task(
                     default_swap_mode=default_swap_mode,
                     allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
+                    default_max_out_tokens=default_max_out_tokens,
                 ),
                 baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
@@ -64,6 +66,20 @@ def test_registered_task_applies_judge_defaults(monkeypatch):
 
     assert cfg.judge.swap_mode == "both"
     assert cfg.judge.temperature == 0.25
+    assert cfg.judge.max_out_tokens == 4096
+
+
+def test_registered_task_keeps_explicit_judge_max_out_tokens(monkeypatch):
+    monkeypatch.setattr(
+        config_module, "get_packaged_task", lambda _task: _registered_task()
+    )
+    data = _base_generate()
+    data["task"] = "yaml-task"
+    data["judge"]["max_out_tokens"] = 512
+
+    cfg = RunConfig(**data)
+
+    assert cfg.judge.max_out_tokens == 512
 
 
 def test_registered_task_rejects_unsupported_swap_mode(monkeypatch):

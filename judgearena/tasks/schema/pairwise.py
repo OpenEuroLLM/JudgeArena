@@ -24,6 +24,7 @@ class PairwiseJudgeSpec(StrictFrozenModel):
     default_swap_mode: SwapMode = "fixed"
     allowed_swap_modes: tuple[SwapMode, ...] = ("fixed", "both")
     default_temperature: float | None = None
+    default_max_out_tokens: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _default_must_be_allowed(self) -> PairwiseJudgeSpec:
