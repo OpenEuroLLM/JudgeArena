@@ -149,7 +149,6 @@ class SuffixVariants(_StrictFrozenModel):
     """Validated suffixes selecting views of one task definition."""
 
     selector: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
-    separator: Literal["-"] = "-"
     values: tuple[str, ...] = Field(min_length=1)
     groups: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 

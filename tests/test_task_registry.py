@@ -198,7 +198,7 @@ def test_registry_rejects_variant_id_collision(tmp_path):
         definition=_task_definition("family-mini"),
     )
 
-    with pytest.raises(TaskDefinitionError, match="Variant task ID"):
+    with pytest.raises(TaskDefinitionError, match="collides with an existing task"):
         load_tasks(tmp_path)
 
 
