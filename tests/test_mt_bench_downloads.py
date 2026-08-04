@@ -120,6 +120,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "elo-lmarena",
         "elo-lmarena-100k",
         "elo-lmarena-140k",
+        "fluency",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",

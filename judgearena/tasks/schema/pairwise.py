@@ -11,7 +11,9 @@ from judgearena.tasks.schema.baselines import BaselineSpec
 
 
 class SingleTurnGeneration(StrictFrozenModel):
-    mode: Literal["single_turn_chat"]
+    # "single_turn_chat" prompts an instruction-tuned model through its chat
+    # template; "base_completion" lets a base model continue the raw text.
+    mode: Literal["single_turn_chat", "base_completion"]
 
 
 SwapMode = Literal["fixed", "both"]

@@ -7,6 +7,7 @@ import pytest
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.judgearena_tables as judgearena_tables
+import judgearena.datasets.fluency as fluency
 import judgearena.datasets.m_arenahard as m_arenahard
 import judgearena.datasets.pairwise as pairwise_data
 from judgearena.datasets.arena_hard import (
@@ -420,3 +421,29 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]
     assert loaded.index.tolist() == [0, 1]
+
+
+def test_fluency_variants_cover_all_supported_languages():
+    task = get_packaged_task("fluency")
+    assert task is not None
+    expected = {
+        fluency.fluency_language_slug(language)
+        for language in fluency.FLUENCY_LANGUAGES
+    }
+    assert set(task.spec.variants.values) == expected
+
+
+def test_fluency_adapter_loads_selected_language(monkeypatch, tmp_path):
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+    monkeypatch.setattr(fluency, "download_task_sources", lambda _task, _path: None)
+    root = fluency._source_local_dir(fluency._source(task), tmp_path)
+    (root / "French").mkdir(parents=True)
+    pd.DataFrame({"sentence": ["Le chat", "La maison"]}).to_parquet(
+        root / "French" / "data.parquet"
+    )
+
+    loaded = fluency.load_task_instructions(task, tmp_path)
+
+    assert loaded["instruction"].tolist() == ["Le chat", "La maison"]
+    assert loaded["instruction_index"].tolist() == ["french-0", "french-1"]

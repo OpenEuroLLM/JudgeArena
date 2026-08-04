@@ -42,6 +42,7 @@ def dataset_adapters() -> tuple[TaskDatasetAdapter, ...]:
     from judgearena.datasets import (
         arena_battles,
         arena_hard,
+        fluency,
         judgearena_tables,
         m_arenahard,
         mt_bench,
@@ -64,6 +65,12 @@ def dataset_adapters() -> tuple[TaskDatasetAdapter, ...]:
             arena_hard.download_task_sources,
             arena_hard.load_task_instructions,
             arena_hard.load_task_model_outputs,
+        ),
+        InstructionDatasetAdapter(
+            "fluency",
+            fluency.download_task_sources,
+            fluency.load_task_instructions,
+            fluency.load_task_model_outputs,
         ),
         InstructionDatasetAdapter(
             "m_arena_hard",

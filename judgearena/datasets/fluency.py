@@ -19,6 +19,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 
 from judgearena.dataset_revisions import hf_revision
+from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
 FLUENCY_TASK_PREFIX = "fluency-"
 
@@ -122,6 +123,76 @@ def download_fluency_dataset(local_path: Path) -> Path:
         revision=hf_revision(FLUENCY_HF_REPO),
     )
     return root
+
+
+def _source(task: "ResolvedTaskSpec") -> "HuggingFaceDatasetSource":
+    source = task.spec.dataset.sources.get("examples")
+    if not isinstance(source, HuggingFaceDatasetSource):
+        raise ValueError(
+            f"Task {task.task!r} must define a Hugging Face dataset source "
+            "named 'examples'."
+        )
+    return source
+
+
+def _source_local_dir(source: "HuggingFaceDatasetSource", root: Path) -> Path:
+    """Keep raw source snapshots separate from normalized JudgeArena tables."""
+    return root / "_sources" / source.repo_id.replace("/", "--")
+
+
+def download_task_sources(task: "ResolvedTaskSpec", local_tables_path: Path) -> None:
+    """Download the pinned fluency contexts declared by the task."""
+    if task.spec.dataset.adapter != "fluency":
+        raise ValueError(f"Task {task.task!r} does not use the fluency adapter.")
+    source = _source(task)
+    snapshot_download(
+        repo_id=source.repo_id,
+        repo_type="dataset",
+        revision=source.revision,
+        allow_patterns=list(source.allow_patterns) or None,
+        local_dir=_source_local_dir(source, local_tables_path),
+        force_download=False,
+    )
+
+
+def _selected_languages(task: "ResolvedTaskSpec") -> tuple[str, ...]:
+    variants = task.spec.variants
+    if variants is None or variants.selector != "language":
+        raise ValueError(f"Task {task.task!r} must define language suffix variants.")
+    slugs = task.selection.values if task.selection is not None else variants.values
+    return tuple(_SLUG_TO_LANGUAGE[slug] for slug in slugs)
+
+
+def load_task_instructions(
+    task: "ResolvedTaskSpec", local_tables_path: Path
+) -> pd.DataFrame:
+    """Load the sentence contexts for the languages selected by the invocation."""
+    download_task_sources(task, local_tables_path)
+    root = _source_local_dir(_source(task), local_tables_path)
+
+    frames: list[pd.DataFrame] = []
+    for language in _selected_languages(task):
+        matches = sorted((root / language).glob("*.parquet"))
+        if not matches:
+            raise FileNotFoundError(
+                f"No parquet found for language {language!r} under {root}."
+            )
+        frame = pd.concat([pd.read_parquet(path) for path in matches])
+        frame["instruction_index"] = [
+            f"{fluency_language_slug(language)}-{i}" for i in range(len(frame))
+        ]
+        frames.append(frame)
+
+    df = pd.concat(frames, ignore_index=True)
+    fields = task.spec.dataset.fields
+    return df.rename(columns={fields.instruction: "instruction"})
+
+
+def load_task_model_outputs(
+    task: "ResolvedTaskSpec", local_tables_path: Path
+) -> pd.DataFrame | None:
+    """Fluency has no pre-generated model outputs; completions are generated."""
+    return None
 
 
 def load_fluency_contexts(local_path: Path, task: str) -> pd.Series:
