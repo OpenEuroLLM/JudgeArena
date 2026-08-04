@@ -233,7 +233,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             system_prompt=group_prompt.system_prompt,
             user_prompt_template=group_prompt.user_prompt_template,
             prompt_preset=group_prompt.preset_name,
-            parser_mode=group_prompt.parser_mode,
+            parse=group_prompt.parse,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
         )

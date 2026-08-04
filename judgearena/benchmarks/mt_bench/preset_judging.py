@@ -19,7 +19,7 @@ from judgearena.benchmarks.mt_bench.pairwise_judging import (
 from judgearena.benchmarks.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
 )
-from judgearena.evaluate import PairScore
+from judgearena.prompts.parsing import JudgeParser, parser_name
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -31,7 +31,7 @@ from judgearena.prompts.registry import (
 class MTBenchPresetPrompt:
     name: str
     preset_name: str
-    parser_mode: str
+    parse: JudgeParser
     system_prompt: str | None
     user_prompt_template: str
     multi_turn: bool
@@ -89,7 +89,7 @@ def _select_preset_prompt(
     return MTBenchPresetPrompt(
         name=f"{resolved_prompt.preset_name}-{suffix}",
         preset_name=resolved_prompt.preset_name,
-        parser_mode=resolved_prompt.parser_mode,
+        parse=resolved_prompt.parse,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=_build_mt_bench_preset_user_prompt_template(
             resolved_prompt=resolved_prompt,
@@ -200,9 +200,7 @@ def judge_mt_bench_with_preset(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
             prompt: MTBenchPresetPrompt = item.prompt
-            parsed_preference = PairScore(
-                parser_mode=prompt.parser_mode
-            ).parse_model_raw(raw_judgment)
+            parsed_preference = prompt.parse(raw_judgment)
             normalized_preference = _normalize_preference(
                 parsed_preference,
                 swapped=swapped,
@@ -217,7 +215,7 @@ def judge_mt_bench_with_preset(
                     "judge": judge_model,
                     "prompt_name": prompt.name,
                     "prompt_preset": prompt.preset_name,
-                    "parser_mode": prompt.parser_mode,
+                    "parser_mode": parser_name(prompt.parse),
                     "system_prompt": prompt.system_prompt,
                     "user_prompt_template": prompt.user_prompt_template,
                     "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
