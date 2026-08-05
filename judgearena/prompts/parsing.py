@@ -58,3 +58,20 @@ class PairScore:
 def parser_name(parse: JudgeParser) -> str:
     """Short identifier of a parser for run metadata."""
     return getattr(parse, "parser_name", getattr(parse, "__name__", "unknown"))
+
+
+# Parsers selectable by name for runtime prompt overrides (judge.parser);
+# presets reference their parser callable directly.
+JUDGE_PARSERS: dict[str, JudgeParser] = {
+    "score": PairScore(),
+}
+
+
+def resolve_judge_parser(name: str) -> JudgeParser:
+    """Return the registered judge parser named in a run config."""
+    try:
+        return JUDGE_PARSERS[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown judge parser {name!r}; available: {sorted(JUDGE_PARSERS)}"
+        ) from exc

@@ -6,7 +6,12 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-from judgearena.prompts.parsing import JudgeParser, PairScore
+from judgearena.prompts.parsing import (
+    JUDGE_PARSERS,
+    JudgeParser,
+    parser_name,
+    resolve_judge_parser,
+)
 
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
@@ -60,6 +65,7 @@ class ResolvedJudgePrompt:
     def metadata(self) -> dict[str, str | bool | None]:
         return {
             "judge_prompt_preset": self.preset_name,
+            "judge_parser": parser_name(self.parse) if self.parse is not None else None,
             "judge_prompt_source": self.source,
             "judge_prompt_delegated": self.delegated,
             "judge_prompt_system_path": self.system_path,
@@ -69,7 +75,7 @@ class ResolvedJudgePrompt:
         }
 
 
-SCORE_PARSER = PairScore()
+SCORE_PARSER = JUDGE_PARSERS["score"]
 
 PRESETS: dict[str, JudgePromptPreset] = {
     DEFAULT_JUDGE_PROMPT_PRESET: JudgePromptPreset(
@@ -140,6 +146,7 @@ def _resolve_file_prompt(
     user_file: str | Path,
     multi_turn: bool,
     provide_explanation: bool,
+    parse: JudgeParser,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file)
     user_path = Path(user_file)
@@ -151,7 +158,7 @@ def _resolve_file_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=f"file:{system_path.name}+{user_path.name}",
-        parse=SCORE_PARSER,
+        parse=parse,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="file",
@@ -170,6 +177,7 @@ def resolve_judge_prompt(
     user_file: str | Path | None = None,
     multi_turn: bool = False,
     provide_explanation: bool = False,
+    parser: str | None = None,
 ) -> ResolvedJudgePrompt:
     if (system_file is None) != (user_file is None):
         raise ValueError(
@@ -182,6 +190,12 @@ def resolve_judge_prompt(
             user_file=user_file,
             multi_turn=multi_turn,
             provide_explanation=provide_explanation,
+            parse=resolve_judge_parser(parser or "score"),
+        )
+    if parser is not None:
+        raise ValueError(
+            "judge.parser requires judge prompt files; a preset already "
+            "defines its parser."
         )
 
     if preset is None:
@@ -250,4 +264,5 @@ def resolve_run_judge_prompt(
         user_file=getattr(judge_cfg, "user_prompt_file", None),
         multi_turn=multi_turn,
         provide_explanation=getattr(judge_cfg, "provide_explanation", False),
+        parser=getattr(judge_cfg, "parser", None),
     )

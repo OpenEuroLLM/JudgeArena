@@ -248,6 +248,8 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
+    # Keep in sync with judgearena.datasets.registry.dataset_adapters();
+    # importing it here would create a cycle.
     instruction_datasets: frozenset[str] = frozenset(
         {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
