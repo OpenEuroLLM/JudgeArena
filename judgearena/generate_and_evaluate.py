@@ -11,30 +11,26 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.baselines import native_pairwise_baseline
+from judgearena.benchmark import (
+    BenchmarkAdapter,
+    build_generation_kwargs,
+    build_judge,
+    resolve_benchmark_adapter,
+)
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
-    ARENA_HARD_BASELINES,
     download_arena_hard,
     is_arena_hard_dataset,
 )
 from judgearena.instruction_dataset.fluency import is_fluency_task as task_is_fluency
 from judgearena.instruction_dataset.fluency import load_fluency_contexts
-from judgearena.instruction_dataset.m_arenahard import (
-    M_ARENA_HARD_BASELINES,
-    split_m_arena_hard_dataset,
-)
-from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
 from judgearena.log import (
     attach_file_handler,
     get_logger,
     make_run_log_path,
-)
-from judgearena.models import (
-    build_default_judge_model_kwargs,
-    is_thinking_model,
-    make_model,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import write_run_metadata
@@ -52,17 +48,6 @@ if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
-
-ALPACA_EVAL_BASELINES: dict[str, str] = {
-    "alpaca-eval": "gpt4_1106_preview",
-}
-
-PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
-    **ALPACA_EVAL_BASELINES,
-    **ARENA_HARD_BASELINES,
-    **M_ARENA_HARD_BASELINES,
-    **MT_BENCH_BASELINES,
-}
 
 
 def try_load_dataset_completions(
@@ -147,17 +132,6 @@ class BaselinePlan:
         return self.baseline_by_index.loc[index]
 
 
-def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
-    """Return the dataset-native pairwise baseline, if the task defines one."""
-    if task in PAIRWISE_BASELINES:
-        return PAIRWISE_BASELINES[task]
-    parsed_m_arena_hard = split_m_arena_hard_dataset(task)
-    if parsed_m_arena_hard is not None:
-        version_key, _lang_or_subset = parsed_m_arena_hard
-        return PAIRWISE_BASELINES[version_key]
-    return None
-
-
 def _resolve_baseline_plan(
     *, task: str, model_b: str | None, instructions_df: pd.DataFrame
 ) -> BaselinePlan:
@@ -193,31 +167,7 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
 
 
-def _build_generation_kwargs(
-    cfg: "RunConfig", model_spec: str, *, role: str
-) -> dict[str, object]:
-    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
-    if role == "A":
-        generation_kwargs = cfg.model.evaluated_generation_kwargs()
-    elif role == "B":
-        generation_kwargs = cfg.model.baseline_generation_kwargs()
-    else:
-        raise ValueError(f"Unknown generation role: {role!r}")
-    provider, _, model_name = model_spec.partition("/")
-    if (
-        cfg.judge.battle_thinking_token_budget is not None
-        and provider == "VLLM"
-        and is_thinking_model(model_name)
-    ):
-        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
-        generation_kwargs["thinking_token_budget"] = min(
-            int(cfg.judge.battle_thinking_token_budget),
-            max_tokens,
-        )
-    return generation_kwargs
-
-
-def main(cfg: "RunConfig"):
+def run_pairwise(cfg: "RunConfig"):
     """
     1) take as input:
      * task (dataset), make sure instruct-completion works
@@ -330,7 +280,7 @@ def main(cfg: "RunConfig"):
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
-        generation_kwargs = _build_generation_kwargs(cfg, model_spec, role=role)
+        generation_kwargs = build_generation_kwargs(cfg, model_spec, role=role)
         sampling_token = generation_cache_token(generation_kwargs)
         generated = cache_function_dataframe(
             lambda: _run_generation(model_spec, generation_kwargs=generation_kwargs),
@@ -372,16 +322,7 @@ def main(cfg: "RunConfig"):
     )
     logger.info("Evaluating completions with judge %s.", cfg.judge.model)
 
-    judge_chat_model = make_model(
-        model=cfg.judge.model,
-        **build_default_judge_model_kwargs(
-            cfg.judge.model,
-            cfg.model.engine_kwargs,
-            judge_engine_kwargs_override=cfg.judge.model_kwargs(
-                fallback_chat_template=cfg.model.chat_template,
-            ),
-        ),
-    )
+    judge_chat_model = build_judge(cfg)
 
     # save the resolved config for results analysis (round-trippable via --config_path)
     from judgearena.config import dump_config
@@ -480,3 +421,15 @@ def main(cfg: "RunConfig"):
         logger.warning("Failed to write run metadata: %s", e)
 
     return prefs
+
+
+def _benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
+    """Return the registered generate-and-evaluate implementations."""
+    return (BenchmarkAdapter("pairwise", None, run_pairwise),)
+
+
+def main(cfg: "RunConfig"):
+    """Run a task through its registered generate-and-evaluate adapter."""
+    adapter = resolve_benchmark_adapter(cfg.task, _benchmark_adapters())
+    logger.info("Using %s benchmark adapter for %s.", adapter.name, cfg.task)
+    return adapter.runner(cfg)
