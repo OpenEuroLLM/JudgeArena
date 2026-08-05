@@ -134,6 +134,42 @@ def test_file_overrides_take_precedence_over_preset(tmp_path):
     assert resolved.user_sha256 is not None
 
 
+def test_file_overrides_accept_named_parser(tmp_path):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("Judge with scores", encoding="utf-8")
+    user_file.write_text("Q: {user_prompt} A: {completion_A} B: {completion_B}")
+
+    resolved = resolve_judge_prompt(
+        system_file=system_file,
+        user_file=user_file,
+        parser="score",
+    )
+
+    assert resolved.parse is JUDGE_PARSERS["score"]
+    assert resolved.parse("score A: 0 score B: 10") is not None
+    assert resolved.metadata()["judge_parser"] == "score"
+
+
+def test_named_parser_without_prompt_files_is_rejected():
+    with pytest.raises(ValueError, match="requires judge prompt files"):
+        resolve_judge_prompt(task="alpaca-eval", parser="score")
+
+
+def test_unknown_named_parser_lists_available(tmp_path):
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("s", encoding="utf-8")
+    user_file.write_text("u", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unknown judge parser"):
+        resolve_judge_prompt(
+            system_file=system_file, user_file=user_file, parser="nope"
+        )
+
+
 def test_resolve_run_judge_prompt_reads_cli_fields():
     resolved_default = resolve_run_judge_prompt("alpaca-eval", FakeCliArgs())
     resolved_explain = resolve_run_judge_prompt(

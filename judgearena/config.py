@@ -232,6 +232,11 @@ class JudgeArgs(BaseModel):
     user_prompt_file: str | None = None
     """Path to a custom judge user-prompt template, overriding the preset's."""
 
+    parser: str | None = None
+    """Named parser for judge outputs when using custom prompt files (see
+    ``judgearena.prompts.parsing.JUDGE_PARSERS``). Defaults to "score". Only
+    valid with prompt files — presets carry their own parser."""
+
     battle_thinking_token_budget: int | None = None
     """Token budget allotted to a thinking judge's reasoning block. Unset
     leaves the model default."""

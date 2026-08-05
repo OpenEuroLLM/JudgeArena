@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 from judgearena.prompts.parsing import (  # noqa: E402
     JudgeParser,
     PairScore,
+    resolve_judge_parser,
 )
 
 
@@ -117,11 +118,12 @@ def resolve_judge_prompts(
     task: str | None = None,
     system_file: str | None = None,
     user_file: str | None = None,
+    parser: str | None = None,
 ) -> ResolvedJudgePrompt:
     if system_prompt is not None and user_prompt_template is not None:
         return ResolvedJudgePrompt(
             preset_name=prompt_preset or "custom",
-            parse=PairScore(),
+            parse=resolve_judge_parser(parser or "score"),
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
             source="override",
@@ -138,6 +140,7 @@ def resolve_judge_prompts(
         user_file=user_file,
         provide_explanation=provide_explanation,
         multi_turn=multi_turn,
+        parser=parser,
     )
     if resolved.delegated:
         raise ValueError(
