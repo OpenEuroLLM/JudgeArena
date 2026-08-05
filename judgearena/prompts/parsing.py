@@ -2,20 +2,40 @@
 
 from __future__ import annotations
 
+import abc
 import re
-from collections.abc import Callable
 
 import numpy as np
 
 from judgearena.utils import strip_thinking_tags
 
-JudgeParser = Callable[[str], "float | None"]
+
+class JudgeParser(abc.ABC):
+    """Parses one judge completion into the universal preference.
+
+    ``__call__`` returns the preference every pipeline consumes (0 = A wins,
+    0.5 = tie, 1 = B wins, None = unparseable). ``parse_values`` optionally
+    exposes the parser's structured values as a flat ``str -> float`` dict:
+    per-side keys carry ``_a``/``_b`` suffixes in judged positions,
+    battle-level keys are unsuffixed, and the key set is owned by the parser.
+    """
+
+    name: str
+    """Registry key and run-metadata identifier."""
+
+    @abc.abstractmethod
+    def __call__(self, judge_completion: str) -> float | None: ...
+
+    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
+        """Structured values behind the preference; None when there are none."""
+        return None
 
 
-class PairScore:
+
+class PairScore(JudgeParser):
     """Score-format parser: temperature-softened preference from A/B scores."""
 
-    parser_name = "score"
+    name = "score"
 
     def __init__(self, *, temperature: float = 0.3):
         self.temperature = temperature
@@ -27,6 +47,12 @@ class PairScore:
 
     def __call__(self, judge_completion: str) -> float | None:
         return self.parse_model_raw(judge_completion)
+
+    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
+        score_a, score_b = self.parse_raw_scores(judge_completion)
+        if score_a is None or score_b is None:
+            return None
+        return {"score_a": score_a, "score_b": score_b}
 
     def parse_model_raw(self, judge_completion: str) -> float | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
@@ -55,15 +81,19 @@ class PairScore:
             return float(m.group(group_index).strip(" "))
 
 
-def parser_name(parse: JudgeParser) -> str:
-    """Short identifier of a parser for run metadata."""
-    return getattr(parse, "parser_name", getattr(parse, "__name__", "unknown"))
+def parser_name(parse) -> str:
+    """Short identifier of a parser for run metadata.
+
+    Falls back to ``__name__`` for plain callables outside the registry
+    (e.g. mt_bench's delegated FastChat parsers).
+    """
+    return getattr(parse, "name", getattr(parse, "__name__", "unknown"))
 
 
 # Parsers selectable by name for runtime prompt overrides (judge.parser);
-# presets reference their parser callable directly.
+# presets reference these same instances.
 JUDGE_PARSERS: dict[str, JudgeParser] = {
-    "score": PairScore(),
+    parser.name: parser for parser in (PairScore(),)
 }
 
 

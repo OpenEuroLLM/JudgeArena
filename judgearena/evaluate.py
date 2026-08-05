@@ -313,6 +313,9 @@ class JudgeAnnotation:
     judge_completion: str  # output of the judge
     judge_input: str | None = None  # input that was passed to the judge
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
+    # structured parser values (flat, _a/_b suffixes = judged positions);
+    # key set is owned by the parser, see JudgeParser.parse_values
+    judge_values: dict[str, float] | None = None
 
 
 def annotate_battles(
@@ -498,6 +501,8 @@ def judge_and_parse_prefs(
         parse = PairScore()
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
+        for annotation in ann_list:
+            annotation.judge_values = parse.parse_values(annotation.judge_completion)
         results = [parse(a.judge_completion) for a in ann_list]
         n_failed = sum(1 for r in results if r is None)
         if n_failed:
