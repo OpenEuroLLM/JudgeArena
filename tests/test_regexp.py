@@ -2,7 +2,6 @@ from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
-
 def test_pair_score():
     s = """
 Answer: Model B
