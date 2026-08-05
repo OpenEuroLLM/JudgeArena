@@ -123,7 +123,11 @@ def _sha256(text: str) -> str:
 
 
 def _load_packaged_text(filename: str) -> str:
-    return files(PROMPTS_PACKAGE).joinpath(filename).read_text(encoding="utf-8")
+    return (
+        files(PROMPTS_PACKAGE)
+        .joinpath("templates", filename)
+        .read_text(encoding="utf-8")
+    )
 
 
 def _materialize_user_template(
