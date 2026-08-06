@@ -171,17 +171,20 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
+    def _preloaded_completions(model_spec: str) -> pd.Series | None:
+        """Aligned completions shipped with the dataset, if any."""
         if task_data is not None:
             preloaded = task_data.model_completion(model_spec)
-            if preloaded is not None:
-                return preloaded.loc[instructions.index]
-        else:
-            preloaded = _try_load_legacy_dataset_completions(
-                cfg.task, model_spec, n_instructions
-            )
+            return None if preloaded is None else preloaded.loc[instructions.index]
+        legacy = _try_load_legacy_dataset_completions(
+            cfg.task, model_spec, n_instructions
+        )
+        return None if legacy is None else _align_completion_series(legacy)
+
+    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
+        preloaded = _preloaded_completions(model_spec)
         if preloaded is not None:
-            return _align_completion_series(preloaded)
+            return preloaded
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -283,7 +286,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         result_folder=str(res_folder),
         preferences=prefs.tolist(),
         metadata={
-            "baseline_assignment": "per-row" if not baseline_plan.is_single_model else "flat",
+            "baseline_assignment": "per-row"
+            if not baseline_plan.is_single_model
+            else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
