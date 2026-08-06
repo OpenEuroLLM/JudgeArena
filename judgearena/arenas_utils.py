@@ -16,28 +16,21 @@ def _download_arena_dataset(
     *,
     repo_id: str,
     default_allow_patterns: str | tuple[str, ...],
-    default_revision: str | None,
-    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
 ) -> str:
-    """Download one arena source, preferring its resolved task definition."""
-    if dataset_sources is None:
-        revision = default_revision
-        allow_patterns = default_allow_patterns
-    else:
-        try:
-            source = dataset_sources[repo_id]
-        except KeyError as exc:
-            raise ValueError(
-                f"Arena task does not declare required dataset source {repo_id!r}."
-            ) from exc
-        revision = source.revision
-        allow_patterns = source.allow_patterns or default_allow_patterns
+    """Download one arena source at the revision pinned by its task definition."""
+    try:
+        source = dataset_sources[repo_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"Arena task does not declare required dataset source {repo_id!r}."
+        ) from exc
     return snapshot_download(
         repo_id=repo_id,
         repo_type="dataset",
-        allow_patterns=allow_patterns,
+        allow_patterns=source.allow_patterns or default_allow_patterns,
         force_download=False,
-        revision=revision,
+        revision=source.revision,
     )
 
 
@@ -58,9 +51,8 @@ KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
 
 def _load_arena_dataframe(
     arena: str,
-    comparia_revision: str | None = None,
     *,
-    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None = None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
     if arena == "LMArena-55k":
@@ -68,7 +60,6 @@ def _load_arena_dataframe(
         path = _download_arena_dataset(
             repo_id=repo_id,
             default_allow_patterns="*.csv",
-            default_revision=None,
             dataset_sources=dataset_sources,
         )
         df = pd.read_csv(Path(path) / "train.csv")
@@ -109,7 +100,6 @@ def _load_arena_dataframe(
         path = _download_arena_dataset(
             repo_id=repo_id,
             default_allow_patterns="*parquet",
-            default_revision=None,
             dataset_sources=dataset_sources,
         )
         parquet_files = sorted((Path(path) / "data").glob("*.parquet"))
@@ -135,7 +125,6 @@ def _load_arena_dataframe(
         path = _download_arena_dataset(
             repo_id="ministere-culture/comparia-votes",
             default_allow_patterns="*",
-            default_revision=comparia_revision,
             dataset_sources=dataset_sources,
         )
 
@@ -208,16 +197,14 @@ def _load_arena_dataframe(
 
 def load_arena_dataframe(
     arena: str | None,
-    comparia_revision: str | None = None,
     *,
-    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None = None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 
     :param arena: one of "LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"
                   (concatenation of both LMArena variants), or None (all arenas).
-    :param comparia_revision: optional revision for a standalone ComparIA load.
-                              Packaged tasks pass all pinned sources explicitly.
+    :param dataset_sources: pinned sources declared by the task, keyed by repo ID.
     :return: dataframe containing battles for the arena(s) selected.
     """
     if arena is None:
@@ -225,28 +212,24 @@ def load_arena_dataframe(
     elif arena == "LMArena":
         arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
-        return _load_arena_dataframe(
-            arena,
-            comparia_revision,
-            dataset_sources=dataset_sources,
-        )
+        return _load_arena_dataframe(arena, dataset_sources=dataset_sources)
     return pd.concat(
-        [
-            _load_arena_dataframe(
-                a,
-                comparia_revision,
-                dataset_sources=dataset_sources,
-            )
-            for a in arenas
-        ],
+        [_load_arena_dataframe(a, dataset_sources=dataset_sources) for a in arenas],
         ignore_index=True,
     )
 
 
 def main():
-    for arena in KNOWN_ARENAS:
-        logger.info("Loading %s", arena)
-        df = _load_arena_dataframe(arena)
+    from judgearena.datasets import load_battles
+    from judgearena.tasks.registry import load_tasks
+    from judgearena.tasks.schema import EloProtocol
+
+    for task_id, task in load_tasks().items():
+        if not isinstance(task.spec.protocol, EloProtocol):
+            continue
+        logger.info("Loading %s", task_id)
+        df = load_battles(task)
+        arena = task.spec.protocol.arena
         n_battles = len(df)
         n_models = len(set(df["model_a"]) | set(df["model_b"]))
         n_languages = df["lang"].nunique()
