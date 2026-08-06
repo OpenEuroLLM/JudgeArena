@@ -233,15 +233,40 @@ def _load_task(root: Traversable, relative_path: str) -> ResolvedTaskSpec:
         raise TaskDefinitionError(f"{relative_path}: {exc}") from exc
     normalized = spec.model_dump(mode="json")
     child_digest = next(digest for digest in resources if digest.path == relative_path)
+    prompt_texts, prompt_digests = _load_prompt_files(root, spec, relative_path)
     return ResolvedTaskSpec(
         spec=spec,
         provenance=TaskProvenance(
             source_path=relative_path,
             source_sha256=child_digest.sha256,
             resolved_sha256=_canonical_sha256(normalized),
-            resources=resources,
+            resources=(*resources, *prompt_digests),
         ),
+        prompt_texts=prompt_texts,
     )
+
+
+def _load_prompt_files(
+    root: Traversable, spec: TaskSpec, relative_path: str
+) -> tuple[dict[str, str] | None, tuple[ResourceDigest, ...]]:
+    """Read task-shipped judge prompt files and fingerprint them."""
+    prompt_spec = getattr(spec.protocol.judge, "prompt", None)
+    if prompt_spec is None:
+        return None, ()
+    parent = PurePosixPath(relative_path).parent
+    texts: dict[str, str] = {}
+    digests: list[ResourceDigest] = []
+    for filename in (prompt_spec.system_file, prompt_spec.user_file):
+        file_path = _normalize_root_path(str(parent / filename))
+        resource = _resource(root, file_path)
+        if not resource.is_file():
+            raise TaskDefinitionError(
+                f"{relative_path}: judge prompt file {filename!r} does not exist"
+            )
+        text = resource.read_text(encoding="utf-8")
+        texts[filename] = text
+        digests.append(ResourceDigest(file_path, _sha256(text)))
+    return texts, tuple(digests)
 
 
 @dataclass(frozen=True)
@@ -249,8 +274,8 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
-    # Keep in sync with judgearena.datasets.registry.dataset_adapters();
-    # importing it here would create a cycle.
+    # Keep in sync with judgearena.datasets.registry; importing it here
+    # would create a cycle.
     instruction_datasets: frozenset[str] = frozenset(
         {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
@@ -313,15 +338,20 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),
-        "prompt": (spec.protocol.judge.default_prompt, adapters.prompts),
         "scorer": (spec.protocol.scoring.adapter, scorer_names),
     }
+    judge = spec.protocol.judge
+    if judge.prompt is not None:
+        references["parser"] = (judge.prompt.parser, adapters.parsers)
+    else:
+        references["prompt"] = (judge.default_prompt, adapters.prompts)
     for kind, (adapter_id, available) in references.items():
         if adapter_id not in available:
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown {kind} {adapter_id!r}"
             )
-    for category, preset in getattr(spec.protocol.judge, "category_prompts", {}).items():
+    category_prompts = getattr(spec.protocol.judge, "category_prompts", {})
+    for category, preset in category_prompts.items():
         if preset not in adapters.prompts:
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown prompt {preset!r} "
@@ -384,6 +414,7 @@ def resolve_task(
             spec=base.spec,
             provenance=base.provenance,
             invocation_task=task_id,
+            prompt_texts=base.prompt_texts,
             selection=TaskSelection(
                 selector=variants.selector,
                 name=suffix,
