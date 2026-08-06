@@ -8,8 +8,7 @@ from dataclasses import asdict
 
 import yaml
 
-from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import load_tasks
+from judgearena.tasks.registry import TaskDefinitionError, load_tasks
 from judgearena.tasks.schema import ResolvedTaskSpec
 
 

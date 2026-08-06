@@ -9,8 +9,7 @@ import yaml
 
 from judgearena import cli as cli_module
 from judgearena.tasks.cli import run_task_command
-from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import load_tasks
+from judgearena.tasks.registry import TaskDefinitionError, load_tasks
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
