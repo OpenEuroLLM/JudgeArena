@@ -14,12 +14,14 @@ from judgearena.utils.eval import PrefSummary, compute_pref_summary
 class ScoringInputs:
     """One judged battle per row, canonically oriented (model vs baseline).
 
-    Columns: ``instruction_index``, ``model``, ``baseline``,
-    ``completion_model``, ``completion_baseline``, and ``pref`` (float64,
-    P(baseline wins) in [0, 1], NaN = unparseable). Rows follow judged order:
-    direct battles first, then the reversed duplicates under
-    ``swap_mode="both"`` (same canonical orientation, so instruction_index
-    values repeat there).
+    ``pref`` (float64, P(baseline wins) in [0, 1], NaN = unparseable) is the
+    only column every runner guarantees. The single-turn pairwise runner adds
+    ``instruction_index``, ``model``, ``baseline``, ``completion_model`` and
+    ``completion_baseline``, plus one column per parser side-channel value
+    (``JudgeParser.parse_values``); each scorer documents the extra columns it
+    requires. Rows follow judged order: direct battles first, then the
+    reversed duplicates under ``swap_mode="both"`` (same canonical
+    orientation, so instruction_index values repeat there).
     """
 
     battles: pd.DataFrame

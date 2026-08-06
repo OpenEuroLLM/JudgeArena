@@ -318,22 +318,25 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     # Scorers see one canonically-oriented row per judged battle; under
     # swap_mode="both" every instruction contributes two rows.
     repeats = 2 if cfg.judge.swap_mode == "both" else 1
-    scoring_inputs = ScoringInputs(
-        battles=pd.DataFrame(
-            {
-                "instruction_index": list(eval_instruction_index) * repeats,
-                "model": cfg.model.name,
-                "baseline": baseline_per_eval.tolist() * repeats,
-                "completion_model": completions_A.loc[eval_instruction_index].tolist()
-                * repeats,
-                "completion_baseline": completions_B.loc[
-                    eval_instruction_index
-                ].tolist()
-                * repeats,
-                "pref": pd.Series(prefs, dtype="float64").to_numpy(),
-            }
-        )
+    battles = pd.DataFrame(
+        {
+            "instruction_index": list(eval_instruction_index) * repeats,
+            "model": cfg.model.name,
+            "baseline": baseline_per_eval.tolist() * repeats,
+            "completion_model": completions_A.loc[eval_instruction_index].tolist()
+            * repeats,
+            "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
+            * repeats,
+            "pref": pd.Series(prefs, dtype="float64").to_numpy(),
+        }
     )
+    # Parser side-channel values (e.g. per-criterion scores) become battle
+    # columns so scorers can aggregate them.
+    judged_annotations = annotations + (annotations_reversed or [])
+    values = pd.DataFrame([a.judge_values or {} for a in judged_annotations])
+    if not values.empty:
+        battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
+    scoring_inputs = ScoringInputs(battles=battles)
     summary = scorer.summarize(scoring_inputs)
 
     report = BattleReport(
