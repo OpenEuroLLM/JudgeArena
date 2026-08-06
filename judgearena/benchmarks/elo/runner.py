@@ -350,7 +350,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 [our_model_is_position_a, our_model_is_position_a]
             )
             row_opponents = list(opponent_models) + list(opponent_models)
-        return pd.DataFrame(
+        frame = pd.DataFrame(
             {
                 "judge_completion": [a.judge_completion for a in row_annotations],
                 "instruction": [a.instruction for a in row_annotations],
@@ -362,6 +362,12 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 "opponent_model": row_opponents,
             }
         )
+        # Parser side-channel values (e.g. per-criterion scores) become battle
+        # columns so downstream scoring can aggregate them.
+        values = pd.DataFrame([a.judge_values or {} for a in row_annotations])
+        if not values.empty:
+            frame = pd.concat([frame, values.set_axis(frame.index)], axis=1)
+        return frame
 
     # Stripping reasoning traces changes the judged text but not the cached
     # completions, so it must be part of the judge cache key. Only append when

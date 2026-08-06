@@ -1,3 +1,5 @@
+import pytest
+
 from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
@@ -94,3 +96,18 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
     )
 
     assert strip_thinking_tags(raw_text) == "Final answer."
+
+
+def test_judge_and_parse_prefs_collects_parser_values():
+    from judgearena.evaluate import judge_and_parse_prefs
+    from judgearena.models import make_model
+
+    annotations, _, prefs = judge_and_parse_prefs(
+        judge_chat_model=make_model("Dummy/score A: 2 score B: 8"),
+        instructions=["q"],
+        completions_A=["a"],
+        completions_B=["b"],
+    )
+
+    assert annotations[0].judge_values == {"score_a": 2.0, "score_b": 8.0}
+    assert prefs.iloc[0] == pytest.approx(0.8582, abs=1e-3)
