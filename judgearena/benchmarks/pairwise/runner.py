@@ -12,7 +12,7 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import resolve_pairwise_scorer
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
@@ -118,7 +118,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
     def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = task_data.completions_for(model_spec)
+        preloaded = task_data.model_completion(model_spec)
         if preloaded is not None:
             return preloaded.loc[instructions.index]
         # Fold the resolved generation kwargs into the cache key so that changing
@@ -139,7 +139,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
-    if baseline_plan.is_flat:
+    if baseline_plan.is_single_model:
         completions_B = _load_or_generate_completions(
             baseline_plan.single_model, role="B"
         )
@@ -205,7 +205,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    scorer = resolve_pairwise_scorer(resolved_task.spec.protocol.scoring.adapter)
+    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
     summary = scorer.summarize(prefs)
 
     report = BattleReport(
@@ -218,7 +218,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         result_folder=str(res_folder),
         preferences=prefs.tolist(),
         metadata={
-            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_assignment": "per-row"
+            if not baseline_plan.is_single_model
+            else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,

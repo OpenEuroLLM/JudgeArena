@@ -6,8 +6,8 @@ import pytest
 
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.arena_hard as arena_hard
-import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.fluency as fluency
+import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.m_arenahard as m_arenahard
 import judgearena.datasets.pairwise as pairwise_data
 from judgearena.datasets.arena_hard import (
@@ -399,7 +399,6 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     ).to_csv(output_path, index=False)
 
     adapter = SimpleNamespace(
-        name="arena_hard",
         load_instructions=lambda task, path: pd.DataFrame(
             {
                 "instruction_index": [0, 1],
@@ -416,7 +415,7 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
         task, local_tables_path=tmp_path / "tables"
     )
 
-    loaded = task_data.completions_for("baseline")
+    loaded = task_data.model_completion("baseline")
 
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]

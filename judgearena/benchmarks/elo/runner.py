@@ -21,7 +21,7 @@ from judgearena.benchmarks.elo.rating import (
     select_seeded_random_arena_battles,
     winner_to_pref,
 )
-from judgearena.benchmarks.elo.scoring import resolve_elo_scorer
+from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.execution import build_generation_kwargs
 from judgearena.datasets import load_battles
 from judgearena.evaluate import (
@@ -34,7 +34,6 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
@@ -138,26 +137,21 @@ class EloReport(Report):
             print("\n  No overlapping arena models to compute MAE.")
 
 
-def run_elo(
-    cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
-) -> dict:
+def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     """Rate one model against the human battles defined by an ELO task."""
-    resolved_task = resolved_task or get_packaged_task(cfg.task)
-    if resolved_task is None or not isinstance(
-        resolved_task.spec.protocol, EloProtocol
-    ):
+    protocol = task.spec.protocol if task is not None else None
+    if not isinstance(protocol, EloProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define an ELO protocol.")
     if cfg.elo is None:
         raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
-    protocol = resolved_task.spec.protocol
     arena = protocol.arena
-    scorer = resolve_elo_scorer(protocol.scoring.adapter)
+    scorer = ELO_SCORERS[protocol.scoring.adapter]
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
     # Step 1: Load arena battles
     logger.info("Step 1: Loading battles from %s", arena)
-    df_arena_all = load_battles(resolved_task)
+    df_arena_all = load_battles(task)
 
     # Filter by language if specified
     df_battles = df_arena_all

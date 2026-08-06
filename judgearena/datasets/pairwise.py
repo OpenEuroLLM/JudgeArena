@@ -17,22 +17,29 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class PairwiseTaskData:
-    """Normalized instructions and optional pre-generated model outputs."""
+    """Normalized instructions and optional pre-generated model outputs.
+
+    ``model_outputs`` is ``None`` when the dataset ships no pre-generated
+    completions; the runner generates whatever it cannot find here.
+    """
 
     instructions: pd.DataFrame
     model_outputs: pd.DataFrame | None = None
 
-    def completions_for(self, model: str) -> pd.Series | None:
-        """Return model completions aligned to the instruction index."""
+    def __post_init__(self) -> None:
         if self.model_outputs is None:
-            return None
-
+            return
         required = {"instruction_index", "model", "output"}
         missing = sorted(required - set(self.model_outputs.columns))
         if missing:
             raise ValueError(
                 f"Pairwise model outputs are missing canonical columns: {missing}."
             )
+
+    def model_completion(self, model: str) -> pd.Series | None:
+        """Return model completions aligned to the instruction index."""
+        if self.model_outputs is None:
+            return None
 
         outputs = self.model_outputs.loc[
             self.model_outputs["model"] == model,
@@ -62,21 +69,20 @@ def load_pairwise_task_data(
         raise ValueError(f"Task {task.task!r} does not use the pairwise protocol.")
 
     tables_path = local_tables_path or data_root / "tables"
-    adapter = resolve_dataset_adapter(task.spec.dataset.adapter)
+    adapter_id = task.spec.dataset.adapter
+    adapter = resolve_dataset_adapter(adapter_id)
     instructions = adapter.load_instructions(task, tables_path)
     if "instruction_index" in instructions.columns:
         instructions = instructions.set_index("instruction_index")
     if instructions.index.name != "instruction_index":
         raise ValueError(
-            f"Dataset adapter {adapter.name!r} must provide 'instruction_index'."
+            f"Dataset adapter {adapter_id!r} must provide 'instruction_index'."
         )
     if "instruction" not in instructions.columns:
-        raise ValueError(
-            f"Dataset adapter {adapter.name!r} must provide 'instruction'."
-        )
+        raise ValueError(f"Dataset adapter {adapter_id!r} must provide 'instruction'.")
     if instructions.index.has_duplicates:
         raise ValueError(
-            f"Dataset adapter {adapter.name!r} returned duplicate instruction IDs."
+            f"Dataset adapter {adapter_id!r} returned duplicate instruction IDs."
         )
 
     instructions = instructions.sort_index()

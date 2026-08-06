@@ -31,7 +31,9 @@ def load_instructions(
     )
 
     df_instructions = df_instructions.set_index("instruction_index").sort_index()
-    logger.info("Loaded %d instructions for %s.", len(df_instructions), resolved_task.task)
+    logger.info(
+        "Loaded %d instructions for %s.", len(df_instructions), resolved_task.task
+    )
     if n_instructions is None:
         n_instructions = len(df_instructions)
     return df_instructions.head(n_instructions)
@@ -44,9 +46,7 @@ def load_battles(dataset: str | ResolvedTaskSpec) -> pd.DataFrame:
     from judgearena.datasets.registry import resolve_battle_dataset_adapter
 
     adapter = resolve_battle_dataset_adapter(resolved_task.spec.dataset.adapter)
-    battles = adapter.load_battles(
-        resolved_task, judgearena_utils.data_root / "tables"
-    )
+    battles = adapter.load_battles(resolved_task, judgearena_utils.data_root / "tables")
     logger.info("Loaded %d battles for %s.", len(battles), resolved_task.task)
     return battles
 

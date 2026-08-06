@@ -7,8 +7,8 @@ from functools import cache
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
-from judgearena.benchmarks.elo.scoring import ELO_SCORER_NAMES
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
+from judgearena.benchmarks.elo.scoring import ELO_SCORERS
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec, TaskSelection
@@ -24,8 +24,8 @@ class AdapterCatalog:
     )
     battle_datasets: frozenset[str] = frozenset({"arena_battles"})
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    pairwise_scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
-    elo_scorers: frozenset[str] = ELO_SCORER_NAMES
+    pairwise_scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
+    elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
 
 
 def load_tasks(
@@ -72,7 +72,9 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
     spec = resolved.spec
     is_elo = isinstance(spec.protocol, EloProtocol)
     scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
-    dataset_names = adapters.battle_datasets if is_elo else adapters.instruction_datasets
+    dataset_names = (
+        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+    )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),
