@@ -398,7 +398,6 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     ).to_csv(output_path, index=False)
 
     adapter = SimpleNamespace(
-        name="arena_hard",
         load_instructions=lambda task, path: pd.DataFrame(
             {
                 "instruction_index": [0, 1],
