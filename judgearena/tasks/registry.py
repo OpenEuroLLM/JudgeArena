@@ -72,7 +72,9 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
     spec = resolved.spec
     is_elo = isinstance(spec.protocol, EloProtocol)
     scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
-    dataset_names = adapters.battle_datasets if is_elo else adapters.instruction_datasets
+    dataset_names = (
+        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+    )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),

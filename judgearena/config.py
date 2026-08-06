@@ -401,9 +401,7 @@ class RunConfig(BaseSettings):
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if self.model.baseline is None:
-                raise ValueError(
-                    f"model.baseline is required for task {self.task!r}."
-                )
+                raise ValueError(f"model.baseline is required for task {self.task!r}.")
             return self
 
         protocol = resolved_task.spec.protocol
