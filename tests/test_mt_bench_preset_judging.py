@@ -55,7 +55,6 @@ def test_select_preset_prompt_rejects_delegated_preset():
             multi_turn=False,
             reference_categories=REFERENCE_CATEGORIES,
             prompt_preset=FASTCHAT_PAIRWISE_PROMPT_PRESET,
-            provide_explanation=False,
         )
 
 
@@ -79,7 +78,6 @@ def test_select_preset_prompt_variants(
         multi_turn=multi_turn,
         reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
-        provide_explanation=False,
     )
 
     assert prompt.name == expected_name
@@ -99,7 +97,6 @@ def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
         truncate_input_chars=None,
         reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
-        provide_explanation=False,
     )
 
     assert [item.turn for item in items] == [1, 2]

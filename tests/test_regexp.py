@@ -46,7 +46,6 @@ def test_regexp():
 def test_default_prompt_preset_renders_answer_labels():
     resolved = resolve_judge_prompt(
         preset="default",
-        provide_explanation=False,
     )
 
     assert isinstance(resolved.parse, PairScore)

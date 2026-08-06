@@ -230,7 +230,6 @@ class JudgeArgs(BaseModel):
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
 
-    provide_explanation: bool = False
     """If set, the judge explains its reasoning before scoring. Aids
     interpretation; does not necessarily improve accuracy."""
 

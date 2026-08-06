@@ -185,14 +185,14 @@ def test_load_config_from_yaml(tmp_path):
         "  max_out_tokens: 4096\n"
         "judge:\n"
         "  model: Dummy/j\n"
-        "  provide_explanation: true\n"
+        "  prompt_preset: default_with_explanation\n"
         "generation:\n"
         "  n_instructions: 10\n"
     )
     cfg = load_config(yaml_path)
     assert cfg.model.name == "Dummy/a"
     assert cfg.model.max_out_tokens == 4096
-    assert cfg.judge.provide_explanation is True
+    assert cfg.judge.prompt_preset == "default_with_explanation"
     assert cfg.generation.n_instructions == 10
 
 

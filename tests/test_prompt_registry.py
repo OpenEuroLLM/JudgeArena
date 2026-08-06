@@ -19,9 +19,7 @@ from judgearena.prompts.registry import (
 @dataclass
 class FakeCliArgs:
     prompt_preset: str | None = None
-    system_prompt_file: str | None = None
-    user_prompt_file: str | None = None
-    provide_explanation: bool = False
+    prompt: object | None = None
 
 
 def test_default_presets_are_owned_by_task_yaml():
@@ -72,22 +70,10 @@ def test_explicit_preset_wins_over_task_default():
     assert resolved.delegated is False
 
 
-def test_provide_explanation_legacy_alias_picks_explanation_preset():
-    resolved = resolve_judge_prompt(task="alpaca-eval", provide_explanation=True)
+def test_explanation_preset_renders_explanation_suffix():
+    resolved = resolve_judge_prompt(preset=DEFAULT_WITH_EXPLANATION_PRESET)
 
-    assert resolved.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
     assert "explanation of your judgement" in resolved.user_prompt_template
-
-
-def test_explicit_preset_wins_over_provide_explanation_alias():
-    resolved = resolve_judge_prompt(
-        task="alpaca-eval",
-        preset="default",
-        provide_explanation=True,
-    )
-
-    assert resolved.preset_name == "default"
-    assert "explanation of your judgement" not in resolved.user_prompt_template
 
 
 def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
@@ -176,14 +162,9 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
         "alpaca-eval",
         FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
     )
-    resolved_legacy = resolve_run_judge_prompt(
-        "alpaca-eval",
-        FakeCliArgs(provide_explanation=True),
-    )
 
     assert resolved_default.preset_name == "default"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
-    assert resolved_legacy.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 
 def test_every_preset_resolves_or_delegates():
