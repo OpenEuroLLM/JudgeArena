@@ -121,3 +121,11 @@ def resolve_judge_parser(name: str) -> JudgeParser:
         raise ValueError(
             f"Unknown judge parser {name!r}; available: {sorted(JUDGE_PARSERS)}"
         ) from exc
+
+
+def register_judge_parser(parser: JudgeParser) -> JudgeParser:
+    """Make a custom parser addressable by name in prompts and task YAML."""
+    if parser.name in JUDGE_PARSERS:
+        raise ValueError(f"Judge parser {parser.name!r} is already registered.")
+    JUDGE_PARSERS[parser.name] = parser
+    return parser
