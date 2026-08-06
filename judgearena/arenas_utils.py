@@ -1,23 +1,15 @@
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol
 
 import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
 
 from judgearena.log import get_logger
+from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 logger = get_logger(__name__)
-
-
-class ArenaDatasetSource(Protocol):
-    """Pinned Hugging Face source fields consumed by the arena loader."""
-
-    repo_id: str
-    revision: str
-    allow_patterns: tuple[str, ...]
 
 
 def _download_arena_dataset(
@@ -25,7 +17,7 @@ def _download_arena_dataset(
     repo_id: str,
     default_allow_patterns: str | tuple[str, ...],
     default_revision: str | None,
-    dataset_sources: Mapping[str, ArenaDatasetSource] | None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None,
 ) -> str:
     """Download one arena source, preferring its resolved task definition."""
     if dataset_sources is None:
@@ -68,7 +60,7 @@ def _load_arena_dataframe(
     arena: str,
     comparia_revision: str | None = None,
     *,
-    dataset_sources: Mapping[str, ArenaDatasetSource] | None = None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None = None,
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
     if arena == "LMArena-55k":
@@ -218,7 +210,7 @@ def load_arena_dataframe(
     arena: str | None,
     comparia_revision: str | None = None,
     *,
-    dataset_sources: Mapping[str, ArenaDatasetSource] | None = None,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource] | None = None,
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 
