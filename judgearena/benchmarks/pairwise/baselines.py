@@ -36,12 +36,12 @@ class BaselinePlan:
         return sorted(self.baseline_by_index.dropna().unique().tolist())
 
     @property
-    def is_flat(self) -> bool:
+    def is_single_model(self) -> bool:
         return len(self.unique_models) == 1
 
     @property
     def single_model(self) -> str:
-        if not self.is_flat:
+        if not self.is_single_model:
             raise ValueError(
                 "BaselinePlan is per-row; use baseline_by_index for row-level lookups."
             )
@@ -49,7 +49,7 @@ class BaselinePlan:
 
     @property
     def display_name(self) -> str:
-        return self.single_model if self.is_flat else "+".join(self.unique_models)
+        return self.single_model if self.is_single_model else "+".join(self.unique_models)
 
     def aligned_to(self, index: pd.Index) -> pd.Series:
         return self.baseline_by_index.loc[index]

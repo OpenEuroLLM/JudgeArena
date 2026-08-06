@@ -200,7 +200,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
-    if baseline_plan.is_flat:
+    if baseline_plan.is_single_model:
         completions_B = _load_or_generate_completions(
             baseline_plan.single_model, role="B"
         )
@@ -283,7 +283,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         result_folder=str(res_folder),
         preferences=prefs.tolist(),
         metadata={
-            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_assignment": "per-row" if not baseline_plan.is_single_model else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
