@@ -261,12 +261,13 @@ def resolve_run_judge_prompt(
     *,
     multi_turn: bool = False,
 ) -> ResolvedJudgePrompt:
+    prompt = getattr(judge_cfg, "prompt", None)
     return resolve_judge_prompt(
         task=task,
         preset=getattr(judge_cfg, "prompt_preset", None),
-        system_file=getattr(judge_cfg, "system_prompt_file", None),
-        user_file=getattr(judge_cfg, "user_prompt_file", None),
+        system_file=prompt.system_file if prompt is not None else None,
+        user_file=prompt.user_file if prompt is not None else None,
         multi_turn=multi_turn,
         provide_explanation=getattr(judge_cfg, "provide_explanation", False),
-        parser=getattr(judge_cfg, "parser", None),
+        parser=prompt.parser if prompt is not None else None,
     )
