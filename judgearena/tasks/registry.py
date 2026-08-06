@@ -6,7 +6,7 @@ import hashlib
 import json
 import posixpath
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.log import get_logger
+from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
     EloProtocol,
@@ -255,6 +256,9 @@ class AdapterCatalog:
     )
     battle_datasets: frozenset[str] = frozenset({"arena_battles"})
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
+    # Snapshot at construction so parsers registered via register_judge_parser
+    # before load_tasks() are accepted.
+    parsers: frozenset[str] = field(default_factory=lambda: frozenset(JUDGE_PARSERS))
     pairwise_scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
     elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
 
