@@ -111,6 +111,4 @@ def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypat
     assert task_definition["schema_version"] == 1
     assert task_definition["task_version"] == 1
     assert len(task_definition["resolved_sha256"]) == 64
-    assert task_definition["resources"][0]["path"] == (
-        "alpaca_eval/alpaca-eval.yaml"
-    )
+    assert task_definition["resources"][0]["path"] == ("alpaca_eval/alpaca-eval.yaml")

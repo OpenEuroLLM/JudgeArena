@@ -14,7 +14,7 @@ from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.scoring import (
     DEFAULT_PAIRWISE_SCORER,
-    resolve_pairwise_scorer,
+    PAIRWISE_SCORERS,
 )
 from judgearena.datasets import load_instructions
 from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
@@ -171,17 +171,20 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
+    def _preloaded_completions(model_spec: str) -> pd.Series | None:
+        """Aligned completions shipped with the dataset, if any."""
         if task_data is not None:
-            preloaded = task_data.completions_for(model_spec)
-            if preloaded is not None:
-                return preloaded.loc[instructions.index]
-        else:
-            preloaded = _try_load_legacy_dataset_completions(
-                cfg.task, model_spec, n_instructions
-            )
+            preloaded = task_data.model_completion(model_spec)
+            return None if preloaded is None else preloaded.loc[instructions.index]
+        legacy = _try_load_legacy_dataset_completions(
+            cfg.task, model_spec, n_instructions
+        )
+        return None if legacy is None else _align_completion_series(legacy)
+
+    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
+        preloaded = _preloaded_completions(model_spec)
         if preloaded is not None:
-            return _align_completion_series(preloaded)
+            return preloaded
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -200,7 +203,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
-    if baseline_plan.is_flat:
+    if baseline_plan.is_single_model:
         completions_B = _load_or_generate_completions(
             baseline_plan.single_model, role="B"
         )
@@ -266,11 +269,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    scorer = resolve_pairwise_scorer(
+    scorer = PAIRWISE_SCORERS[
         resolved_task.spec.protocol.scoring.adapter
         if resolved_task is not None
         else DEFAULT_PAIRWISE_SCORER
-    )
+    ]
     summary = scorer.summarize(prefs)
 
     report = BattleReport(
@@ -283,7 +286,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         result_folder=str(res_folder),
         preferences=prefs.tolist(),
         metadata={
-            "baseline_assignment": "per-row" if not baseline_plan.is_flat else "flat",
+            "baseline_assignment": "per-row"
+            if not baseline_plan.is_single_model
+            else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,

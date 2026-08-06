@@ -12,7 +12,6 @@ class HuggingFaceDatasetSource(StrictFrozenModel):
     repo_id: str = Field(min_length=1)
     revision: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     config: str | None = None
-    split: str | None = None
     allow_patterns: tuple[str, ...] = ()
 
 
@@ -30,14 +29,7 @@ class GitRawSource(StrictFrozenModel):
     path: str = Field(min_length=1)
 
 
-class LocalSource(StrictFrozenModel):
-    type: Literal["local"]
-    path: str = Field(min_length=1)
-    format: Literal["csv", "json", "jsonl", "parquet"]
-    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
-
-
 SourceSpec = Annotated[
-    HuggingFaceDatasetSource | HuggingFaceSpaceSource | GitRawSource | LocalSource,
+    HuggingFaceDatasetSource | HuggingFaceSpaceSource | GitRawSource,
     Field(discriminator="type"),
 ]

@@ -37,7 +37,6 @@ from judgearena.tasks.schema.sources import (
     GitRawSource,
     HuggingFaceDatasetSource,
     HuggingFaceSpaceSource,
-    LocalSource,
     SourceSpec,
 )
 from judgearena.tasks.schema.task import (
@@ -57,7 +56,6 @@ __all__ = [
     "GitRawSource",
     "HuggingFaceDatasetSource",
     "HuggingFaceSpaceSource",
-    "LocalSource",
     "MTBenchJudgeSpec",
     "MTBenchProtocol",
     "MultiTurnGeneration",

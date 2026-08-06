@@ -31,7 +31,8 @@ def cli(argv: list[str] | None = None) -> None:
     # instead of running an evaluation, so it has its own argparse grammar (see
     # tasks/cli.py) and must be routed before build_run_config, which only parses
     # run/eval flags and would reject the subcommand form.
-    if args[:1] == ["tasks"]:
+    is_task_cli = args[:1] == ["tasks"]
+    if is_task_cli:
         from judgearena.tasks.cli import run_task_command
 
         configure_logging()

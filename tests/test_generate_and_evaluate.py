@@ -117,7 +117,7 @@ def test_resolve_plan_v01_flat_default():
         runtime_baseline=None,
         instructions=_instructions(["q1", "q2"]),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "gpt-4-0314"
 
 
@@ -131,7 +131,7 @@ def test_resolve_plan_v20_routes_per_category():
             categories=["hard_prompt", "creative_writing"],
         ),
     )
-    assert not plan.is_flat
+    assert not plan.is_single_model
     assert plan.baseline_by_index.loc["qh"] == "o3-mini-2025-01-31"
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
 
@@ -143,7 +143,7 @@ def test_resolve_plan_alpaca_eval_uses_native_baseline():
         runtime_baseline=None,
         instructions=_instructions(["q1", "q2"]),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "gpt4_1106_preview"
 
 
@@ -157,7 +157,7 @@ def test_resolve_plan_explicit_model_b_overrides_native():
             categories=["hard_prompt", "creative_writing"],
         ),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "override"
 
 
@@ -252,14 +252,14 @@ def test_resolve_plan_v20_unknown_category_raises():
 
 def test_baseline_plan_flat_repeats_model():
     plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.baseline_by_index.tolist() == ["b", "b"]
 
 
 def test_baseline_plan_per_row_preserves_order():
     series = pd.Series(["m1", "m2"], index=["a", "b"], name="model_B")
     plan = BaselinePlan.per_row(series)
-    assert not plan.is_flat
+    assert not plan.is_single_model
     assert plan.unique_models == ["m1", "m2"]
 
 
