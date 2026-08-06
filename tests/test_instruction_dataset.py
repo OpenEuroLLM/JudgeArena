@@ -415,7 +415,7 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
         task, local_tables_path=tmp_path / "tables"
     )
 
-    loaded = task_data.completions_for("baseline")
+    loaded = task_data.model_completion("baseline")
 
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]

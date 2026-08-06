@@ -173,7 +173,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
         if task_data is not None:
-            preloaded = task_data.completions_for(model_spec)
+            preloaded = task_data.model_completion(model_spec)
             if preloaded is not None:
                 return preloaded.loc[instructions.index]
         else:

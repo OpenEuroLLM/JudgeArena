@@ -17,22 +17,29 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class PairwiseTaskData:
-    """Normalized instructions and optional pre-generated model outputs."""
+    """Normalized instructions and optional pre-generated model outputs.
+
+    ``model_outputs`` is ``None`` when the dataset ships no pre-generated
+    completions; the runner generates whatever it cannot find here.
+    """
 
     instructions: pd.DataFrame
     model_outputs: pd.DataFrame | None = None
 
-    def completions_for(self, model: str) -> pd.Series | None:
-        """Return model completions aligned to the instruction index."""
+    def __post_init__(self) -> None:
         if self.model_outputs is None:
-            return None
-
+            return
         required = {"instruction_index", "model", "output"}
         missing = sorted(required - set(self.model_outputs.columns))
         if missing:
             raise ValueError(
                 f"Pairwise model outputs are missing canonical columns: {missing}."
             )
+
+    def model_completion(self, model: str) -> pd.Series | None:
+        """Return model completions aligned to the instruction index."""
+        if self.model_outputs is None:
+            return None
 
         outputs = self.model_outputs.loc[
             self.model_outputs["model"] == model,
