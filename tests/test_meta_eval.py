@@ -155,18 +155,17 @@ def test_cli_meta_eval_dispatch(monkeypatch):
         [
             "--task",
             "meta-eval",
-            "--judge",
+            "--judge.model",
             "Dummy/J",
-            "--reference_arena",
+            "--meta_eval.reference_arena",
             "LMArena-140k",
-            "--prompt_mode",
+            "--meta_eval.prompt_mode",
             "arena-hard",
-            "--languages",
-            "en",
-            "es",
-            "--top_models",
+            "--meta_eval.languages",
+            '["en", "es"]',
+            "--meta_eval.top_models",
             "5",
-            "--battles_per_model",
+            "--meta_eval.battles_per_model",
             "10",
         ]
     )
@@ -202,12 +201,16 @@ def test_meta_eval_rejects_nonpositive_batch_size():
 @pytest.mark.parametrize(
     ("flag", "value", "message"),
     [
-        ("--model_A", "Dummy/A", "--model_A/--model_B are not used"),
-        ("--n_instructions", "10", "--n_instructions is not used"),
+        ("--model.name", "Dummy/A", "model config is not used"),
         (
-            "--max_out_tokens_models",
+            "--generation.n_instructions",
+            "10",
+            "generation.n_instructions is not used",
+        ),
+        (
+            "--model.max_out_tokens",
             "1024",
-            "--max_out_tokens_models is not used",
+            "model.max_out_tokens is not used",
         ),
     ],
 )
@@ -223,7 +226,7 @@ def test_cli_meta_eval_rejects_irrelevant_flags(
             [
                 "--task",
                 "meta-eval",
-                "--judge",
+                "--judge.model",
                 "Dummy/J",
                 flag,
                 value,

@@ -21,6 +21,13 @@ def _base_elo() -> dict:
     }
 
 
+def _base_meta_eval() -> dict:
+    return {
+        "task": "meta-eval",
+        "judge": {"model": "Dummy/j"},
+    }
+
+
 def test_generate_config_constructs():
     cfg = RunConfig(**_base_generate())
     assert cfg.task == "alpaca-eval"
@@ -33,6 +40,20 @@ def test_elo_config_derives_arena():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
     assert cfg.elo.arena == "ComparIA"
+
+
+def test_meta_eval_config_constructs():
+    cfg = RunConfig(**_base_meta_eval())
+    assert cfg.meta_eval is not None
+    assert cfg.meta_eval.reference_arena == "LMArena-140k"
+    assert cfg.model.name is None
+
+
+def test_meta_eval_rejects_model_config():
+    data = _base_meta_eval()
+    data["model"] = {"name": "Dummy/a"}
+    with pytest.raises(ValidationError, match="model config is not used"):
+        RunConfig(**data)
 
 
 def test_elo_requires_model_path():
