@@ -324,7 +324,6 @@ def _run_mt_bench_preset(
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
         prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
-        provide_explanation=cfg.judge.provide_explanation,
         system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
         user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
@@ -383,7 +382,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         questions_df=questions_df,
     )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
-    if resolved_prompt.delegated and not cfg.judge.provide_explanation:
+    if resolved_prompt.delegated:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."

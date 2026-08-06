@@ -97,12 +97,10 @@ def calibrate_temperature(
 
 
 def load_judge_system_and_user_prompt(
-    provide_explanation: bool = True,
     multi_turn: bool = False,
 ) -> tuple[str, str]:
     resolved = resolve_judge_prompt(
         preset=DEFAULT_JUDGE_PROMPT_PRESET,
-        provide_explanation=provide_explanation,
         multi_turn=multi_turn,
     )
     return resolved.system_prompt or "", resolved.user_prompt_template
@@ -110,7 +108,6 @@ def load_judge_system_and_user_prompt(
 
 def resolve_judge_prompts(
     *,
-    provide_explanation: bool = False,
     multi_turn: bool = False,
     prompt_preset: str | None = None,
     system_prompt: str | None = None,
@@ -138,7 +135,6 @@ def resolve_judge_prompts(
         preset=prompt_preset,
         system_file=system_file,
         user_file=user_file,
-        provide_explanation=provide_explanation,
         multi_turn=multi_turn,
         parser=parser,
     )
@@ -167,7 +163,6 @@ def evaluate_completions(
     num_annotations: int | None = 50,
     use_tqdm: bool = False,
     truncate_input_chars: int | None = 8192,
-    provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
 ):
@@ -243,7 +238,6 @@ def evaluate_completions(
     logger.info("Saving results in %s", output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
     resolved_prompt = resolve_judge_prompts(
-        provide_explanation=provide_explanation,
         prompt_preset=prompt_preset,
     )
 
@@ -257,7 +251,6 @@ def evaluate_completions(
         prompt_preset=resolved_prompt.preset_name,
         use_tqdm=use_tqdm,
         truncate_input_chars=truncate_input_chars,
-        provide_explanation=provide_explanation,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
@@ -286,7 +279,6 @@ def evaluate_completions(
         "n_annotations": len(instructions),
         "use_tqdm": use_tqdm,
         "truncate_input_chars": truncate_input_chars,
-        "provide_explanation": provide_explanation,
         **resolved_prompt.metadata(),
         "strip_thinking_before_judging": strip_thinking_before_judging,
     }
@@ -332,7 +324,6 @@ def annotate_battles(
     user_prompt_template: str = None,
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
-    provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
@@ -354,7 +345,6 @@ def annotate_battles(
         completions_B=["No"],
     )
     ```
-    :param provide_explanation:
     :param judge_chat_model:
     :param instructions:
     :param completions_A:
@@ -369,7 +359,6 @@ def annotate_battles(
     assert len(instructions) == len(completions_A) == len(completions_B)
 
     resolved_prompt = resolve_judge_prompts(
-        provide_explanation=provide_explanation,
         prompt_preset=prompt_preset,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
@@ -448,7 +437,6 @@ def judge_and_parse_prefs(
     completions_A: list[str],
     completions_B: list[str],
     swap_mode: str = "fixed",
-    provide_explanation: bool = False,
     strip_thinking_before_judging: bool = False,
     system_prompt: str | None = None,
     user_prompt_template: str | None = None,
@@ -482,7 +470,6 @@ def judge_and_parse_prefs(
         instructions=instructions,
         completions_A=completions_A,
         completions_B=completions_B,
-        provide_explanation=provide_explanation,
         strip_thinking_before_judging=strip_thinking_before_judging,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
@@ -499,7 +486,6 @@ def judge_and_parse_prefs(
             instructions=instructions,
             completions_A=completions_B,
             completions_B=completions_A,
-            provide_explanation=provide_explanation,
             strip_thinking_before_judging=strip_thinking_before_judging,
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,

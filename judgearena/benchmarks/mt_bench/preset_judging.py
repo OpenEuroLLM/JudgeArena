@@ -66,7 +66,6 @@ def _select_preset_prompt(
     *,
     reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
 ) -> MTBenchPresetPrompt:
@@ -75,7 +74,6 @@ def _select_preset_prompt(
         preset=prompt_preset,
         system_file=system_file,
         user_file=user_file,
-        provide_explanation=provide_explanation,
         multi_turn=multi_turn,
     )
     if resolved_prompt.delegated:
@@ -111,7 +109,6 @@ def _build_mt_bench_preset_items(
     truncate_input_chars: int | None,
     reference_categories: Collection[str],
     prompt_preset: str,
-    provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
     strip_thinking_before_judging: bool = False,
@@ -128,7 +125,6 @@ def _build_mt_bench_preset_items(
             multi_turn=multi_turn,
             reference_categories=reference_categories,
             prompt_preset=prompt_preset,
-            provide_explanation=provide_explanation,
             system_file=system_file,
             user_file=user_file,
         ),
@@ -157,7 +153,6 @@ def judge_mt_bench_with_preset(
     use_tqdm: bool,
     reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    provide_explanation: bool = False,
     system_file: str | None = None,
     user_file: str | None = None,
     strip_thinking_before_judging: bool = False,
@@ -174,7 +169,6 @@ def judge_mt_bench_with_preset(
         truncate_input_chars=truncate_input_chars,
         reference_categories=reference_categories,
         prompt_preset=prompt_preset,
-        provide_explanation=provide_explanation,
         system_file=system_file,
         user_file=user_file,
         strip_thinking_before_judging=strip_thinking_before_judging,

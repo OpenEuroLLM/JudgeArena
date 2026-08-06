@@ -325,7 +325,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             completions_A=completions_A,
             completions_B=completions_B,
             swap_mode=cfg.judge.swap_mode,
-            provide_explanation=cfg.judge.provide_explanation,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
@@ -479,7 +478,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 completions_A=cal_completions_a,
                 completions_B=cal_completions_b,
                 swap_mode=cfg.judge.swap_mode,
-                provide_explanation=cfg.judge.provide_explanation,
                 truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             )
 

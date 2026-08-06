@@ -61,11 +61,7 @@ def _resolve_prompt_groups(
         group_index = categories.index[categories == category]
         preset = category_prompts.get(category)
         prompt = (
-            resolved_prompt
-            if preset is None
-            else resolve_judge_prompt(
-                preset=preset, provide_explanation=cfg.judge.provide_explanation
-            )
+            resolved_prompt if preset is None else resolve_judge_prompt(preset=preset)
         )
         groups.append((prompt, group_index))
     return groups
@@ -262,7 +258,6 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             completions_A=judged_A.loc[group_index].tolist(),
             completions_B=judged_B.loc[group_index].tolist(),
             swap_mode=cfg.judge.swap_mode,
-            provide_explanation=cfg.judge.provide_explanation,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
             system_prompt=group_prompt.system_prompt,
             user_prompt_template=group_prompt.user_prompt_template,

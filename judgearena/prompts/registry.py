@@ -182,7 +182,6 @@ def _resolve_file_prompt(
     system_file: str | Path,
     user_file: str | Path,
     multi_turn: bool,
-    provide_explanation: bool,
     parse: JudgeParser,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file)
@@ -191,7 +190,7 @@ def _resolve_file_prompt(
     user_prompt_template = _materialize_user_template(
         user_path.read_text(encoding="utf-8"),
         multi_turn=multi_turn,
-        with_explanation=provide_explanation,
+        with_explanation=False,
     )
     return ResolvedJudgePrompt(
         preset_name=f"file:{system_path.name}+{user_path.name}",
@@ -213,7 +212,6 @@ def resolve_judge_prompt(
     system_file: str | Path | None = None,
     user_file: str | Path | None = None,
     multi_turn: bool = False,
-    provide_explanation: bool = False,
     parser: str | None = None,
 ) -> ResolvedJudgePrompt:
     if (system_file is None) != (user_file is None):
@@ -226,7 +224,6 @@ def resolve_judge_prompt(
             system_file=system_file,
             user_file=user_file,
             multi_turn=multi_turn,
-            provide_explanation=provide_explanation,
             parse=resolve_judge_parser(parser or "score"),
         )
     if parser is not None:
@@ -236,17 +233,10 @@ def resolve_judge_prompt(
         )
 
     if preset is None:
-        # `provide_explanation` is a legacy alias for explicitly selecting the
-        # explanation preset. It intentionally takes precedence over the task
-        # default (so e.g. `--provide_explanation` on any task yields
-        # `default_with_explanation`); pass `--judge_prompt_preset` to opt out.
-        if provide_explanation:
-            preset = DEFAULT_WITH_EXPLANATION_PRESET
-        else:
-            task_prompt = _task_file_prompt(task, multi_turn=multi_turn)
-            if task_prompt is not None:
-                return task_prompt
-            preset = default_preset_for_task(task)
+        task_prompt = _task_file_prompt(task, multi_turn=multi_turn)
+        if task_prompt is not None:
+            return task_prompt
+        preset = default_preset_for_task(task)
 
     spec = PRESETS.get(preset)
     if spec is None:
@@ -303,6 +293,5 @@ def resolve_run_judge_prompt(
         system_file=prompt.system_file if prompt is not None else None,
         user_file=prompt.user_file if prompt is not None else None,
         multi_turn=multi_turn,
-        provide_explanation=getattr(judge_cfg, "provide_explanation", False),
         parser=prompt.parser if prompt is not None else None,
     )
