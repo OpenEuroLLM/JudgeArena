@@ -325,8 +325,8 @@ def _run_mt_bench_preset(
         reference_categories=protocol.judge.reference_categories,
         prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
         provide_explanation=cfg.judge.provide_explanation,
-        system_file=cfg.judge.system_prompt_file,
-        user_file=cfg.judge.user_prompt_file,
+        system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
+        user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(

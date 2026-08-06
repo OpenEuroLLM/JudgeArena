@@ -238,7 +238,11 @@ def test_judge_prompt_preset_is_forwarded(capture_mains):
     assert cfg.judge.prompt_preset == "default_with_explanation"
 
 
-def test_custom_judge_prompt_files_are_forwarded(capture_mains):
+def test_custom_judge_prompt_files_are_forwarded(capture_mains, tmp_path):
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("system prompt")
+    user_file.write_text("user template")
     cli_module.cli(
         [
             "--task",
@@ -249,15 +253,16 @@ def test_custom_judge_prompt_files_are_forwarded(capture_mains):
             "Dummy/B",
             "--judge.model",
             "Dummy/J",
-            "--judge.system_prompt_file",
-            "system.txt",
-            "--judge.user_prompt_file",
-            "user.txt",
+            "--judge.prompt.system_file",
+            str(system_file),
+            "--judge.prompt.user_file",
+            str(user_file),
         ]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.judge.system_prompt_file == "system.txt"
-    assert cfg.judge.user_prompt_file == "user.txt"
+    assert cfg.judge.prompt.system_file == system_file
+    assert cfg.judge.prompt.user_file == user_file
+    assert cfg.judge.prompt.parser == "score"
 
 
 def test_mt_bench_omits_prompt_preset_for_task_default(capture_mains):

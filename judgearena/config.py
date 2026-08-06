@@ -17,6 +17,7 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol
 
@@ -176,6 +177,22 @@ class ModelArgs(BaseModel):
         return kwargs
 
 
+class JudgePromptSpec(BaseModel):
+    """A custom judge prompt: two template files plus the parser for its output."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    system_file: Path
+    """Path to the judge system prompt file."""
+
+    user_file: Path
+    """Path to the judge user-prompt template file."""
+
+    parser: str = "score"
+    """Named parser for the judge's output (see
+    ``judgearena.prompts.parsing.JUDGE_PARSERS``)."""
+
+
 class JudgeArgs(BaseModel):
     """The judge model and how it scores each battle."""
 
@@ -231,17 +248,9 @@ class JudgeArgs(BaseModel):
     """Named judge prompt preset to use (see ``judgearena.prompts``). Defaults
     to the task's preset when unset."""
 
-    system_prompt_file: str | None = None
-    """Path to a custom judge system prompt, overriding the preset's system
-    prompt."""
-
-    user_prompt_file: str | None = None
-    """Path to a custom judge user-prompt template, overriding the preset's."""
-
-    parser: str | None = None
-    """Named parser for judge outputs when using custom prompt files (see
-    ``judgearena.prompts.parsing.JUDGE_PARSERS``). Defaults to "score". Only
-    valid with prompt files — presets carry their own parser."""
+    prompt: JudgePromptSpec | None = None
+    """Custom judge prompt bundle (system/user template files plus the parser
+    for the judge's output), overriding any preset."""
 
     battle_thinking_token_budget: int | None = None
     """Token budget allotted to a thinking judge's reasoning block. Unset
@@ -399,6 +408,16 @@ class RunConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
+        if self.judge.prompt is not None:
+            if self.judge.prompt_preset is not None:
+                raise ValueError(
+                    "judge.prompt and judge.prompt_preset are mutually exclusive."
+                )
+            resolve_judge_parser(self.judge.prompt.parser)
+            for path in (self.judge.prompt.system_file, self.judge.prompt.user_file):
+                if not path.is_file():
+                    raise ValueError(f"judge prompt file not found: {path}")
+
         resolved_task = get_packaged_task(self.task)
         if resolved_task is None:
             raise ValueError(
