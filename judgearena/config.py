@@ -20,9 +20,9 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+from judgearena.baselines import native_pairwise_baseline
 from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA, META_EVAL_TASK
 from judgearena.inference_cache import InferenceCache
-from judgearena.pairwise_baselines import native_pairwise_baseline
 from judgearena.store_sync import DEFAULT_CACHE_REPO
 
 CacheMode = Literal["use", "off", "refresh"]

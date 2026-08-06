@@ -13,6 +13,11 @@ from typing import Any
 
 import pandas as pd
 
+from judgearena.baselines import (
+    ALPACA_EVAL_BASELINES,
+    PAIRWISE_BASELINES,
+    native_pairwise_baseline,
+)
 from judgearena.benchmark import (
     BenchmarkAdapter,
     build_generation_kwargs,
@@ -36,11 +41,6 @@ from judgearena.log import (
     make_run_log_path,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
-from judgearena.pairwise_baselines import (
-    ALPACA_EVAL_BASELINES,
-    PAIRWISE_BASELINES,
-    native_pairwise_baseline,
-)
 from judgearena.repro import write_run_metadata
 from judgearena.utils import compute_pref_summary, data_root, download_hf, read_df
 from judgearena.utils.eval import BattleReport

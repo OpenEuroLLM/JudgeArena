@@ -23,10 +23,6 @@ FORBIDDEN_IMPORTS = (
     "from judgearena.meta_eval.cache import",
 )
 
-LEGACY_MIGRATION_ALLOWLIST = frozenset(
-    {("ignore_cache", "judgearena/cache_backfill_config.py")}
-)
-
 INFERENCE_BATCH_INVOKE_ALLOWLIST = frozenset(
     {
         "judgearena/models.py",
@@ -52,7 +48,7 @@ def test_judgearena_has_no_legacy_runtime_cache_symbols() -> None:
         rel = path.relative_to(REPO_ROOT).as_posix()
         text = path.read_text(encoding="utf-8")
         for label, pattern in FORBIDDEN_PATTERNS:
-            if pattern.search(text) and (label, rel) not in LEGACY_MIGRATION_ALLOWLIST:
+            if pattern.search(text):
                 violations.append(f"{rel}: {label}")
         for imp in FORBIDDEN_IMPORTS:
             if imp in text:

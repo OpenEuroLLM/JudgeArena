@@ -85,6 +85,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     swap_mode = kwargs.pop("swap_mode", "fixed")
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
+    store_root = kwargs.pop("store_root", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
         "model": judge_model,
@@ -100,6 +101,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         generation={"n_instructions": n_instructions},
         elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
         run={"result_folder": result_folder},
+        cache={"store_root": store_root} if store_root is not None else {},
     )
 
 
@@ -344,9 +346,16 @@ def test_main_generation_cache_metadata_includes_arena_question_identity(
         estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
     )
 
-    main(_default_args(result_folder=str(tmp_path), arena="ComparIA"))
+    main(
+        _default_args(
+            result_folder=str(tmp_path),
+            arena="ComparIA",
+            store_root=str(tmp_path / "cache"),
+        )
+    )
 
     row_metadata = captured["gen_kwargs"]["row_metadata"]
+    assert captured["cache"] is not None
     assert len(row_metadata) == 10
     assert all(row["arena"] == "ComparIA" for row in row_metadata)
     assert [row["question_id"] for row in row_metadata] == [

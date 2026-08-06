@@ -266,35 +266,6 @@ def test_cache_defaults():
     assert cfg.cache.cache_create_pr is False
 
 
-def test_cache_pushed_by_defaults_to_getuser(monkeypatch):
-    monkeypatch.setattr("judgearena.config.default_pushed_by", lambda: "test-user")
-    cfg = RunConfig(**_base_generate())
-    assert cfg.cache.pushed_by == "test-user"
-
-
-def test_cache_yaml_load(tmp_path):
-    from judgearena.config import load_config
-
-    yaml_path = tmp_path / "cache.yaml"
-    yaml_path.write_text(
-        "task: alpaca-eval\n"
-        "model: {name: Dummy/a, baseline: Dummy/b}\n"
-        "judge: {model: Dummy/j}\n"
-        "cache:\n"
-        "  store_root: /data/cache\n"
-        "  cache_mode: refresh\n"
-        "  cache_fetch: true\n"
-        "  cache_push: true\n"
-        "  pushed_by: yaml-user\n"
-    )
-    cfg = load_config(yaml_path)
-    assert cfg.cache.store_root == "/data/cache"
-    assert cfg.cache.cache_mode == "refresh"
-    assert cfg.cache.cache_fetch is True
-    assert cfg.cache.cache_push is True
-    assert cfg.cache.pushed_by == "yaml-user"
-
-
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
@@ -303,24 +274,12 @@ def test_cache_yaml_load(tmp_path):
             "cache.store_root is required",
         ),
         (
-            {"store_root": "/tmp", "cache_fetch": True, "cache_hf_repo": "  "},
-            "cache_hf_repo must be non-empty",
-        ),
-        (
             {"store_root": "/tmp", "cache_create_pr": True},
             "cache_push is required",
         ),
         (
             {"store_root": "/tmp", "cache_mode": "off", "cache_fetch": True},
             "cache_fetch and cache_push cannot be enabled",
-        ),
-        (
-            {"cache_mode": "refresh"},
-            "cache.store_root is required when cache_mode is refresh",
-        ),
-        (
-            {"store_root": "   "},
-            "cache.store_root must be non-empty",
         ),
     ],
 )

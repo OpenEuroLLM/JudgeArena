@@ -93,13 +93,7 @@ def configure_logging(
     # --- console handler ---
     # Avoid duplicate handlers when configure_logging is called more than once
     # (e.g. in tests).
-    console_handlers = [
-        handler
-        for handler in root.handlers
-        if isinstance(handler, logging.StreamHandler)
-        and not isinstance(handler, logging.FileHandler)
-    ]
-    if not console_handlers:
+    if not root.handlers:
         handler = logging.StreamHandler(sys.stderr)
         handler.setLevel(level)
         handler.setFormatter(
@@ -107,14 +101,11 @@ def configure_logging(
         )
         root.addHandler(handler)
     else:
-        for handler in console_handlers:
-            handler.setLevel(level)
-            if handler.stream is not sys.stderr:
-                try:
-                    handler.setStream(sys.stderr)
-                except ValueError:
-                    # Test/output capture can close the previous stream.
-                    handler.stream = sys.stderr
+        for h in root.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(
+                h, logging.FileHandler
+            ):
+                h.setLevel(level)
 
     # --- file handler (explicit --log-file) ---
     if log_file is not None:

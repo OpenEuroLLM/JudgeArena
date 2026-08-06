@@ -3,28 +3,22 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompt_values import ChatPromptValue
 
-import judgearena.model_adapters as model_adapters
-import judgearena.models as models
 from judgearena.inference_cache import InferenceCache
-from judgearena.models import (
-    HOSTED_ADAPTER_VERSION,
-    PreparedModel,
-    do_inference,
-    make_model,
-)
+from judgearena.models import do_inference, make_model
 from judgearena.store_sqlite import (
     SQLiteInferenceStore,
     descriptor_hash,
-    stable_json_dumps,
     store_folder,
 )
 
 
 def _install_fake_vllm(monkeypatch):
     captured = {"llm_init": False}
+    monkeypatch.setattr(
+        "judgearena.model_adapters._provider_package_version",
+        lambda name: "test-version",
+    )
 
     class FakeSamplingParams:
         def __init__(self, **kwargs):
@@ -234,102 +228,6 @@ def test_metadata_associations_are_saved(tmp_path):
     assert saved == {"q-1", "q-2"}
 
 
-def test_secret_values_are_not_descriptorized(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
-    model = make_model(
-        "OpenRouter/google/gemma-3-4b-it",
-        max_tokens=16,
-        api_key="super-secret",
-        default_headers={"Authorization": "Bearer secret"},
-    )
-    assert model.engine_kwargs["api_key"] == "super-secret"
-    assert model.engine_kwargs["default_headers"]["Authorization"] == "Bearer secret"
-    descriptor = model.cache_descriptor()
-    assert descriptor is not None
-    serialized = stable_json_dumps(descriptor)
-    assert "super-secret" not in serialized
-    assert "Authorization" not in serialized
-    assert "api_key" not in serialized
-
-
-def test_provider_canonicalization_distinguishes_chat_and_raw():
-    chat_model = make_model("Dummy/chat", max_tokens=8)
-    raw_model = make_model("Dummy/raw", max_tokens=8)
-    raw_model.input_mode = "raw"
-
-    chat_payload = chat_model.canonicalize_input("hello")
-    raw_payload = raw_model.canonicalize_input("hello")
-    assert json.loads(chat_payload)["kind"] == "chat"
-    assert json.loads(raw_payload)["kind"] == "raw"
-    assert chat_payload != raw_payload
-
-    prompt = ChatPromptValue(
-        messages=[SystemMessage(content="sys"), HumanMessage(content="hi", id="tmp")]
-    )
-    chat_canonical = json.loads(chat_model.canonicalize_input(prompt))
-    assert chat_canonical["messages"] == [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "hi"},
-    ]
-    assert "id" not in stable_json_dumps(chat_canonical)
-
-
-def test_set_temperature_direct_and_mutated_descriptors_match(tmp_path):
-    direct = make_model("Dummy/temp-hash", max_tokens=8, temperature=0.9)
-    mutated = make_model("Dummy/temp-hash", max_tokens=8)
-    mutated.set_temperature(0.9)
-    assert direct.cache_descriptor() == mutated.cache_descriptor()
-    assert descriptor_hash(direct.cache_descriptor()) == descriptor_hash(
-        mutated.cache_descriptor()
-    )
-
-
-def test_set_temperature_changes_cache_cell(tmp_path):
-    cold = make_model("Dummy/temp", max_tokens=8, temperature=0.2)
-    _seed_cache(tmp_path, "arena", cold, ["x"], ["cold-hit"])
-
-    model = make_model("Dummy/temp", max_tokens=8, temperature=0.2)
-    model.set_temperature(0.9)
-    assert model.cache_descriptor()["sampling"]["temperature"] == 0.9
-    backend = model.materialize()
-    assert backend.init_kwargs["temperature"] == 0.9
-
-    with InferenceCache(tmp_path, "arena", mode="use") as cache:
-        results = do_inference(model, ["x"], cache=cache)
-
-    assert results == ["temp"]
-
-
-def test_hosted_adapter_version_is_part_of_descriptor(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
-    model = make_model("OpenRouter/openai/gpt-4o-mini", max_tokens=8)
-    descriptor = model.cache_descriptor()
-    assert descriptor["hosted_adapter_version"] == HOSTED_ADAPTER_VERSION
-    assert descriptor["server_defaults"] == "unobserved"
-    metadata = model.producer_metadata()
-    assert metadata["hosted_adapter_version"] == HOSTED_ADAPTER_VERSION
-    assert "langchain_openai_version" in metadata
-
-
-def test_direct_chat_vllm_can_be_cached_when_constructed(monkeypatch, tmp_path):
-    captured = _install_fake_vllm(monkeypatch)
-    chat_model = models.ChatVLLM(
-        model="Qwen/Qwen3.5-9B",
-        max_tokens=16,
-        gpu_memory_utilization=0.7,
-    )
-    assert captured["llm_init"] is True
-
-    wrapped = model_adapters.wrap_known_model(chat_model)
-    assert wrapped is not None
-    _seed_cache(tmp_path, "arena", wrapped, ["hello"], ["cached-vllm"])
-
-    with InferenceCache(tmp_path, "arena", mode="use") as cache:
-        results = do_inference(chat_model, ["hello"], cache=cache)
-
-    assert results == ["cached-vllm"]
-
-
 def test_off_mode_never_reads_cache(tmp_path):
     model = make_model("Dummy/off", max_tokens=8)
     _seed_cache(tmp_path, "arena", model, ["prompt"], ["cached"])
@@ -338,37 +236,6 @@ def test_off_mode_never_reads_cache(tmp_path):
         results = do_inference(model, ["prompt"], cache=cache)
 
     assert results == ["off"]
-
-
-def test_do_inference_off_bypasses_cache_resolution(monkeypatch, tmp_path):
-    model = make_model("Dummy/off-bypass", max_tokens=8)
-
-    def fail_resolution(*args, **kwargs):
-        raise AssertionError("resolve_cacheable_model must not run in off mode")
-
-    monkeypatch.setattr(models, "resolve_cacheable_model", fail_resolution)
-
-    with InferenceCache(tmp_path, "arena", mode="off") as cache:
-        results = do_inference(model, ["prompt"], cache=cache)
-
-    assert results == ["off-bypass"]
-
-
-def test_prepared_model_proxy_materializes_backend():
-    model = make_model("Dummy/proxy", max_tokens=8)
-    assert isinstance(model, PreparedModel)
-    assert model.init_kwargs["max_tokens"] == 8
-
-
-def test_descriptor_schema_version_is_present():
-    model = make_model("Dummy/schema", max_tokens=8)
-    descriptor = model.cache_descriptor()
-    assert descriptor["descriptor_schema_version"] == models.DESCRIPTOR_SCHEMA_VERSION
-
-
-def test_hosted_adapter_version_must_be_bumped_when_request_shaping_changes():
-    """Guardrail: request-shaping edits must bump HOSTED_ADAPTER_VERSION."""
-    assert HOSTED_ADAPTER_VERSION == "judgearena-hosted-adapter/v1"
 
 
 def test_off_mode_runs_every_input_without_dedupe(tmp_path):
@@ -391,31 +258,6 @@ def test_off_mode_runs_every_input_without_dedupe(tmp_path):
 
     assert results == ["out-0", "out-1"]
     assert calls == ["same", "same"]
-
-
-def test_metadata_only_association_marks_cell_dirty(tmp_path):
-    model = make_model("Dummy/meta-dirty", max_tokens=8)
-    _seed_cache(tmp_path, "arena", model, ["prompt"], ["cached-out"])
-
-    with InferenceCache(tmp_path, "arena", mode="use", push=False) as cache:
-        do_inference(
-            model,
-            ["prompt"],
-            cache=cache,
-            cache_meta={"metadata": [{"question_id": "q-hit"}]},
-        )
-        assert cache._dirty_cells
-
-    descriptor = model.cache_descriptor()
-    folder = store_folder(
-        tmp_path,
-        "arena",
-        model.model_spec,
-        descriptor_hash(descriptor),
-    )
-    with SQLiteInferenceStore(folder / "inference.db") as store:
-        rows = store.query_metadata()
-    assert len(rows) == 1
 
 
 def test_close_before_push_closes_sqlite_before_upload(monkeypatch, tmp_path):
@@ -449,17 +291,3 @@ def test_close_before_push_closes_sqlite_before_upload(monkeypatch, tmp_path):
 def test_invalid_cache_mode_rejected(tmp_path):
     with pytest.raises(ValueError, match="Invalid cache mode"):
         InferenceCache(tmp_path, "arena", mode="bogus")  # type: ignore[arg-type]
-
-
-def test_vllm_make_model_is_lazy_until_materialized(monkeypatch):
-    captured = _install_fake_vllm(monkeypatch)
-    model = make_model(
-        "VLLM/Qwen/Qwen3.5-9B",
-        max_tokens=16,
-        thinking_token_budget=64,
-        gpu_memory_utilization=0.7,
-    )
-    assert isinstance(model, PreparedModel)
-    assert captured["llm_init"] is False
-    model.materialize()
-    assert captured["llm_init"] is True

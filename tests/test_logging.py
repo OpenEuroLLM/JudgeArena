@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import logging
-import sys
 
 import pytest
 
@@ -76,28 +74,6 @@ def test_configure_logging_no_duplicate_handlers():
         and not isinstance(h, logging.FileHandler)
     ]
     assert len(console_handlers) == 1
-
-
-def test_configure_logging_rebinds_console_to_current_stderr(monkeypatch):
-    first_stream = io.StringIO()
-    second_stream = io.StringIO()
-    monkeypatch.setattr(sys, "stderr", first_stream)
-    configure_logging(0)
-    monkeypatch.setattr(sys, "stderr", second_stream)
-    configure_logging(0)
-
-    get_logger("judgearena.test_rebind").error("new stream")
-
-    assert "new stream" not in first_stream.getvalue()
-    assert "new stream" in second_stream.getvalue()
-
-
-def test_configure_logging_adds_console_when_only_file_handler_exists(tmp_path):
-    attach_file_handler(tmp_path / "run.log")
-
-    configure_logging(0)
-
-    assert _console_handler_level() == logging.INFO
 
 
 def test_env_var_overrides_verbosity(monkeypatch):

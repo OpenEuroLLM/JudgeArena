@@ -303,38 +303,7 @@ def test_judge_side_kwargs_parsed_separately(capture_mains):
     assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
 
 
-def test_cache_nested_cli_flags(capture_mains, tmp_path, monkeypatch):
-    monkeypatch.setattr("getpass.getuser", lambda: "cli-user")
-    store = tmp_path / "store"
-    cli_module.cli(
-        [
-            "--task",
-            "alpaca-eval",
-            "--model.name",
-            "Dummy/A",
-            "--model.baseline",
-            "Dummy/B",
-            "--judge.model",
-            "Dummy/J",
-            "--cache.store_root",
-            str(store),
-            "--cache.cache_mode",
-            "refresh",
-            "--cache.cache_fetch",
-            "--cache.cache_push",
-            "--cache.pushed_by",
-            "cli-user",
-        ]
-    )
-    cfg = capture_mains["cfg"]
-    assert cfg.cache.store_root == str(store)
-    assert cfg.cache.cache_mode == "refresh"
-    assert cfg.cache.cache_fetch is True
-    assert cfg.cache.cache_push is True
-    assert cfg.cache.pushed_by == "cli-user"
-
-
-def test_cache_flat_cli_aliases(capture_mains, tmp_path):
+def test_cache_cli_flags(capture_mains, tmp_path):
     store = tmp_path / "store"
     cli_module.cli(
         [
@@ -349,43 +318,19 @@ def test_cache_flat_cli_aliases(capture_mains, tmp_path):
             "--store_root",
             str(store),
             "--cache_mode",
-            "use",
-            "--cache_hf_repo",
-            "org/repo",
+            "refresh",
             "--cache_fetch",
-            "--cache_create_pr",
             "--cache_push",
+            "--pushed_by",
+            "cli-user",
         ]
     )
     cfg = capture_mains["cfg"]
     assert cfg.cache.store_root == str(store)
-    assert cfg.cache.cache_mode == "use"
-    assert cfg.cache.cache_hf_repo == "org/repo"
+    assert cfg.cache.cache_mode == "refresh"
     assert cfg.cache.cache_fetch is True
     assert cfg.cache.cache_push is True
-    assert cfg.cache.cache_create_pr is True
-
-
-def test_cache_cli_overrides_yaml_fetch(tmp_path, capture_mains):
-    yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
-        "task: alpaca-eval\n"
-        "model: {name: Dummy/A, baseline: Dummy/B}\n"
-        "judge: {model: Dummy/J}\n"
-        "cache:\n"
-        "  store_root: /yaml/store\n"
-        "  cache_fetch: true\n"
-    )
-    cli_module.cli(
-        [
-            "--config_path",
-            str(yaml_path),
-            "--no-cache_fetch",
-        ]
-    )
-    cfg = capture_mains["cfg"]
-    assert cfg.cache.store_root == "/yaml/store"
-    assert cfg.cache.cache_fetch is False
+    assert cfg.cache.pushed_by == "cli-user"
 
 
 def test_cache_fetch_without_store_root_errors(capture_mains):

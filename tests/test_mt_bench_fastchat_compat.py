@@ -3,8 +3,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import judgearena.mt_bench.fastchat_compat as fastchat_module
-from judgearena.inference_cache import InferenceCache
 from judgearena.mt_bench.fastchat_compat import (
     _conservative_winner,
     _map_verdict_to_winner,
@@ -120,35 +118,3 @@ def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
     assert annotations[0]["final_winner"] == "model_A"
     assert "B1" in annotations[0]["g2_user_prompt"]
     assert metadata == [{"question_id": 1, "category": "writing", "turn": 1}]
-
-
-def test_judge_mt_bench_pairwise_fastchat_forwards_cache(monkeypatch):
-    captured: list[object | None] = []
-
-    def fake_infer(*, cache, **kwargs):
-        captured.append(cache)
-        return (["[[A]]"] * len(kwargs["items"]), [{}] * len(kwargs["items"]))
-
-    monkeypatch.setattr(
-        fastchat_module,
-        "infer_pairwise_judgments_by_prompt_groups",
-        fake_infer,
-    )
-
-    with InferenceCache("/tmp/unused", "mt-judge", mode="off") as cache:
-        judge_mt_bench_pairwise_fastchat(
-            judge_chat_model=object(),
-            judge_model="judge",
-            questions=_questions_df(category="writing"),
-            completions_a=_completions_df("A"),
-            completions_b=_completions_df("B"),
-            model_a="model-a",
-            model_b="model-b",
-            turns_mode="single",
-            swap_mode="both",
-            truncate_input_chars=None,
-            use_tqdm=False,
-            cache=cache,
-        )
-
-    assert captured == [cache, cache]

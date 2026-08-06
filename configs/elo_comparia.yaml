@@ -14,11 +14,3 @@ elo:
   # Restrict the arena to these language codes. Defaults to English here; add
   # more to evaluate multilingually, e.g. languages: ["en", "fr", "de"].
   languages: ["en"]
-# Optional unified inference cache (disabled unless store_root is set):
-# cache:
-#   store_root: ~/judgearena-data/cache
-#   cache_mode: use
-#   cache_hf_repo: judge-arena/judge-arena-cache
-#   # cache_fetch: true
-#   # cache_push: true
-#   pushed_by: your-user

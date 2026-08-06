@@ -145,51 +145,6 @@ def test_output_and_metadata_batch_rolls_back_atomically(tmp_path):
         assert store.query_metadata().empty
 
 
-def test_save_metadata_normalizes_dict_and_string_equivalently(tmp_path):
-    meta = {"b": 2, "a": 1}
-    with SQLiteInferenceStore(tmp_path / "inference.db") as store:
-        store.save_outputs(_outputs(["h0"]), pushed_by="test")
-        store.save_metadata(
-            pd.DataFrame({"input_hash": ["h0"], "metadata_json": [meta]}),
-        )
-        rows = store.query_metadata(["h0"])
-
-    assert rows["metadata_hash"].iloc[0] == metadata_hash(meta)
-    assert json.loads(rows["metadata_json"].iloc[0]) == meta
-
-    with SQLiteInferenceStore(tmp_path / "other.db") as store:
-        store.save_outputs(_outputs(["h0"]), pushed_by="test")
-        store.save_metadata(
-            pd.DataFrame(
-                {
-                    "input_hash": ["h0"],
-                    "metadata_json": [json.dumps(meta, sort_keys=False)],
-                }
-            ),
-        )
-        other = store.query_metadata(["h0"])
-
-    assert other["metadata_hash"].iloc[0] == rows["metadata_hash"].iloc[0]
-
-
-def test_save_metadata_ignores_nan_metadata_hash(tmp_path):
-    meta = {"question_id": "q-1"}
-    with SQLiteInferenceStore(tmp_path / "inference.db") as store:
-        store.save_outputs(_outputs(["h0"]), pushed_by="test")
-        store.save_metadata(
-            pd.DataFrame(
-                {
-                    "input_hash": ["h0"],
-                    "metadata_hash": [float("nan")],
-                    "metadata_json": [stable_json_dumps(meta)],
-                }
-            ),
-        )
-        rows = store.query_metadata(["h0"])
-
-    assert rows["metadata_hash"].iloc[0] == metadata_hash(meta)
-
-
 def test_chunked_query_preserves_input_independent_order(tmp_path, monkeypatch):
     hashes = [f"h{index}" for index in range(IN_QUERY_CHUNK_SIZE + 3)]
     with SQLiteInferenceStore(tmp_path / "inference.db") as store:

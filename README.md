@@ -108,206 +108,71 @@ model defaults. Each run also writes the fully-resolved config to
 
 ### Unified inference cache
 
-Caching is **disabled by default**. Set `cache.store_root` (CLI: `--store_root` or
-`--cache.store_root`) to enable the shared SQLite store. Generation, judging,
-meta-eval, MT-Bench, and ELO all route through the same per-inference boundary.
-
-Each **configuration cell** is scoped by benchmark task, model spec, and a
-descriptor hash derived from resolved engine/sampling settings. Within a cell,
-rows are keyed by a SHA-256 hash of the **canonical rendered input** (for judges,
-the fully rendered prompt including instruction, truncated completions, and
-template). Changing any of those fields is a cache miss rather than a stale hit.
-
-**Store layout** (local paths mirror the default Hugging Face dataset
-`judge-arena/judge-arena-cache`):
+Caching is disabled by default. Set `--store_root` (or
+`cache.store_root` in YAML) to cache generation and judge calls from all
+benchmarks at the shared `do_inference` boundary. Rows are content-addressed by
+the canonical rendered input and stored in model/configuration-specific cells:
 
 ```text
 {store_root}/inference/{task}/{provider}/{percent-encoded-model}/{descriptor_hash}/
-  metadata.json    # descriptor for this cell
-  inference.db     # WAL-mode SQLite (`inference` + `inference_metadata` tables)
+  metadata.json
+  inference.db
 ```
 
-**Modes** (`--cache_mode` / `--cache.cache_mode`):
+Cache modes:
 
-- `use` (default): read hits, infer misses, insert new rows (`INSERT OR IGNORE`).
+- `use` (default): reuse hits and insert misses.
 - `off`: always infer, even when `store_root` is set.
-- `refresh`: replace existing rows for the same input hash (`INSERT OR REPLACE`).
+- `refresh`: regenerate and replace matching rows.
 
-**Run flags** — nested and flat aliases are equivalent (`--cache.store_root` ≡
-`--store_root`, `--cache.cache_fetch` ≡ `--cache_fetch`, and so on). Hugging Face
-sync is **opt-in**: `cache_fetch`, `cache_push`, and `cache_create_pr` default to
-`false`. When enabled, fetch pulls remote cells lazily as each local cell opens;
-push uploads only cells written during the run and **only after a successful exit**
-(failures and interrupts leave local SQLite updates but skip HF push). Use
-`--no-cache_fetch` on compute nodes that cannot reach the Hub.
-Main-pipeline sync is best-effort and logs failures without discarding local
-results; the standalone `judgearena-cache fetch` and `push` commands fail loudly.
+Sampling parameters and explicit engine settings are part of the cell
+descriptor, while API keys and headers are redacted. Hosted provider defaults
+that are not visible to the client cannot be hashed. ELO and meta-eval cache raw
+judge outputs and recompute preferences, calibration, costs, and aggregate
+metrics on each run.
 
-**Stochastic sampling.** Identical canonical inputs in one batch are deduplicated to
-a single inference call. Across runs, the first stored output wins locally; Hub
-merges keep the newest row by `pushed_at`. For stochastic judges (for example
-meta-eval PairScore at temperature `0.5`), set an explicit `--judge.seed` when you
-need reproducible resampling, or use `--cache_mode refresh` / a separate
-`store_root`. `--run.seed` drives battle sampling and shuffles; it is not
-automatically forwarded as a backend seed.
-
-**Descriptors and provenance.**
-
-- **Local engines (vLLM, LlamaCpp):** descriptors capture fully resolved engine
-  settings and package versions (`vllm_version`, `llama_cpp_python_version`, …).
-- **Hosted APIs (OpenRouter, OpenAI, Together):** only **explicitly set** client
-  sampling fields are hashed. Provider-side defaults and model aliases are
-  inherently best-effort — the client library version is recorded in row
-  provenance (`langchain_openai_version`, `hosted_adapter_version`, …) but is **not**
-  part of the descriptor hash.
-- **Secrets and unsafe settings:** API keys, headers, and other sensitive
-  constructor fields are redacted. Non-JSON-safe or un-normalizable
-  `engine_kwargs` yield no descriptor; inference still runs, uncached, with a
-  warning.
-
-**Single-host SQLite.** Open cells use WAL mode. Do not share one open
-`inference.db` across NFS or multiple compute nodes. Synchronize **closed** cells
-via Hugging Face (`judgearena-cache fetch` / `push`) or a local store copy.
-
-**Interrupted runs.** Partial rows are persisted locally as they are written. Re-run
-to hit local cache, use `refresh` to regenerate, or `judgearena-cache push` after
-you verify the store.
-
-**ELO and meta-eval.** Cached judge completions are stored as raw outputs; ELO
-preferences, calibration, and leaderboard statistics are always recomputed from
-those outputs (and current run settings) rather than replaying prior aggregates.
-Meta-eval uses task namespace `meta-eval-{reference_arena}` under `inference/`.
-
-#### Examples
-
-Local cache only (no network):
+Local-only example:
 
 ```bash
 judgearena \
-  --task alpaca-eval \
-  --model.name gpt4_1106_preview \
-  --model.baseline VLLM/utter-project/EuroLLM-9B \
-  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --generation.n_instructions 10 \
+  --config_path configs/alpaca_eval.yaml \
   --store_root ~/judgearena-data/cache
 ```
 
-Run with explicit Hugging Face fetch and push:
-
-```bash
-judgearena \
-  --config_path configs/alpaca_eval.yaml \
-  --cache.store_root ~/judgearena-data/cache \
-  --cache.cache_hf_repo judge-arena/judge-arena-cache \
-  --cache.cache_fetch \
-  --cache.cache_push \
-  --cache.pushed_by "$USER"
-```
-
-Offline workflow (login node → compute → login node):
-
-```bash
-# login node: prefetch cells for the benchmark
-judgearena-cache fetch \
-  --store_root ~/judgearena-data/cache \
-  --cache_hf_repo judge-arena/judge-arena-cache \
-  --task alpaca-eval
-
-# compute node: local store only
-judgearena \
-  --config_path configs/alpaca_eval.yaml \
-  --store_root ~/judgearena-data/cache \
-  --no-cache_fetch
-
-# login node: merge and upload
-judgearena-cache push \
-  --store_root ~/judgearena-data/cache \
-  --cache_hf_repo judge-arena/judge-arena-cache \
-  --task alpaca-eval \
-  --pushed_by "$USER"
-```
-
-If that path is on NFS, stage the **closed** store to node-local storage before
-opening it on a compute node, then stage it back after the job. Never open the
-same cell concurrently from multiple hosts.
-
-Filtered sync (`fetch` requires `--prefix` or at least `--task`; `push` without
-filters uploads every local cell):
-
-```bash
-judgearena-cache fetch \
-  --store_root ~/judgearena-data/cache \
-  --prefix inference/alpaca-eval/OpenRouter
-
-judgearena-cache push \
-  --store_root ~/judgearena-data/cache \
-  --task alpaca-eval \
-  --provider OpenRouter \
-  --model deepseek/deepseek-chat-v3.1 \
-  --create_pr \
-  --pushed_by "$USER"
-```
-
-Open a pull request from the main CLI instead:
+Hugging Face synchronization is opt-in. `--cache_fetch` fetches cells lazily;
+`--cache_push` uploads cells written during a successful run. Pipeline sync is
+best-effort, while the standalone commands fail loudly.
 
 ```bash
 judgearena \
   --config_path configs/alpaca_eval.yaml \
   --store_root ~/judgearena-data/cache \
   --cache_fetch \
-  --cache_push \
-  --cache_create_pr
+  --cache_push
 ```
 
-#### `judgearena-cache backfill`
-
-`judgearena-cache backfill` imports **verified hosted judge rows** from saved
-generate-and-evaluate, MT-Bench, and meta-eval run folders into the unified store.
-For generate-and-evaluate and meta-eval, it reconstructs the rendered judge input
-from saved configuration and checks it against stored `judge_input` text.
-MT-Bench stores the exact system and rendered user messages used for each pass,
-which are canonicalized directly.
-**Insert-only, no network.**
-
-Imported: hosted judge outputs (`OpenRouter`, `ChatOpenAI`, `OpenAI`, `Together`,
-and `Dummy` in tests). Model-generation outputs are never backfilled because old
-artifacts cannot prove whether they came from inference or precomputed datasets.
-
-Skipped: generation-only artifacts, ELO runs, local engines (vLLM / LlamaCpp),
-legacy pass-level caches, identity-keyed meta-eval DBs under `cache/db`, legacy
-`judgements.db` / `completions.db` cells, rows whose recomputed input does not
-match saved `judge_input`, and conflicting outputs for the same key.
-
-Dry-run first, then write:
+For offline compute nodes, fetch and push closed cells from the login node:
 
 ```bash
-judgearena-cache backfill results/ \
+judgearena-cache fetch \
   --store_root ~/judgearena-data/cache \
-  --dry_run \
-  --report ~/judgearena-data/cache/backfill-report.json
+  --task alpaca-eval
 
-judgearena-cache backfill results/alpaca-eval-2026-04-01/ \
+judgearena \
+  --config_path configs/alpaca_eval.yaml \
   --store_root ~/judgearena-data/cache \
-  --report ~/judgearena-data/cache/backfill-report.json
+  --no-cache_fetch
+
+judgearena-cache push \
+  --store_root ~/judgearena-data/cache \
+  --task alpaca-eval \
+  --pushed_by "$USER"
 ```
 
-The JSON report lists `written`, `existing`, `rows_planned`, `runs_processed`,
-and per-reason `skipped` counts.
-
-Optional YAML (commented so defaults stay network-free):
-
-```yaml
-# cache:
-#   store_root: ~/judgearena-data/cache
-#   cache_mode: use
-#   cache_hf_repo: judge-arena/judge-arena-cache
-#   # cache_fetch: true
-#   # cache_push: true
-#   pushed_by: your-user
-```
-
-Standalone cache CLI: `judgearena-cache {fetch,push,backfill}` (see
-`judgearena-cache --help`).
+SQLite cells must not be open concurrently from multiple hosts or shared over
+NFS. Stage closed cells to node-local storage or synchronize them through
+Hugging Face. `judgearena-cache fetch` requires `--prefix` or at least `--task`;
+unfiltered `push` uploads every local cell.
 
 ### Length and Token Parameters
 

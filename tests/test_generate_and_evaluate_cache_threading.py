@@ -153,39 +153,6 @@ def test_gae_second_run_reuses_cached_rows(mock_gae_inputs, monkeypatch, tmp_pat
     assert prefs_second.tolist() == prefs_first.tolist()
 
 
-def test_gae_preloaded_completions_bypass_generation(
-    mock_gae_inputs, monkeypatch, tmp_path
-):
-    preloaded = pd.DataFrame(
-        {
-            "completion": ["preloaded-a", "preloaded-b"],
-            "instruction_index": [0, 1],
-        }
-    )
-    generation_calls: list[str] = []
-    real_gen = models_module._do_inference_uncached
-
-    def track_generation(chat_model, inputs, **kwargs):
-        model_spec = getattr(chat_model, "model_spec", None) or getattr(
-            chat_model, "name", "unknown"
-        )
-        generation_calls.append(str(model_spec))
-        return real_gen(chat_model, inputs, **kwargs)
-
-    def load_preloaded(dataset, model, n_instructions):
-        if model == "Dummy/gen-a":
-            return preloaded
-        return None
-
-    monkeypatch.setattr(gae, "try_load_dataset_completions", load_preloaded)
-    monkeypatch.setattr(models_module, "_do_inference_uncached", track_generation)
-
-    main_generate_and_eval(_cfg_with_cache(tmp_path))
-
-    assert not any("gen-a" in call for call in generation_calls)
-    assert any("gen-b" in call for call in generation_calls)
-
-
 def test_gae_judge_row_metadata_includes_models_and_instruction_index(
     mock_gae_inputs, monkeypatch, tmp_path
 ):

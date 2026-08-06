@@ -1,13 +1,11 @@
-"""Standalone CLI for synchronizing inference cache cells with Hugging Face."""
+"""CLI for synchronizing inference cache cells with Hugging Face."""
 
 from __future__ import annotations
 
 import argparse
 import getpass
 import sys
-from pathlib import Path
 
-from judgearena.cache_backfill import backfill_sources, log_report_summary, write_report
 from judgearena.log import configure_logging, get_logger
 from judgearena.store_sync import (
     DEFAULT_CACHE_REPO,
@@ -27,14 +25,11 @@ def _add_filter_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--task", help="Filter cells by benchmark task name.")
     parser.add_argument("--provider", help="Filter cells by provider, e.g. VLLM.")
-    parser.add_argument(
-        "--model",
-        help="Filter cells by model path (slashes become '--' in folders).",
-    )
+    parser.add_argument("--model", help="Filter cells by model path.")
     parser.add_argument("--config_hash", help="Filter cells by descriptor hash.")
 
 
-def _add_common(parser: argparse.ArgumentParser) -> None:
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--store_root", required=True, help="Local store root.")
     parser.add_argument("--cache_hf_repo", default=DEFAULT_CACHE_REPO)
     parser.add_argument("--repo_type", default="dataset")
@@ -63,14 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "fetch",
         help="Discover and merge remote cells into the local store.",
     )
-    _add_common(fetch)
+    _add_common_args(fetch)
     _add_filter_args(fetch)
 
-    push = subparsers.add_parser(
-        "push",
-        help="Merge and upload local cells.",
-    )
-    _add_common(push)
+    push = subparsers.add_parser("push", help="Merge and upload local cells.")
+    _add_common_args(push)
     _add_filter_args(push)
     push.add_argument("--pushed_by", default=getpass.getuser())
     push.add_argument("--create_pr", action="store_true")
@@ -84,46 +76,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Create a public repository when used with --ensure_repo.",
     )
-
-    backfill = subparsers.add_parser(
-        "backfill",
-        help="Backfill hosted judge outputs from saved run folders.",
-    )
-    backfill.add_argument(
-        "sources",
-        nargs="+",
-        type=Path,
-        help="Run folders or parents containing saved judge annotations.",
-    )
-    backfill.add_argument("--store_root", required=True, help="Local store root.")
-    backfill.add_argument(
-        "--dry_run",
-        action="store_true",
-        help="Plan and report without writing inference rows.",
-    )
-    backfill.add_argument(
-        "--report",
-        type=Path,
-        help="Optional path to write a JSON backfill report.",
-    )
-    backfill.add_argument("-v", "--verbose", action="count", default=0)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
-    configure_logging(getattr(args, "verbose", 0))
-
-    if args.command == "backfill":
-        report = backfill_sources(
-            args.sources,
-            args.store_root,
-            dry_run=args.dry_run,
-        )
-        if args.report is not None:
-            write_report(report, args.report)
-        log_report_summary(report)
-        return
+    configure_logging(args.verbose)
 
     try:
         path_prefix = _resolve_prefix(args)
