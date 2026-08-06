@@ -51,6 +51,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "download_hf",
         lambda name, local_path: hf_datasets.append((name, local_path)),
     )
+
     def _contexts_snapshot_stub(**_kwargs):
         calls["contexts"] += 1
 
