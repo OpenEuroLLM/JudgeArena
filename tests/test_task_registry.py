@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -276,10 +275,8 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
     assert shown["task"] == "test-task"
     assert shown["_provenance"]["resolved_sha256"]
 
-    caplog.set_level(logging.INFO, logger="judgearena")
     run_task_command(["validate"], tasks=tasks)
-    assert capsys.readouterr().out == ""
-    assert "Validated 1 task(s)." in caplog.text
+    assert "Validated 1 task(s)." in capsys.readouterr().out
 
 
 def test_main_cli_intercepts_task_commands(monkeypatch, capsys):

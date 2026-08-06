@@ -8,12 +8,9 @@ from dataclasses import asdict
 
 import yaml
 
-from judgearena.log import get_logger
 from judgearena.tasks.loader import TaskDefinitionError
 from judgearena.tasks.registry import load_tasks
 from judgearena.tasks.schema import ResolvedTaskSpec
-
-logger = get_logger(__name__)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,9 +52,9 @@ def run_task_command(
         elif args.command == "validate":
             if args.task is not None:
                 _require(parser, tasks, args.task)
-                logger.info("Validated task %r.", args.task)
+                print(f"Validated task {args.task!r}.")
             else:
-                logger.info("Validated %d task(s).", len(tasks))
+                print(f"Validated {len(tasks)} task(s).")
     except TaskDefinitionError as exc:
         parser.error(str(exc))
 
