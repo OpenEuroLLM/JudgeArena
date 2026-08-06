@@ -2,6 +2,12 @@ extends: _base.yaml
 task: elo-lmarena-140k
 description: Arena-anchored ELO evaluation using LMSYS Chatbot Arena 140k battles.
 
+variants:
+  selector: language
+  values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
+  groups:
+    tier1: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it]
+
 dataset:
   sources:
     lmarena_140k:
