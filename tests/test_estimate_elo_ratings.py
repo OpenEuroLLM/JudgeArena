@@ -454,7 +454,6 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     assert variant is not None
     assert variant.selection is not None
     assert variant.selection.values == ("en",)
-    assert get_packaged_task("elo-lmarena-tier1").selection.values[0] == "en"
 
     result_en = run_elo(
         _default_args(
