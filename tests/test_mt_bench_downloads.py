@@ -199,6 +199,7 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
 
     completions_a, completions_b = mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
+        protocol=get_packaged_task("mt-bench").spec.protocol,
         questions_df=questions_df,
     )
 
@@ -236,6 +237,7 @@ def test_generate_mt_bench_completions_reports_missing_baseline_rows(monkeypatch
     with pytest.raises(ValueError, match="missing 1 question"):
         mt_bench_runner._generate_mt_bench_completions(
             cfg=cfg,
+            protocol=get_packaged_task("mt-bench").spec.protocol,
             questions_df=questions_df,
         )
 
@@ -299,7 +301,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, protocol, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -343,13 +345,13 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
     assert captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
-    assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
+    assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
     assert captured["fastchat"]["resolved_prompt"].preset_name == (
         FASTCHAT_PAIRWISE_PROMPT_PRESET
     )
@@ -370,7 +372,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, protocol, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -411,11 +413,11 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["temperature"] == 0.0
-    assert captured["fastchat"]["fastchat_prompt_preset"] == "default"
+    assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
     assert captured["fastchat"]["resolved_prompt"].preset_name == (
         FASTCHAT_PAIRWISE_PROMPT_PRESET
     )
@@ -435,7 +437,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, protocol, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -476,7 +478,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
     assert captured["preset"]["resolved_prompt"].preset_name == (
         "default_with_explanation"
@@ -529,6 +531,7 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
 
     mt_bench_runner._generate_mt_bench_completions(
         cfg=cfg,
+        protocol=get_packaged_task("mt-bench").spec.protocol,
         questions_df=questions_df,
     )
 
@@ -558,7 +561,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, questions_df: (
+        lambda cfg, protocol, questions_df: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -588,7 +591,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg)
+    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
     assert captured["judge"]["strip_thinking_before_judging"] is True
     assert captured["judge"]["reference_categories"] == (
