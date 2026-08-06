@@ -1,15 +1,243 @@
-"""Discover task definitions and validate their referenced component IDs."""
+"""Load packaged task definitions and validate their referenced component IDs."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import posixpath
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import cache
 from importlib.resources import files
 from importlib.resources.abc import Traversable
+from pathlib import Path, PurePosixPath
+from typing import Any
 
+import yaml
+from pydantic import ValidationError
+
+from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
-from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
-from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
+from judgearena.tasks.schema import (
+    ResolvedTaskSpec,
+    ResourceDigest,
+    TaskProvenance,
+    TaskSelection,
+    TaskSpec,
+)
+
+logger = get_logger(__name__)
+
+
+class TaskDefinitionError(ValueError):
+    """A packaged task definition is malformed or unsafe."""
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys."""
+
+    pass
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeySafeLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _canonical_sha256(data: dict[str, object]) -> str:
+    canonical = json.dumps(
+        data,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return _sha256(canonical)
+
+
+def _strict_yaml_mapping(text: str, *, path: str) -> dict[str, Any]:
+    try:
+        data = yaml.load(text, Loader=_UniqueKeySafeLoader)
+    except yaml.YAMLError as exc:
+        raise TaskDefinitionError(f"{path}: invalid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise TaskDefinitionError(f"{path}: task YAML must contain a mapping")
+    if any(not isinstance(key, str) for key in data):
+        raise TaskDefinitionError(f"{path}: task YAML keys must be strings")
+    return data
+
+
+def _merge_mapping(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+    """Apply the documented recursive-map/replace-list/null-delete merge."""
+    merged = deepcopy(parent)
+    for key, value in child.items():
+        if value is None:
+            merged.pop(key, None)
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_mapping(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def _normalize_root_path(relative_path: str) -> str:
+    pure = PurePosixPath(relative_path)
+    normalized = posixpath.normpath(pure.as_posix())
+    if (
+        pure.is_absolute()
+        or normalized in {"", ".", ".."}
+        or normalized.startswith("../")
+    ):
+        raise TaskDefinitionError(
+            f"{relative_path}: path escapes task definitions root"
+        )
+    return PurePosixPath(normalized).as_posix()
+
+
+def _resource(root: Traversable, relative_path: str) -> Traversable:
+    normalized = _normalize_root_path(relative_path)
+    resource: Traversable = root
+    for part in PurePosixPath(normalized).parts:
+        resource = resource.joinpath(part)
+    if isinstance(root, Path) and isinstance(resource, Path):
+        root_path = root.resolve()
+        resource_path = resource.resolve()
+        if not resource_path.is_relative_to(root_path):
+            raise TaskDefinitionError(
+                f"{relative_path}: path escapes task definitions root"
+            )
+    return resource
+
+
+def _discover(root: Traversable) -> tuple[str, ...]:
+    """Public task YAMLs at exactly ``<family>/<task>.yaml``.
+
+    ``_*.yaml`` files are private bases for ``extends`` and are not runnable.
+    """
+    if not root.is_dir():
+        raise TaskDefinitionError("task definitions root is not a directory")
+    discovered: list[str] = []
+    for family in sorted(root.iterdir(), key=lambda entry: entry.name):
+        if not family.is_dir():
+            if family.name.endswith((".yaml", ".yml")):
+                logger.warning(
+                    "Ignoring %s: task YAML must live in a <family>/ subfolder.",
+                    family.name,
+                )
+            continue
+        for entry in sorted(family.iterdir(), key=lambda item: item.name):
+            if (
+                entry.is_file()
+                and entry.name.endswith((".yaml", ".yml"))
+                and not entry.name.startswith("_")
+            ):
+                discovered.append(f"{family.name}/{entry.name}")
+    return tuple(discovered)
+
+
+def _resolve(
+    root: Traversable, relative_path: str, *, chain: tuple[str, ...]
+) -> tuple[dict[str, Any], tuple[ResourceDigest, ...]]:
+    normalized_path = _normalize_root_path(relative_path)
+    if normalized_path in chain:
+        cycle = " -> ".join((*chain, normalized_path))
+        raise TaskDefinitionError(f"task inheritance cycle: {cycle}")
+
+    resource = _resource(root, normalized_path)
+    if not resource.is_file():
+        raise TaskDefinitionError(f"{normalized_path}: task file does not exist")
+    text = resource.read_text(encoding="utf-8")
+    data = _strict_yaml_mapping(text, path=normalized_path)
+    digest = ResourceDigest(normalized_path, _sha256(text))
+
+    is_base = PurePosixPath(normalized_path).name.startswith("_")
+    if is_base and "task" in data:
+        raise TaskDefinitionError(
+            f"{normalized_path}: private base files must not define task"
+        )
+
+    extends = data.pop("extends", None)
+    if extends is None:
+        return data, (digest,)
+    if not isinstance(extends, str) or not extends:
+        raise TaskDefinitionError(
+            f"{normalized_path}: extends must be one relative YAML path"
+        )
+    base_path = _resolve_extends(normalized_path, extends)
+    base, base_resources = _resolve(root, base_path, chain=(*chain, normalized_path))
+    return _merge_mapping(base, data), (*base_resources, digest)
+
+
+def _resolve_extends(child_path: str, extends: str) -> str:
+    requested = PurePosixPath(extends)
+    if requested.is_absolute() or requested.suffix not in {".yaml", ".yml"}:
+        raise TaskDefinitionError(
+            f"{child_path}: extends must reference a relative YAML file"
+        )
+    if not requested.name.startswith("_"):
+        raise TaskDefinitionError(
+            f"{child_path}: extends may only reference a private _*.yaml base"
+        )
+    joined = posixpath.normpath(str(PurePosixPath(child_path).parent / requested))
+    return _normalize_root_path(joined)
+
+
+def _load_task(root: Traversable, relative_path: str) -> ResolvedTaskSpec:
+    """Resolve, validate, and fingerprint one public task definition."""
+    relative_path = _normalize_root_path(relative_path)
+    if PurePosixPath(relative_path).name.startswith("_"):
+        raise TaskDefinitionError(
+            f"{relative_path}: private base files are not runnable tasks"
+        )
+    resolved, resources = _resolve(root, relative_path, chain=())
+    if "task" not in resolved:
+        raise TaskDefinitionError(f"{relative_path}: public task must define task")
+    try:
+        spec = TaskSpec.model_validate(resolved)
+    except ValidationError as exc:
+        raise TaskDefinitionError(f"{relative_path}: {exc}") from exc
+    normalized = spec.model_dump(mode="json")
+    child_digest = next(digest for digest in resources if digest.path == relative_path)
+    return ResolvedTaskSpec(
+        spec=spec,
+        provenance=TaskProvenance(
+            source_path=relative_path,
+            source_sha256=child_digest.sha256,
+            resolved_sha256=_canonical_sha256(normalized),
+            resources=resources,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -50,10 +278,9 @@ def _load_packaged_tasks() -> dict[str, ResolvedTaskSpec]:
 def _discover_tasks(
     definitions_root: Traversable, adapters: AdapterCatalog
 ) -> dict[str, ResolvedTaskSpec]:
-    loader = TaskLoader(definitions_root)
     tasks: dict[str, ResolvedTaskSpec] = {}
-    for relative_path in loader.discover():
-        resolved = loader.load(relative_path)
+    for relative_path in _discover(definitions_root):
+        resolved = _load_task(definitions_root, relative_path)
         if resolved.task in tasks:
             other = tasks[resolved.task].provenance.source_path
             raise TaskDefinitionError(
@@ -61,8 +288,9 @@ def _discover_tasks(
             )
         _validate_adapter_ids(resolved, adapters)
         tasks[resolved.task] = resolved
+    tasks = dict(sorted(tasks.items()))
     _validate_variant_ids(tasks)
-    return dict(sorted(tasks.items()))
+    return tasks
 
 
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
