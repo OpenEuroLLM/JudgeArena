@@ -7,7 +7,7 @@ from functools import cache
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORER_NAMES
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.loader import TaskDefinitionError, TaskLoader
 from judgearena.tasks.schema import ResolvedTaskSpec, TaskSelection
@@ -22,7 +22,7 @@ class AdapterCatalog:
         {"arena_hard", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    scorers: frozenset[str] = PAIRWISE_SCORER_NAMES
+    scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
 
 
 def load_tasks(

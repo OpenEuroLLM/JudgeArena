@@ -14,7 +14,7 @@ from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.scoring import (
     DEFAULT_PAIRWISE_SCORER,
-    resolve_pairwise_scorer,
+    PAIRWISE_SCORERS,
 )
 from judgearena.datasets import load_instructions
 from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
@@ -266,11 +266,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    scorer = resolve_pairwise_scorer(
+    scorer = PAIRWISE_SCORERS[
         resolved_task.spec.protocol.scoring.adapter
         if resolved_task is not None
         else DEFAULT_PAIRWISE_SCORER
-    )
+    ]
     summary = scorer.summarize(prefs)
 
     report = BattleReport(
