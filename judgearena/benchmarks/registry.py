@@ -49,9 +49,7 @@ def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
         for adapter in adapters:
             if adapter.name == runner_id:
                 return adapter
-        raise ValueError(
-            f"Task {task!r} selects unavailable runner {runner_id!r}."
-        )
+        raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
 
     for adapter in adapters:
         if adapter.supports(task):

@@ -47,9 +47,7 @@ def _registered_task(
                     allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
                 ),
-                baseline=SimpleNamespace(
-                    allow_runtime_override=allow_runtime_override
-                ),
+                baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
         )
     )
