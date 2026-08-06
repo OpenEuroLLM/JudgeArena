@@ -372,7 +372,7 @@ class MetaEvalArgs(BaseModel):
     battles_per_model: int = 50
     """Battles sampled per top model."""
 
-    batch_size: int = 50
+    batch_size: int = Field(default=50, gt=0)
     """Annotation batch size."""
 
     languages: list[str] | None = None

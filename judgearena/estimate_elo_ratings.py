@@ -11,6 +11,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import extract_turn_text, load_arena_dataframe
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
+from judgearena.benchmark import build_generation_kwargs
 from judgearena.config import RunConfig, inference_cache_session
 from judgearena.evaluate import (
     PairScore,
@@ -20,7 +21,6 @@ from judgearena.evaluate import (
     resolve_run_judge_prompt,
 )
 from judgearena.generate import generate_instructions
-from judgearena.generate_and_evaluate import _build_generation_kwargs
 from judgearena.inference_cache import InferenceCache
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
@@ -527,7 +527,7 @@ def _run_elo(cfg: RunConfig, *, cache: InferenceCache | None) -> dict:
     # thinking-token sub-budget for thinking models (the Elo entrypoint
     # previously called evaluated_generation_kwargs() directly and silently
     # dropped battle_thinking_token_budget).
-    extra_kwargs = _build_generation_kwargs(cfg, cfg.model.name, role="A")
+    extra_kwargs = build_generation_kwargs(cfg, cfg.model.name, role="A")
     use_tqdm = cfg.run.use_tqdm
     instruction_text = instructions.tolist()
     completions_df = generate_instructions(

@@ -447,20 +447,20 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 
 ### Generate + judge (pairwise)
 
-| Task                         | Description                                                                                    |
-|------------------------------|------------------------------------------------------------------------------------------------|
-| `alpaca-eval`                | General instruction-following benchmark                                                        |
-| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                              |
-| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                       |
-| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                   |
-| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                        |
-| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                 |
-| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages          |
-| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                   |
-| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                 |
-| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                 |
-| `fluency-{lang}`             | Fluency evaluation for pretrained models (`finnish`, `french`, `german`, `spanish`, `swedish`) |
-| `meta-eval`                  | Judge meta-evaluation against human-labeled arena battles (not generator ELO)                  |
+| Task                         | Description                                                                                                                                                                     |
+|------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `alpaca-eval`                | General instruction-following benchmark                                                                                                                                         |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                                                                                               |
+| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                                                                                        |
+| `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                                                                                    |
+| `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                                                                                         |
+| `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                                                                                                  |
+| `m-arena-hard-v2.0`          | `CohereLabs/m-ArenaHard-v2.0` (498 prompts, in-house translation) across 23 languages                                                                                           |
+| `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                                                                                                    |
+| `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                                                                                                  |
+| `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
+| `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
+| `meta-eval`                  | Judge meta-evaluation against human-labeled arena battles (not generator ELO)                                                                                                   |
 
 For MT-Bench, the default pairwise baseline is `gpt-4`.
 We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
@@ -499,39 +499,39 @@ The task samples battles from a reference arena (default `LMArena-140k`), asks t
 ```bash
 judgearena \
   --task meta-eval \
-  --judge.model OpenRouter/deepseek/deepseek-v3.2 \
-  --meta_eval.reference_arena LMArena-140k \
-  --meta_eval.prompt_mode standard \
-  --meta_eval.languages '["en", "es"]' \
-  --meta_eval.top_models 20 \
-  --meta_eval.battles_per_model 50 \
-  --meta_eval.n_bootstraps 1000 \
-  --run.seed 0
+  --judge_model OpenRouter/deepseek/deepseek-v3.2 \
+  --reference_arena LMArena-140k \
+  --prompt_mode standard \
+  --languages en es \
+  --top_models 20 \
+  --battles_per_model 50 \
+  --n_bootstraps 1000 \
+  --seed 0
 ```
 
 ### Prompt modes
 
 Only named prompt modes are supported (no custom prompt files):
 
-| `--meta_eval.prompt_mode` | Description                              |
-|---------------------------|------------------------------------------|
-| `standard`                | Default PairScore judge prompt           |
-| `arena-hard`              | Arena-Hard Likert verdict parsing        |
-| `alpaca-eval`             | Alpaca-Eval JSON ordering prompt         |
-| `alpaca-eval-pair-score`  | Alpaca-Eval prompt with PairScore output |
+| `--prompt_mode`           | Description                                      |
+|---------------------------|--------------------------------------------------|
+| `standard`                | Default PairScore judge prompt                   |
+| `arena-hard`              | Arena-Hard Likert verdict parsing                  |
+| `alpaca-eval`             | Alpaca-Eval JSON ordering prompt                 |
+| `alpaca-eval-pair-score`  | Alpaca-Eval prompt with PairScore output           |
 
 PairScore meta-eval uses temperature `0.5` (paper setting). The standard generate+judge benchmark path keeps PairScore temperature `0.3`.
 
 Language filters use ISO 639-1 codes such as `en es fr`.
 
-With `--judge.swap_mode both`, overall accuracy and kappa use both judge orderings
+With `--swap_mode both`, overall accuracy and kappa use both judge orderings
 (the reversed verdict is inverted), while language, ranking, and ELO-gap analyses
 retain one forward-order row per sampled battle to match the reference
 meta-evaluation methodology. `annotations.parquet` stores one row per judge pass
 with an `orientation` column; swapped winners and preferences are normalized
 back to the original model ordering. Cost totals include both passes.
 
-Results are written under `[run.result_folder]/meta-eval-*` as `args.json`,
+Results are written under `[result_folder]/meta-eval-*` as `args.json`,
 `annotations.parquet`, `results.json`, `summary.csv`, logs, and
 `run-metadata.v1.json`. With `--store_root`, judge calls use the unified cache
 under `{store_root}/inference/meta-eval-{reference_arena}/…` (content-addressed

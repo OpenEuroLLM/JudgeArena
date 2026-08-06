@@ -7,7 +7,6 @@ import math
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import cohen_kappa_score
 
 from judgearena.estimate_elo_ratings import fit_bradley_terry
@@ -122,54 +121,6 @@ def compute_agreement_metrics(
     }
 
 
-def compute_soft_bradley_terry(
-    df: pd.DataFrame,
-    pref_col: str = "pref_llm",
-    scale: float = 400,
-    base: float = 10,
-    init_rating: float = 1000,
-) -> dict[str, float]:
-    df = df.dropna(subset=[pref_col]).copy()
-    if df.empty:
-        return {}
-
-    all_models = sorted(set(df["model_a"].unique()) | set(df["model_b"].unique()))
-    models = pd.Series(np.arange(len(all_models)), index=all_models)
-    p = len(models)
-    n_battles = len(df)
-    x = np.zeros([2 * n_battles, p])
-    y = np.zeros(2 * n_battles)
-    sample_weights = np.zeros(2 * n_battles)
-
-    for idx, (_, row) in enumerate(df.iterrows()):
-        m_a = row["model_a"]
-        m_b = row["model_b"]
-        pref = row[pref_col]
-        x[2 * idx, models[m_a]] = +np.log(base)
-        x[2 * idx, models[m_b]] = -np.log(base)
-        y[2 * idx] = 1.0
-        sample_weights[2 * idx] = 1.0 - pref
-        x[2 * idx + 1, models[m_a]] = +np.log(base)
-        x[2 * idx + 1, models[m_b]] = -np.log(base)
-        y[2 * idx + 1] = 0.0
-        sample_weights[2 * idx + 1] = pref
-
-    nonzero = sample_weights > 0
-    x = x[nonzero]
-    y = y[nonzero]
-    sample_weights = sample_weights[nonzero]
-    if len(x) == 0:
-        return {}
-
-    try:
-        lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
-        lr.fit(x, y, sample_weight=sample_weights)
-    except ValueError:
-        return {}
-    elo_scores = scale * lr.coef_[0] + init_rating
-    return dict(pd.Series(elo_scores, index=models.index))
-
-
 def format_metric(value: float | None, se: float | None, *, digits: int = 2) -> str:
     if value is None or not math.isfinite(value):
         return "n/a"
@@ -216,7 +167,10 @@ def _bt_ratings_soft(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, 
         df_sub[["model_a", "model_b", "winner"]],
         "winner",
     )
-    llm = compute_soft_bradley_terry(df_sub[["model_a", "model_b", "pref_llm"]])
+    llm = fit_bradley_terry(
+        df_sub[["model_a", "model_b", "pref_llm"]],
+        pref_col="pref_llm",
+    )
     return human, llm
 
 
@@ -382,6 +336,11 @@ def compute_elo_gap_summary(
     seed: int,
     exclude_ties: bool,
 ) -> pd.DataFrame:
+    """Measure ELO error by annotation budget.
+
+    Tie predictions are excluded after sampling so ``num_battles`` remains the
+    number of judge annotations purchased, matching the reference experiment.
+    """
     df_battles = df_top[["model_a", "model_b", "winner"]].copy()
     human_ratings = _hard_bradley_terry(df_battles, "winner")
     rows: list[dict[str, float | int | str]] = []

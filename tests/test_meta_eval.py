@@ -14,10 +14,10 @@ import judgearena.meta_eval.runner as meta_eval_runner
 import judgearena.meta_eval.sampling as meta_sampling
 from judgearena import cli as cli_module
 from judgearena.arenas_utils import extract_turn_text
-from judgearena.config import meta_eval_cache_task
+from judgearena.config import RunConfig, meta_eval_cache_task
 from judgearena.evaluate import JudgeAnnotation, PairScore, annotate_battles
 from judgearena.inference_cache import InferenceCache
-from judgearena.meta_eval.cli_args import CliMetaEvalArgs
+from judgearena.meta_eval.cli_args import CliMetaEvalArgs, meta_eval_args_from_config
 from judgearena.meta_eval.metrics import (
     compute_agreement_metrics,
     compute_elo_gap_summary,
@@ -38,6 +38,7 @@ from judgearena.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
+from judgearena.models import DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
 from judgearena.repro import METADATA_FILENAME
 
 
@@ -173,6 +174,28 @@ def test_cli_meta_eval_dispatch(monkeypatch):
     assert args.prompt_mode == "arena-hard"
     assert args.languages == ["en", "es"]
     assert args.top_models == 5
+
+
+def test_meta_eval_applies_default_judge_model_kwargs():
+    cfg = RunConfig(
+        task="meta-eval",
+        judge={"model": "VLLM/Qwen/Qwen3-8B"},
+    )
+
+    args = meta_eval_args_from_config(cfg)
+
+    assert (
+        args.engine_kwargs["thinking_token_budget"]
+        == DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET
+    )
+
+
+def test_meta_eval_rejects_nonpositive_batch_size():
+    with pytest.raises(ValueError, match="batch_size must be greater than zero"):
+        CliMetaEvalArgs(
+            judge_model="Dummy/judge",
+            batch_size=0,
+        )
 
 
 @pytest.mark.parametrize(

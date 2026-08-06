@@ -13,6 +13,12 @@ from typing import Any
 
 import pandas as pd
 
+from judgearena.benchmark import (
+    BenchmarkAdapter,
+    build_generation_kwargs,
+    build_judge,
+    resolve_benchmark_adapter,
+)
 from judgearena.config import RunConfig, dump_config, inference_cache_session
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
@@ -22,15 +28,12 @@ from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
+from judgearena.instruction_dataset.fluency import is_fluency_task as task_is_fluency
+from judgearena.instruction_dataset.fluency import load_fluency_contexts
 from judgearena.log import (
     attach_file_handler,
     get_logger,
     make_run_log_path,
-)
-from judgearena.models import (
-    build_default_judge_model_kwargs,
-    is_thinking_model,
-    make_model,
 )
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.pairwise_baselines import (
@@ -171,35 +174,6 @@ def _resolve_baseline_plan(
     raise ValueError(f"Unsupported baseline shape for dataset '{task}'.")
 
 
-def _build_generation_kwargs(
-    cfg: RunConfig, model_spec: str, *, role: str
-) -> dict[str, object]:
-    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
-    if role == "A":
-        generation_kwargs = cfg.model.evaluated_generation_kwargs()
-    elif role == "B":
-        generation_kwargs = cfg.model.baseline_generation_kwargs()
-    else:
-        raise ValueError(f"Unknown generation role: {role!r}")
-    provider, _, model_name = model_spec.partition("/")
-    if (
-        cfg.judge.battle_thinking_token_budget is not None
-        and provider == "VLLM"
-        and is_thinking_model(model_name)
-    ):
-        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
-        generation_kwargs["thinking_token_budget"] = min(
-            int(cfg.judge.battle_thinking_token_budget),
-            max_tokens,
-        )
-    return generation_kwargs
-
-
-def load_contexts(dataset: str) -> pd.Series:
-    path = data_root / "contexts" / dataset
-    return pd.read_csv(path).loc[:, "instruction"]
-
-
 def _setup_result_folder(
     cfg: RunConfig, result_name: str, run_started_at: datetime
 ) -> Path:
@@ -227,10 +201,9 @@ def _mt_bench_result_name(cfg: RunConfig, model_b: str) -> str:
 
 
 def _load_task_instructions(cfg: RunConfig) -> tuple[pd.DataFrame, pd.Series, bool]:
-    is_fluency_task = "fluency" in cfg.task
+    is_fluency_task = task_is_fluency(cfg.task)
     if is_fluency_task:
-        lang = cfg.task.split("-")[-1]
-        instructions = load_contexts(f"{lang}-contexts.csv")
+        instructions = load_fluency_contexts(data_root, cfg.task)
         instructions_df = pd.DataFrame({"instruction": instructions.values})
         instructions_df.index = instructions.index
     else:
@@ -268,7 +241,7 @@ def _load_or_generate_completions(
     if preloaded is not None:
         return _align_completion_series(preloaded, index=instructions.index)
 
-    generation_kwargs = _build_generation_kwargs(cfg, model_spec, role=role)
+    generation_kwargs = build_generation_kwargs(cfg, model_spec, role=role)
     generated = generation_function(
         instructions=instructions,
         model=model_spec,
@@ -349,19 +322,6 @@ def _judge_row_metadata(
         }
         for instruction_index in instruction_indices
     ]
-
-
-def _build_judge_model(cfg: RunConfig):
-    return make_model(
-        model=cfg.judge.model,
-        **build_default_judge_model_kwargs(
-            cfg.judge.model,
-            cfg.model.engine_kwargs,
-            judge_engine_kwargs_override=cfg.judge.model_kwargs(
-                fallback_chat_template=cfg.model.chat_template,
-            ),
-        ),
-    )
 
 
 def _persist_pairwise_results(
@@ -502,7 +462,7 @@ def _run_pairwise_task(cfg: RunConfig, *, run_started_at: datetime) -> pd.Series
         logger.info("Saving results to %s", res_folder)
 
         resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
-        judge_chat_model = _build_judge_model(cfg)
+        judge_chat_model = build_judge(cfg)
         eval_instruction_index = instructions.index.tolist()
         row_metadata = _judge_row_metadata(
             instruction_indices=eval_instruction_index,
@@ -545,7 +505,7 @@ def _run_pairwise_task(cfg: RunConfig, *, run_started_at: datetime) -> pd.Series
         )
 
 
-def main(cfg: RunConfig):
+def run_pairwise(cfg: RunConfig):
     """
     1) take as input:
      * task (dataset), make sure instruct-completion works
@@ -573,3 +533,15 @@ def main(cfg: RunConfig):
             )
 
     return _run_pairwise_task(cfg, run_started_at=run_started_at)
+
+
+def _benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
+    """Return the registered generate-and-evaluate implementations."""
+    return (BenchmarkAdapter("pairwise", None, run_pairwise),)
+
+
+def main(cfg: RunConfig):
+    """Run a task through its registered generate-and-evaluate adapter."""
+    adapter = resolve_benchmark_adapter(cfg.task, _benchmark_adapters())
+    logger.info("Using %s benchmark adapter for %s.", adapter.name, cfg.task)
+    return adapter.runner(cfg)

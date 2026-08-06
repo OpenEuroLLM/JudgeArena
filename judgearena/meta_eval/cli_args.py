@@ -7,6 +7,7 @@ from typing import Any
 
 from judgearena.config import CacheArgs, RunConfig
 from judgearena.model_adapters import normalize_constructor_settings
+from judgearena.models import build_default_judge_model_kwargs
 
 PROMPT_MODES = (
     "standard",
@@ -45,6 +46,8 @@ class CliMetaEvalArgs:
     cache: CacheArgs = field(default_factory=CacheArgs)
 
     def __post_init__(self) -> None:
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
         if self.swap_mode not in {"fixed", "both"}:
             raise ValueError(f"Unsupported swap_mode {self.swap_mode!r}.")
         if self.prompt_mode not in PROMPT_MODES:
@@ -67,7 +70,11 @@ def meta_eval_args_from_config(cfg: RunConfig) -> CliMetaEvalArgs:
     if cfg.meta_eval is None:
         raise ValueError("meta_eval config is required for the meta-eval task.")
 
-    judge_kwargs = cfg.judge.model_kwargs()
+    judge_kwargs = build_default_judge_model_kwargs(
+        cfg.judge.model,
+        {},
+        judge_engine_kwargs_override=cfg.judge.model_kwargs(),
+    )
     max_out_tokens_judge = int(judge_kwargs.pop("max_tokens"))
     max_model_len = judge_kwargs.pop("max_model_len", None)
     chat_template = judge_kwargs.pop("chat_template", None)
