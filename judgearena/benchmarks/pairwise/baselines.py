@@ -49,7 +49,9 @@ class BaselinePlan:
 
     @property
     def display_name(self) -> str:
-        return self.single_model if self.is_single_model else "+".join(self.unique_models)
+        return (
+            self.single_model if self.is_single_model else "+".join(self.unique_models)
+        )
 
     def aligned_to(self, index: pd.Index) -> pd.Series:
         return self.baseline_by_index.loc[index]
