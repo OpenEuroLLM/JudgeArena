@@ -444,9 +444,7 @@ def test_task_show_reports_resolved_selection(tmp_path, capsys):
         definition=definition,
     )
 
-    run_task_command(
-        ["show", "family-uk", "--resolved"], tasks=load_tasks(tmp_path)
-    )
+    run_task_command(["show", "family-uk", "--resolved"], tasks=load_tasks(tmp_path))
 
     shown = yaml.safe_load(capsys.readouterr().out)
     assert shown["task"] == "family"
