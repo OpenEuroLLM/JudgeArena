@@ -35,15 +35,22 @@ def _download_arena_dataset(
 
 
 def _extract_instruction_text(turn: dict) -> str:
-    """Extract plain instruction text from a conversation first turn.
+    """Extract plain instruction text from a conversation turn.
 
     Handles both the 100k schema (content is a plain string) and the 140k
-    schema (content is an array of {type, text, ...} objects).
+    schema (content is an array of {type, text, ...} objects). Moderated or
+    empty turns ship ``content: None`` and yield an empty string.
     """
-    content = turn["content"]
+    content = turn.get("content")
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
-    return " ".join(block["text"] for block in content if block.get("type") == "text")
+    return " ".join(
+        block.get("text") or ""
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
 
 
 KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
