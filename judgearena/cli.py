@@ -35,18 +35,16 @@ def cli(argv: list[str] | None = None) -> None:
     if is_task_cli:
         from judgearena.tasks.cli import run_task_command
 
-        configure_logging()
         run_task_command(args[1:])
-        return
+    else:
+        try:
+            cfg = build_run_config(args)
+        except ValidationError as exc:
+            raise SystemExit(_format_config_error(exc)) from exc
 
-    try:
-        cfg = build_run_config(args)
-    except ValidationError as exc:
-        raise SystemExit(_format_config_error(exc)) from exc
-
-    configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
-    logger.debug("Running with config: %s", cfg.model_dump())
-    run_benchmark(cfg)
+        configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
+        logger.debug("Running with config: %s", cfg.model_dump())
+        run_benchmark(cfg)
 
 
 if __name__ == "__main__":

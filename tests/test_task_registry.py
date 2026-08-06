@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -10,8 +9,7 @@ import yaml
 
 from judgearena import cli as cli_module
 from judgearena.tasks.cli import run_task_command
-from judgearena.tasks.loader import TaskDefinitionError
-from judgearena.tasks.registry import load_tasks, resolve_task
+from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
@@ -476,10 +474,8 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
     assert shown["task"] == "test-task"
     assert shown["_provenance"]["resolved_sha256"]
 
-    caplog.set_level(logging.INFO, logger="judgearena")
     run_task_command(["validate"], tasks=tasks)
-    assert capsys.readouterr().out == ""
-    assert "Validated 1 task(s)." in caplog.text
+    assert "Validated 1 task(s)." in capsys.readouterr().out
 
 
 def test_task_show_reports_resolved_selection(tmp_path, capsys):
