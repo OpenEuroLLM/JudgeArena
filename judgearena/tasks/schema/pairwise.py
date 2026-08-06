@@ -19,8 +19,17 @@ class SingleTurnGeneration(StrictFrozenModel):
 SwapMode = Literal["fixed", "both", "random"]
 
 
+class TaskPromptSpec(StrictFrozenModel):
+    """Judge prompt files shipped inside the task's folder."""
+
+    system_file: str = Field(min_length=1)
+    user_file: str = Field(min_length=1)
+    parser: str = Field(default="score", min_length=1)
+
+
 class PairwiseJudgeSpec(StrictFrozenModel):
-    default_prompt: str = Field(min_length=1)
+    default_prompt: str | None = Field(default=None, min_length=1)
+    prompt: TaskPromptSpec | None = None
     default_swap_mode: SwapMode = "fixed"
     allowed_swap_modes: tuple[SwapMode, ...] = ("fixed", "both")
     default_temperature: float | None = None
@@ -32,6 +41,10 @@ class PairwiseJudgeSpec(StrictFrozenModel):
 
     @model_validator(mode="after")
     def _default_must_be_allowed(self) -> PairwiseJudgeSpec:
+        if (self.default_prompt is None) == (self.prompt is None):
+            raise ValueError("exactly one of default_prompt or prompt is required")
+        if self.prompt is not None and self.category_prompts:
+            raise ValueError("category_prompts requires default_prompt")
         if not self.allowed_swap_modes:
             raise ValueError("allowed_swap_modes must not be empty")
         if self.default_swap_mode not in self.allowed_swap_modes:

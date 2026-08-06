@@ -13,7 +13,7 @@ from judgearena.prompts.parsing import (
     resolve_judge_parser,
 )
 
-PromptSource = Literal["preset", "file", "override", "delegated"]
+PromptSource = Literal["preset", "file", "task", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
@@ -113,9 +113,42 @@ def default_preset_for_task(task: str | None) -> str:
     from judgearena.tasks.registry import get_packaged_task
 
     resolved = get_packaged_task(task)
-    if resolved is not None:
+    if resolved is not None and resolved.spec.protocol.judge.default_prompt:
         return resolved.spec.protocol.judge.default_prompt
     return DEFAULT_JUDGE_PROMPT_PRESET
+
+
+def _task_file_prompt(
+    task: str | None, *, multi_turn: bool
+) -> ResolvedJudgePrompt | None:
+    """Resolve a prompt shipped inside the task's folder, if declared."""
+    if task is None:
+        return None
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved = get_packaged_task(task)
+    if resolved is None:
+        return None
+    prompt_spec = getattr(resolved.spec.protocol.judge, "prompt", None)
+    if prompt_spec is None:
+        return None
+    system_prompt = resolved.prompt_texts[prompt_spec.system_file]
+    user_prompt_template = _materialize_user_template(
+        resolved.prompt_texts[prompt_spec.user_file],
+        multi_turn=multi_turn,
+        with_explanation=False,
+    )
+    return ResolvedJudgePrompt(
+        preset_name=f"task:{resolved.definition_task}",
+        parse=resolve_judge_parser(prompt_spec.parser),
+        system_prompt=system_prompt,
+        user_prompt_template=user_prompt_template,
+        source="task",
+        system_path=prompt_spec.system_file,
+        user_path=prompt_spec.user_file,
+        system_sha256=_sha256(system_prompt),
+        user_sha256=_sha256(user_prompt_template),
+    )
 
 
 def _sha256(text: str) -> str:
@@ -207,11 +240,13 @@ def resolve_judge_prompt(
         # explanation preset. It intentionally takes precedence over the task
         # default (so e.g. `--provide_explanation` on any task yields
         # `default_with_explanation`); pass `--judge_prompt_preset` to opt out.
-        preset = (
-            DEFAULT_WITH_EXPLANATION_PRESET
-            if provide_explanation
-            else default_preset_for_task(task)
-        )
+        if provide_explanation:
+            preset = DEFAULT_WITH_EXPLANATION_PRESET
+        else:
+            task_prompt = _task_file_prompt(task, multi_turn=multi_turn)
+            if task_prompt is not None:
+                return task_prompt
+            preset = default_preset_for_task(task)
 
     spec = PRESETS.get(preset)
     if spec is None:
