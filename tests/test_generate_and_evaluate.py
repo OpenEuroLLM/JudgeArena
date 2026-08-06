@@ -177,9 +177,7 @@ def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
     monkeypatch.setattr(
         benchmark_registry, "benchmark_adapters", lambda: (fallback, pairwise)
     )
-    monkeypatch.setattr(
-        benchmark_registry, "get_packaged_task", lambda _task: resolved
-    )
+    monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
 
     assert benchmark_registry.resolve_benchmark_adapter("yaml-task") is pairwise
 
