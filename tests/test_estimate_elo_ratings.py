@@ -27,12 +27,11 @@ def _make_conversation(content_user: str, content_assistant: str) -> list[dict]:
     ]
 
 
-@pytest.fixture
-def synthetic_arena_df() -> pd.DataFrame:
+def _arena_df(n_battles: int) -> pd.DataFrame:
     """Synthetic arena DataFrame matching the schema produced by load_arena_dataframe."""
     rng = np.random.default_rng(42)
     rows = []
-    for i in range(N_BATTLES):
+    for i in range(n_battles):
         ma, mb = rng.choice(ARENA_MODELS, size=2, replace=False)
         winner = rng.choice(["model_a", "model_b", "tie"])
         lang = rng.choice(["en", "fr"])
@@ -54,6 +53,11 @@ def synthetic_arena_df() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def synthetic_arena_df() -> pd.DataFrame:
+    return _arena_df(N_BATTLES)
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +98,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     languages = kwargs.pop("languages", None)
     swap_mode = kwargs.pop("swap_mode", "fixed")
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
+    calibrate_temperature = kwargs.pop("calibrate_temperature", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
@@ -108,7 +113,12 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         model={"name": model},
         judge=judge,
         generation={"n_instructions": n_instructions},
-        elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
+        elo={
+            "arena": arena,
+            "n_bootstraps": n_bootstraps,
+            "languages": languages,
+            "calibrate_temperature": calibrate_temperature,
+        },
         run={"result_folder": result_folder},
     )
 
@@ -462,3 +472,28 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
         result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
     )
     assert 0 < total_en < total_all
+
+
+def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
+    """Regression: the calibration path constructs its own judge model and once
+    crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
+    MLE fit itself is mocked."""
+    captured = {}
+
+    def fake_calibrate(delta_s, y):
+        captured["n_pairs"] = len(delta_s)
+        return 0.42
+
+    monkeypatch.setattr(estimate_elo_ratings, "calibrate_temperature", fake_calibrate)
+    # Anchor battles require models with >= 500 appearances; the default
+    # 30-battle fixture leaves the calibration pool empty.
+    monkeypatch.setattr(
+        estimate_elo_ratings, "load_battles", lambda _task: _arena_df(900)
+    )
+
+    result = run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), calibrate_temperature=True)
+    )
+
+    assert captured["n_pairs"] >= 10
+    assert 0.0 <= result["winrate"] <= 1.0
