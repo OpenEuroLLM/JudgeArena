@@ -85,7 +85,8 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
-    arena = kwargs.pop("arena", "ComparIA")
+    task = kwargs.pop("task", "elo-comparia")
+    arena = kwargs.pop("arena", None)
     model = kwargs.pop("model", "Dummy/my model")
     judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
     n_instructions = kwargs.pop("n_instructions", 10)
@@ -103,7 +104,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     if battle_thinking_token_budget is not None:
         judge["battle_thinking_token_budget"] = battle_thinking_token_budget
     return RunConfig(
-        task="elo-comparia",
+        task=task,
         model={"name": model},
         judge=judge,
         generation={"n_instructions": n_instructions},
@@ -436,3 +437,28 @@ def test_arena_anchor_battles_filters_and_preserves_index():
     assert list(out.index) == list(range(1000, 1000 + n))  # labels preserved, rare gone
     assert (out["source"] == "human").all()
     assert out.loc[1000, "pref"] == 0.0 and out.loc[1001, "pref"] == 1.0
+
+
+def test_elo_language_variant_resolves_and_filters(tmp_path):
+    variant = get_packaged_task("elo-lmarena-140k-en")
+    assert variant is not None
+    assert variant.selection is not None
+    assert variant.selection.values == ("en",)
+    assert get_packaged_task("elo-lmarena-tier1").selection.values[0] == "en"
+
+    result_en = run_elo(
+        _default_args(
+            result_folder=str(tmp_path), task="elo-lmarena-140k-en", n_instructions=None
+        ),
+        variant,
+    )
+    result_all = run_elo_with_task(
+        _default_args(
+            result_folder=str(tmp_path), task="elo-lmarena-140k", n_instructions=None
+        )
+    )
+    total_en = result_en["num_wins"] + result_en["num_losses"] + result_en["num_ties"]
+    total_all = (
+        result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
+    )
+    assert 0 < total_en < total_all

@@ -153,10 +153,26 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     logger.info("Step 1: Loading battles from %s", arena)
     df_arena_all = load_battles(task)
 
-    # Filter by language if specified
+    # Filter by language: a task variant (e.g. elo-lmarena-140k-en) preselects
+    # languages; elo.languages narrows further within that selection.
+    selected_languages = list(cfg.elo.languages or [])
+    if task.selection is not None:
+        variant_languages = list(task.selection.values)
+        if selected_languages:
+            selected_languages = [
+                lang for lang in selected_languages if lang in set(variant_languages)
+            ]
+            if not selected_languages:
+                raise ValueError(
+                    f"elo.languages {cfg.elo.languages} has no overlap with the "
+                    f"languages of task {cfg.task!r} ({variant_languages})."
+                )
+        else:
+            selected_languages = variant_languages
+
     df_battles = df_arena_all
-    if cfg.elo.languages:
-        df_battles = df_battles[df_battles["lang"].isin(cfg.elo.languages)]
+    if selected_languages:
+        df_battles = df_battles[df_battles["lang"].isin(selected_languages)]
 
     random_sampling = cfg.elo.elo_random_battles is not None
     sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
@@ -220,7 +236,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     def replace_slash(s: str) -> str:
         return s.replace("/", "_")
 
-    languages_str = "-".join(sorted(cfg.elo.languages)) if cfg.elo.languages else "all"
+    languages_str = (
+        "-".join(sorted(selected_languages)) if selected_languages else "all"
+    )
     extra_kwargs_str = (
         "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
         if extra_kwargs
