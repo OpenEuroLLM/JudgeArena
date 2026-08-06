@@ -21,7 +21,7 @@ from judgearena.benchmarks.elo.rating import (
     select_seeded_random_arena_battles,
     winner_to_pref,
 )
-from judgearena.benchmarks.elo.scoring import resolve_elo_scorer
+from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.execution import build_generation_kwargs
 from judgearena.datasets import load_battles
 from judgearena.evaluate import (
@@ -151,7 +151,7 @@ def run_elo(
         raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
     protocol = resolved_task.spec.protocol
     arena = protocol.arena
-    scorer = resolve_elo_scorer(protocol.scoring.adapter)
+    scorer = ELO_SCORERS[protocol.scoring.adapter]
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 

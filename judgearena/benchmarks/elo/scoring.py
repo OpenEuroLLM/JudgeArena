@@ -1,4 +1,10 @@
-"""Runtime scoring adapters for ELO rating tasks."""
+"""Runtime scoring adapters for ELO rating tasks.
+
+A scorer turns judged battles into the metric a benchmark reports. Each
+protocol defines its own, so scorers are named components selected by task
+YAML rather than logic in the runner: the runner produces preferences, the
+scorer owns the metric math.
+"""
 
 from __future__ import annotations
 
@@ -12,27 +18,11 @@ RatingFunction = Callable[..., dict[str, float]]
 
 @dataclass(frozen=True)
 class EloScorer:
-    """Registered rating implementation selected by an ELO task."""
+    """Rating implementation selected by an ELO task's scoring adapter."""
 
-    name: str
     fit: RatingFunction
 
 
-_ELO_SCORERS = {
-    "bradley_terry": EloScorer(
-        name="bradley_terry",
-        fit=fit_bradley_terry,
-    )
+ELO_SCORERS = {
+    "bradley_terry": EloScorer(fit=fit_bradley_terry),
 }
-
-ELO_SCORER_NAMES = frozenset(_ELO_SCORERS)
-
-
-def resolve_elo_scorer(name: str) -> EloScorer:
-    """Return the ELO scorer registered under ``name``."""
-    try:
-        return _ELO_SCORERS[name]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unknown ELO scorer {name!r}; available: {sorted(ELO_SCORER_NAMES)}"
-        ) from exc
