@@ -16,7 +16,7 @@ class SingleTurnGeneration(StrictFrozenModel):
     mode: Literal["single_turn_chat", "base_completion"]
 
 
-SwapMode = Literal["fixed", "both"]
+SwapMode = Literal["fixed", "both", "random"]
 
 
 class PairwiseJudgeSpec(StrictFrozenModel):
