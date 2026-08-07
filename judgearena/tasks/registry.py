@@ -315,6 +315,12 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown {kind} {adapter_id!r}"
             )
+    for category, preset in getattr(spec.protocol.judge, "category_prompts", {}).items():
+        if preset not in adapters.prompts:
+            raise TaskDefinitionError(
+                f"{resolved.provenance.source_path}: unknown prompt {preset!r} "
+                f"for category {category!r}"
+            )
 
 
 def _validate_variant_ids(tasks: dict[str, ResolvedTaskSpec]) -> None:
