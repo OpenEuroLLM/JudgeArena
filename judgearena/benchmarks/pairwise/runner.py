@@ -28,6 +28,48 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _resolve_prompt_groups(
+    cfg: "RunConfig",
+    resolved_task: ResolvedTaskSpec,
+    instructions_df: pd.DataFrame,
+    eval_index: pd.Index,
+    resolved_prompt,
+) -> list[tuple[object, pd.Index]]:
+    """Split judging into one group per judge prompt.
+
+    Tasks may map categories to prompt presets (e.g. Arena-Hard v2.0 judges
+    creative writing with a different system prompt). Runtime prompt overrides
+    (an explicit preset or prompt files) disable the per-category mapping.
+    """
+    category_prompts = getattr(
+        resolved_task.spec.protocol.judge, "category_prompts", {}
+    )
+    if (
+        not category_prompts
+        or cfg.judge.prompt_preset is not None
+        or resolved_prompt.source != "preset"
+        or "category" not in instructions_df.columns
+    ):
+        return [(resolved_prompt, eval_index)]
+
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    categories = instructions_df.loc[eval_index, "category"]
+    groups: list[tuple[object, pd.Index]] = []
+    for category in dict.fromkeys(categories):
+        group_index = categories.index[categories == category]
+        preset = category_prompts.get(category)
+        prompt = (
+            resolved_prompt
+            if preset is None
+            else resolve_judge_prompt(
+                preset=preset, provide_explanation=cfg.judge.provide_explanation
+            )
+        )
+        groups.append((prompt, group_index))
+    return groups
+
+
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
     """
     1) take as input:
@@ -171,23 +213,44 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     logger.info("Saving results to %s", res_folder)
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
-    annotations, annotations_reversed, prefs = judge_and_parse_prefs(
-        judge_chat_model=judge_chat_model,
-        instructions=instructions.head(n_instructions).tolist(),
-        completions_A=completions_A.head(n_instructions).tolist(),
-        completions_B=completions_B.head(n_instructions).tolist(),
-        swap_mode=cfg.judge.swap_mode,
-        provide_explanation=cfg.judge.provide_explanation,
-        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
-        parser_mode=resolved_prompt.parser_mode,
-        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-        use_tqdm=cfg.run.use_tqdm,
+    eval_index = instructions.head(n_instructions).index
+    prompt_groups = _resolve_prompt_groups(
+        cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
 
-    eval_instruction_index = instructions.head(n_instructions).index.tolist()
+    annotations = []
+    annotations_reversed = [] if cfg.judge.swap_mode == "both" else None
+    direct_prefs, reversed_prefs = [], []
+    for group_prompt, group_index in prompt_groups:
+        group_annotations, group_reversed, group_prefs = judge_and_parse_prefs(
+            judge_chat_model=judge_chat_model,
+            instructions=instructions.loc[group_index].tolist(),
+            completions_A=completions_A.loc[group_index].tolist(),
+            completions_B=completions_B.loc[group_index].tolist(),
+            swap_mode=cfg.judge.swap_mode,
+            provide_explanation=cfg.judge.provide_explanation,
+            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+            system_prompt=group_prompt.system_prompt,
+            user_prompt_template=group_prompt.user_prompt_template,
+            prompt_preset=group_prompt.preset_name,
+            parser_mode=group_prompt.parser_mode,
+            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
+        )
+        annotations.extend(group_annotations)
+        if group_reversed is not None:
+            annotations_reversed.extend(group_reversed)
+            # judge_and_parse_prefs returns [direct..., reversed...] per call;
+            # split so the global order stays all-direct then all-reversed.
+            direct_prefs.append(group_prefs.iloc[: len(group_index)])
+            reversed_prefs.append(group_prefs.iloc[len(group_index) :])
+        else:
+            direct_prefs.append(group_prefs)
+    prefs = pd.concat(direct_prefs + reversed_prefs).reset_index(drop=True)
+
+    eval_instruction_index = [
+        index for _, group_index in prompt_groups for index in group_index
+    ]
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
