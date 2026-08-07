@@ -16,7 +16,7 @@ from judgearena.datasets.arena_hard import (
     is_arena_hard_dataset,
 )
 from judgearena.log import get_logger
-from judgearena.models import do_inference
+from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -313,6 +313,8 @@ class JudgeAnnotation:
     judge_completion: str  # output of the judge
     judge_input: str | None = None  # input that was passed to the judge
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
+    # first-token top logprobs, only collected for logprob-weighted presets
+    judge_top_logprobs: dict[str, float] | None = None
     # structured parser values (flat, _a/_b suffixes = judged positions);
     # key set is owned by the parser, see JudgeParser.parse_values
     judge_values: dict[str, float] | None = None
@@ -330,6 +332,7 @@ def annotate_battles(
     provide_explanation: bool = False,
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
+    collect_top_logprobs: bool = False,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -392,16 +395,19 @@ def annotate_battles(
     )
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
-    judge_completions = do_inference(
+    judge_results = do_inference(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        return_top_logprobs=collect_top_logprobs,
     )
+    if not collect_top_logprobs:
+        judge_results = [InferenceResult(text=text) for text in judge_results]
 
     annotations = []
-    for judge_input, judge_completion, instruction, completion_A, completion_B in zip(
+    for judge_input, judge_result, instruction, completion_A, completion_B in zip(
         inputs,
-        judge_completions,
+        judge_results,
         instructions,
         completions_A,
         completions_B,
@@ -410,11 +416,12 @@ def annotate_battles(
         annotations.append(
             JudgeAnnotation(
                 judge_input=judge_input,
-                judge_completion=judge_completion,
+                judge_completion=judge_result.text,
                 instruction=instruction,
                 completion_A=completion_A,
                 completion_B=completion_B,
                 prompt_preset=resolved_prompt.preset_name,
+                judge_top_logprobs=judge_result.first_token_top_logprobs,
             )
         )
     return annotations
@@ -455,6 +462,9 @@ def judge_and_parse_prefs(
         prefs: pd.Series of floats (0=A wins, 0.5=tie, 1=B wins, None=unparseable),
                already combined for swap_mode="both"
     """
+    if parse is None:
+        parse = PairScore()
+
     if swap_mode == "both":
         logger.info(
             "Correction for judge bias towards a certain model position is set."
@@ -476,6 +486,7 @@ def judge_and_parse_prefs(
         prompt_preset=prompt_preset,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
+        collect_top_logprobs=parse.uses_top_logprobs,
     )
 
     annotations_reversed = None
@@ -492,18 +503,29 @@ def judge_and_parse_prefs(
             prompt_preset=prompt_preset,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
+            collect_top_logprobs=parse.uses_top_logprobs,
         )
 
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    if parse is None:
-        parse = PairScore()
-
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
+        if parse.uses_top_logprobs:
+            n_no_logprobs = sum(1 for a in ann_list if a.judge_top_logprobs is None)
+            if n_no_logprobs:
+                logger.warning(
+                    "%d/%d judge responses returned no logprobs (%s) — falling "
+                    "back to discrete token parsing for those.",
+                    n_no_logprobs,
+                    len(ann_list),
+                    label,
+                )
         for annotation in ann_list:
             annotation.judge_values = parse.parse_values(annotation.judge_completion)
-        results = [parse(a.judge_completion) for a in ann_list]
+        results = [
+            parse(a.judge_completion, top_logprobs=a.judge_top_logprobs)
+            for a in ann_list
+        ]
         n_failed = sum(1 for r in results if r is None)
         if n_failed:
             logger.warning(
