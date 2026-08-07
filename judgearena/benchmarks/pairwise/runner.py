@@ -326,16 +326,22 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     values = pd.DataFrame([a.judge_values or {} for a in judged_annotations])
     if not values.empty:
         battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
-    summary = scorer(battles)
+    scoring_result = scorer.score(battles)
+    scoring_details = {
+        **scoring_result.metrics,
+        **scoring_result.scoring_details,
+    }
 
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=baseline_plan.display_name,
         judge_model=cfg.judge.model,
-        summary=summary,
+        summary=scoring_result.summary,
         swap_mode=cfg.judge.swap_mode,
         result_folder=str(res_folder),
+        per_category=scoring_result.grouped_results.get("category"),
+        per_turn=scoring_result.grouped_results.get("turn"),
         preferences=prefs.tolist(),
         metadata={
             "baseline_assignment": "per-row"
@@ -345,6 +351,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+            **({"scoring": scoring_details} if scoring_details else {}),
         },
     )
     results = report.to_dict()

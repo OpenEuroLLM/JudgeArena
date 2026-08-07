@@ -44,7 +44,9 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     assert calls == [
         ("hf", "alpaca-eval", tables_dir),
         ("hf", "arena-hard-v0.1", tables_dir),
+        ("hf", "arena-hard-v0.1-official", tables_dir),
         ("hf", "arena-hard-v2.0", tables_dir),
+        ("hf", "arena-hard-v2.0-official", tables_dir),
         ("hf", "elo-comparia", tables_dir),
         ("hf", "elo-lmarena", tables_dir),
         ("hf", "elo-lmarena-100k", tables_dir),

@@ -3,19 +3,36 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import pandas as pd
 
+from judgearena.benchmarks.pairwise import scoring_arena_hard
 from judgearena.utils.eval import PrefSummary, compute_pref_summary
 
-PairwiseScoreFn = Callable[[pd.DataFrame], PrefSummary]
+
+@dataclass(frozen=True)
+class ScoringResult:
+    """Complete output produced by one scoring pass."""
+
+    summary: PrefSummary
+    metrics: dict[str, float | None] = field(default_factory=dict)
+    grouped_results: dict[str, object] = field(default_factory=dict)
+    scoring_details: dict[str, object] = field(default_factory=dict)
 
 
-def _score_win_rate(battles: pd.DataFrame) -> PrefSummary:
-    """Summarize canonical pairwise preferences."""
-    return compute_pref_summary(battles["pref"])
+@dataclass(frozen=True)
+class PairwiseScorer:
+    """Pairwise scoring implementation."""
+
+    score: Callable[[pd.DataFrame], ScoringResult]
 
 
-PAIRWISE_SCORERS: dict[str, PairwiseScoreFn] = {
-    "pairwise_win_rate": _score_win_rate,
+def _score_win_rate(battles: pd.DataFrame) -> ScoringResult:
+    return ScoringResult(summary=compute_pref_summary(battles["pref"]))
+
+
+PAIRWISE_SCORERS: dict[str, PairwiseScorer] = {
+    "pairwise_win_rate": PairwiseScorer(score=_score_win_rate),
+    "arena_hard_score": PairwiseScorer(score=scoring_arena_hard.score),
 }

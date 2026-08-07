@@ -349,19 +349,19 @@ def test_run_writes_roundtrippable_config(tmp_path):
 
 
 def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
-    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
 
     captured = {}
     win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
 
     def recording_score(battles):
         captured["battles"] = battles
-        return win_rate(battles)
+        return win_rate.score(battles)
 
     monkeypatch.setitem(
         PAIRWISE_SCORERS,
         "pairwise_win_rate",
-        recording_score,
+        PairwiseScorer(score=recording_score),
     )
 
     run_pairwise(
@@ -378,3 +378,40 @@ def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
     battles = captured["battles"]
     assert battles["score_a"].tolist() == [0.0, 0.0]
     assert battles["score_b"].tolist() == [10.0, 10.0]
+
+
+def test_run_pairwise_judges_categories_with_their_declared_prompts(
+    monkeypatch, tmp_path
+):
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["q0", "q1", "q2"],
+            "category": ["hard_prompt", "creative_writing", "hard_prompt"],
+        },
+        index=pd.Index([0, 1, 2], name="instruction_index"),
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="arena-hard-v2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/My final verdict is tie: [[A=B]]",
+            n_instructions=3,
+            result_folder=str(tmp_path),
+            swap_mode="both",
+        )
+    )
+
+    # 3 battles x both orders, every verdict parseable.
+    assert prefs.tolist() == [0.5] * 6
+
+    annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
+    by_preset = annotations.groupby("prompt_preset")["instruction_index"].apply(set)
+    assert by_preset["arena-hard"] == {0, 2}
+    assert by_preset["arena-hard-creative"] == {1}

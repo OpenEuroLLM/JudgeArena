@@ -42,6 +42,50 @@ class JudgeParser(abc.ABC):
         return None
 
 
+# Graded preferences for the official Arena-Hard verdict labels. The spacing
+# keeps decisiveness recoverable downstream (< 0.5 is an A win either way,
+# but 0.0 marks a significant [[A>>B]] win vs 0.25 for [[A>B]]), and the
+# encoding is symmetric so swapped-order judgments invert via 1 - preference.
+ARENA_HARD_VERDICT_PREFERENCES: dict[str, float] = {
+    "A>>B": 0.0,
+    "A>B": 0.25,
+    "A=B": 0.5,
+    "B>A": 0.75,
+    "B>>A": 1.0,
+}
+
+# Official Arena-Hard verdict extraction (judge_config.yaml regex_pattern),
+# with v2.0's single-bracket fallback for judges that drop one bracket pair.
+_ARENA_HARD_VERDICT_PATTERN = re.compile(r"\[\[([AB<>=]+)\]\]")
+_ARENA_HARD_VERDICT_FALLBACK_PATTERN = re.compile(r"\[([AB<>=]+)\]")
+
+
+class ArenaHardVerdict(JudgeParser):
+    """Extract one graded verdict label, following the official rules.
+
+    Like Arena-Hard-Auto's ``get_score``: the judgment must contain exactly
+    one distinct label; none or conflicting labels are unparseable.
+    """
+
+    name = "arena-hard-verdict"
+
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None:
+        text = strip_thinking_tags(judge_completion)
+        matches = {m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m}
+        if not matches:
+            matches = {
+                m for m in _ARENA_HARD_VERDICT_FALLBACK_PATTERN.findall(text) if m
+            }
+        if len(matches) != 1:
+            return None
+        return ARENA_HARD_VERDICT_PREFERENCES.get(matches.pop().strip())
+
+
 class PairScore(JudgeParser):
     """Score-format parser: temperature-softened preference from A/B scores."""
 
@@ -109,6 +153,7 @@ def parser_name(parse) -> str:
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, JudgeParser] = {
     "score": PairScore(),
+    "arena-hard-verdict": ArenaHardVerdict(),
 }
 
 

@@ -1,8 +1,13 @@
 import pytest
 
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import (
+    JUDGE_PARSERS,
+    PairScore,
+)
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
+
+parse_arena_hard_verdict = JUDGE_PARSERS["arena-hard-verdict"]
 
 
 def test_pair_score():
@@ -98,6 +103,36 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
     assert strip_thinking_tags(raw_text) == "Final answer."
 
 
+@pytest.mark.parametrize(
+    "judgment, expected",
+    [
+        ("My final verdict is tie: [[A=B]]", 0.5),
+        ("Assistant A is significantly better: [[A>>B]]", 0.0),
+        ("[[A>B]]", 0.25),
+        ("some explanation...\n[[B>A]]", 0.75),
+        ("[[B>>A]]", 1.0),
+        ("[[A=B]] ... repeated [[A=B]]", 0.5),  # duplicates of one label are fine
+        ("[[A>B]] but wait [[B>A]]", None),  # conflicting labels
+        ("no verdict here", None),
+        ("[[A<B]]", None),  # regex-matched but not a canonical label
+    ],
+)
+def test_parse_arena_hard_verdict(judgment, expected):
+    assert parse_arena_hard_verdict(judgment) == expected
+
+
+def test_pair_score_parse_values_exposes_raw_scores():
+    parser = PairScore()
+
+    assert parser.parse_values("Score A: 3 Score B: 9") == {
+        "score_a": 3.0,
+        "score_b": 9.0,
+    }
+    assert parser.parse_values("no scores here") is None
+    # Parsers without structured values inherit the base behaviour.
+    assert parse_arena_hard_verdict.parse_values("[[A>B]]") is None
+
+
 def test_judge_and_parse_prefs_collects_parser_values():
     from judgearena.evaluate import judge_and_parse_prefs
     from judgearena.models import make_model
@@ -111,3 +146,16 @@ def test_judge_and_parse_prefs_collects_parser_values():
 
     assert annotations[0].judge_values == {"score_a": 2.0, "score_b": 8.0}
     assert prefs.iloc[0] == pytest.approx(0.8582, abs=1e-3)
+
+
+def test_arena_hard_preset_resolves_verdict_parser():
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    resolved = resolve_judge_prompt(preset="arena-hard")
+
+    assert resolved.parse is parse_arena_hard_verdict
+    assert resolved.system_prompt.startswith(
+        "Please act as an impartial judge and evaluate the quality"
+    )
+    assert "[[A>>B]]" in resolved.system_prompt
+    assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template

@@ -19,6 +19,8 @@ DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
+ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
+ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET = "arena-hard-creative"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -100,6 +102,23 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+    ),
+    # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),
+    # verbatim except for placeholder names. The judge explains, then emits one
+    # graded verdict label ([[A>>B]] ... [[B>>A]]).
+    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ARENA_HARD_JUDGE_PROMPT_PRESET,
+        parse=JUDGE_PARSERS["arena-hard-verdict"],
+        system_file="arena-hard-system-prompt.txt",
+        user_file="arena-hard-prompt.txt",
+    ),
+    # Official Arena-Hard v2.0 creative-writing variant: identical except the
+    # judge is not asked to answer the prompt itself first.
+    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
+        parse=JUDGE_PARSERS["arena-hard-verdict"],
+        system_file="arena-hard-creative-system-prompt.txt",
+        user_file="arena-hard-prompt.txt",
     ),
 }
 

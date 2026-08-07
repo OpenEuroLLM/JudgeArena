@@ -1,0 +1,26 @@
+extends: _base.yaml
+task: arena-hard-v0.1-official
+description: Arena-Hard v0.1 with the official judging protocol (verdict labels, both orders, weighted score).
+
+dataset:
+  sources:
+    examples:
+      config: arena-hard-v0.1
+      allow_patterns:
+        - data/arena-hard-v0.1/question.jsonl
+        - data/arena-hard-v0.1/model_answer/*.jsonl
+
+protocol:
+  baseline:
+    strategy: task_default
+    reference_id: gpt-4-0314
+    allow_runtime_override: true
+  judge:
+    default_prompt: arena-hard
+    default_swap_mode: both
+    default_temperature: 0
+    # The official prompt has the judge answer the question itself before the
+    # verdict, so it needs the official 4096-token budget to reach the label.
+    default_max_out_tokens: 4096
+  scoring:
+    adapter: arena_hard_score
