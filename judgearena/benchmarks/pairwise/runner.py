@@ -12,7 +12,7 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, ScoringInputs
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
@@ -268,8 +268,25 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
+    # Scoring inputs follow the judged battle order: all-direct then, for
+    # swap_mode="both", all-reversed with the A/B positions swapped.
+    completions_a_eval = completions_A.loc[eval_instruction_index].tolist()
+    completions_b_eval = completions_B.loc[eval_instruction_index].tolist()
+    scoring_inputs = ScoringInputs(
+        prefs=prefs,
+        completions_a=(
+            completions_a_eval + completions_b_eval
+            if cfg.judge.swap_mode == "both"
+            else completions_a_eval
+        ),
+        completions_b=(
+            completions_b_eval + completions_a_eval
+            if cfg.judge.swap_mode == "both"
+            else completions_b_eval
+        ),
+    )
     scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
-    summary = scorer.summarize(prefs)
+    summary = scorer.summarize(scoring_inputs)
 
     report = BattleReport(
         task=cfg.task,
@@ -288,6 +305,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+            **(
+                scorer.report_metadata(scoring_inputs)
+                if scorer.report_metadata is not None
+                else {}
+            ),
         },
     )
     results = report.to_dict()
