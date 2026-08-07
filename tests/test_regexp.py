@@ -1,13 +1,17 @@
+import math
+
 import pytest
 
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
     PairScore,
+    weighted_token_preference,
 )
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
 parse_arena_hard_verdict = JUDGE_PARSERS["arena-hard-verdict"]
+parse_alpaca_eval_token = JUDGE_PARSERS["alpaca-eval-token"]
 
 
 def test_pair_score():
@@ -121,6 +125,47 @@ def test_parse_arena_hard_verdict(judgment, expected):
     assert parse_arena_hard_verdict(judgment) == expected
 
 
+@pytest.mark.parametrize(
+    "judgment, expected",
+    [
+        ("m", 0.0),
+        ("M", 1.0),
+        (" m\n", 0.0),  # whitespace-only padding is tolerated
+        ("mM", None),
+        ("model m", None),
+        ("", None),
+    ],
+)
+def test_parse_alpaca_eval_token(judgment, expected):
+    assert parse_alpaca_eval_token(judgment) == expected
+
+
+@pytest.mark.parametrize(
+    "top_logprobs, expected",
+    [
+        ({"m": math.log(0.25), "M": math.log(0.75)}, 0.75),
+        ({"M": -0.5}, 1.0),  # missing verdict token counts as -inf
+        ({"m": -0.5}, 0.0),
+        ({"x": -0.1}, None),  # neither verdict token present
+        ({}, None),
+    ],
+)
+def test_weighted_token_preference(top_logprobs, expected):
+    result = weighted_token_preference(top_logprobs, ("m", "M"))
+    if expected is None:
+        assert result is None
+    else:
+        assert result == pytest.approx(expected)
+
+
+def test_alpaca_eval_token_weights_by_logprobs_when_present():
+    assert parse_alpaca_eval_token(
+        "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}
+    ) == pytest.approx(0.75)
+    # Without logprobs the sampled token decides.
+    assert parse_alpaca_eval_token("M") == 1.0
+
+
 def test_pair_score_parse_values_exposes_raw_scores():
     parser = PairScore()
 
@@ -146,6 +191,16 @@ def test_judge_and_parse_prefs_collects_parser_values():
 
     assert annotations[0].judge_values == {"score_a": 2.0, "score_b": 8.0}
     assert prefs.iloc[0] == pytest.approx(0.8582, abs=1e-3)
+
+
+def test_alpaca_eval_preset_resolves_token_parser():
+    resolved = resolve_judge_prompt(preset="alpaca-eval")
+
+    assert resolved.parse is parse_alpaca_eval_token
+    assert resolved.parse.requires_top_logprobs is True
+    assert resolved.system_prompt.startswith("You are a highly efficient assistant")
+    assert '"model_identifier": "m"' in resolved.user_prompt_template
+    assert "{completion_A}" in resolved.user_prompt_template
 
 
 def test_arena_hard_preset_resolves_verdict_parser():

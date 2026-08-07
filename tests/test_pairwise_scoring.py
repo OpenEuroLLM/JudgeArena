@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.pairwise.scoring_alpaca_eval import (
+    _official_annotations,
+    _summarize,
+)
 
 
 def _battles(prefs: list, **overrides) -> pd.DataFrame:
@@ -28,16 +32,13 @@ def test_pairwise_win_rate_scorer_owns_metric_semantics():
 
 
 def test_arena_hard_score_weights_decisive_battles_three_to_one():
-    # Graded prefs: [[A>>B]], [[A>B]], [[A=B]], [[B>A]], [[B>>A]], unparsed.
-    # With one model vs one baseline, the official Bradley-Terry fit reduces
-    # to the weighted win fraction, so winrate IS the official score.
     result = PAIRWISE_SCORERS["arena_hard_score"].score(
         _battles([0.0, 0.25, 0.5, 0.75, 1.0, None])
     )
     summary = result.summary
 
-    assert summary.num_wins == 4  # 3x for A>>B + 1x for A>B
-    assert summary.num_losses == 4  # 3x for B>>A + 1x for B>A
+    assert summary.num_wins == 4
+    assert summary.num_losses == 4
     assert summary.num_ties == 1
     assert summary.num_missing == 1
     assert summary.num_battles == 10
@@ -62,3 +63,44 @@ def test_arena_hard_score_empty_prefs_yield_no_ci():
 
     assert result.metrics["score_ci_low"] is None
     assert result.metrics["score_ci_high"] is None
+
+
+def test_alpaca_eval_summary_is_mean_preference_over_parsed_battles():
+    summary = _summarize(_battles([0.25, 0.75, None]))
+
+    assert summary.winrate == pytest.approx(0.5)
+    assert summary.num_battles == 3
+    assert summary.num_missing == 1
+
+
+def test_alpaca_eval_official_annotations_mapping():
+    annotations = _official_annotations(_battles([0.25, None]))
+
+    assert annotations["preference"].tolist() == [1.75, 0.0]
+    assert annotations["index"].tolist() == [0, 1]
+    assert str(annotations["index"].dtype).startswith("int")
+    assert annotations["generator_2"].unique().tolist() == ["model-under-test"]
+    assert annotations["generator_1"].unique().tolist() == ["baseline-model"]
+    assert annotations["output_2"].tolist() == ["m", "mm"]
+    assert annotations["output_1"].tolist() == ["b", "bbb"]
+
+
+def test_alpaca_eval_lc_winrate_matches_pinned_reference_value():
+    pytest.importorskip("alpaca_eval")
+    import numpy as np
+
+    scorer = PAIRWISE_SCORERS["alpaca_eval_lc_winrate"]
+    rng = np.random.default_rng(0)
+    n = 805
+    battles = _battles(
+        rng.uniform(0, 1, n).tolist(),
+        completion_model=["x" * int(v) for v in rng.integers(50, 2000, n)],
+        completion_baseline=["y" * int(v) for v in rng.integers(50, 2000, n)],
+    )
+
+    result = scorer.score(battles)
+
+    if result.metrics["lc_winrate"] is None:
+        pytest.skip("LC computation degraded (likely offline)")
+    assert result.metrics["lc_winrate"] == pytest.approx(48.29068772368286, abs=0.5)
+    assert result.metrics["raw_winrate"] == pytest.approx(48.20877535856965, abs=1e-6)

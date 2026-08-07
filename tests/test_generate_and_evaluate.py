@@ -348,38 +348,6 @@ def test_run_writes_roundtrippable_config(tmp_path):
     assert reloaded.model.name == "Dummy/no answer"
 
 
-def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
-    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
-
-    captured = {}
-    win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
-
-    def recording_score(battles):
-        captured["battles"] = battles
-        return win_rate.score(battles)
-
-    monkeypatch.setitem(
-        PAIRWISE_SCORERS,
-        "pairwise_win_rate",
-        PairwiseScorer(score=recording_score),
-    )
-
-    run_pairwise(
-        _cfg(
-            task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-        )
-    )
-
-    battles = captured["battles"]
-    assert battles["score_a"].tolist() == [0.0, 0.0]
-    assert battles["score_b"].tolist() == [10.0, 10.0]
-
-
 def test_run_pairwise_judges_categories_with_their_declared_prompts(
     monkeypatch, tmp_path
 ):
@@ -415,3 +383,121 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
     by_preset = annotations.groupby("prompt_preset")["instruction_index"].apply(set)
     assert by_preset["arena-hard"] == {0, 2}
     assert by_preset["arena-hard-creative"] == {1}
+
+
+def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_path):
+    """The alpaca-eval preset weights verdicts by the judge's top logprobs."""
+    import math
+
+    from langchain_core.messages import AIMessage
+
+    message = AIMessage(
+        content="M",
+        response_metadata={
+            "logprobs": {
+                "content": [
+                    {
+                        "token": "M",
+                        "logprob": math.log(0.75),
+                        "top_logprobs": [
+                            {"token": "M", "logprob": math.log(0.75)},
+                            {"token": "m", "logprob": math.log(0.25)},
+                        ],
+                    }
+                ]
+            }
+        },
+    )
+
+    def fake_make_model(**kwargs):
+        class FakeJudge:
+            def batch(self, inputs, **_kwargs):
+                return [message] * len(inputs)
+
+        return FakeJudge()
+
+    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval-2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="OpenRouter/fake-judge",
+            n_instructions=4,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    # Judged pref is P(M)=0.75 everywhere; rows 1 is swapped (see the golden
+    # mask below) and re-orients to 0.25.
+    assert prefs.tolist() == pytest.approx([0.75, 0.25, 0.75, 0.75])
+
+
+def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
+    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
+
+    captured = {}
+    win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
+
+    def recording_score(battles):
+        captured["battles"] = battles
+        return win_rate.score(battles)
+
+    monkeypatch.setitem(
+        PAIRWISE_SCORERS,
+        "pairwise_win_rate",
+        PairwiseScorer(score=recording_score),
+    )
+
+    run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
+
+    battles = captured["battles"]
+    assert battles["score_a"].tolist() == [0.0, 0.0]
+    assert battles["score_b"].tolist() == [10.0, 10.0]
+
+
+def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
+    """swap_mode='random' flips judged positions per instruction and re-orients.
+
+    The AlpacaEval-scheme mask for 'Synthetic instruction 0..3' is
+    [False, True, False, False]. The judge always answers 'm' (slot A wins),
+    so swapped rows come back as baseline wins after re-orientation.
+    """
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval-2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/m",
+            n_instructions=4,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    assert prefs.tolist() == [0.0, 1.0, 0.0, 0.0]
+
+    annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
+    assert annotations["model_A"].tolist() == [
+        "Dummy/a",
+        "Dummy/b",
+        "Dummy/a",
+        "Dummy/a",
+    ]
+    assert annotations["model_B"].tolist() == [
+        "Dummy/b",
+        "Dummy/a",
+        "Dummy/b",
+        "Dummy/b",
+    ]

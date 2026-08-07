@@ -103,6 +103,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     if resolved_task is None:
         raise ValueError(f"Unknown task {cfg.task!r}.")
     scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
+    if scorer.check_requirements is not None:
+        scorer.check_requirements()
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,

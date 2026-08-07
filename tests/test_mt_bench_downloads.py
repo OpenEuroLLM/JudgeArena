@@ -108,6 +108,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     tables_dir = tmp_path / "tables"
     assert [name for name, _ in hf_datasets] == [
         "alpaca-eval",
+        "alpaca-eval-2.0-official",
         "arena-hard-v0.1",
         "arena-hard-v0.1-official",
         "arena-hard-v2.0",

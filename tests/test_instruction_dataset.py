@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 import judgearena.datasets as instruction_dataset
+import judgearena.datasets.alpaca_eval as alpaca_eval
 import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.fluency as fluency
 import judgearena.datasets.judgearena_tables as judgearena_tables
@@ -56,6 +57,26 @@ def test_alpaca_eval_table_loader_uses_yaml_fields(monkeypatch, tmp_path):
 
     assert loaded["instruction_index"].tolist() == [1, 2]
     assert loaded["instruction"].tolist() == ["First", "Second"]
+
+
+def test_alpaca_eval_builders_normalize_official_baseline_file():
+    raw_df = pd.DataFrame(
+        {
+            "dataset": ["helpful_base", "koala"],
+            "instruction": ["q0", "q1"],
+            "output": ["out0", "out1"],
+            "generator": ["gpt4_1106_preview", "gpt4_1106_preview"],
+        }
+    )
+
+    instructions = alpaca_eval._build_instructions(raw_df)
+    assert instructions["instruction_index"].tolist() == ["0000", "0001"]
+    assert instructions["instruction"].tolist() == ["q0", "q1"]
+
+    outputs = alpaca_eval._build_model_outputs(raw_df)
+    assert outputs["model"].unique().tolist() == ["gpt4_1106_preview"]
+    assert outputs["output"].tolist() == ["out0", "out1"]
+    assert outputs["instruction_index"].tolist() == ["0000", "0001"]
 
 
 def test_arena_hard_native_baseline_v01_is_flat_string():

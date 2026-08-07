@@ -86,6 +86,60 @@ class ArenaHardVerdict(JudgeParser):
         return ARENA_HARD_VERDICT_PREFERENCES.get(matches.pop().strip())
 
 
+class AlpacaEvalToken(JudgeParser):
+    """Parse the official AlpacaEval verdict, weighted by logprobs when given.
+
+    The annotator prompt labels the evaluated model "m" and the baseline "M".
+    With top logprobs the preference is the official logprob weighting over
+    the two tokens; without them it falls back to the sampled token (case is
+    the whole signal, so matching is case-sensitive).
+    """
+
+    name = "alpaca-eval-token"
+    requires_top_logprobs = True
+    _TOKENS = ("m", "M")
+
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None:
+        if top_logprobs is not None:
+            return weighted_token_preference(top_logprobs, self._TOKENS)
+        token = strip_thinking_tags(judge_completion).strip()
+        if token == "m":
+            return 0.0
+        if token == "M":
+            return 1.0
+        return None
+
+
+def weighted_token_preference(
+    top_logprobs: dict[str, float], tokens: tuple[str, str]
+) -> float | None:
+    """Official AlpacaEval logprob weighting over the two verdict tokens.
+
+    Follows their ``logprob_parser``: a verdict token absent from the returned
+    top logprobs counts as -inf (probability zero), and if both are absent the
+    judgment is unparseable. Returns P(second token) renormalized over the
+    pair, i.e. the preference for completion B.
+    """
+    logprob_a = top_logprobs.get(tokens[0])
+    logprob_b = top_logprobs.get(tokens[1])
+    if logprob_a is None and logprob_b is None:
+        return None
+    missing = float("-inf")
+    scores = np.array(
+        [
+            logprob_a if logprob_a is not None else missing,
+            logprob_b if logprob_b is not None else missing,
+        ]
+    )
+    weights = np.exp(scores - scores.max())
+    return float(weights[1] / weights.sum())
+
+
 class PairScore(JudgeParser):
     """Score-format parser: temperature-softened preference from A/B scores."""
 
@@ -154,6 +208,7 @@ def parser_name(parse) -> str:
 JUDGE_PARSERS: dict[str, JudgeParser] = {
     "score": PairScore(),
     "arena-hard-verdict": ArenaHardVerdict(),
+    "alpaca-eval-token": AlpacaEvalToken(),
 }
 
 

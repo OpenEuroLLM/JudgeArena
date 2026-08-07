@@ -79,6 +79,7 @@ def test_packaged_registry_discovers_versioned_tasks():
 
     assert list(tasks) == [
         "alpaca-eval",
+        "alpaca-eval-2.0-official",
         "arena-hard-v0.1",
         "arena-hard-v0.1-official",
         "arena-hard-v2.0",

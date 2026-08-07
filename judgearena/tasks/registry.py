@@ -277,7 +277,14 @@ class AdapterCatalog:
     # Keep in sync with judgearena.datasets.registry; importing it here
     # would create a cycle.
     instruction_datasets: frozenset[str] = frozenset(
-        {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
+        {
+            "alpaca_eval",
+            "arena_hard",
+            "fluency",
+            "judgearena_tables",
+            "m_arena_hard",
+            "mt_bench",
+        }
     )
     battle_datasets: frozenset[str] = frozenset({"arena_battles"})
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
