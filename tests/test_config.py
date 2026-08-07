@@ -38,6 +38,7 @@ def _registered_task(
     allowed_swap_modes: tuple[str, ...] = ("both",),
     default_temperature: float | None = 0.25,
     default_max_out_tokens: int | None = 4096,
+    default_top_logprobs: int | None = 5,
     allow_runtime_override: bool = True,
 ):
     return SimpleNamespace(
@@ -48,6 +49,7 @@ def _registered_task(
                     allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
                     default_max_out_tokens=default_max_out_tokens,
+                    default_top_logprobs=default_top_logprobs,
                 ),
                 baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
@@ -67,6 +69,7 @@ def test_registered_task_applies_judge_defaults(monkeypatch):
     assert cfg.judge.swap_mode == "both"
     assert cfg.judge.temperature == 0.25
     assert cfg.judge.max_out_tokens == 4096
+    assert cfg.judge.top_logprobs == 5
 
 
 def test_registered_task_keeps_explicit_judge_max_out_tokens(monkeypatch):

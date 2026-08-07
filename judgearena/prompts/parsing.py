@@ -11,20 +11,31 @@ from judgearena.utils import strip_thinking_tags
 
 
 class JudgeParser(abc.ABC):
-    """Parses one judge completion into the universal preference.
+    """Parses what the judge returned into the universal preference.
 
-    ``__call__`` returns the preference every pipeline consumes (0 = A wins,
-    0.5 = tie, 1 = B wins, None = unparseable). ``parse_values`` optionally
-    exposes the parser's structured values as a flat ``str -> float`` dict:
-    per-side keys carry ``_a``/``_b`` suffixes in judged positions,
-    battle-level keys are unsuffixed, and the key set is owned by the parser.
+    ``__call__`` receives the completion text plus, for parsers that declare
+    ``uses_top_logprobs``, the first generated token's top logprobs — and
+    returns the preference every pipeline consumes (0 = A wins, 0.5 = tie,
+    1 = B wins, None = unparseable). ``parse_values`` optionally exposes the
+    parser's structured values as a flat ``str -> float`` dict: per-side keys
+    carry ``_a``/``_b`` suffixes in judged positions, battle-level keys are
+    unsuffixed, and the key set is owned by the parser.
     """
 
     name: str
     """Registry key and run-metadata identifier."""
 
+    uses_top_logprobs: bool = False
+    """Whether judging should collect first-token top logprobs for this
+    parser (the backend must also be asked for them via judge.top_logprobs)."""
+
     @abc.abstractmethod
-    def __call__(self, judge_completion: str) -> float | None: ...
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None: ...
 
     def parse_values(self, judge_completion: str) -> dict[str, float] | None:
         """Structured values behind the preference; None when there are none."""
@@ -45,7 +56,12 @@ class PairScore(JudgeParser):
             np.exp(self.temperature * np.array([score_a, score_b])).sum()
         )
 
-    def __call__(self, judge_completion: str) -> float | None:
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None:
         return self.parse_model_raw(judge_completion)
 
     def parse_values(self, judge_completion: str) -> dict[str, float] | None:

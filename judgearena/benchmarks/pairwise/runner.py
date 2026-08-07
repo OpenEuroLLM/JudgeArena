@@ -303,6 +303,16 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
+            **(
+                {
+                    "judge_annotations_with_logprobs": sum(
+                        a.judge_top_logprobs is not None
+                        for a in annotations + (annotations_reversed or [])
+                    ),
+                }
+                if getattr(resolved_prompt.parse, "uses_top_logprobs", False)
+                else {}
+            ),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             **(

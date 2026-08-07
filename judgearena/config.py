@@ -221,6 +221,10 @@ class JudgeArgs(BaseModel):
     """Position-bias handling. ``fixed``: a single A-B judge pass. ``both``:
     judge each battle in both orders (A-B and B-A) and combine."""
 
+    top_logprobs: int | None = None
+    """Request the judge's top-N token logprobs (used by logprob-weighted
+    annotators like AlpacaEval's). Unset requests none."""
+
     prompt_preset: str | None = None
     """Named judge prompt preset to use (see ``judgearena.prompts``). Defaults
     to the task's preset when unset."""
@@ -268,6 +272,7 @@ class JudgeArgs(BaseModel):
                     "top_p": self.top_p,
                     "top_k": self.top_k,
                     "seed": self.seed,
+                    "top_logprobs": self.top_logprobs,
                 }
             )
         )
@@ -419,6 +424,11 @@ class RunConfig(BaseSettings):
             and task_judge.default_max_out_tokens is not None
         ):
             self.judge.max_out_tokens = task_judge.default_max_out_tokens
+        if (
+            "top_logprobs" not in self.judge.model_fields_set
+            and task_judge.default_top_logprobs is not None
+        ):
+            self.judge.top_logprobs = task_judge.default_top_logprobs
 
         baseline = protocol.baseline
         if (

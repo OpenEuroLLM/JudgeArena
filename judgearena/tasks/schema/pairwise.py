@@ -25,6 +25,7 @@ class PairwiseJudgeSpec(StrictFrozenModel):
     allowed_swap_modes: tuple[SwapMode, ...] = ("fixed", "both")
     default_temperature: float | None = None
     default_max_out_tokens: int | None = Field(default=None, gt=0)
+    default_top_logprobs: int | None = Field(default=None, gt=0)
     category_prompts: dict[str, str] = Field(default_factory=dict)
     """Per-category prompt presets overriding ``default_prompt`` (e.g. the
     Arena-Hard v2.0 creative-writing judge prompt)."""
