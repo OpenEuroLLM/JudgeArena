@@ -263,7 +263,10 @@ def evaluate_completions(
 
     # Pairwise judge results
     prefs = pd.Series(
-        [resolved_prompt.parse(annotation.judge_completion) for annotation in annotations]
+        [
+            resolved_prompt.parse(annotation.judge_completion)
+            for annotation in annotations
+        ]
     )
     results = {
         **compute_pref_summary(prefs).to_dict(),

@@ -111,6 +111,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     resolved_task = resolved_task or get_packaged_task(cfg.task)
     if resolved_task is None:
         raise ValueError(f"Unknown task {cfg.task!r}.")
+    # Resolve before generation so a missing scorer dependency fails fast.
+    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
+    if scorer.check_available is not None:
+        scorer.check_available()
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
@@ -311,24 +315,25 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    # Scoring inputs follow the judged battle order: all-direct then, for
-    # swap_mode="both", all-reversed with the A/B positions swapped.
-    completions_a_eval = judged_A.loc[eval_instruction_index].tolist()
-    completions_b_eval = judged_B.loc[eval_instruction_index].tolist()
+    # Scorers see one canonically-oriented row per judged battle; under
+    # swap_mode="both" every instruction contributes two rows.
+    repeats = 2 if cfg.judge.swap_mode == "both" else 1
     scoring_inputs = ScoringInputs(
-        prefs=prefs,
-        completions_a=(
-            completions_a_eval + completions_b_eval
-            if cfg.judge.swap_mode == "both"
-            else completions_a_eval
-        ),
-        completions_b=(
-            completions_b_eval + completions_a_eval
-            if cfg.judge.swap_mode == "both"
-            else completions_b_eval
-        ),
+        battles=pd.DataFrame(
+            {
+                "instruction_index": list(eval_instruction_index) * repeats,
+                "model": cfg.model.name,
+                "baseline": baseline_per_eval.tolist() * repeats,
+                "completion_model": completions_A.loc[eval_instruction_index].tolist()
+                * repeats,
+                "completion_baseline": completions_B.loc[
+                    eval_instruction_index
+                ].tolist()
+                * repeats,
+                "pref": pd.Series(prefs, dtype="float64").to_numpy(),
+            }
+        )
     )
-    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
     summary = scorer.summarize(scoring_inputs)
 
     report = BattleReport(
