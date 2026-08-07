@@ -230,9 +230,6 @@ class JudgeArgs(BaseModel):
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
 
-    """If set, the judge explains its reasoning before scoring. Aids
-    interpretation; does not necessarily improve accuracy."""
-
     swap_mode: Literal["fixed", "both", "random"] = "fixed"
     """Position-bias handling. ``fixed``: a single A-B judge pass. ``both``:
     judge each battle in both orders (A-B and B-A) and combine. ``random``:
