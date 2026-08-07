@@ -3,6 +3,7 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
+import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -68,6 +69,24 @@ def _resolve_prompt_groups(
         )
         groups.append((prompt, group_index))
     return groups
+
+
+def _random_swap_mask(instructions: pd.Series) -> pd.Series:
+    """Deterministic per-instruction pair-order flips (swap_mode='random').
+
+    Replicates AlpacaEval's RandomSwitchTwoColumnsProcessor seed derivation
+    (switch-column name + instruction text + annotator seed 0), so the swap
+    decisions are bit-identical to the official annotator's.
+    """
+    return pd.Series(
+        [
+            random.Random(f"is_switch_output_1_output_2{instruction}0").choices(
+                [False, True], k=1
+            )[0]
+            for instruction in instructions
+        ],
+        index=instructions.index,
+    )
 
 
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
@@ -218,6 +237,17 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
 
+    # swap_mode="random" flips the judged pair order per instruction; prefs
+    # are re-oriented to the A=model frame after parsing.
+    swap_mask = (
+        _random_swap_mask(instructions) if cfg.judge.swap_mode == "random" else None
+    )
+    if swap_mask is not None:
+        judged_A = completions_A.mask(swap_mask, completions_B)
+        judged_B = completions_B.mask(swap_mask, completions_A)
+    else:
+        judged_A, judged_B = completions_A, completions_B
+
     annotations = []
     annotations_reversed = [] if cfg.judge.swap_mode == "both" else None
     direct_prefs, reversed_prefs = [], []
@@ -225,8 +255,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         group_annotations, group_reversed, group_prefs = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
             instructions=instructions.loc[group_index].tolist(),
-            completions_A=completions_A.loc[group_index].tolist(),
-            completions_B=completions_B.loc[group_index].tolist(),
+            completions_A=judged_A.loc[group_index].tolist(),
+            completions_B=judged_B.loc[group_index].tolist(),
             swap_mode=cfg.judge.swap_mode,
             provide_explanation=cfg.judge.provide_explanation,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
@@ -254,8 +284,21 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
-    df["model_A"] = cfg.model.name
-    df["model_B"] = baseline_per_eval.tolist()
+    if swap_mask is not None:
+        swapped_eval = swap_mask.loc[eval_instruction_index].reset_index(drop=True)
+        prefs = prefs.astype("float64")
+        prefs = prefs.where(~swapped_eval, 1 - prefs)
+        df["model_A"] = [
+            baseline if swapped else cfg.model.name
+            for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
+        ]
+        df["model_B"] = [
+            cfg.model.name if swapped else baseline
+            for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
+        ]
+    else:
+        df["model_A"] = cfg.model.name
+        df["model_B"] = baseline_per_eval.tolist()
     df["judge"] = cfg.judge.model
 
     if cfg.judge.swap_mode == "both":
@@ -270,8 +313,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     # Scoring inputs follow the judged battle order: all-direct then, for
     # swap_mode="both", all-reversed with the A/B positions swapped.
-    completions_a_eval = completions_A.loc[eval_instruction_index].tolist()
-    completions_b_eval = completions_B.loc[eval_instruction_index].tolist()
+    completions_a_eval = judged_A.loc[eval_instruction_index].tolist()
+    completions_b_eval = judged_B.loc[eval_instruction_index].tolist()
     scoring_inputs = ScoringInputs(
         prefs=prefs,
         completions_a=(

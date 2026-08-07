@@ -217,9 +217,11 @@ class JudgeArgs(BaseModel):
     """If set, the judge explains its reasoning before scoring. Aids
     interpretation; does not necessarily improve accuracy."""
 
-    swap_mode: Literal["fixed", "both"] = "fixed"
+    swap_mode: Literal["fixed", "both", "random"] = "fixed"
     """Position-bias handling. ``fixed``: a single A-B judge pass. ``both``:
-    judge each battle in both orders (A-B and B-A) and combine."""
+    judge each battle in both orders (A-B and B-A) and combine. ``random``:
+    a single pass with the pair order flipped deterministically per
+    instruction (AlpacaEval's scheme)."""
 
     top_logprobs: int | None = None
     """Request the judge's top-N token logprobs (used by logprob-weighted
