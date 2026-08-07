@@ -12,16 +12,17 @@ from judgearena.utils.eval import PrefSummary, compute_pref_summary
 
 @dataclass(frozen=True)
 class ScoringInputs:
-    """Per-battle judging outcomes handed to a scorer.
+    """One judged battle per row, canonically oriented (model vs baseline).
 
-    With ``swap_mode="both"`` the entries are ordered all-direct then
-    all-reversed, and the completion lists follow the judged positions (so the
-    reversed half has A and B swapped).
+    Columns: ``instruction_index``, ``model``, ``baseline``,
+    ``completion_model``, ``completion_baseline``, and ``pref`` (float64,
+    P(baseline wins) in [0, 1], NaN = unparseable). Rows follow judged order:
+    direct battles first, then the reversed duplicates under
+    ``swap_mode="both"`` (same canonical orientation, so instruction_index
+    values repeat there).
     """
 
-    prefs: pd.Series
-    completions_a: list[str] | None = None
-    completions_b: list[str] | None = None
+    battles: pd.DataFrame
 
 
 @dataclass(frozen=True)
@@ -33,10 +34,13 @@ class PairwiseScorer:
     summarize: Callable[[ScoringInputs], PrefSummary]
     report_metadata: Callable[[ScoringInputs], dict[str, object]] | None = None
     """Optional scorer-specific details merged into the run report metadata."""
+    check_available: Callable[[], None] | None = None
+    """Optional pre-run check that raises when a scorer dependency is missing;
+    runners call it before generation so a run fails fast."""
 
 
 def _summarize_win_rate(inputs: ScoringInputs) -> PrefSummary:
-    return compute_pref_summary(inputs.prefs)
+    return compute_pref_summary(inputs.battles["pref"])
 
 
 PAIRWISE_SCORERS = {
