@@ -430,9 +430,9 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
         )
     )
 
-    # Judged pref is P(M)=0.75 everywhere; rows 1 is swapped (see the golden
-    # mask below) and re-orients to 0.25.
-    assert prefs.tolist() == pytest.approx([0.75, 0.25, 0.75, 0.75])
+    # Judged pref is P(M)=0.75 everywhere; unswitched rows (2, 3 under the
+    # golden mask) show the baseline in slot A and re-orient to 0.25.
+    assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
 
 
 def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
@@ -471,8 +471,9 @@ def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
     """swap_mode='random' flips judged positions per instruction and re-orients.
 
     The AlpacaEval-scheme mask for 'Synthetic instruction 0..3' is
-    [False, True, False, False]. The judge always answers 'm' (slot A wins),
-    so swapped rows come back as baseline wins after re-orientation.
+    [True, True, False, False]. Unswitched rows present the baseline in slot
+    A, so the judge's constant 'm' (slot A wins) re-orients to a baseline win
+    there and to a model win on switched rows.
     """
     prefs = run_pairwise(
         _cfg(
@@ -486,18 +487,18 @@ def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
         )
     )
 
-    assert prefs.tolist() == [0.0, 1.0, 0.0, 0.0]
+    assert prefs.tolist() == [0.0, 0.0, 1.0, 1.0]
 
     annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
     assert annotations["model_A"].tolist() == [
         "Dummy/a",
+        "Dummy/a",
         "Dummy/b",
-        "Dummy/a",
-        "Dummy/a",
+        "Dummy/b",
     ]
     assert annotations["model_B"].tolist() == [
         "Dummy/b",
+        "Dummy/b",
         "Dummy/a",
-        "Dummy/b",
-        "Dummy/b",
+        "Dummy/a",
     ]
