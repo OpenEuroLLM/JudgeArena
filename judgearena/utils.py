@@ -14,6 +14,15 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from judgearena.cache_sqlite import input_hash
+from judgearena.inference import (
+    VLLM_TEMPERATURE,
+    VLLM_TOP_P,
+    InferenceCache,
+    PreparedModel,
+    build_model_descriptor,
+    canonicalize_chat_input,
+)
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -127,7 +136,8 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     return truncate(str(value), max_len=truncate_chars)
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def _do_inference_uncached(chat_model, inputs, use_tqdm: bool = False):
+    """Run the existing retry path for cache misses or cache-disabled calls."""
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -206,6 +216,59 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     return res
 
 
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    *,
+    cache_metadata: list[dict] | None = None,
+):
+    """Reuse raw outputs by rendered input and invoke the model only for misses."""
+    inputs = list(inputs)
+    if not isinstance(chat_model, PreparedModel):
+        return _do_inference_uncached(chat_model, inputs, use_tqdm)
+
+    cache = chat_model.cache
+    if cache is None or chat_model.descriptor is None:
+        return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
+    if cache_metadata is None or len(cache_metadata) != len(inputs):
+        raise ValueError("cache_metadata must contain one row per inference input.")
+
+    input_texts = [canonicalize_chat_input(item) for item in inputs]
+
+    input_hashes = [input_hash(input_text) for input_text in input_texts]
+    with cache.open_store(chat_model) as store:
+        cached_rows = store.query(input_hashes)
+        cached_outputs = dict(
+            zip(
+                cached_rows["input_hash"],
+                cached_rows[cache.output_column],
+                strict=True,
+            )
+        )
+        outputs = [cached_outputs.get(key) for key in input_hashes]
+        missing_indices = [
+            index for index, output in enumerate(outputs) if output is None
+        ]
+        if missing_indices:
+            generated = _do_inference_uncached(
+                chat_model.materialize(),
+                [inputs[index] for index in missing_indices],
+                use_tqdm,
+            )
+            for index, output in zip(missing_indices, generated, strict=True):
+                outputs[index] = output
+            cache.save_outputs(
+                store,
+                chat_model,
+                input_texts,
+                generated,
+                cache_metadata,
+                missing_indices,
+            )
+    return outputs
+
+
 class DummyModel:
     def __init__(self, name: str):
         self.name = name
@@ -276,8 +339,8 @@ class ChatVLLM:
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
         self.sampling_params = SamplingParams(
             max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
+            temperature=VLLM_TEMPERATURE,
+            top_p=VLLM_TOP_P,
         )
 
         # Resolve chat template:
@@ -389,6 +452,65 @@ class ChatVLLM:
         )
 
 
+def _resolve_model_config(
+    model: str,
+    max_tokens: int | None,
+    engine_kwargs: dict,
+) -> tuple[str, str, dict]:
+    """Resolve constructor kwargs once for both descriptors and materialization."""
+    resolved_kwargs = engine_kwargs.copy()
+    resolved_kwargs["max_tokens"] = max_tokens or 8192
+    model_provider, model_name = model.split("/", 1)
+
+    if model_provider != "VLLM":
+        resolved_kwargs.pop("max_model_len", None)
+        resolved_kwargs.pop("chat_template", None)
+    if model_provider == "VLLM":
+        resolved_kwargs = {
+            key: value for key, value in resolved_kwargs.items() if value is not None
+        }
+        resolved_kwargs["chat_template"] = resolved_kwargs.get("chat_template")
+    elif model_provider == "LlamaCpp":
+        resolved_kwargs["model_path"] = model_name
+    elif model_provider not in {"Dummy", "OpenRouter"}:
+        resolved_kwargs["model"] = model_name
+    return model_provider, model_name, resolved_kwargs
+
+
+def prepare_model(
+    model: str,
+    max_tokens: int | None = 8192,
+    *,
+    cache: InferenceCache | None = None,
+    **engine_kwargs,
+) -> PreparedModel:
+    """Prepare cache identity and a lazy factory without loading the backend."""
+    provider, model_name, resolved_kwargs = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
+    descriptor = (
+        build_model_descriptor(provider, model_name, resolved_kwargs)
+        if cache is not None
+        else None
+    )
+    if cache is not None and descriptor is None:
+        logger.warning(
+            "Caching is not supported for %s; running uncached.",
+            model,
+        )
+    factory_kwargs = engine_kwargs.copy()
+    return PreparedModel(
+        model_spec=model,
+        descriptor=descriptor,
+        factory=lambda: make_model(
+            model,
+            max_tokens=max_tokens,
+            **factory_kwargs,
+        ),
+        cache=cache,
+    )
+
+
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     """Instantiate a model wrapper from a provider/model-name string.
 
@@ -398,34 +520,17 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
     """
-    # Avoid mutating the original engine_kwargs dictionary
-    # NOTE: this is a shallow copy since we are not modifying any
-    # mutable objects in the dictionary.
-    engine_kwargs = engine_kwargs.copy()
-
-    # Dedicated arguments like max_tokens always win over engine_kwargs.
-    engine_kwargs["max_tokens"] = max_tokens or 8192
-
-    model_provider = model.split("/")[0]
-
-    # vLLM-engine-only kwargs must not leak to remote-API providers
-    # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
-    # kwargs via model_kwargs into chat.completions.create, which rejects them.
-    if model_provider != "VLLM":
-        engine_kwargs.pop("max_model_len", None)
-        engine_kwargs.pop("chat_template", None)
+    model_provider, model_name, engine_kwargs = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
 
     if model_provider == "Dummy":
         return DummyModel(model)
 
-    model_name = "/".join(model.split("/")[1:])
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
     # Use our custom ChatVLLM wrapper which properly applies chat templates
     if model_provider == "VLLM":
-        engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
-        engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
-
         return ChatVLLM(
             model=model_name,
             **engine_kwargs,
@@ -444,10 +549,6 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             LlamaCpp,
             ChatOpenAI,
         ]
-        if model_provider == "LlamaCpp":
-            engine_kwargs["model_path"] = model_name
-        else:
-            engine_kwargs["model"] = model_name
 
         try:
             from langchain_together.llms import Together

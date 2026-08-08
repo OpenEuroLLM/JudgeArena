@@ -273,6 +273,7 @@ def annotate_battles(
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     provide_explanation: bool = False,
+    cache_metadata: list[dict] | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -332,6 +333,7 @@ def annotate_battles(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
+        cache_metadata=cache_metadata,
     )
 
     annotations = []
