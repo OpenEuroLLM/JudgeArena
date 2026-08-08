@@ -11,7 +11,7 @@ from judgearena.arenas_utils import _extract_instruction_text, load_arena_datafr
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
-from judgearena.inference import InferenceCache
+from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
 from judgearena.log import get_logger
 from judgearena.utils import compute_pref_summary, prepare_model
 
@@ -235,7 +235,7 @@ def main(args: CliEloArgs) -> dict:
         extra_kwargs["chat_template"] = args.chat_template
     use_tqdm = False
     completion_cache = (
-        InferenceCache(Path(args.store_root), "completions", args.arena)
+        CompletionInferenceCache(Path(args.store_root), args.arena)
         if args.store_root is not None
         else None
     )
@@ -301,7 +301,7 @@ def main(args: CliEloArgs) -> dict:
         judge_extra_kwargs["chat_template"] = args.chat_template
 
     judgement_cache = (
-        InferenceCache(Path(args.store_root), "judgements", args.arena)
+        JudgementInferenceCache(Path(args.store_root), args.arena)
         if args.store_root is not None
         else None
     )
