@@ -22,7 +22,6 @@ from judgearena.inference import (
     PreparedModel,
     build_model_descriptor,
     canonicalize_model_input,
-    provider_input_mode,
 )
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -235,10 +234,8 @@ def do_inference(
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
-    assert chat_model.input_mode is not None
-    input_texts = [
-        canonicalize_model_input(item, chat_model.input_mode) for item in inputs
-    ]
+    input_mode = chat_model.descriptor["input_mode"]
+    input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
 
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
@@ -515,7 +512,6 @@ def prepare_model(
     provider, model_name, resolved_kwargs = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )
-    input_mode = provider_input_mode(provider, resolved_kwargs)
     descriptor = (
         build_model_descriptor(
             provider,
@@ -526,6 +522,13 @@ def prepare_model(
         if cache is not None
         else None
     )
+    routing = (resolved_kwargs.get("extra_body") or {}).get("provider") or {}
+    if (
+        cache is not None
+        and provider == "OpenRouter"
+        and (not routing.get("order") or routing.get("allow_fallbacks") is not False)
+    ):
+        logger.warning("OpenRouter cache identity uses unpinned provider routing.")
     if cache is not None and descriptor is None:
         logger.warning(
             "Caching is not supported for %s; running uncached.",
@@ -535,7 +538,6 @@ def prepare_model(
     return PreparedModel(
         model_spec=model,
         descriptor=descriptor,
-        input_mode=input_mode,
         factory=lambda: make_model(
             model,
             max_tokens=max_tokens,

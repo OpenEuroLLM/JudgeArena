@@ -114,6 +114,8 @@ def build_model_descriptor(
 
     Omitted hosted settings retain provider defaults. LlamaCpp model identity
     remains path-based, so moving the same GGUF creates a different cache cell.
+    Local-engine versions must be installed to derive their cache keys. VLLM
+    tokenizer-template changes require a distinct model revision or template.
     """
     input_mode = provider_input_mode(provider, resolved_kwargs)
     if input_mode is None:
@@ -153,7 +155,6 @@ class PreparedModel:
 
     model_spec: str
     descriptor: dict[str, Any] | None
-    input_mode: InputMode | None
     factory: Callable[[], Any]
     cache: InferenceCache | None = None
     _model: Any = field(default=None, init=False, repr=False)

@@ -166,6 +166,8 @@ def test_supported_provider_descriptors(
 ):
     versions = {"vllm": "0.10.2", "llama-cpp-python": "0.3.0"}
     monkeypatch.setattr(inference.importlib_metadata, "version", versions.__getitem__)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     cache = CompletionInferenceCache(tmp_path, "arena-hard")
 
     descriptor = prepare_model(model_spec, cache=cache).descriptor
@@ -174,19 +176,25 @@ def test_supported_provider_descriptors(
     assert descriptor.get("endpoint") == expected_endpoint
 
 
-def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(tmp_path):
+def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(
+    tmp_path, monkeypatch, caplog
+):
     cache = CompletionInferenceCache(tmp_path, "arena-hard")
     unpinned = prepare_model(
         "OpenRouter/org/model",
         cache=cache,
         api_key="secret",
     ).descriptor
+    assert "uses unpinned provider routing" in caplog.text
+
+    caplog.clear()
     pinned = prepare_model(
         "OpenRouter/org/model",
         cache=cache,
         api_key="secret",
         extra_body={"provider": {"order": ["Together"], "allow_fallbacks": False}},
     ).descriptor
+    assert "uses unpinned provider routing" not in caplog.text
 
     assert unpinned != pinned
     assert "secret" not in json.dumps(pinned)
@@ -199,6 +207,19 @@ def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(tmp_path)
         base_url="https://gateway.example/v1/",
     ).descriptor
     assert gateway["endpoint"] == "https://gateway.example/v1"
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://ambient.example/v1")
+    ambient = prepare_model("ChatOpenAI/model", cache=cache).descriptor
+    assert ambient["endpoint"] == "https://ambient.example/v1"
+
+
+def test_unsupported_provider_runs_uncached(tmp_path, caplog):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+
+    model = prepare_model("Unsupported/model", cache=cache)
+
+    assert model.descriptor is None
+    assert "Caching is not supported" in caplog.text
 
 
 @pytest.mark.parametrize(
