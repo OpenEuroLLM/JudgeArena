@@ -154,3 +154,25 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         {"question_id": 1, "category": "writing", "turn": 1},
         {"question_id": 1, "category": "writing", "turn": 1},
     ]
+
+
+def test_select_preset_prompt_forwards_named_parser(tmp_path):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("Custom system", encoding="utf-8")
+    user_file.write_text(
+        "Q: {user_prompt} A: {completion_A} B: {completion_B}\n# Your output\nscores"
+    )
+
+    prompt = _select_preset_prompt(
+        "writing",
+        multi_turn=False,
+        reference_categories=REFERENCE_CATEGORIES,
+        system_file=str(system_file),
+        user_file=str(user_file),
+        parser="score",
+    )
+
+    assert prompt.parse is JUDGE_PARSERS["score"]
