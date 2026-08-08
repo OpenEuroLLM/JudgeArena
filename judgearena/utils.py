@@ -239,13 +239,10 @@ def do_inference(
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
         cached_rows = store.query(input_hashes)
-        output_column = (
-            "completion" if cache.kind == "completions" else "judge_completion"
-        )
         cached_outputs = dict(
             zip(
                 cached_rows["input_hash"],
-                cached_rows[output_column],
+                cached_rows[cache.output_column],
                 strict=True,
             )
         )
