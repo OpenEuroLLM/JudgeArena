@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -12,13 +9,11 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
 from judgearena.cli_common import BaseCliArgs
-from judgearena.evaluate import PairScore, judge_and_parse_prefs
+from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_instructions
+from judgearena.inference import InferenceCache
 from judgearena.log import get_logger
-from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
-
-if TYPE_CHECKING:
-    pass
+from judgearena.utils import compute_pref_summary, prepare_model
 
 logger = get_logger(__name__)
 
@@ -40,9 +35,6 @@ class CliEloArgs(BaseCliArgs):
     n_bootstraps: int = 20
     seed: int = 0
     baseline_model: str | None = None
-    store_root: str | None = (
-        None  # root dir of the SQLite store; enables caching if set
-    )
 
 
 def compute_bradley_terry(
@@ -157,29 +149,7 @@ def compute_bradley_terry(
     return dict(pd.Series(elo_scores, index=models.index))
 
 
-def _store_folder(store_root: str, kind: str, task: str, model_spec: str) -> Path:
-    provider, model_path = model_spec.split("/", 1)
-    model_name = model_path.replace("/", "--")
-    return Path(store_root) / kind / task / model_name / provider
-
-
 def main(args: CliEloArgs) -> dict:
-    from judgearena.store_sqlite import SQLiteCompletionStore, SQLiteJudgementStore
-
-    if args.store_root is not None:
-        comp_folder = _store_folder(
-            args.store_root, "completions", args.arena, args.model
-        )
-        completion_store = SQLiteCompletionStore(comp_folder / "completions.db")
-        judge_folder = _store_folder(
-            args.store_root, "judgements", args.arena, args.judge_model
-        )
-        judgement_store = SQLiteJudgementStore(judge_folder / "judgements.db")
-        logger.info("Using SQLite store at %s", args.store_root)
-    else:
-        completion_store = None
-        judgement_store = None
-
     rng = np.random.default_rng(args.seed)
 
     # Step 1: Load arena battles
@@ -264,43 +234,19 @@ def main(args: CliEloArgs) -> dict:
     if args.chat_template is not None:
         extra_kwargs["chat_template"] = args.chat_template
     use_tqdm = False
-    gen_fun = partial(
-        generate_instructions,
+    completion_cache = (
+        InferenceCache(Path(args.store_root), "completions", args.arena)
+        if args.store_root is not None
+        else None
+    )
+    completions_df = generate_instructions(
+        instructions=instructions,
+        model=args.model,
         truncate_input_chars=args.truncate_all_input_chars,
         max_tokens=args.max_out_tokens_models,
         use_tqdm=use_tqdm,
-        completion_store=completion_store,
+        inference_cache=completion_cache,
         **extra_kwargs,
-    )
-
-    def replace_slash(s: str) -> str:
-        return s.replace("/", "_")
-
-    languages_str = "-".join(sorted(args.languages)) if args.languages else "all"
-    extra_kwargs_str = (
-        "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
-        if extra_kwargs
-        else ""
-    )
-    cache_suffix = (
-        f"{args.arena}_{replace_slash(args.model)}_"
-        f"{args.n_instructions}_{args.n_instructions_per_language}_"
-        f"{languages_str}_{args.truncate_all_input_chars}_{args.max_out_tokens_models}"
-        + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
-    )
-    if len(cache_suffix) > 100:
-        cache_hash = hashlib.sha256(cache_suffix.encode()).hexdigest()[:16]
-        logger.debug(
-            "Cache suffix too long (%d chars), using hash: %s (full: %s)",
-            len(cache_suffix),
-            cache_hash,
-            cache_suffix,
-        )
-        cache_suffix = cache_hash
-    completions_df = cache_function_dataframe(
-        lambda: gen_fun(instructions=instructions, model=args.model),
-        ignore_cache=args.ignore_cache,
-        cache_name=f"elo/{cache_suffix}",
     ).set_index("instruction_index")
     completions = completions_df.loc[:, "completion"]
 
@@ -354,116 +300,43 @@ def main(args: CliEloArgs) -> dict:
     if args.chat_template is not None:
         judge_extra_kwargs["chat_template"] = args.chat_template
 
-    def run_judge() -> pd.DataFrame:
-        # Determine which indices still need judging
-        all_indices = list(range(n))
-        if judgement_store is not None:
-            pairs = list(
-                zip(all_indices, model_A_per_row, model_B_per_row, strict=True)
-            )
-            cached_df = judgement_store.query(model=args.model)
-            cached_keys = (
-                set(
-                    zip(
-                        cached_df["instruction_index"].astype(int),
-                        cached_df["model_A"],
-                        cached_df["model_B"],
-                        strict=True,
-                    )
-                )
-                if not cached_df.empty
-                else set()
-            )
-            missing_idx = [i for i, mA, mB in pairs if (i, mA, mB) not in cached_keys]
-            logger.info(
-                "Judgement store: %d cached, %d to judge.",
-                n - len(missing_idx),
-                len(missing_idx),
-            )
-        else:
-            missing_idx = all_indices
-            cached_df = pd.DataFrame()
-
-        new_df = pd.DataFrame()
-        if missing_idx:
-            judge_chat_model = make_model(
-                model=args.judge_model,
-                max_tokens=args.max_out_tokens_judge,
-                **judge_extra_kwargs,
-            )
-            annotations, _, prefs = judge_and_parse_prefs(
-                judge_chat_model=judge_chat_model,
-                instructions=[instructions[i] for i in missing_idx],
-                completions_A=[completions_A[i] for i in missing_idx],
-                completions_B=[completions_B[i] for i in missing_idx],
-                swap_mode=args.swap_mode,
-                provide_explanation=args.provide_explanation,
-                truncate_input_chars=args.truncate_all_input_chars,
-                use_tqdm=use_tqdm,
-            )
-            new_df = pd.DataFrame(
-                {
-                    "judge_completion": [a.judge_completion for a in annotations],
-                    "instruction": [a.instruction for a in annotations],
-                    "completion_A": [a.completion_A for a in annotations],
-                    "completion_B": [a.completion_B for a in annotations],
-                    "pref": list(prefs),
-                    "use_model_a_as_opponent": use_model_a_as_opponent[missing_idx],
-                    "our_model_is_position_a": our_model_is_position_a[missing_idx],
-                    "opponent_model": [opponent_models[i] for i in missing_idx],
-                    "instruction_index": missing_idx,
-                    "model_A": [model_A_per_row[i] for i in missing_idx],
-                    "model_B": [model_B_per_row[i] for i in missing_idx],
-                }
-            )
-            if judgement_store is not None:
-                judgement_store.save(
-                    new_df.rename(columns={"judge_completion": "judge_output"}),
-                    pushed_by="judgearena",
-                )
-
-        if judgement_store is not None and not cached_df.empty:
-            # Reconstruct full df by merging cached rows back in
-            score_parser = PairScore()
-            cached_df = cached_df.copy()
-            cached_df["pref"] = cached_df["judge_output"].apply(
-                score_parser.parse_model_raw
-            )
-            cached_df = cached_df.rename(columns={"judge_output": "judge_completion"})
-            cached_df["our_model_is_position_a"] = cached_df["model_A"] == args.model
-            cached_df["opponent_model"] = cached_df.apply(
-                lambda r: (
-                    r["model_B"] if r["our_model_is_position_a"] else r["model_A"]
-                ),
-                axis=1,
-            )
-            cached_df["use_model_a_as_opponent"] = [
-                df_battles.iloc[int(idx)]["model_a"] == opp
-                for idx, opp in zip(
-                    cached_df["instruction_index"],
-                    cached_df["opponent_model"],
-                    strict=True,
-                )
-            ]
-            full_df = pd.concat([new_df, cached_df], ignore_index=True)
-            return full_df.sort_values("instruction_index").reset_index(drop=True)
-
-        return new_df
-
-    judge_cache_suffix = f"judge_{cache_suffix}"
-    df_judge = cache_function_dataframe(
-        run_judge,
-        ignore_cache=args.ignore_cache,
-        cache_name=f"elo/{judge_cache_suffix}",
+    judgement_cache = (
+        InferenceCache(Path(args.store_root), "judgements", args.arena)
+        if args.store_root is not None
+        else None
     )
+    judge_chat_model = prepare_model(
+        model=args.judge_model,
+        max_tokens=args.max_out_tokens_judge,
+        cache=judgement_cache,
+        **judge_extra_kwargs,
+    )
+    annotations, annotations_reversed, prefs = judge_and_parse_prefs(
+        judge_chat_model=judge_chat_model,
+        instructions=instructions.tolist(),
+        completions_A=completions_A,
+        completions_B=completions_B,
+        swap_mode=args.swap_mode,
+        provide_explanation=args.provide_explanation,
+        truncate_input_chars=args.truncate_all_input_chars,
+        use_tqdm=use_tqdm,
+        cache_metadata=[
+            {
+                "instruction_id": index,
+                "model_a": model_A_per_row[index],
+                "model_b": model_B_per_row[index],
+                "orientation": "direct",
+            }
+            for index in range(n)
+        ],
+    )
+    prefs = prefs.tolist()
+    if annotations_reversed is not None:
+        use_model_a_as_opponent = np.tile(use_model_a_as_opponent, 2)
+        our_model_is_position_a = np.tile(our_model_is_position_a, 2)
+        opponent_models *= 2
 
-    # Restore position arrays and prefs from cache (in case loaded from disk)
-    use_model_a_as_opponent = df_judge["use_model_a_as_opponent"].to_numpy()
-    our_model_is_position_a = df_judge["our_model_is_position_a"].to_numpy()
-    opponent_models = df_judge["opponent_model"].tolist()
-    prefs = df_judge["pref"].tolist()
-
-    logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
+    logger.debug("First judge output:\n%s", annotations[0].judge_completion[:500])
 
     # Map preferences back to model-name-level battle results
     model_name = args.model

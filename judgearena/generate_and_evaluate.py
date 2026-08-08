@@ -14,6 +14,7 @@ import pandas as pd
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
+from judgearena.inference import InferenceCache
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -27,11 +28,10 @@ from judgearena.log import (
 from judgearena.mt_bench.mt_bench_utils import run_mt_bench
 from judgearena.repro import _to_jsonable, write_run_metadata
 from judgearena.utils import (
-    cache_function_dataframe,
     compute_pref_summary,
     data_root,
     download_hf,
-    make_model,
+    prepare_model,
     read_df,
 )
 
@@ -146,15 +146,10 @@ def main(args: CliArgs):
         args.model_B,
     )
 
-    # Not working with vllm, not detecting model changes and serving the same cache for two different models...
-    # if not args.ignore_cache:
-    #     set_langchain_cache()
-    ignore_cache = args.ignore_cache
-
     if args.task == "mt-bench":
         return run_mt_bench(
             args,
-            ignore_cache,
+            args.ignore_cache,
             res_folder=res_folder,
             result_name=name,
         )
@@ -182,6 +177,11 @@ def main(args: CliArgs):
         args.model_A,
         args.model_B,
     )
+    completion_cache = (
+        InferenceCache(Path(args.store_root), "completions", args.task)
+        if args.store_root is not None
+        else None
+    )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
     gen_fun = (
@@ -192,6 +192,7 @@ def main(args: CliArgs):
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             use_tqdm=args.use_tqdm,
+            inference_cache=completion_cache,
             **args.engine_kwargs,
         )
         if is_fluency_task
@@ -202,6 +203,7 @@ def main(args: CliArgs):
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             use_tqdm=args.use_tqdm,
+            inference_cache=completion_cache,
             **args.engine_kwargs,
         )
     )
@@ -213,14 +215,10 @@ def main(args: CliArgs):
             :, "completion"
         ]
     else:
-        completions_A = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_A,
-                use_tqdm=args.use_tqdm,
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_A}_{args.n_instructions}",
+        completions_A = gen_fun(
+            instructions=instructions,
+            model=args.model_A,
+            use_tqdm=args.use_tqdm,
         ).set_index("instruction_index")
         completions_A = completions_A.loc[:, "completion"]
 
@@ -232,14 +230,10 @@ def main(args: CliArgs):
             :, "completion"
         ]
     else:
-        completions_B = cache_function_dataframe(
-            lambda: gen_fun(
-                instructions=instructions,
-                model=args.model_B,
-                use_tqdm=args.use_tqdm,
-            ),
-            ignore_cache=ignore_cache,
-            cache_name=f"{args.task}_{args.model_B}_{args.n_instructions}",
+        completions_B = gen_fun(
+            instructions=instructions,
+            model=args.model_B,
+            use_tqdm=args.use_tqdm,
         ).set_index("instruction_index")
         completions_B = completions_B.loc[:, "completion"]
     logger.debug("First instruction/context: %s", instructions.values[0])
@@ -247,9 +241,15 @@ def main(args: CliArgs):
     logger.debug("First completion of %s:\n%s", args.model_B, completions_B.values[0])
     logger.info("Evaluating completions with judge %s.", args.judge_model)
 
-    judge_chat_model = make_model(
+    judgement_cache = (
+        InferenceCache(Path(args.store_root), "judgements", args.task)
+        if args.store_root is not None
+        else None
+    )
+    judge_chat_model = prepare_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
+        cache=judgement_cache,
         max_model_len=args.max_model_len,
         chat_template=args.chat_template,
         **args.engine_kwargs,
@@ -288,6 +288,15 @@ def main(args: CliArgs):
         user_prompt_template=judge_user_prompt_template,
         truncate_input_chars=args.truncate_all_input_chars,
         use_tqdm=args.use_tqdm,
+        cache_metadata=[
+            {
+                "instruction_id": index,
+                "model_a": args.model_A,
+                "model_b": args.model_B,
+                "orientation": "direct",
+            }
+            for index in instructions.head(n_instructions).index
+        ],
     )
 
     df = pd.DataFrame(annotations)

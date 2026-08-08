@@ -368,6 +368,7 @@ def judge_and_parse_prefs(
     user_prompt_template: str | None = None,
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
+    cache_metadata: list[dict] | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -396,10 +397,22 @@ def judge_and_parse_prefs(
         user_prompt_template=user_prompt_template,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
+        cache_metadata=cache_metadata,
     )
 
     annotations_reversed = None
     if swap_mode == "both":
+        reversed_cache_metadata = None
+        if cache_metadata is not None:
+            reversed_cache_metadata = [
+                {
+                    **metadata,
+                    "model_a": metadata["model_b"],
+                    "model_b": metadata["model_a"],
+                    "orientation": "reversed",
+                }
+                for metadata in cache_metadata
+            ]
         annotations_reversed = annotate_battles(
             judge_chat_model=judge_chat_model,
             instructions=instructions,
@@ -410,6 +423,7 @@ def judge_and_parse_prefs(
             user_prompt_template=user_prompt_template,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
+            cache_metadata=reversed_cache_metadata,
         )
 
     def _none_to_nan(x):

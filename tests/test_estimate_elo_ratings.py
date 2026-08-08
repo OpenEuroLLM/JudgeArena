@@ -69,13 +69,6 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
     monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", mock_generate)
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        estimate_elo_ratings, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _default_args(**kwargs) -> CliEloArgs:
     defaults = dict(

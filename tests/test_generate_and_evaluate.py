@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 import judgearena.generate_and_evaluate as generate_and_evaluate
+import judgearena.utils as utils
 from judgearena.generate_and_evaluate import (
     CliArgs,
 )
@@ -38,13 +39,6 @@ def mock_external_data_and_cache(monkeypatch):
         generate_and_evaluate,
         "try_load_dataset_completions",
         lambda dataset, model, n_instructions: None,
-    )
-
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        generate_and_evaluate, "cache_function_dataframe", _run_without_cache
     )
 
 
@@ -96,3 +90,22 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
 
     avg_pref = sum(prefs) / len(prefs)
     assert avg_pref == 0.5
+
+
+def test_generate_and_evaluate_reuses_inference_cache(tmp_path, monkeypatch):
+    args = CliArgs(
+        task="alpaca-eval",
+        model_A="Dummy/answer A",
+        model_B="Dummy/answer B",
+        judge_model="Dummy/score A: 1 score B: 0",
+        n_instructions=2,
+        result_folder=str(tmp_path / "results"),
+        store_root=str(tmp_path / "cache"),
+    )
+    main_generate_and_eval(args)
+    monkeypatch.setattr(
+        utils,
+        "make_model",
+        lambda *_args, **_kwargs: pytest.fail("cache hit materialized a model"),
+    )
+    main_generate_and_eval(args)
