@@ -116,7 +116,8 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
         ("some explanation...\n[[B>A]]", 0.75),
         ("[[B>>A]]", 1.0),
         ("[[A=B]] ... repeated [[A=B]]", 0.5),  # duplicates of one label are fine
-        ("[[A>B]] but wait [[B>A]]", None),  # conflicting labels
+        ("[[A>B]] but wait [[B>A]]", 0.75),  # last label wins, as upstream
+        ("[[a>b]]", 0.25),  # matching is case-insensitive, as upstream
         ("no verdict here", None),
         ("[[A<B]]", None),  # regex-matched but not a canonical label
     ],

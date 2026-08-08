@@ -63,8 +63,10 @@ _ARENA_HARD_VERDICT_FALLBACK_PATTERN = re.compile(r"\[([AB<>=]+)\]")
 class ArenaHardVerdict(JudgeParser):
     """Extract one graded verdict label, following the official rules.
 
-    Like Arena-Hard-Auto's ``get_score``: the judgment must contain exactly
-    one distinct label; none or conflicting labels are unparseable.
+    Like the current Arena-Hard-Auto ``get_score`` (the pipeline that governs
+    v2.0): the judgment is uppercased and the LAST label found wins, so an
+    explanation that mentions earlier labels still parses from its final
+    verdict; only a judgment with no label at all is unparseable.
     """
 
     name = "arena-hard-verdict"
@@ -75,15 +77,15 @@ class ArenaHardVerdict(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None:
-        text = strip_thinking_tags(judge_completion)
-        matches = {m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m}
+        text = strip_thinking_tags(judge_completion).upper()
+        matches = [m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m]
         if not matches:
-            matches = {
+            matches = [
                 m for m in _ARENA_HARD_VERDICT_FALLBACK_PATTERN.findall(text) if m
-            }
-        if len(matches) != 1:
+            ]
+        if not matches:
             return None
-        return ARENA_HARD_VERDICT_PREFERENCES.get(matches.pop().strip())
+        return ARENA_HARD_VERDICT_PREFERENCES.get(matches[-1].strip())
 
 
 class AlpacaEvalToken(JudgeParser):
