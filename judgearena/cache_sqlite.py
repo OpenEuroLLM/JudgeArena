@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -39,6 +40,17 @@ def cache_folder(
     model_spec: str,
     descriptor: dict[str, Any],
 ) -> Path:
+    return cache_model_folder(store_root, kind, task, model_spec) / descriptor_hash(
+        descriptor
+    )
+
+
+def cache_model_folder(
+    store_root: Path | str,
+    kind: CacheKind,
+    task: str,
+    model_spec: str,
+) -> Path:
     provider, model = model_spec.split("/", 1)
     return (
         Path(store_root)
@@ -46,7 +58,6 @@ def cache_folder(
         / quote(task, safe="")
         / quote(provider, safe="")
         / quote(model, safe="")
-        / descriptor_hash(descriptor)
     )
 
 
@@ -60,6 +71,13 @@ def write_descriptor(folder: Path, descriptor: dict[str, Any]) -> Path:
 
     path.write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n")
     return path
+
+
+def read_descriptor(folder: Path) -> dict[str, Any]:
+    descriptor = json.loads((folder / DESCRIPTOR_FILENAME).read_text())
+    if folder.name != descriptor_hash(descriptor):
+        raise ValueError(f"Descriptor hash does not match cache folder {folder}.")
+    return descriptor
 
 
 class _SQLiteCache:
@@ -107,6 +125,31 @@ class _SQLiteCache:
         with self._connect() as conn:
             cursor = conn.execute(f"DELETE FROM {self.table}{where}", params)
         return cursor.rowcount
+
+    def merge_from(self, other_db: Path) -> int:
+        """Atomically merge another cache database using pushed_at last-write-wins."""
+        self.close()
+        frames = []
+        for db_path in (other_db, self.db_path):
+            if db_path.exists():
+                with sqlite3.connect(db_path) as conn:
+                    frames.append(pd.read_sql(f"SELECT * FROM {self.table}", conn))
+        rows = (
+            pd.concat(frames, ignore_index=True)
+            .sort_values("pushed_at", kind="stable")
+            .drop_duplicates("input_hash", keep="last")
+        )
+
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_db = self.db_path.with_name(f".{self.db_path.name}.{uuid.uuid4()}")
+        try:
+            with sqlite3.connect(temporary_db) as conn:
+                conn.execute(self.schema)
+                rows.to_sql(self.table, conn, if_exists="append", index=False)
+            os.replace(temporary_db, self.db_path)
+        finally:
+            temporary_db.unlink(missing_ok=True)
+        return len(rows)
 
     def close(self) -> None:
         if self._conn is not None:
