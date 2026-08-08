@@ -107,6 +107,7 @@ class InferenceCache:
     store_root: Path
     kind: CacheKind
     task: str
+    pushed_by: str = "judgearena"
 
     def open_store(self, model: PreparedModel) -> CompletionCache | JudgementCache:
         assert model.descriptor is not None
@@ -159,4 +160,4 @@ class InferenceCache:
                         "orientation": row_metadata.get("orientation"),
                     }
                 )
-        store.save(pd.DataFrame(rows))
+        store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
