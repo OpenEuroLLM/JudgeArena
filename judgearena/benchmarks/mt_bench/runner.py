@@ -326,6 +326,7 @@ def _run_mt_bench_preset(
         prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
         system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
         user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
+        parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(

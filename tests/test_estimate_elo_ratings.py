@@ -509,3 +509,20 @@ def test_extract_instruction_text_tolerates_moderated_turns():
         )
         == ""
     )
+
+
+def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    captured = {}
+    real = estimate_elo_ratings.judge_and_parse_prefs
+
+    def spy(*args, **kwargs):
+        captured["parse"] = kwargs.get("parse")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy)
+    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
+
+    # The default preset's registered parser instance, not a fresh fallback.
+    assert captured["parse"] is JUDGE_PARSERS["score"]

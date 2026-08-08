@@ -1,20 +1,10 @@
-import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
 from scipy.optimize import minimize_scalar
 
-from judgearena.artifacts import to_jsonable, write_run_metadata_safely
-from judgearena.datasets import load_instructions
-from judgearena.datasets.arena_hard import (
-    download_arena_hard,
-    is_arena_hard_dataset,
-)
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
@@ -25,14 +15,7 @@ from judgearena.prompts.registry import (
 from judgearena.prompts.registry import (
     resolve_run_judge_prompt as _resolve_run_judge_prompt,
 )
-from judgearena.utils import (
-    compute_pref_summary,
-    data_root,
-    download_hf,
-    read_df,
-    strip_thinking_tags,
-    truncate,
-)
+from judgearena.utils import strip_thinking_tags, truncate
 
 logger = get_logger(__name__)
 
@@ -153,151 +136,6 @@ def resolve_run_judge_prompt(
     multi_turn: bool = False,
 ) -> ResolvedJudgePrompt:
     return _resolve_run_judge_prompt(task, cli_args, multi_turn=multi_turn)
-
-
-def evaluate_completions(
-    dataset: str = "alpaca-eval",
-    judge_chat_model: LLM = None,
-    method_A: str = "gpt4_1106_preview",
-    method_B: str = "llama-2-70b-chat-hf",
-    num_annotations: int | None = 50,
-    use_tqdm: bool = False,
-    truncate_input_chars: int | None = 8192,
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    strip_thinking_before_judging: bool = False,
-):
-    """
-    :param dataset:
-    :param judge_chat_model:
-    :param method_A: one method to evaluate, can be a method existing in `dataset` or a local path to the completion
-    of a local method. The path should be a dataframe ending with ".csv.zip" or ".parquet", have columns
-    "instruction_index" and "output" and should contains all the instruction of `dataset`.
-    :param method_B: another method to evaluate against `method_A`
-    :param num_annotations: if specified will do at most `num_annotations` annotations
-    :param use_tqdm:
-    :param truncate_input_chars: if specified, truncates the length of completion, useful to save cost and avoid
-    exceeding context limit
-    :return:
-    """
-    run_started_at = datetime.now(UTC)
-    local_path_tables = data_root / "tables"
-    if is_arena_hard_dataset(dataset):
-        download_arena_hard(dataset=dataset, local_tables_path=local_path_tables)
-    else:
-        download_hf(name=dataset, local_path=local_path_tables)
-
-    instructions = load_instructions(
-        dataset=dataset,
-    ).loc[:, "instruction"]
-
-    # A bit ugly, only loads if local path exist as we do not have a local path of completion for cases such as
-    # m-arena-hard.
-    dataset_output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
-    if dataset_output_path.exists():
-        df_outputs = read_df(dataset_output_path)
-        # empty strings are encoded as Nan in csv
-        df_outputs.loc[:, "output"] = df_outputs.loc[:, "output"].fillna("")
-        df_outputs = df_outputs.pivot_table(
-            index="instruction_index", columns="model", values="output", aggfunc="last"
-        ).sort_index()
-        df_outputs = df_outputs.loc[instructions.index]
-    else:
-        df_outputs = None
-
-    def get_output(df_outputs: pd.DataFrame, dataset: str, method: str):
-        if Path(method).exists():
-            logger.info("Path %s exists, loading local model completions.", method)
-            df = read_df(Path(method)).set_index("instruction_index").sort_index()
-            logger.info("Loaded %d completions.", len(df))
-            df.loc[:, "output"] = df.loc[:, "output"].fillna("")
-            return df.loc[:, "output"]
-        else:
-            logger.info("Loading %s from %s dataset.", method, dataset)
-            assert method in df_outputs.columns, (
-                f"Method {method} not present, pick among {df_outputs.columns.tolist()}"
-            )
-            return df_outputs.loc[:, method].sort_index()
-
-    completions_A = get_output(df_outputs=df_outputs, dataset=dataset, method=method_A)
-    completions_B = get_output(df_outputs=df_outputs, dataset=dataset, method=method_B)
-    if num_annotations is not None:
-        instructions = instructions.head(num_annotations)
-        completions_A = completions_A.head(num_annotations)
-        completions_B = completions_B.head(num_annotations)
-    assert completions_A.index.tolist() == completions_B.index.tolist(), (
-        f"Index mismatch between methods {method_A} and {method_B}."
-    )
-
-    if judge_chat_model is None:
-        from langchain_together.llms import Together
-
-        judge_chat_model = Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo")
-
-    unique_string = dataset + "-" + datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_folder = data_root / "judge-evals" / unique_string
-    logger.info("Saving results in %s", output_folder)
-    output_folder.mkdir(parents=True, exist_ok=True)
-    resolved_prompt = resolve_judge_prompts(
-        prompt_preset=prompt_preset,
-    )
-
-    annotations = annotate_battles(
-        judge_chat_model=judge_chat_model,
-        instructions=instructions.tolist(),
-        completions_A=completions_A.loc[instructions.index].tolist(),
-        completions_B=completions_B.loc[instructions.index].tolist(),
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
-        use_tqdm=use_tqdm,
-        truncate_input_chars=truncate_input_chars,
-        strip_thinking_before_judging=strip_thinking_before_judging,
-    )
-
-    # Pairwise judge results
-    prefs = pd.Series(
-        [
-            resolved_prompt.parse(annotation.judge_completion)
-            for annotation in annotations
-        ]
-    )
-    results = {
-        **compute_pref_summary(prefs).to_dict(),
-        **resolved_prompt.metadata(),
-    }
-    pd.DataFrame(annotations).to_csv(output_folder / "annotations.csv", index=False)
-
-    logger.info("%s against %s:\n%s", method_A, method_B, results)
-    with open(output_folder / "results.json", "w") as f:
-        json.dump(to_jsonable(results), f, allow_nan=False)
-
-    run_metadata = {
-        "dataset": dataset,
-        "method_A": method_A,
-        "method_B": method_B,
-        "num_annotations": num_annotations,
-        "n_annotations": len(instructions),
-        "use_tqdm": use_tqdm,
-        "truncate_input_chars": truncate_input_chars,
-        **resolved_prompt.metadata(),
-        "strip_thinking_before_judging": strip_thinking_before_judging,
-    }
-
-    write_run_metadata_safely(
-        output_dir=output_folder,
-        entrypoint="judgearena.evaluate.evaluate_completions",
-        run=run_metadata,
-        results=results,
-        input_payloads={
-            "instruction_index": instructions.index.tolist(),
-            "instructions": instructions.tolist(),
-            "completions_A": completions_A.loc[instructions.index].tolist(),
-            "completions_B": completions_B.loc[instructions.index].tolist(),
-        },
-        judge_system_prompt=resolved_prompt.system_prompt,
-        judge_user_prompt_template=resolved_prompt.user_prompt_template,
-        started_at_utc=run_started_at,
-    )
 
 
 @dataclass
