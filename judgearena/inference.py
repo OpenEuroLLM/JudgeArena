@@ -22,7 +22,6 @@ from judgearena.cache_sqlite import (
 )
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
-_SECRET_KEYS = {"api_key", "password", "secret", "token"}
 
 
 def canonicalize_chat_input(input_item: Any) -> str:
@@ -61,25 +60,12 @@ def canonicalize_chat_input(input_item: Any) -> str:
     return stable_json_dumps(payload)
 
 
-def _contains_secret(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(
-            str(key).lower() in _SECRET_KEYS
-            or str(key).lower().endswith(("_api_key", "_password", "_secret", "_token"))
-            or _contains_secret(item)
-            for key, item in value.items()
-        )
-    if isinstance(value, (list, tuple)):
-        return any(_contains_secret(item) for item in value)
-    return False
-
-
 def build_model_descriptor(
     provider: str,
     model_name: str,
     resolved_kwargs: dict[str, Any],
 ) -> dict[str, Any] | None:
-    if provider not in {"Dummy", "VLLM"} or _contains_secret(resolved_kwargs):
+    if provider not in {"Dummy", "VLLM"}:
         return None
 
     backend_version = None
@@ -110,17 +96,7 @@ class PreparedModel:
     model_spec: str
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
-    canonicalizer: Callable[[Any], str] | None
     _model: Any = field(default=None, init=False, repr=False)
-
-    @property
-    def cacheable(self) -> bool:
-        return self.descriptor is not None and self.canonicalizer is not None
-
-    def canonicalize(self, input_item: Any) -> str:
-        if self.canonicalizer is None:
-            raise TypeError(f"{self.model_spec} has no safe input canonicalizer.")
-        return self.canonicalizer(input_item)
 
     def materialize(self) -> Any:
         if self._model is None:

@@ -227,13 +227,13 @@ def do_inference(
             logger.warning("Caching requires a PreparedModel; running uncached.")
         return _do_inference_uncached(chat_model, inputs, use_tqdm)
 
-    if cache is None or not chat_model.cacheable:
+    if cache is None or chat_model.descriptor is None:
         return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
     try:
-        input_texts = [chat_model.canonicalize(item) for item in inputs]
+        input_texts = [canonicalize_chat_input(item) for item in inputs]
     except TypeError as error:
         logger.warning("Input cannot be safely cached (%s); running uncached.", error)
         return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
@@ -505,7 +505,6 @@ def prepare_model(
             max_tokens=max_tokens,
             **factory_kwargs,
         ),
-        canonicalizer=canonicalize_chat_input if descriptor is not None else None,
     )
 
 
