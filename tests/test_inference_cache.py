@@ -4,7 +4,7 @@ import judgearena.evaluate as evaluate
 import judgearena.generate as generate
 import judgearena.inference as inference
 import judgearena.utils as utils
-from judgearena.inference import InferenceCache
+from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
 from judgearena.utils import do_inference, prepare_model
 
 
@@ -26,8 +26,8 @@ class EchoModel:
 
 
 def test_generate_and_judge_full_hits_do_not_materialize_models(tmp_path, monkeypatch):
-    completion_cache = InferenceCache(tmp_path, "completions", "arena-hard")
-    judgement_cache = InferenceCache(tmp_path, "judgements", "arena-hard")
+    completion_cache = CompletionInferenceCache(tmp_path, "arena-hard")
+    judgement_cache = JudgementInferenceCache(tmp_path, "arena-hard")
     battle_model = "VLLM/Qwen/Qwen3-8B"
     judge_model = "VLLM/Qwen/Qwen3-32B"
     monkeypatch.setattr(inference.importlib_metadata, "version", lambda _name: "0.10.2")
@@ -87,7 +87,7 @@ def test_generate_and_judge_full_hits_do_not_materialize_models(tmp_path, monkey
 
 
 def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
-    cache = InferenceCache(tmp_path, "completions", "arena-hard")
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
     monkeypatch.setattr(
         utils, "make_model", lambda *_args, **_kwargs: ConstantModel("cached")
     )
@@ -115,7 +115,7 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
 
 def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
     monkeypatch.setattr(inference.importlib_metadata, "version", lambda _name: "0.10.2")
-    cache = InferenceCache(tmp_path, "completions", "arena-hard")
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
 
     model = prepare_model(
         "VLLM/Qwen/Qwen3-8B",
