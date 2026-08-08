@@ -17,7 +17,7 @@ import pandas as pd
 
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
-from judgearena.inference import InferenceCache
+from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
 from judgearena.instruction_dataset import load_instructions
 from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
@@ -38,7 +38,7 @@ def _generate_mt_bench_completions(
     questions_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     inference_cache = (
-        InferenceCache(Path(args.store_root), "completions", "mt-bench")
+        CompletionInferenceCache(Path(args.store_root), "mt-bench")
         if args.store_root is not None
         else None
     )
@@ -156,7 +156,7 @@ def run_mt_bench(
         questions_df=questions_df,
     )
     judgement_cache = (
-        InferenceCache(Path(args.store_root), "judgements", "mt-bench")
+        JudgementInferenceCache(Path(args.store_root), "mt-bench")
         if args.store_root is not None
         else None
     )

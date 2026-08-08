@@ -130,7 +130,7 @@ def test_multiturn_temperature_cache_full_hit(tmp_path, monkeypatch):
             "category": ["writing", "math"],
         }
     )
-    cache = InferenceCache(tmp_path, "completions", "mt-bench")
+    cache = CompletionInferenceCache(tmp_path, "mt-bench")
     kwargs = {"temperature_config": {"writing": 0.7, "math": 0.0}, "use_tqdm": False}
     first = generate.generate_multiturn(
         questions, "Dummy/answer", inference_cache=cache, **kwargs
