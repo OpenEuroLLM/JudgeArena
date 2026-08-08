@@ -71,12 +71,13 @@ def _random_swap_mask(instructions: pd.Series) -> pd.Series:
     """Deterministic per-instruction pair-order flips (swap_mode='random').
 
     Replicates AlpacaEval's RandomSwitchTwoColumnsProcessor seed derivation
-    (switch-column name + instruction text + annotator seed 0), so the swap
-    decisions are bit-identical to the official annotator's.
+    (switch-column name "is_switched_outputs" + instruction text + annotator
+    seed 0), so the swap decisions are bit-identical to the official
+    annotator's.
     """
     return pd.Series(
         [
-            random.Random(f"is_switch_output_1_output_2{instruction}0").choices(
+            random.Random(f"is_switched_outputs{instruction}0").choices(
                 [False, True], k=1
             )[0]
             for instruction in instructions
@@ -237,14 +238,16 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
 
-    # swap_mode="random" flips the judged pair order per instruction; prefs
-    # are re-oriented to the A=model frame after parsing.
+    # swap_mode="random" follows AlpacaEval's presentation order: the baseline
+    # fills the first judged slot unless the per-instruction mask switches the
+    # pair; prefs are re-oriented to the canonical model/baseline frame after
+    # parsing.
     swap_mask = (
         _random_swap_mask(instructions) if cfg.judge.swap_mode == "random" else None
     )
     if swap_mask is not None:
-        judged_A = completions_A.mask(swap_mask, completions_B)
-        judged_B = completions_B.mask(swap_mask, completions_A)
+        judged_A = completions_B.mask(swap_mask, completions_A)
+        judged_B = completions_A.mask(swap_mask, completions_B)
     else:
         judged_A, judged_B = completions_A, completions_B
 
@@ -286,13 +289,15 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     if swap_mask is not None:
         swapped_eval = swap_mask.loc[eval_instruction_index].reset_index(drop=True)
         prefs = prefs.astype("float64")
-        prefs = prefs.where(~swapped_eval, 1 - prefs)
+        # Unswitched rows judged the baseline in slot A, so P(slot B wins) is
+        # already P(model wins); invert those to the canonical P(baseline wins).
+        prefs = prefs.where(swapped_eval, 1 - prefs)
         df["model_A"] = [
-            baseline if swapped else cfg.model.name
+            cfg.model.name if swapped else baseline
             for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
         ]
         df["model_B"] = [
-            cfg.model.name if swapped else baseline
+            baseline if swapped else cfg.model.name
             for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
         ]
     else:
