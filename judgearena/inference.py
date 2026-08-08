@@ -61,11 +61,16 @@ def build_model_descriptor(
         return None
 
     backend_version = importlib_metadata.version("vllm") if provider == "VLLM" else None
-    descriptor_kwargs = resolved_kwargs
+    descriptor_kwargs = dict(resolved_kwargs)
+    sampling = None
     if provider == "VLLM":
+        sampling = {
+            "temperature": descriptor_kwargs.pop("temperature"),
+            "top_p": descriptor_kwargs.pop("top_p"),
+        }
         descriptor_kwargs = {
             key: value
-            for key, value in resolved_kwargs.items()
+            for key, value in descriptor_kwargs.items()
             if key not in VLLM_EXECUTION_ONLY_KWARGS
         }
 
@@ -77,10 +82,7 @@ def build_model_descriptor(
         "model_kwargs": descriptor_kwargs,
     }
     if provider == "VLLM":
-        descriptor["sampling"] = {
-            "temperature": VLLM_TEMPERATURE,
-            "top_p": VLLM_TOP_P,
-        }
+        descriptor["sampling"] = sampling
     return descriptor
 
 

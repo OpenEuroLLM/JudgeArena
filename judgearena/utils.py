@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
-from langchain_community.cache import SQLiteCache
 from langchain_community.llms import LlamaCpp
-from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
@@ -40,10 +38,6 @@ def _data_root_path() -> Path:
 
 
 data_root = _data_root_path()
-
-
-def set_langchain_cache():
-    set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
 
 
 def download_hf(name: str, local_path: Path):
@@ -307,6 +301,8 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float = VLLM_TEMPERATURE,
+        top_p: float = VLLM_TOP_P,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -342,8 +338,8 @@ class ChatVLLM:
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
         self.sampling_params = SamplingParams(
             max_tokens=max_tokens,
-            temperature=VLLM_TEMPERATURE,
-            top_p=VLLM_TOP_P,
+            temperature=temperature,
+            top_p=top_p,
         )
 
         # Resolve chat template:
@@ -445,6 +441,9 @@ class ChatVLLM:
         results = self.batch([input_item], **invoke_kwargs)
         return results[0]
 
+    def set_temperature(self, temperature: float) -> None:
+        self.sampling_params.temperature = temperature
+
     async def ainvoke(self, input_item, **invoke_kwargs):
         """Async version - runs sync version in executor for compatibility."""
         import asyncio
@@ -473,6 +472,8 @@ def _resolve_model_config(
             key: value for key, value in resolved_kwargs.items() if value is not None
         }
         resolved_kwargs["chat_template"] = resolved_kwargs.get("chat_template")
+        resolved_kwargs.setdefault("temperature", VLLM_TEMPERATURE)
+        resolved_kwargs.setdefault("top_p", VLLM_TOP_P)
     elif model_provider == "LlamaCpp":
         resolved_kwargs["model_path"] = model_name
     elif model_provider not in {"Dummy", "OpenRouter"}:
@@ -485,6 +486,7 @@ def prepare_model(
     max_tokens: int | None = 8192,
     *,
     cache: InferenceCache | None = None,
+    factory: Callable[[], object] | None = None,
     **engine_kwargs,
 ) -> PreparedModel:
     """Prepare cache identity and a lazy factory without loading the backend."""
@@ -505,10 +507,14 @@ def prepare_model(
     return PreparedModel(
         model_spec=model,
         descriptor=descriptor,
-        factory=lambda: make_model(
-            model,
-            max_tokens=max_tokens,
-            **factory_kwargs,
+        factory=(
+            factory
+            if factory is not None
+            else lambda: make_model(
+                model,
+                max_tokens=max_tokens,
+                **factory_kwargs,
+            )
         ),
         cache=cache,
     )
@@ -597,93 +603,6 @@ def download_all():
     from judgearena.instruction_dataset.mt_bench import download_mt_bench
 
     download_mt_bench()
-
-
-class Timeblock:
-    """Timer context manager"""
-
-    def __init__(self, name: str | None = None, verbose: bool = True):
-        self.name = name
-        self.verbose = verbose
-
-    def __enter__(self):
-        """Start a new timer as a context manager"""
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        """Stop the context manager timer"""
-        self.end = time.time()
-        self.duration = self.end - self.start
-        if self.verbose:
-            logger.info("%s", self)
-
-    def __str__(self):
-        name = self.name if self.name else "block"
-        msg = f"{name} took {self.duration} seconds"
-        return msg
-
-
-def cache_function_dataframe(
-    fun: Callable[[], pd.DataFrame],
-    cache_name: str,
-    ignore_cache: bool = False,
-    cache_path: Path | None = None,
-    parquet: bool = False,
-) -> pd.DataFrame:
-    """
-    :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
-    :param ignore_cache: whether to recompute even if the cache is present
-    :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
-    :param parquet: whether to store the data in parquet, if not specified use csv.zip
-    :return: result of fun()
-    """
-    if cache_path is None:
-        cache_path = data_root / "cache"
-
-    if parquet:
-        cache_file = cache_path / (cache_name + ".parquet")
-    else:
-        cache_file = cache_path / (cache_name + ".csv.zip")
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    if cache_file.exists() and not ignore_cache:
-        logger.info("Loading cache %s", cache_file)
-        if parquet:
-            return pd.read_parquet(cache_file)
-        else:
-            return pd.read_csv(cache_file)
-    else:
-        logger.info(
-            "Cache %s not found or ignore_cache set to True, regenerating the file",
-            cache_file,
-        )
-        with Timeblock("Evaluate function."):
-            df = fun()
-            assert isinstance(df, pd.DataFrame)
-            if parquet:
-                # object cols cannot be saved easily in parquet; numpy arrays must be
-                # deep-converted to plain Python so str() produces ast.literal_eval-safe
-                # repr (no "array([...])" syntax, which breaks literal_eval)
-                import numpy as np
-
-                def _to_python(x):
-                    """Recursively convert numpy arrays/scalars to Python lists/dicts."""
-                    if isinstance(x, np.ndarray):
-                        return [_to_python(i) for i in x]
-                    if isinstance(x, dict):
-                        return {k: _to_python(v) for k, v in x.items()}
-                    if isinstance(x, list):
-                        return [_to_python(i) for i in x]
-                    return x
-
-                for col in df.select_dtypes(include="object").columns:
-                    df[col] = df[col].apply(_to_python).astype(str)
-                df.to_parquet(cache_file, index=False)
-                return pd.read_parquet(cache_file)
-            else:
-                df.to_csv(cache_file, index=False)
-                return pd.read_csv(cache_file)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import pandas as pd
 
 from judgearena.eval_utils import _compute_grouped_stats, print_results
 from judgearena.generate import generate_multiturn
+from judgearena.inference import InferenceCache
 from judgearena.instruction_dataset import load_instructions
 from judgearena.log import get_logger
 from judgearena.mt_bench.fastchat_compat import (
@@ -24,7 +25,7 @@ from judgearena.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.repro import _to_jsonable
-from judgearena.utils import cache_function_dataframe, compute_pref_summary, make_model
+from judgearena.utils import compute_pref_summary, prepare_model
 
 logger = get_logger(__name__)
 
@@ -35,9 +36,12 @@ if TYPE_CHECKING:
 def _generate_mt_bench_completions(
     args: CliArgs,
     questions_df: pd.DataFrame,
-    ignore_cache: bool,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cache_prefix = "mt-bench"
+    inference_cache = (
+        InferenceCache(Path(args.store_root), "completions", "mt-bench")
+        if args.store_root is not None
+        else None
+    )
 
     def _run_generation(model_name: str) -> pd.DataFrame:
         return generate_multiturn(
@@ -49,19 +53,12 @@ def _generate_mt_bench_completions(
             max_model_len=args.max_model_len,
             chat_template=args.chat_template,
             temperature_config=FASTCHAT_TEMPERATURE_CONFIG,
+            inference_cache=inference_cache,
+            **args.engine_kwargs,
         )
 
-    completions_a = cache_function_dataframe(
-        lambda: _run_generation(args.model_A),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_A}_{args.n_instructions}",
-    ).set_index("instruction_index")
-
-    completions_b = cache_function_dataframe(
-        lambda: _run_generation(args.model_B),
-        ignore_cache=ignore_cache,
-        cache_name=f"{cache_prefix}_{args.model_B}_{args.n_instructions}",
-    ).set_index("instruction_index")
+    completions_a = _run_generation(args.model_A).set_index("instruction_index")
+    completions_b = _run_generation(args.model_B).set_index("instruction_index")
     return completions_a, completions_b
 
 
@@ -143,7 +140,6 @@ def _run_mt_bench_fastchat(
 
 def run_mt_bench(
     args: CliArgs,
-    ignore_cache: bool,
     *,
     res_folder: Path,
     result_name: str,
@@ -158,14 +154,20 @@ def run_mt_bench(
     completions_a, completions_b = _generate_mt_bench_completions(
         args=args,
         questions_df=questions_df,
-        ignore_cache=ignore_cache,
     )
-    judge_chat_model = make_model(
+    judgement_cache = (
+        InferenceCache(Path(args.store_root), "judgements", "mt-bench")
+        if args.store_root is not None
+        else None
+    )
+    judge_chat_model = prepare_model(
         model=args.judge_model,
         max_tokens=args.max_out_tokens_judge,
+        cache=judgement_cache,
         temperature=0.0,
         max_model_len=args.max_model_len,
         chat_template=args.chat_template,
+        **args.engine_kwargs,
     )
     return _run_mt_bench_fastchat(
         args=args,
