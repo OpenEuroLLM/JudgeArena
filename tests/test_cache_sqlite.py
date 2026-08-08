@@ -59,12 +59,11 @@ def test_completion_cache_uses_content_key_and_last_write(tmp_path):
     second = first.assign(completion="second")
 
     with CompletionCache(db_path) as cache:
-        cache.save(first, pushed_by="alice")
-        cache.save(second, pushed_by="bob")
+        cache.save(first)
+        cache.save(second)
         result = cache.query([input_hash("rendered prompt")])
 
     assert result["completion"].tolist() == ["second"]
-    assert result["pushed_by"].tolist() == ["bob"]
 
 
 def test_completion_cache_filters_and_deletes_by_instruction(tmp_path):
@@ -82,7 +81,7 @@ def test_completion_cache_filters_and_deletes_by_instruction(tmp_path):
     )
 
     with CompletionCache(tmp_path / COMPLETION_DB_NAME) as cache:
-        cache.save(rows, pushed_by="alice")
+        cache.save(rows)
         assert cache.query(instruction_id="1")["completion"].tolist() == [
             "completion-1"
         ]
@@ -108,7 +107,7 @@ def test_judgement_cache_filters_and_deletes_by_candidate_model(tmp_path):
     )
 
     with JudgementCache(tmp_path / JUDGEMENT_DB_NAME) as cache:
-        cache.save(rows, pushed_by="alice")
+        cache.save(rows)
         result = cache.query(model="candidate")
         assert result["judge_completion"].tolist() == ["scores 0"]
         assert cache.delete(model="candidate") == 1
