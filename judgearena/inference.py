@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import pandas as pd
 
@@ -23,6 +23,15 @@ from judgearena.cache_sqlite import (
 )
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
+_CHAT_PROVIDERS = {"ChatOpenAI", "Dummy", "OpenRouter", "VLLM"}
+_TEXT_PROVIDERS = {"LlamaCpp", "OpenAI", "Together"}
+_CREDENTIAL_KEYS = {
+    "api_key",
+    "authorization",
+    "openai_api_key",
+    "token",
+    "together_api_key",
+}
 VLLM_TEMPERATURE = 0.6
 VLLM_TOP_P = 0.95
 VLLM_EXECUTION_ONLY_KWARGS = {
@@ -31,38 +40,86 @@ VLLM_EXECUTION_ONLY_KWARGS = {
     "tensor_parallel_size",
 }
 
+InputMode = Literal["auto", "chat", "text"]
 
-def canonicalize_chat_input(input_item: Any) -> str:
-    """Serialize a logical model input for content-addressed cache lookup."""
+
+def provider_input_mode(
+    provider: str, resolved_kwargs: dict[str, Any] | None = None
+) -> InputMode | None:
+    if provider == "VLLM" and not (resolved_kwargs or {}).get("chat_template"):
+        return "auto"
+    if provider in _CHAT_PROVIDERS:
+        return "chat"
+    if provider in _TEXT_PROVIDERS:
+        return "text"
+    return None
+
+
+def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
     if isinstance(input_item, str):
-        payload = {"type": "text", "text": input_item}
-    elif hasattr(input_item, "to_messages"):
-        payload = {
-            "type": "messages",
-            "messages": [
-                {
-                    "role": _ROLE_MAP.get(message.type, message.type),
-                    "content": message.content,
-                }
-                for message in input_item.to_messages()
-            ],
-        }
+        return [{"role": "user", "content": input_item}]
+    if hasattr(input_item, "to_messages"):
+        return [
+            {
+                "role": _ROLE_MAP.get(message.type, message.type),
+                "content": message.content,
+            }
+            for message in input_item.to_messages()
+        ]
+    raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+
+
+def _canonical_text(input_item: Any) -> str:
+    if isinstance(input_item, str):
+        return input_item
+    if hasattr(input_item, "to_string"):
+        return input_item.to_string()
+    raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+
+
+def canonicalize_model_input(input_item: Any, input_mode: InputMode) -> str:
+    """Serialize the exact chat or flattened text input seen by the backend."""
+    if input_mode == "text":
+        payload = {"type": "text", "text": _canonical_text(input_item)}
+    elif input_mode == "chat":
+        payload = {"type": "messages", "messages": _canonical_messages(input_item)}
     else:
-        raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+        payload = {
+            "type": "auto",
+            "messages": _canonical_messages(input_item),
+            "text": _canonical_text(input_item),
+        }
     return stable_json_dumps(payload)
+
+
+def _without_credentials(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_credentials(item)
+            for key, item in value.items()
+            if str(key).lower().replace("-", "_") not in _CREDENTIAL_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_credentials(item) for item in value]
+    return value
 
 
 def build_model_descriptor(
     provider: str,
     model_name: str,
     resolved_kwargs: dict[str, Any],
+    endpoint: str | None = None,
 ) -> dict[str, Any] | None:
-    """Describe output-affecting settings without constructing the backend."""
-    if provider not in {"Dummy", "VLLM"}:
+    """Describe the configured request without constructing the backend.
+
+    Omitted hosted settings retain provider defaults. LlamaCpp model identity
+    remains path-based, so moving the same GGUF creates a different cache cell.
+    """
+    input_mode = provider_input_mode(provider, resolved_kwargs)
+    if input_mode is None:
         return None
 
-    backend_version = importlib_metadata.version("vllm") if provider == "VLLM" else None
-    descriptor_kwargs = dict(resolved_kwargs)
+    descriptor_kwargs = _without_credentials(resolved_kwargs)
     sampling = None
     if provider == "VLLM":
         sampling = {
@@ -79,11 +136,16 @@ def build_model_descriptor(
         "schema_version": "judgearena-inference-cache/v1",
         "provider": provider,
         "model": model_name,
-        "backend_version": backend_version,
+        "input_mode": input_mode,
         "model_kwargs": descriptor_kwargs,
     }
     if provider == "VLLM":
+        descriptor["backend_version"] = importlib_metadata.version("vllm")
         descriptor["sampling"] = sampling
+    elif provider == "LlamaCpp":
+        descriptor["backend_version"] = importlib_metadata.version("llama-cpp-python")
+    if endpoint is not None:
+        descriptor["endpoint"] = endpoint.rstrip("/")
     return descriptor
 
 
@@ -93,6 +155,7 @@ class PreparedModel:
 
     model_spec: str
     descriptor: dict[str, Any] | None
+    input_mode: InputMode | None
     factory: Callable[[], Any]
     cache: InferenceCache | None = None
     _model: Any = field(default=None, init=False, repr=False)

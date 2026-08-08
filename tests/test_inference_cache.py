@@ -1,12 +1,20 @@
+import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
+from langchain_core.prompts import ChatPromptTemplate
 
 import judgearena.evaluate as evaluate
 import judgearena.generate as generate
 import judgearena.inference as inference
 import judgearena.utils as utils
-from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
+from judgearena.inference import (
+    CompletionInferenceCache,
+    JudgementInferenceCache,
+    canonicalize_model_input,
+    provider_input_mode,
+)
 from judgearena.utils import do_inference, prepare_model
 
 
@@ -168,4 +176,77 @@ def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
         "chat_template": None,
     }
     assert model.descriptor["sampling"] == {"temperature": 0.2, "top_p": 0.95}
-    assert prepare_model("OpenRouter/provider/model", cache=cache).descriptor is None
+
+
+@pytest.mark.parametrize(
+    ("model_spec", "expected_mode", "expected_endpoint"),
+    [
+        ("Dummy/model", "chat", None),
+        ("VLLM/org/model", "auto", None),
+        ("OpenRouter/org/model", "chat", "https://openrouter.ai/api/v1"),
+        ("ChatOpenAI/model", "chat", "https://api.openai.com/v1"),
+        ("OpenAI/model", "text", "https://api.openai.com/v1"),
+        ("Together/org/model", "text", "https://api.together.xyz/v1/completions"),
+        ("LlamaCpp/./models/model.gguf", "text", None),
+    ],
+)
+def test_supported_provider_descriptors(
+    tmp_path,
+    monkeypatch,
+    model_spec,
+    expected_mode,
+    expected_endpoint,
+):
+    versions = {"vllm": "0.10.2", "llama-cpp-python": "0.3.0"}
+    monkeypatch.setattr(inference.importlib_metadata, "version", versions.__getitem__)
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+
+    descriptor = prepare_model(model_spec, cache=cache).descriptor
+
+    assert descriptor["input_mode"] == expected_mode
+    assert descriptor.get("endpoint") == expected_endpoint
+
+
+def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(tmp_path):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+    unpinned = prepare_model(
+        "OpenRouter/org/model",
+        cache=cache,
+        api_key="secret",
+    ).descriptor
+    pinned = prepare_model(
+        "OpenRouter/org/model",
+        cache=cache,
+        api_key="secret",
+        extra_body={"provider": {"order": ["Together"], "allow_fallbacks": False}},
+    ).descriptor
+
+    assert unpinned != pinned
+    assert "secret" not in json.dumps(pinned)
+    assert "api_key" not in pinned["model_kwargs"]
+    assert pinned["model_kwargs"]["extra_body"]["provider"]["order"] == ["Together"]
+
+    gateway = prepare_model(
+        "ChatOpenAI/model",
+        cache=cache,
+        base_url="https://gateway.example/v1/",
+    ).descriptor
+    assert gateway["endpoint"] == "https://gateway.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_type"),
+    [("OpenRouter", "messages"), ("Together", "text"), ("VLLM", "auto")],
+)
+def test_input_canonicalization_matches_provider_mode(provider, expected_type):
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", "System"), ("user", "Question")]
+    ).invoke({})
+
+    payload = json.loads(
+        canonicalize_model_input(prompt, provider_input_mode(provider))
+    )
+
+    assert payload["type"] == expected_type
+    if expected_type in {"auto", "text"}:
+        assert payload["text"] == prompt.to_string()
