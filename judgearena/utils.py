@@ -21,7 +21,8 @@ from judgearena.inference import (
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
-    canonicalize_chat_input,
+    canonicalize_model_input,
+    provider_input_mode,
 )
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -234,7 +235,10 @@ def do_inference(
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
-    input_texts = [canonicalize_chat_input(item) for item in inputs]
+    assert chat_model.input_mode is not None
+    input_texts = [
+        canonicalize_model_input(item, chat_model.input_mode) for item in inputs
+    ]
 
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
@@ -452,6 +456,29 @@ class ChatVLLM:
         )
 
 
+_REMOTE_ENDPOINTS = {
+    "ChatOpenAI": "https://api.openai.com/v1",
+    "OpenAI": "https://api.openai.com/v1",
+    "OpenRouter": "https://openrouter.ai/api/v1",
+    "Together": "https://api.together.xyz/v1/completions",
+}
+
+
+def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
+    if provider == "OpenRouter":
+        return _REMOTE_ENDPOINTS[provider]
+    for key in ("base_url", "openai_api_base", "together_api_base"):
+        if resolved_kwargs.get(key):
+            return str(resolved_kwargs[key])
+    if provider in {"ChatOpenAI", "OpenAI"}:
+        return (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or _REMOTE_ENDPOINTS[provider]
+        )
+    return _REMOTE_ENDPOINTS.get(provider)
+
+
 def _resolve_model_config(
     model: str,
     max_tokens: int | None,
@@ -488,8 +515,14 @@ def prepare_model(
     provider, model_name, resolved_kwargs = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )
+    input_mode = provider_input_mode(provider, resolved_kwargs)
     descriptor = (
-        build_model_descriptor(provider, model_name, resolved_kwargs)
+        build_model_descriptor(
+            provider,
+            model_name,
+            resolved_kwargs,
+            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+        )
         if cache is not None
         else None
     )
@@ -502,6 +535,7 @@ def prepare_model(
     return PreparedModel(
         model_spec=model,
         descriptor=descriptor,
+        input_mode=input_mode,
         factory=lambda: make_model(
             model,
             max_tokens=max_tokens,
