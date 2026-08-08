@@ -135,6 +135,7 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
 
 
 def _do_inference_uncached(chat_model, inputs, use_tqdm: bool = False):
+    """Run the existing retry path for cache misses or cache-disabled calls."""
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -221,6 +222,7 @@ def do_inference(
     cache: InferenceCache | None = None,
     cache_metadata: list[dict] | None = None,
 ):
+    """Reuse raw outputs by rendered input and invoke the model only for misses."""
     inputs = list(inputs)
     if not isinstance(chat_model, PreparedModel):
         if cache is not None:
@@ -462,6 +464,7 @@ def _resolve_model_config(
     max_tokens: int | None,
     engine_kwargs: dict,
 ) -> tuple[str, str, dict]:
+    """Resolve constructor kwargs once for both descriptors and materialization."""
     resolved_kwargs = engine_kwargs.copy()
     resolved_kwargs["max_tokens"] = max_tokens or 8192
     model_provider, model_name = model.split("/", 1)
@@ -486,6 +489,7 @@ def prepare_model(
     max_tokens: int | None = 8192,
     **engine_kwargs,
 ) -> PreparedModel:
+    """Prepare cache identity and a lazy factory without loading the backend."""
     provider, model_name, resolved_kwargs = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )

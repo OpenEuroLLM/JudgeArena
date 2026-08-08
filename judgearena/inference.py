@@ -25,6 +25,7 @@ _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 
 
 def canonicalize_chat_input(input_item: Any) -> str:
+    """Serialize a logical model input for content-addressed cache lookup."""
     if isinstance(input_item, str):
         payload = {"type": "text", "text": input_item}
     elif hasattr(input_item, "to_messages"):
@@ -65,6 +66,7 @@ def build_model_descriptor(
     model_name: str,
     resolved_kwargs: dict[str, Any],
 ) -> dict[str, Any] | None:
+    """Describe output-affecting settings without constructing the backend."""
     if provider not in {"Dummy", "VLLM"}:
         return None
 
@@ -93,6 +95,8 @@ def build_model_descriptor(
 
 @dataclass
 class PreparedModel:
+    """Carry cache identity while deferring backend construction until a miss."""
+
     model_spec: str
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
@@ -106,6 +110,8 @@ class PreparedModel:
 
 @dataclass(frozen=True)
 class InferenceCache:
+    """Select the role-specific store used by the inference cache boundary."""
+
     store_root: Path
     kind: CacheKind
     task: str
