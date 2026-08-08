@@ -22,6 +22,13 @@ from judgearena.cache_sqlite import (
 )
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
+VLLM_TEMPERATURE = 0.6
+VLLM_TOP_P = 0.95
+VLLM_EXECUTION_ONLY_KWARGS = {
+    "enforce_eager",
+    "gpu_memory_utilization",
+    "tensor_parallel_size",
+}
 
 
 def canonicalize_chat_input(input_item: Any) -> str:
@@ -53,26 +60,27 @@ def build_model_descriptor(
     if provider not in {"Dummy", "VLLM"}:
         return None
 
-    backend_version = None
+    backend_version = importlib_metadata.version("vllm") if provider == "VLLM" else None
+    descriptor_kwargs = resolved_kwargs
     if provider == "VLLM":
-        try:
-            backend_version = importlib_metadata.version("vllm")
-        except importlib_metadata.PackageNotFoundError:
-            return None
+        descriptor_kwargs = {
+            key: value
+            for key, value in resolved_kwargs.items()
+            if key not in VLLM_EXECUTION_ONLY_KWARGS
+        }
 
     descriptor = {
         "schema_version": "judgearena-inference-cache/v1",
         "provider": provider,
         "model": model_name,
         "backend_version": backend_version,
-        "model_kwargs": resolved_kwargs,
+        "model_kwargs": descriptor_kwargs,
     }
     if provider == "VLLM":
-        descriptor["sampling"] = {"temperature": 0.6, "top_p": 0.95}
-    try:
-        stable_json_dumps(descriptor)
-    except TypeError:
-        return None
+        descriptor["sampling"] = {
+            "temperature": VLLM_TEMPERATURE,
+            "top_p": VLLM_TOP_P,
+        }
     return descriptor
 
 
@@ -83,6 +91,7 @@ class PreparedModel:
     model_spec: str
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
+    cache: InferenceCache | None = None
     _model: Any = field(default=None, init=False, repr=False)
 
     def materialize(self) -> Any:
@@ -98,7 +107,6 @@ class InferenceCache:
     store_root: Path
     kind: CacheKind
     task: str
-    pushed_by: str = "judgearena"
 
     def open_store(self, model: PreparedModel) -> CompletionCache | JudgementCache:
         assert model.descriptor is not None
@@ -151,4 +159,4 @@ class InferenceCache:
                         "orientation": row_metadata.get("orientation"),
                     }
                 )
-        store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
+        store.save(pd.DataFrame(rows))

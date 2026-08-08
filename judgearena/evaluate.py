@@ -9,7 +9,6 @@ import pandas as pd
 from langchain_core.language_models.llms import LLM
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.inference import InferenceCache
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -274,7 +273,6 @@ def annotate_battles(
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     provide_explanation: bool = False,
-    inference_cache: InferenceCache | None = None,
     cache_metadata: list[dict] | None = None,
 ) -> list[JudgeAnnotation]:
     """
@@ -335,7 +333,6 @@ def annotate_battles(
         chat_model=judge_chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        cache=inference_cache,
         cache_metadata=cache_metadata,
     )
 

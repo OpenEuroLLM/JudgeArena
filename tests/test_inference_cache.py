@@ -58,12 +58,11 @@ def test_generate_and_judge_full_hits_do_not_materialize_models(tmp_path, monkey
         "instructions": instructions.tolist(),
         "completions_A": completions["completion"].tolist(),
         "completions_B": ["Baseline answer"],
-        "inference_cache": judgement_cache,
         "cache_metadata": metadata,
     }
 
     first = evaluate.annotate_battles(
-        judge_chat_model=prepare_model(judge_model),
+        judge_chat_model=prepare_model(judge_model, cache=judgement_cache),
         **arguments,
     )
 
@@ -78,7 +77,7 @@ def test_generate_and_judge_full_hits_do_not_materialize_models(tmp_path, monkey
         inference_cache=completion_cache,
     )
     second = evaluate.annotate_battles(
-        judge_chat_model=prepare_model(judge_model),
+        judge_chat_model=prepare_model(judge_model, cache=judgement_cache),
         **arguments,
     )
 
@@ -93,18 +92,16 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
         utils, "make_model", lambda *_args, **_kwargs: ConstantModel("cached")
     )
     do_inference(
-        prepare_model("Dummy/test-model"),
+        prepare_model("Dummy/test-model", cache=cache),
         ["hit"],
-        cache=cache,
         cache_metadata=[{"instruction_id": "hit"}],
     )
 
     backend = EchoModel()
     monkeypatch.setattr(utils, "make_model", lambda *_args, **_kwargs: backend)
     outputs = do_inference(
-        prepare_model("Dummy/test-model"),
+        prepare_model("Dummy/test-model", cache=cache),
         ["miss-a", "hit", "miss-b"],
-        cache=cache,
         cache_metadata=[
             {"instruction_id": "a"},
             {"instruction_id": "hit"},
@@ -116,12 +113,16 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
     assert backend.calls == [["miss-a", "miss-b"]]
 
 
-def test_vllm_descriptor_contains_resolved_backend_configuration(monkeypatch):
+def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
     monkeypatch.setattr(inference.importlib_metadata, "version", lambda _name: "0.10.2")
+    cache = InferenceCache(tmp_path, "completions", "arena-hard")
 
     model = prepare_model(
         "VLLM/Qwen/Qwen3-8B",
         max_tokens=32,
+        cache=cache,
+        enforce_eager=True,
+        gpu_memory_utilization=0.9,
         max_model_len=4096,
         tensor_parallel_size=2,
     )
@@ -130,8 +131,7 @@ def test_vllm_descriptor_contains_resolved_backend_configuration(monkeypatch):
     assert model.descriptor["model_kwargs"] == {
         "max_tokens": 32,
         "max_model_len": 4096,
-        "tensor_parallel_size": 2,
         "chat_template": None,
     }
     assert model.descriptor["sampling"] == {"temperature": 0.6, "top_p": 0.95}
-    assert prepare_model("OpenRouter/provider/model").descriptor is None
+    assert prepare_model("OpenRouter/provider/model", cache=cache).descriptor is None

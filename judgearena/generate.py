@@ -50,8 +50,12 @@ def generate_instructions(
     if instructions_to_run.empty:
         return cached_df[["instruction_index", "completion"]].reset_index(drop=True)
 
-    model_factory = prepare_model if inference_cache is not None else make_model
-    chat_model = model_factory(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = prepare_model(
+        model,
+        max_tokens=max_tokens,
+        cache=inference_cache,
+        **engine_kwargs,
+    )
 
     if system_prompt is None:
         system_prompt = (
@@ -70,7 +74,6 @@ def generate_instructions(
         chat_model=chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        cache=inference_cache,
         cache_metadata=[
             {"instruction_id": index} for index in instructions_to_run.index
         ],

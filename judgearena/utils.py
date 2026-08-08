@@ -16,6 +16,8 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.cache_sqlite import input_hash
 from judgearena.inference import (
+    VLLM_TEMPERATURE,
+    VLLM_TOP_P,
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
@@ -219,26 +221,20 @@ def do_inference(
     inputs,
     use_tqdm: bool = False,
     *,
-    cache: InferenceCache | None = None,
     cache_metadata: list[dict] | None = None,
 ):
     """Reuse raw outputs by rendered input and invoke the model only for misses."""
     inputs = list(inputs)
     if not isinstance(chat_model, PreparedModel):
-        if cache is not None:
-            logger.warning("Caching requires a PreparedModel; running uncached.")
         return _do_inference_uncached(chat_model, inputs, use_tqdm)
 
+    cache = chat_model.cache
     if cache is None or chat_model.descriptor is None:
         return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
-    try:
-        input_texts = [canonicalize_chat_input(item) for item in inputs]
-    except TypeError as error:
-        logger.warning("Input cannot be safely cached (%s); running uncached.", error)
-        return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
+    input_texts = [canonicalize_chat_input(item) for item in inputs]
 
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
@@ -346,8 +342,8 @@ class ChatVLLM:
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
         self.sampling_params = SamplingParams(
             max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
+            temperature=VLLM_TEMPERATURE,
+            top_p=VLLM_TOP_P,
         )
 
         # Resolve chat template:
@@ -487,17 +483,22 @@ def _resolve_model_config(
 def prepare_model(
     model: str,
     max_tokens: int | None = 8192,
+    *,
+    cache: InferenceCache | None = None,
     **engine_kwargs,
 ) -> PreparedModel:
     """Prepare cache identity and a lazy factory without loading the backend."""
     provider, model_name, resolved_kwargs = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )
-    descriptor = build_model_descriptor(provider, model_name, resolved_kwargs)
-    if descriptor is None:
+    descriptor = (
+        build_model_descriptor(provider, model_name, resolved_kwargs)
+        if cache is not None
+        else None
+    )
+    if cache is not None and descriptor is None:
         logger.warning(
-            "Caching disabled for %s because its resolved configuration cannot "
-            "be described safely.",
+            "Caching is not supported for %s; running uncached.",
             model,
         )
     factory_kwargs = engine_kwargs.copy()
@@ -509,6 +510,7 @@ def prepare_model(
             max_tokens=max_tokens,
             **factory_kwargs,
         ),
+        cache=cache,
     )
 
 
