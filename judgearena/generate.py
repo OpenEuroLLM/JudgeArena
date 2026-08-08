@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.inference import InferenceCache
 from judgearena.log import get_logger
 from judgearena.utils import (
     do_inference,
     make_model,
+    prepare_model,
     truncate,
 )
 
@@ -26,6 +28,7 @@ def generate_instructions(
     use_tqdm: bool = True,
     system_prompt: str | None = None,
     completion_store: SQLiteCompletionStore | None = None,
+    inference_cache: InferenceCache | None = None,
     pushed_by: str = "judgearena",
     **engine_kwargs,
 ) -> pd.DataFrame:
@@ -47,7 +50,8 @@ def generate_instructions(
     if instructions_to_run.empty:
         return cached_df[["instruction_index", "completion"]].reset_index(drop=True)
 
-    chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    model_factory = prepare_model if inference_cache is not None else make_model
+    chat_model = model_factory(model, max_tokens=max_tokens, **engine_kwargs)
 
     if system_prompt is None:
         system_prompt = (
@@ -62,7 +66,15 @@ def generate_instructions(
             for user_prompt in instructions_to_run
         ]
     )
-    completions = do_inference(chat_model=chat_model, inputs=inputs, use_tqdm=use_tqdm)
+    completions = do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=use_tqdm,
+        cache=inference_cache,
+        cache_metadata=[
+            {"instruction_id": index} for index in instructions_to_run.index
+        ],
+    )
     df_new = pd.DataFrame(
         {
             "completion": completions,
