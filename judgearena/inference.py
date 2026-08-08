@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pandas as pd
 
@@ -103,13 +104,17 @@ class PreparedModel:
 
 
 @dataclass(frozen=True)
-class InferenceCache:
-    """Select the role-specific store used by the inference cache boundary."""
+class InferenceCache(ABC):
+    """Share cache lifecycle while subclasses define role-specific rows."""
 
     store_root: Path
-    kind: CacheKind
     task: str
     pushed_by: str = "judgearena"
+
+    kind: ClassVar[CacheKind]
+    db_name: ClassVar[str]
+    output_column: ClassVar[str]
+    store_type: ClassVar[type[CompletionCache] | type[JudgementCache]]
 
     def open_store(self, model: PreparedModel) -> CompletionCache | JudgementCache:
         assert model.descriptor is not None
@@ -121,9 +126,7 @@ class InferenceCache:
             model.descriptor,
         )
         write_descriptor(folder, model.descriptor)
-        if self.kind == "completions":
-            return CompletionCache(folder / COMPLETION_DB_NAME)
-        return JudgementCache(folder / JUDGEMENT_DB_NAME)
+        return self.store_type(folder / self.db_name)
 
     def save_outputs(
         self,
@@ -134,32 +137,77 @@ class InferenceCache:
         metadata: list[dict[str, Any]],
         indices: list[int],
     ) -> None:
-        rows = []
-        for index, output in zip(indices, outputs, strict=True):
-            row_metadata = metadata[index]
-            common = {
-                "benchmark": self.task,
-                "instruction_id": row_metadata["instruction_id"],
-            }
-            if self.kind == "completions":
-                rows.append(
-                    {
-                        **common,
-                        "input_text": input_texts[index],
-                        "completion": output,
-                        "model": model.model_spec,
-                    }
-                )
-            else:
-                rows.append(
-                    {
-                        **common,
-                        "judge_input": input_texts[index],
-                        "judge_completion": output,
-                        "model_a": row_metadata["model_a"],
-                        "model_b": row_metadata["model_b"],
-                        "judge": model.model_spec,
-                        "orientation": row_metadata.get("orientation"),
-                    }
-                )
+        rows = [
+            self.make_row(
+                model=model,
+                input_text=input_texts[index],
+                output=output,
+                metadata=metadata[index],
+            )
+            for index, output in zip(indices, outputs, strict=True)
+        ]
         store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
+
+    @abstractmethod
+    def make_row(
+        self,
+        *,
+        model: PreparedModel,
+        input_text: str,
+        output: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Convert one inference output to its role-specific storage row."""
+
+
+class CompletionInferenceCache(InferenceCache):
+    """Cache generated model completions."""
+
+    kind = "completions"
+    db_name = COMPLETION_DB_NAME
+    output_column = "completion"
+    store_type = CompletionCache
+
+    def make_row(
+        self,
+        *,
+        model: PreparedModel,
+        input_text: str,
+        output: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "input_text": input_text,
+            "completion": output,
+            "benchmark": self.task,
+            "instruction_id": metadata["instruction_id"],
+            "model": model.model_spec,
+        }
+
+
+class JudgementInferenceCache(InferenceCache):
+    """Cache raw judge completions."""
+
+    kind = "judgements"
+    db_name = JUDGEMENT_DB_NAME
+    output_column = "judge_completion"
+    store_type = JudgementCache
+
+    def make_row(
+        self,
+        *,
+        model: PreparedModel,
+        input_text: str,
+        output: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "judge_input": input_text,
+            "judge_completion": output,
+            "benchmark": self.task,
+            "instruction_id": metadata["instruction_id"],
+            "model_a": metadata["model_a"],
+            "model_b": metadata["model_b"],
+            "judge": model.model_spec,
+            "orientation": metadata.get("orientation"),
+        }

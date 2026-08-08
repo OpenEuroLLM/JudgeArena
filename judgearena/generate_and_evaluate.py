@@ -14,7 +14,7 @@ import pandas as pd
 from judgearena.cli_common import BaseCliArgs
 from judgearena.evaluate import judge_and_parse_prefs, resolve_judge_prompts
 from judgearena.generate import generate_base, generate_instructions
-from judgearena.inference import InferenceCache
+from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
 from judgearena.instruction_dataset import load_instructions
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -177,7 +177,7 @@ def main(args: CliArgs):
         args.model_B,
     )
     completion_cache = (
-        InferenceCache(Path(args.store_root), "completions", args.task)
+        CompletionInferenceCache(Path(args.store_root), args.task)
         if args.store_root is not None
         else None
     )
@@ -241,7 +241,7 @@ def main(args: CliArgs):
     logger.info("Evaluating completions with judge %s.", args.judge_model)
 
     judgement_cache = (
-        InferenceCache(Path(args.store_root), "judgements", args.task)
+        JudgementInferenceCache(Path(args.store_root), args.task)
         if args.store_root is not None
         else None
     )
