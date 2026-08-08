@@ -39,23 +39,6 @@ def canonicalize_chat_input(input_item: Any) -> str:
                 for message in input_item.to_messages()
             ],
         }
-    elif isinstance(input_item, list) and input_item:
-        if isinstance(input_item[0], tuple):
-            messages = [
-                {
-                    "role": "user" if role == "human" else role,
-                    "content": content,
-                }
-                for role, content in input_item
-            ]
-        elif isinstance(input_item[0], dict):
-            messages = [
-                {"role": message["role"], "content": message["content"]}
-                for message in input_item
-            ]
-        else:
-            raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
-        payload = {"type": "messages", "messages": messages}
     else:
         raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
     return stable_json_dumps(payload)
