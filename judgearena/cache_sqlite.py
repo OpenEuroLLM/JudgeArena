@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -131,12 +132,21 @@ class CompletionCache(_SQLiteCache):
             benchmark      TEXT NOT NULL,
             instruction_id TEXT NOT NULL,
             model           TEXT NOT NULL,
-            pushed_at       TEXT NOT NULL
+            pushed_by       TEXT NOT NULL,
+            pushed_at       TEXT NOT NULL,
+            run_id          TEXT NOT NULL
         )
     """
 
-    def save(self, rows: pd.DataFrame) -> int:
+    def save(
+        self,
+        rows: pd.DataFrame,
+        *,
+        pushed_by: str,
+        run_id: str | None = None,
+    ) -> int:
         now = datetime.now(UTC).isoformat()
+        resolved_run_id = run_id or str(uuid.uuid4())
         values = [
             (
                 input_hash(str(row["input_text"])),
@@ -145,13 +155,15 @@ class CompletionCache(_SQLiteCache):
                 str(row["benchmark"]),
                 str(row["instruction_id"]),
                 str(row["model"]),
+                pushed_by,
                 now,
+                resolved_run_id,
             )
             for _, row in rows.iterrows()
         ]
         with self._connect() as conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO completions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
         return len(values)
@@ -206,12 +218,21 @@ class JudgementCache(_SQLiteCache):
             judge            TEXT NOT NULL,
             -- direct/reversed relative to the source model order, when applicable
             orientation      TEXT,
-            pushed_at        TEXT NOT NULL
+            pushed_by        TEXT NOT NULL,
+            pushed_at        TEXT NOT NULL,
+            run_id           TEXT NOT NULL
         )
     """
 
-    def save(self, rows: pd.DataFrame) -> int:
+    def save(
+        self,
+        rows: pd.DataFrame,
+        *,
+        pushed_by: str,
+        run_id: str | None = None,
+    ) -> int:
         now = datetime.now(UTC).isoformat()
+        resolved_run_id = run_id or str(uuid.uuid4())
         values = [
             (
                 input_hash(str(row["judge_input"])),
@@ -223,14 +244,16 @@ class JudgementCache(_SQLiteCache):
                 str(row["model_b"]),
                 str(row["judge"]),
                 row.get("orientation"),
+                pushed_by,
                 now,
+                resolved_run_id,
             )
             for _, row in rows.iterrows()
         ]
         with self._connect() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO judgements "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
         return len(values)
