@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,15 @@ import yaml
 from judgearena import cli as cli_module
 from judgearena.tasks.cli import run_task_command
 from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
+
+
+def test_task_local_prompts_are_included_in_package_data():
+    pyproject_path = Path(__file__).parents[1] / "pyproject.toml"
+    package_data = tomllib.loads(pyproject_path.read_text())["tool"]["setuptools"][
+        "package-data"
+    ]
+
+    assert "definitions/*/*.txt" in package_data["judgearena.tasks"]
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
