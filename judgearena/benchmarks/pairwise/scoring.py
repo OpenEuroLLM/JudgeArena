@@ -13,7 +13,10 @@ from judgearena.utils.eval import PrefSummary, compute_pref_summary
 
 @dataclass(frozen=True)
 class ScoringResult:
-    """Complete output produced by one scoring pass."""
+    """Complete output produced by one scoring pass.
+
+    Grouped results are keyed by dimensions such as ``category`` or ``turn``.
+    """
 
     summary: PrefSummary
     metrics: dict[str, float | None] = field(default_factory=dict)

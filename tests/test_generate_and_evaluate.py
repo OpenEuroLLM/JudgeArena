@@ -384,6 +384,14 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
     assert by_preset["arena-hard"] == {0, 2}
     assert by_preset["arena-hard-creative"] == {1}
 
+    import json
+
+    results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert set(results["per_category"]) == {"hard_prompt", "creative_writing"}
+    assert results["per_category"]["hard_prompt"]["num_ties"] == 4
+    assert results["per_category"]["creative_writing"]["num_ties"] == 2
+    assert results["metadata"]["scoring"]["official_scope"] == "per_category"
+
 
 def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_path):
     """The alpaca-eval preset weights verdicts by the judge's top logprobs."""

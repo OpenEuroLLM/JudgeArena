@@ -56,6 +56,8 @@ def test_arena_hard_score_bootstrap_ci_is_ordered_and_deterministic():
     assert 0.0 <= first.metrics["score_ci_low"] <= first.metrics["score_ci_high"] <= 1.0
     assert first.scoring_details["decisive_weight"] == 3
     assert first.scoring_details["bootstrap_rounds"] == 100
+    assert first.scoring_details["confidence_level"] == 0.9
+    assert first.scoring_details["confidence_quantiles"] == [0.05, 0.95]
 
 
 def test_arena_hard_score_empty_prefs_yield_no_ci():
@@ -63,6 +65,51 @@ def test_arena_hard_score_empty_prefs_yield_no_ci():
 
     assert result.metrics["score_ci_low"] is None
     assert result.metrics["score_ci_high"] is None
+
+
+def test_arena_hard_score_drops_both_orders_when_one_is_unparseable():
+    battles = _battles(
+        [0.0, 0.25, None, 0.75],
+        instruction_index=["q0", "q1", "q0", "q1"],
+        orientation=["direct", "direct", "reversed", "reversed"],
+    )
+
+    summary = PAIRWISE_SCORERS["arena_hard_score"].score(battles).summary
+
+    assert summary.num_wins == 1
+    assert summary.num_losses == 1
+    assert summary.num_ties == 0
+    assert summary.num_missing == 2
+    assert summary.winrate == pytest.approx(0.5)
+
+
+def test_arena_hard_v2_reports_official_scores_per_category():
+    battles = _battles(
+        [0.0, 1.0, 0.0, 1.0],
+        instruction_index=["hard", "creative", "hard", "creative"],
+        orientation=["direct", "direct", "reversed", "reversed"],
+        category=[
+            "hard_prompt",
+            "creative_writing",
+            "hard_prompt",
+            "creative_writing",
+        ],
+    )
+
+    result = PAIRWISE_SCORERS["arena_hard_score"].score(battles)
+    per_category = result.grouped_results["category"]
+
+    assert per_category["hard_prompt"]["winrate"] == 1.0
+    assert per_category["hard_prompt"]["baseline_model"] == "baseline-model"
+    assert per_category["hard_prompt"]["score_ci_low"] == 1.0
+    assert per_category["hard_prompt"]["score_ci_high"] == 1.0
+    assert per_category["creative_writing"]["winrate"] == 0.0
+    assert per_category["creative_writing"]["score_ci_low"] == 0.0
+    assert per_category["creative_writing"]["score_ci_high"] == 0.0
+    assert result.scoring_details["official_scope"] == "per_category"
+    assert result.scoring_details["aggregate_score_is_official"] is False
+    assert "score_ci_low" not in result.metrics
+    assert "score_ci_high" not in result.metrics
 
 
 def test_alpaca_eval_summary_is_mean_preference_over_parsed_battles():
