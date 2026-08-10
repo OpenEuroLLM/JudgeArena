@@ -172,10 +172,18 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = task_data.model_completion(model_spec)
+    def _load_or_generate_completions(
+        model_spec: str,
+        *,
+        role: str,
+        required_index: pd.Index | None = None,
+    ) -> pd.Series:
+        preloaded = task_data.model_completion(
+            model_spec,
+            required_index=required_index,
+        )
         if preloaded is not None:
-            return preloaded.loc[instructions.index]
+            return preloaded
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -189,7 +197,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
                 f"{sampling_token}"
             ),
         )
-        return _align_completion_series(generated)
+        completions = _align_completion_series(generated)
+        return (
+            completions if required_index is None else completions.loc[required_index]
+        )
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
@@ -200,7 +211,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
     else:
         per_baseline_completions = {
-            model: _load_or_generate_completions(model, role="B")
+            model: _load_or_generate_completions(
+                model,
+                role="B",
+                required_index=baseline_per_index.index[baseline_per_index == model],
+            )
             for model in baseline_plan.unique_models
         }
         completions_B = pd.Series(

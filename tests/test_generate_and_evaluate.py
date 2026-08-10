@@ -393,6 +393,51 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
     assert results["metadata"]["scoring"]["official_scope"] == "per_category"
 
 
+def test_run_pairwise_only_loads_category_baseline_for_assigned_rows(
+    monkeypatch, tmp_path
+):
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["hard", "creative"],
+            "category": ["hard_prompt", "creative_writing"],
+        },
+        index=pd.Index(["qh", "qc"], name="instruction_index"),
+    )
+    model_outputs = pd.DataFrame(
+        {
+            "instruction_index": ["qh", "qc", "qh", "qc"],
+            "model": [
+                "candidate",
+                "candidate",
+                "o3-mini-2025-01-31",
+                "gemini-2.0-flash-001",
+            ],
+            "output": ["candidate hard", "candidate creative", "hard", "creative"],
+        }
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda task, n_instructions=None: PairwiseTaskData(
+            instructions=instructions,
+            model_outputs=model_outputs,
+        ),
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="arena-hard-v2.0-official",
+            model_A="candidate",
+            judge_model="Dummy/My final verdict is tie: [[A=B]]",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+            swap_mode="both",
+        )
+    )
+
+    assert prefs.tolist() == [0.5] * 4
+
+
 def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_path):
     """The alpaca-eval preset weights verdicts by the judge's top logprobs."""
     import math

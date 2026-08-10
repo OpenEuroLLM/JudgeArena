@@ -443,6 +443,35 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     assert loaded.index.tolist() == [0, 1]
 
 
+def test_pairwise_task_data_only_requires_selected_output_rows():
+    task_data = pairwise_data.PairwiseTaskData(
+        instructions=pd.DataFrame(
+            {"instruction": ["q0", "q1"]},
+            index=pd.Index(["q0", "q1"], name="instruction_index"),
+        ),
+        model_outputs=pd.DataFrame(
+            {
+                "instruction_index": ["q1"],
+                "model": ["category-baseline"],
+                "output": ["answer"],
+            }
+        ),
+    )
+
+    loaded = task_data.model_completion(
+        "category-baseline",
+        required_index=pd.Index(["q1"], name="instruction_index"),
+    )
+
+    assert loaded is not None
+    assert loaded.to_dict() == {"q1": "answer"}
+    with pytest.raises(ValueError, match="missing 1 required instruction"):
+        task_data.model_completion(
+            "category-baseline",
+            required_index=pd.Index(["q0"], name="instruction_index"),
+        )
+
+
 def test_fluency_variants_cover_all_supported_languages():
     task = get_packaged_task("fluency")
     assert task is not None
