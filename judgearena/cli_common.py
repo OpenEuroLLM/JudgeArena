@@ -21,7 +21,6 @@ class BaseCliArgs:
     n_instructions: int | None = None
     provide_explanation: bool = False
     swap_mode: str = "fixed"
-    ignore_cache: bool = False
     store_root: str | None = None
     truncate_all_input_chars: int = 8192
     max_out_tokens_models: int = 32768
@@ -80,11 +79,6 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
             "twice, once as A-B and once as B-A, and concatenating the results. "
             "This helps account for judge position bias. Default is 'fixed'."
         ),
-    )
-    parser.add_argument(
-        "--ignore_cache",
-        action="store_true",
-        help="If specified, ignore cache of previous completions.",
     )
     parser.add_argument(
         "--store_root",

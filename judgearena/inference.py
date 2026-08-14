@@ -103,7 +103,12 @@ def build_model_descriptor(
         return None
 
     descriptor_kwargs = resolved_kwargs.copy()
+    sampling = None
     if provider == "VLLM":
+        sampling = {
+            "temperature": descriptor_kwargs.pop("temperature"),
+            "top_p": descriptor_kwargs.pop("top_p"),
+        }
         descriptor_kwargs = {
             key: value
             for key, value in descriptor_kwargs.items()
@@ -119,10 +124,7 @@ def build_model_descriptor(
     }
     if provider == "VLLM":
         descriptor["backend_version"] = importlib_metadata.version("vllm")
-        descriptor["sampling"] = {
-            "temperature": VLLM_TEMPERATURE,
-            "top_p": VLLM_TOP_P,
-        }
+        descriptor["sampling"] = sampling
     elif provider == "LlamaCpp":
         descriptor["backend_version"] = importlib_metadata.version("llama-cpp-python")
     if endpoint is not None:

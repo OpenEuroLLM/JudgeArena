@@ -267,6 +267,8 @@ def _infer_by_prompt_groups(
     items: list[dict[str, Any]],
     use_tqdm: bool,
     swap_answers: bool,
+    model_a: str,
+    model_b: str,
 ) -> list[str]:
     """Run judge inference, grouping by prompt variant for batching."""
     grouped_indices = _group_indices_by_prompt(items)
@@ -290,6 +292,15 @@ def _infer_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
+            cache_metadata=[
+                {
+                    "instruction_id": items[i]["question_id"],
+                    "model_a": model_b if swap_answers else model_a,
+                    "model_b": model_a if swap_answers else model_b,
+                    "orientation": "reversed" if swap_answers else "direct",
+                }
+                for i in idxs
+            ],
         )
         for i, out in zip(idxs, outs, strict=True):
             judgments[i] = str(out)
@@ -456,6 +467,8 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        model_a=model_a,
+        model_b=model_b,
     )
 
     g2_judgments: list[str] | None = None
@@ -465,6 +478,8 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
+            model_a=model_a,
+            model_b=model_b,
         )
 
     annotations: list[dict[str, Any]] = []

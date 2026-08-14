@@ -149,7 +149,6 @@ def main(args: CliArgs):
     if args.task == "mt-bench":
         return run_mt_bench(
             args,
-            args.ignore_cache,
             res_folder=res_folder,
             result_name=name,
         )

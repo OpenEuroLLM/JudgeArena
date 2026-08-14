@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -32,6 +33,13 @@ class EchoModel:
     def batch(self, inputs, **_kwargs):
         self.calls.append(inputs)
         return [f"generated:{item}" for item in inputs]
+
+
+def test_legacy_runtime_cache_symbols_are_removed():
+    package = Path(utils.__file__).parent
+    source = "\n".join(path.read_text() for path in package.rglob("*.py"))
+    for symbol in ("cache_function_dataframe", "ignore_cache", "set_langchain_cache"):
+        assert symbol not in source
 
 
 def test_generate_and_judge_full_hits_do_not_materialize_models(tmp_path, monkeypatch):
@@ -122,6 +130,30 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
     assert backend.calls == [["miss-a", "miss-b"]]
 
 
+def test_multiturn_temperature_cache_full_hit(tmp_path, monkeypatch):
+    questions = pd.DataFrame(
+        {
+            "turn_1": ["question 1", "question 2"],
+            "turn_2": ["follow-up 1", "follow-up 2"],
+            "category": ["writing", "math"],
+        }
+    )
+    cache = CompletionInferenceCache(tmp_path, "mt-bench")
+    kwargs = {"temperature_config": {"writing": 0.7, "math": 0.0}, "use_tqdm": False}
+    first = generate.generate_multiturn(
+        questions, "Dummy/answer", inference_cache=cache, **kwargs
+    )
+
+    def fail_if_materialized(*_args, **_kwargs):
+        raise AssertionError("cache hit materialized a model")
+
+    monkeypatch.setattr(utils, "make_model", fail_if_materialized)
+    second = generate.generate_multiturn(
+        questions, "Dummy/answer", inference_cache=cache, **kwargs
+    )
+    pd.testing.assert_frame_equal(second, first)
+
+
 def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
     monkeypatch.setattr(inference.importlib_metadata, "version", lambda _name: "0.10.2")
     cache = CompletionInferenceCache(tmp_path, "arena-hard")
@@ -134,6 +166,7 @@ def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
         gpu_memory_utilization=0.9,
         max_model_len=4096,
         tensor_parallel_size=2,
+        temperature=0.2,
     )
 
     assert model.descriptor["backend_version"] == "0.10.2"
@@ -142,7 +175,7 @@ def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
         "max_model_len": 4096,
         "chat_template": None,
     }
-    assert model.descriptor["sampling"] == {"temperature": 0.6, "top_p": 0.95}
+    assert model.descriptor["sampling"] == {"temperature": 0.2, "top_p": 0.95}
 
 
 @pytest.mark.parametrize(
