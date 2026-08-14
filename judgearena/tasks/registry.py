@@ -22,6 +22,7 @@ from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
     EloProtocol,
+    MetaEvalProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
@@ -247,7 +248,7 @@ def _load_task(root: Traversable, relative_path: str) -> ResolvedTaskSpec:
 class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
-    runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
+    runners: frozenset[str] = frozenset({"elo", "meta_eval", "mt_bench", "pairwise"})
     instruction_datasets: frozenset[str] = frozenset(
         {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
@@ -300,16 +301,23 @@ def _discover_tasks(
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
     is_elo = isinstance(spec.protocol, EloProtocol)
-    scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
+    reads_battles = is_elo or isinstance(spec.protocol, MetaEvalProtocol)
     dataset_names = (
-        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+        adapters.battle_datasets if reads_battles else adapters.instruction_datasets
     )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),
         "prompt": (spec.protocol.judge.default_prompt, adapters.prompts),
-        "scorer": (spec.protocol.scoring.adapter, scorer_names),
     }
+    # Meta-eval reports agreement with human labels rather than a benchmark
+    # score, so it declares no scoring adapter until its metrics land.
+    scoring = getattr(spec.protocol, "scoring", None)
+    if scoring is not None:
+        references["scorer"] = (
+            scoring.adapter,
+            adapters.elo_scorers if is_elo else adapters.pairwise_scorers,
+        )
     for kind, (adapter_id, available) in references.items():
         if adapter_id not in available:
             raise TaskDefinitionError(

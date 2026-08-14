@@ -1,4 +1,4 @@
-"""Dataset adapter for human preference battles used by ELO tasks."""
+"""Dataset adapter for human preference battles used by arena-backed tasks."""
 
 from __future__ import annotations
 
@@ -14,25 +14,28 @@ from judgearena.arenas_utils import (
 from judgearena.tasks.schema import (
     EloProtocol,
     HuggingFaceDatasetSource,
+    MetaEvalProtocol,
     ResolvedTaskSpec,
 )
+
+ArenaProtocol = EloProtocol | MetaEvalProtocol
 
 
 def _task_sources(
     task: ResolvedTaskSpec,
-) -> tuple[EloProtocol, dict[str, HuggingFaceDatasetSource]]:
+) -> tuple[ArenaProtocol, dict[str, HuggingFaceDatasetSource]]:
     protocol = task.spec.protocol
-    if not isinstance(protocol, EloProtocol):
-        raise ValueError(f"Task {task.task!r} does not define an ELO protocol.")
+    if not isinstance(protocol, ArenaProtocol):
+        raise ValueError(f"Task {task.task!r} does not define an arena protocol.")
     if protocol.arena not in {*KNOWN_ARENAS, "LMArena"}:
-        raise ValueError(f"Unsupported ELO arena {protocol.arena!r}.")
+        raise ValueError(f"Unsupported arena {protocol.arena!r}.")
 
     sources: dict[str, HuggingFaceDatasetSource] = {}
     for source in task.spec.dataset.sources.values():
         if not isinstance(source, HuggingFaceDatasetSource):
-            raise ValueError("ELO arena sources must be Hugging Face datasets.")
+            raise ValueError("Arena sources must be Hugging Face datasets.")
         if source.repo_id in sources:
-            raise ValueError(f"Duplicate ELO arena source {source.repo_id!r}.")
+            raise ValueError(f"Duplicate arena source {source.repo_id!r}.")
         sources[source.repo_id] = source
     return protocol, sources
 

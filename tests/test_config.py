@@ -118,6 +118,30 @@ def test_elo_config_allows_runtime_scoring_overrides():
     assert cfg.elo.soft_elo_temperature == 0.7
 
 
+def test_meta_eval_config_derives_arena():
+    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
+
+    assert cfg.meta_eval is not None
+    assert cfg.meta_eval.arena == "ComparIA"
+    assert cfg.elo is None
+
+
+def test_meta_eval_rejects_a_model_under_evaluation():
+    with pytest.raises(ValidationError, match="not used"):
+        RunConfig(
+            task="meta-eval-comparia",
+            model={"name": "Dummy/m"},
+            judge={"model": "Dummy/j"},
+        )
+
+
+def test_meta_eval_block_rejected_on_elo_task():
+    data = _base_elo()
+    data["meta_eval"] = {"top_models": 5}
+    with pytest.raises(ValidationError, match="only valid for meta-eval"):
+        RunConfig(**data)
+
+
 def test_elo_requires_model_path():
     data = _base_elo()
     data["model"] = {}
