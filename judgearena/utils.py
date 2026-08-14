@@ -21,7 +21,7 @@ from judgearena.inference import (
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
-    canonicalize_chat_input,
+    canonicalize_model_input,
 )
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
@@ -234,7 +234,8 @@ def do_inference(
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
-    input_texts = [canonicalize_chat_input(item) for item in inputs]
+    input_mode = chat_model.descriptor["input_mode"]
+    input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
 
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
@@ -452,6 +453,29 @@ class ChatVLLM:
         )
 
 
+_REMOTE_ENDPOINTS = {
+    "ChatOpenAI": "https://api.openai.com/v1",
+    "OpenAI": "https://api.openai.com/v1",
+    "OpenRouter": "https://openrouter.ai/api/v1",
+    "Together": "https://api.together.xyz/v1/completions",
+}
+
+
+def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
+    if provider == "OpenRouter":
+        return _REMOTE_ENDPOINTS[provider]
+    for key in ("base_url", "openai_api_base", "together_api_base"):
+        if resolved_kwargs.get(key):
+            return str(resolved_kwargs[key])
+    if provider in {"ChatOpenAI", "OpenAI"}:
+        return (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or _REMOTE_ENDPOINTS[provider]
+        )
+    return _REMOTE_ENDPOINTS.get(provider)
+
+
 def _resolve_model_config(
     model: str,
     max_tokens: int | None,
@@ -489,10 +513,22 @@ def prepare_model(
         model, max_tokens, engine_kwargs
     )
     descriptor = (
-        build_model_descriptor(provider, model_name, resolved_kwargs)
+        build_model_descriptor(
+            provider,
+            model_name,
+            resolved_kwargs,
+            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+        )
         if cache is not None
         else None
     )
+    routing = (resolved_kwargs.get("extra_body") or {}).get("provider") or {}
+    if (
+        cache is not None
+        and provider == "OpenRouter"
+        and (not routing.get("order") or routing.get("allow_fallbacks") is not False)
+    ):
+        logger.warning("OpenRouter cache identity uses unpinned provider routing.")
     if cache is not None and descriptor is None:
         logger.warning(
             "Caching is not supported for %s; running uncached.",
