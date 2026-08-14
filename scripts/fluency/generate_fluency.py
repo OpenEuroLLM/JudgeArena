@@ -3,9 +3,7 @@ from pathlib import Path
 import pandas as pd
 from datasets import Dataset
 
-from judgearena.utils import do_inference, make_model, set_langchain_cache
-
-set_langchain_cache()
+from judgearena.utils import do_inference, make_model
 
 dataset_name = "geoalgo/multilingual-fluency"
 model = "OpenRouter/openai/gpt-5-mini"

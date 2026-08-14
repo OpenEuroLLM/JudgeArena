@@ -21,7 +21,7 @@ class BaseCliArgs:
     n_instructions: int | None = None
     provide_explanation: bool = False
     swap_mode: str = "fixed"
-    ignore_cache: bool = False
+    store_root: str | None = None
     truncate_all_input_chars: int = 8192
     max_out_tokens_models: int = 32768
     max_out_tokens_judge: int = 32768
@@ -81,9 +81,10 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--ignore_cache",
-        action="store_true",
-        help="If specified, ignore cache of previous completions.",
+        "--store_root",
+        type=str,
+        default=None,
+        help="Root directory for content-addressed completion and judgement caches.",
     )
     parser.add_argument(
         "--result_folder",

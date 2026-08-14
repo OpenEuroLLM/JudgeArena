@@ -101,6 +101,40 @@ judgearena \
 
 While any key in `--engine_kwargs` is forwarded to the underlying engine (e.g. `vllm.LLM`, `LlamaCpp`, `ChatOpenAI`), existing dedicated flags such as `--max_model_len` and `--chat_template` have higher precedence.
 
+### Inference Cache
+
+Set `--store_root` to cache model completions and raw judge outputs:
+
+```bash
+judgearena \
+  --task arena-hard-v2.0 \
+  --model_A VLLM/Qwen/Qwen2.5-0.5B-Instruct \
+  --model_B VLLM/Qwen/Qwen2.5-1.5B-Instruct \
+  --judge_model VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8 \
+  --store_root ./cache
+```
+
+Cache synchronization with a Hugging Face dataset repository is explicit and separate from benchmark execution. Fetch or push one role and task with `judgearena-cache`:
+
+```bash
+judgearena-cache \
+  --action fetch \
+  --store_root ./cache \
+  --hf_repo organization/cache-dataset \
+  --kind completions \
+  --task arena-hard-v2.0 \
+  --model VLLM/Qwen/Qwen2.5-0.5B-Instruct
+
+judgearena-cache \
+  --action push \
+  --store_root ./cache \
+  --hf_repo organization/cache-dataset \
+  --kind judgements \
+  --task arena-hard-v2.0
+```
+
+`--kind` is either `completions` or `judgements`; `--model` is optional. Fetch merges matching remote rows into the local cache. Push first merges the current remote folder, then uploads its `metadata.json` and SQLite database together. When another writer updates the same folder concurrently, the command fetches the new remote rows and retries.
+
 ## 🎨 Model Specification
 
 Models are specified using the format: `{LangChain Backend}/{Model Path}`

@@ -7,13 +7,20 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
-from langchain_community.cache import SQLiteCache
 from langchain_community.llms import LlamaCpp
-from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from judgearena.cache_sqlite import input_hash
+from judgearena.inference import (
+    VLLM_TEMPERATURE,
+    VLLM_TOP_P,
+    InferenceCache,
+    PreparedModel,
+    build_model_descriptor,
+    canonicalize_model_input,
+)
 from judgearena.instruction_dataset.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
@@ -31,10 +38,6 @@ def _data_root_path() -> Path:
 
 
 data_root = _data_root_path()
-
-
-def set_langchain_cache():
-    set_llm_cache(SQLiteCache(database_path=str(data_root / ".langchain.db")))
 
 
 def download_hf(name: str, local_path: Path):
@@ -127,7 +130,8 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
     return truncate(str(value), max_len=truncate_chars)
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+def _do_inference_uncached(chat_model, inputs, use_tqdm: bool = False):
+    """Run the existing retry path for cache misses or cache-disabled calls."""
     # Retries on rate-limit/server errors with exponential backoff.
     # Async path retries individual calls; batch path splits into 4^attempt chunks on failure.
     invoke_kwargs = {
@@ -206,6 +210,60 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
     return res
 
 
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    *,
+    cache_metadata: list[dict] | None = None,
+):
+    """Reuse raw outputs by rendered input and invoke the model only for misses."""
+    inputs = list(inputs)
+    if not isinstance(chat_model, PreparedModel):
+        return _do_inference_uncached(chat_model, inputs, use_tqdm)
+
+    cache = chat_model.cache
+    if cache is None or chat_model.descriptor is None:
+        return _do_inference_uncached(chat_model.materialize(), inputs, use_tqdm)
+    if cache_metadata is None or len(cache_metadata) != len(inputs):
+        raise ValueError("cache_metadata must contain one row per inference input.")
+
+    input_mode = chat_model.descriptor["input_mode"]
+    input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
+
+    input_hashes = [input_hash(input_text) for input_text in input_texts]
+    with cache.open_store(chat_model) as store:
+        cached_rows = store.query(input_hashes)
+        cached_outputs = dict(
+            zip(
+                cached_rows["input_hash"],
+                cached_rows[cache.output_column],
+                strict=True,
+            )
+        )
+        outputs = [cached_outputs.get(key) for key in input_hashes]
+        missing_indices = [
+            index for index, output in enumerate(outputs) if output is None
+        ]
+        if missing_indices:
+            generated = _do_inference_uncached(
+                chat_model.materialize(),
+                [inputs[index] for index in missing_indices],
+                use_tqdm,
+            )
+            for index, output in zip(missing_indices, generated, strict=True):
+                outputs[index] = output
+            cache.save_outputs(
+                store,
+                chat_model,
+                input_texts,
+                generated,
+                cache_metadata,
+                missing_indices,
+            )
+    return outputs
+
+
 class DummyModel:
     def __init__(self, name: str):
         self.name = name
@@ -241,6 +299,8 @@ class ChatVLLM:
         model: str,
         max_tokens: int = 8192,
         chat_template: str | None = None,
+        temperature: float = VLLM_TEMPERATURE,
+        top_p: float = VLLM_TOP_P,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -276,8 +336,8 @@ class ChatVLLM:
         self.llm = LLM(model=model, trust_remote_code=True, **vllm_kwargs)
         self.sampling_params = SamplingParams(
             max_tokens=max_tokens,
-            temperature=0.6,
-            top_p=0.95,
+            temperature=temperature,
+            top_p=top_p,
         )
 
         # Resolve chat template:
@@ -379,6 +439,9 @@ class ChatVLLM:
         results = self.batch([input_item], **invoke_kwargs)
         return results[0]
 
+    def set_temperature(self, temperature: float) -> None:
+        self.sampling_params.temperature = temperature
+
     async def ainvoke(self, input_item, **invoke_kwargs):
         """Async version - runs sync version in executor for compatibility."""
         import asyncio
@@ -387,6 +450,107 @@ class ChatVLLM:
         return await loop.run_in_executor(
             None, lambda: self.invoke(input_item, **invoke_kwargs)
         )
+
+
+_REMOTE_ENDPOINTS = {
+    "ChatOpenAI": "https://api.openai.com/v1",
+    "OpenAI": "https://api.openai.com/v1",
+    "OpenRouter": "https://openrouter.ai/api/v1",
+    "Together": "https://api.together.xyz/v1/completions",
+}
+
+
+def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
+    if provider == "OpenRouter":
+        return _REMOTE_ENDPOINTS[provider]
+    for key in ("base_url", "openai_api_base", "together_api_base"):
+        if resolved_kwargs.get(key):
+            return str(resolved_kwargs[key])
+    if provider in {"ChatOpenAI", "OpenAI"}:
+        return (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or _REMOTE_ENDPOINTS[provider]
+        )
+    return _REMOTE_ENDPOINTS.get(provider)
+
+
+def _resolve_model_config(
+    model: str,
+    max_tokens: int | None,
+    engine_kwargs: dict,
+) -> tuple[str, str, dict]:
+    """Resolve constructor kwargs once for both descriptors and materialization."""
+    resolved_kwargs = engine_kwargs.copy()
+    resolved_kwargs["max_tokens"] = max_tokens or 8192
+    model_provider, model_name = model.split("/", 1)
+
+    if model_provider != "VLLM":
+        resolved_kwargs.pop("max_model_len", None)
+        resolved_kwargs.pop("chat_template", None)
+    if model_provider == "VLLM":
+        resolved_kwargs = {
+            key: value for key, value in resolved_kwargs.items() if value is not None
+        }
+        resolved_kwargs["chat_template"] = resolved_kwargs.get("chat_template")
+        resolved_kwargs.setdefault("temperature", VLLM_TEMPERATURE)
+        resolved_kwargs.setdefault("top_p", VLLM_TOP_P)
+    elif model_provider == "LlamaCpp":
+        resolved_kwargs["model_path"] = model_name
+    elif model_provider not in {"Dummy", "OpenRouter"}:
+        resolved_kwargs["model"] = model_name
+    return model_provider, model_name, resolved_kwargs
+
+
+def prepare_model(
+    model: str,
+    max_tokens: int | None = 8192,
+    *,
+    cache: InferenceCache | None = None,
+    factory: Callable[[], object] | None = None,
+    **engine_kwargs,
+) -> PreparedModel:
+    """Prepare cache identity and a lazy factory without loading the backend."""
+    provider, model_name, resolved_kwargs = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
+    descriptor = (
+        build_model_descriptor(
+            provider,
+            model_name,
+            resolved_kwargs,
+            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+        )
+        if cache is not None
+        else None
+    )
+    routing = (resolved_kwargs.get("extra_body") or {}).get("provider") or {}
+    if (
+        cache is not None
+        and provider == "OpenRouter"
+        and (not routing.get("order") or routing.get("allow_fallbacks") is not False)
+    ):
+        logger.warning("OpenRouter cache identity uses unpinned provider routing.")
+    if cache is not None and descriptor is None:
+        logger.warning(
+            "Caching is not supported for %s; running uncached.",
+            model,
+        )
+    factory_kwargs = engine_kwargs.copy()
+    return PreparedModel(
+        model_spec=model,
+        descriptor=descriptor,
+        factory=(
+            factory
+            if factory is not None
+            else lambda: make_model(
+                model,
+                max_tokens=max_tokens,
+                **factory_kwargs,
+            )
+        ),
+        cache=cache,
+    )
 
 
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
@@ -398,34 +562,17 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         max_tokens: Maximum tokens the model may generate.
         **engine_kwargs: Engine-specific options forwarded to the model wrapper.
     """
-    # Avoid mutating the original engine_kwargs dictionary
-    # NOTE: this is a shallow copy since we are not modifying any
-    # mutable objects in the dictionary.
-    engine_kwargs = engine_kwargs.copy()
-
-    # Dedicated arguments like max_tokens always win over engine_kwargs.
-    engine_kwargs["max_tokens"] = max_tokens or 8192
-
-    model_provider = model.split("/")[0]
-
-    # vLLM-engine-only kwargs must not leak to remote-API providers
-    # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
-    # kwargs via model_kwargs into chat.completions.create, which rejects them.
-    if model_provider != "VLLM":
-        engine_kwargs.pop("max_model_len", None)
-        engine_kwargs.pop("chat_template", None)
+    model_provider, model_name, engine_kwargs = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
 
     if model_provider == "Dummy":
         return DummyModel(model)
 
-    model_name = "/".join(model.split("/")[1:])
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
     # Use our custom ChatVLLM wrapper which properly applies chat templates
     if model_provider == "VLLM":
-        engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
-        engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
-
         return ChatVLLM(
             model=model_name,
             **engine_kwargs,
@@ -444,10 +591,6 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             LlamaCpp,
             ChatOpenAI,
         ]
-        if model_provider == "LlamaCpp":
-            engine_kwargs["model_path"] = model_name
-        else:
-            engine_kwargs["model"] = model_name
 
         try:
             from langchain_together.llms import Together
@@ -493,93 +636,6 @@ def download_all():
     from judgearena.instruction_dataset.mt_bench import download_mt_bench
 
     download_mt_bench()
-
-
-class Timeblock:
-    """Timer context manager"""
-
-    def __init__(self, name: str | None = None, verbose: bool = True):
-        self.name = name
-        self.verbose = verbose
-
-    def __enter__(self):
-        """Start a new timer as a context manager"""
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        """Stop the context manager timer"""
-        self.end = time.time()
-        self.duration = self.end - self.start
-        if self.verbose:
-            logger.info("%s", self)
-
-    def __str__(self):
-        name = self.name if self.name else "block"
-        msg = f"{name} took {self.duration} seconds"
-        return msg
-
-
-def cache_function_dataframe(
-    fun: Callable[[], pd.DataFrame],
-    cache_name: str,
-    ignore_cache: bool = False,
-    cache_path: Path | None = None,
-    parquet: bool = False,
-) -> pd.DataFrame:
-    """
-    :param fun: a function whose dataframe result obtained `fun()` will be cached
-    :param cache_name: the cache of the function result is written into `{cache_path}/{cache_name}.csv.zip`
-    :param ignore_cache: whether to recompute even if the cache is present
-    :param cache_path: folder where to write cache files, default to ~/cache-zeroshot/
-    :param parquet: whether to store the data in parquet, if not specified use csv.zip
-    :return: result of fun()
-    """
-    if cache_path is None:
-        cache_path = data_root / "cache"
-
-    if parquet:
-        cache_file = cache_path / (cache_name + ".parquet")
-    else:
-        cache_file = cache_path / (cache_name + ".csv.zip")
-    cache_file.parent.mkdir(parents=True, exist_ok=True)
-    if cache_file.exists() and not ignore_cache:
-        logger.info("Loading cache %s", cache_file)
-        if parquet:
-            return pd.read_parquet(cache_file)
-        else:
-            return pd.read_csv(cache_file)
-    else:
-        logger.info(
-            "Cache %s not found or ignore_cache set to True, regenerating the file",
-            cache_file,
-        )
-        with Timeblock("Evaluate function."):
-            df = fun()
-            assert isinstance(df, pd.DataFrame)
-            if parquet:
-                # object cols cannot be saved easily in parquet; numpy arrays must be
-                # deep-converted to plain Python so str() produces ast.literal_eval-safe
-                # repr (no "array([...])" syntax, which breaks literal_eval)
-                import numpy as np
-
-                def _to_python(x):
-                    """Recursively convert numpy arrays/scalars to Python lists/dicts."""
-                    if isinstance(x, np.ndarray):
-                        return [_to_python(i) for i in x]
-                    if isinstance(x, dict):
-                        return {k: _to_python(v) for k, v in x.items()}
-                    if isinstance(x, list):
-                        return [_to_python(i) for i in x]
-                    return x
-
-                for col in df.select_dtypes(include="object").columns:
-                    df[col] = df[col].apply(_to_python).astype(str)
-                df.to_parquet(cache_file, index=False)
-                return pd.read_parquet(cache_file)
-            else:
-                df.to_csv(cache_file, index=False)
-                return pd.read_csv(cache_file)
 
 
 if __name__ == "__main__":

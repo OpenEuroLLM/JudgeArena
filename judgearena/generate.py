@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.inference import InferenceCache
 from judgearena.log import get_logger
 from judgearena.utils import (
     do_inference,
     make_model,
+    prepare_model,
     truncate,
 )
-
-if TYPE_CHECKING:
-    from judgearena.store_sqlite import SQLiteCompletionStore
 
 logger = get_logger(__name__)
 
@@ -25,29 +24,15 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
-    completion_store: SQLiteCompletionStore | None = None,
-    pushed_by: str = "judgearena",
+    inference_cache: InferenceCache | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    # Filter to instructions not already in the shared store
-    if completion_store is not None:
-        all_indices = instructions.index.tolist()
-        missing = set(completion_store.missing_indices(all_indices))
-        cached_df = completion_store.query([i for i in all_indices if i not in missing])
-        instructions_to_run = instructions.loc[sorted(missing)]
-        logger.info(
-            "Completion store: %d cached, %d to generate.",
-            len(cached_df),
-            len(instructions_to_run),
-        )
-    else:
-        instructions_to_run = instructions
-        cached_df = pd.DataFrame()
-
-    if instructions_to_run.empty:
-        return cached_df[["instruction_index", "completion"]].reset_index(drop=True)
-
-    chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = prepare_model(
+        model,
+        max_tokens=max_tokens,
+        cache=inference_cache,
+        **engine_kwargs,
+    )
 
     if system_prompt is None:
         system_prompt = (
@@ -59,30 +44,21 @@ def generate_instructions(
     inputs = prompt_template.batch(
         [
             {"user_prompt": truncate(user_prompt, max_len=truncate_input_chars)}
-            for user_prompt in instructions_to_run
+            for user_prompt in instructions
         ]
     )
-    completions = do_inference(chat_model=chat_model, inputs=inputs, use_tqdm=use_tqdm)
-    df_new = pd.DataFrame(
+    completions = do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=use_tqdm,
+        cache_metadata=[{"instruction_id": index} for index in instructions.index],
+    )
+    return pd.DataFrame(
         {
             "completion": completions,
-            "instruction_index": instructions_to_run.index.tolist(),
+            "instruction_index": instructions.index.tolist(),
         }
     )
-
-    if completion_store is not None:
-        completion_store.save(df_new, pushed_by=pushed_by)
-        if not cached_df.empty:
-            df_new = (
-                pd.concat(
-                    [cached_df[["instruction_index", "completion"]], df_new],
-                    ignore_index=True,
-                )
-                .sort_values("instruction_index")
-                .reset_index(drop=True)
-            )
-
-    return df_new
 
 
 def _set_temperature_on_model(chat_model, temperature: float) -> None:
@@ -96,11 +72,12 @@ def _set_temperature_on_model(chat_model, temperature: float) -> None:
 def _infer_grouped_by_temperature(
     *,
     model_spec: str,
-    provider: str,
     max_tokens: int | None,
     model_kwargs: dict,
-    base_model,
+    factory_for_temperature: Callable[[float], object] | None,
+    inference_cache: InferenceCache | None,
     inputs: list,
+    cache_metadata: list[dict],
     temperatures: list[float],
     use_tqdm: bool,
 ) -> list[str]:
@@ -113,18 +90,29 @@ def _infer_grouped_by_temperature(
         idxs = groups[temp]
         group_inputs = [inputs[i] for i in idxs]
 
-        if provider in {"VLLM", "LlamaCpp"}:
-            _set_temperature_on_model(base_model, temp)
-            group_model = base_model
+        if factory_for_temperature is not None:
+            group_model = prepare_model(
+                model_spec,
+                max_tokens=max_tokens,
+                cache=inference_cache,
+                factory=lambda temp=temp: factory_for_temperature(temp),
+                temperature=temp,
+                **model_kwargs,
+            )
         else:
-            group_model = make_model(
-                model_spec, max_tokens=max_tokens, temperature=temp, **model_kwargs
+            group_model = prepare_model(
+                model_spec,
+                max_tokens=max_tokens,
+                cache=inference_cache,
+                temperature=temp,
+                **model_kwargs,
             )
 
         group_outs = do_inference(
             chat_model=group_model,
             inputs=group_inputs,
             use_tqdm=use_tqdm,
+            cache_metadata=[cache_metadata[i] for i in idxs],
         )
         for i, out in zip(idxs, group_outs, strict=True):
             outputs[i] = out
@@ -139,6 +127,7 @@ def generate_multiturn(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
+    inference_cache: InferenceCache | None = None,
     **model_kwargs,
 ) -> pd.DataFrame:
     """Generate two-turn completions for MT-Bench style questions."""
@@ -146,15 +135,33 @@ def generate_multiturn(
     use_category_temperatures = temperature_config is not None
     local_provider = provider in {"VLLM", "LlamaCpp"}
 
-    if use_category_temperatures and local_provider:
-        chat_model = make_model(
-            model, max_tokens=max_tokens, temperature=0.0, **model_kwargs
+    chat_model = None
+    materialized_model = None
+
+    def factory_for_temperature(temperature: float):
+        nonlocal materialized_model
+        if materialized_model is None:
+            materialized_model = make_model(
+                model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **model_kwargs,
+            )
+        else:
+            _set_temperature_on_model(materialized_model, temperature)
+        return materialized_model
+
+    if not use_category_temperatures:
+        chat_model = prepare_model(
+            model,
+            max_tokens=max_tokens,
+            cache=inference_cache,
+            **model_kwargs,
         )
-    else:
-        chat_model = make_model(model, max_tokens=max_tokens, **model_kwargs)
 
     system_prompt = "You are a helpful assistant."
     idxs = questions.index.tolist()
+    cache_metadata = [{"instruction_id": index} for index in idxs]
     temperatures: list[float] = []
     if use_category_temperatures:
         temperatures = [
@@ -175,11 +182,14 @@ def generate_multiturn(
     if use_category_temperatures:
         completions_turn_1 = _infer_grouped_by_temperature(
             model_spec=model,
-            provider=provider,
             max_tokens=max_tokens,
             model_kwargs=model_kwargs,
-            base_model=chat_model,
+            factory_for_temperature=(
+                factory_for_temperature if local_provider else None
+            ),
+            inference_cache=inference_cache,
             inputs=turn1_inputs,
+            cache_metadata=cache_metadata,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
         )
@@ -188,6 +198,7 @@ def generate_multiturn(
             chat_model=chat_model,
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
+            cache_metadata=cache_metadata,
         )
 
     turn2_inputs = []
@@ -222,11 +233,14 @@ def generate_multiturn(
     if use_category_temperatures:
         completions_turn_2 = _infer_grouped_by_temperature(
             model_spec=model,
-            provider=provider,
             max_tokens=max_tokens,
             model_kwargs=model_kwargs,
-            base_model=chat_model,
+            factory_for_temperature=(
+                factory_for_temperature if local_provider else None
+            ),
+            inference_cache=inference_cache,
             inputs=turn2_inputs,
+            cache_metadata=cache_metadata,
             temperatures=temperatures,
             use_tqdm=use_tqdm,
         )
@@ -235,6 +249,7 @@ def generate_multiturn(
             chat_model=chat_model,
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
+            cache_metadata=cache_metadata,
         )
 
     return pd.DataFrame(
@@ -252,20 +267,27 @@ def generate_base(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 32768,
     use_tqdm: bool = False,
+    inference_cache: InferenceCache | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = prepare_model(
+        model,
+        max_tokens=max_tokens,
+        cache=inference_cache,
+        **engine_kwargs,
+    )
 
     inputs = [
         truncate(instruction, max_len=truncate_input_chars)
         for instruction in instructions
     ]
 
-    completions = model.batch(
-        inputs=inputs,
-        max_tokens=max_tokens,
+    completions = do_inference(
+        chat_model,
+        inputs,
+        use_tqdm=use_tqdm,
+        cache_metadata=[{"instruction_id": index} for index in instructions.index],
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
 
     df_outputs = pd.DataFrame(
         data={
