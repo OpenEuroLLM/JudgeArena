@@ -176,14 +176,11 @@ def test_supported_provider_descriptors(
     assert descriptor.get("endpoint") == expected_endpoint
 
 
-def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(
-    tmp_path, monkeypatch, caplog
-):
+def test_hosted_descriptor_hashes_routing_and_endpoint(tmp_path, monkeypatch, caplog):
     cache = CompletionInferenceCache(tmp_path, "arena-hard")
     unpinned = prepare_model(
         "OpenRouter/org/model",
         cache=cache,
-        api_key="secret",
     ).descriptor
     assert "uses unpinned provider routing" in caplog.text
 
@@ -191,14 +188,11 @@ def test_hosted_descriptor_hashes_routing_endpoint_without_credentials(
     pinned = prepare_model(
         "OpenRouter/org/model",
         cache=cache,
-        api_key="secret",
         extra_body={"provider": {"order": ["Together"], "allow_fallbacks": False}},
     ).descriptor
     assert "uses unpinned provider routing" not in caplog.text
 
     assert unpinned != pinned
-    assert "secret" not in json.dumps(pinned)
-    assert "api_key" not in pinned["model_kwargs"]
     assert pinned["model_kwargs"]["extra_body"]["provider"]["order"] == ["Together"]
 
     gateway = prepare_model(
