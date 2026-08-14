@@ -25,13 +25,6 @@ from judgearena.cache_sqlite import (
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 _CHAT_PROVIDERS = {"ChatOpenAI", "Dummy", "OpenRouter", "VLLM"}
 _TEXT_PROVIDERS = {"LlamaCpp", "OpenAI", "Together"}
-_CREDENTIAL_KEYS = {
-    "api_key",
-    "authorization",
-    "openai_api_key",
-    "token",
-    "together_api_key",
-}
 VLLM_TEMPERATURE = 0.6
 VLLM_TOP_P = 0.95
 VLLM_EXECUTION_ONLY_KWARGS = {
@@ -92,18 +85,6 @@ def canonicalize_model_input(input_item: Any, input_mode: InputMode) -> str:
     return stable_json_dumps(payload)
 
 
-def _without_credentials(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _without_credentials(item)
-            for key, item in value.items()
-            if str(key).lower().replace("-", "_") not in _CREDENTIAL_KEYS
-        }
-    if isinstance(value, (list, tuple)):
-        return [_without_credentials(item) for item in value]
-    return value
-
-
 def build_model_descriptor(
     provider: str,
     model_name: str,
@@ -121,7 +102,7 @@ def build_model_descriptor(
     if input_mode is None:
         return None
 
-    descriptor_kwargs = _without_credentials(resolved_kwargs)
+    descriptor_kwargs = resolved_kwargs.copy()
     sampling = None
     if provider == "VLLM":
         sampling = {
