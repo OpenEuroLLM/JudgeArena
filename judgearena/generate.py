@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -14,9 +12,6 @@ from judgearena.utils import (
     truncate,
 )
 
-if TYPE_CHECKING:
-    from judgearena.store_sqlite import SQLiteCompletionStore
-
 logger = get_logger(__name__)
 
 
@@ -27,29 +22,9 @@ def generate_instructions(
     max_tokens: int | None = 32768,
     use_tqdm: bool = True,
     system_prompt: str | None = None,
-    completion_store: SQLiteCompletionStore | None = None,
     inference_cache: InferenceCache | None = None,
-    pushed_by: str = "judgearena",
     **engine_kwargs,
 ) -> pd.DataFrame:
-    # Filter to instructions not already in the shared store
-    if completion_store is not None:
-        all_indices = instructions.index.tolist()
-        missing = set(completion_store.missing_indices(all_indices))
-        cached_df = completion_store.query([i for i in all_indices if i not in missing])
-        instructions_to_run = instructions.loc[sorted(missing)]
-        logger.info(
-            "Completion store: %d cached, %d to generate.",
-            len(cached_df),
-            len(instructions_to_run),
-        )
-    else:
-        instructions_to_run = instructions
-        cached_df = pd.DataFrame()
-
-    if instructions_to_run.empty:
-        return cached_df[["instruction_index", "completion"]].reset_index(drop=True)
-
     chat_model = prepare_model(
         model,
         max_tokens=max_tokens,
@@ -67,37 +42,21 @@ def generate_instructions(
     inputs = prompt_template.batch(
         [
             {"user_prompt": truncate(user_prompt, max_len=truncate_input_chars)}
-            for user_prompt in instructions_to_run
+            for user_prompt in instructions
         ]
     )
     completions = do_inference(
         chat_model=chat_model,
         inputs=inputs,
         use_tqdm=use_tqdm,
-        cache_metadata=[
-            {"instruction_id": index} for index in instructions_to_run.index
-        ],
+        cache_metadata=[{"instruction_id": index} for index in instructions.index],
     )
-    df_new = pd.DataFrame(
+    return pd.DataFrame(
         {
             "completion": completions,
-            "instruction_index": instructions_to_run.index.tolist(),
+            "instruction_index": instructions.index.tolist(),
         }
     )
-
-    if completion_store is not None:
-        completion_store.save(df_new, pushed_by=pushed_by)
-        if not cached_df.empty:
-            df_new = (
-                pd.concat(
-                    [cached_df[["instruction_index", "completion"]], df_new],
-                    ignore_index=True,
-                )
-                .sort_values("instruction_index")
-                .reset_index(drop=True)
-            )
-
-    return df_new
 
 
 def _set_temperature_on_model(chat_model, temperature: float) -> None:
@@ -267,20 +226,27 @@ def generate_base(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 32768,
     use_tqdm: bool = False,
+    inference_cache: InferenceCache | None = None,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = prepare_model(
+        model,
+        max_tokens=max_tokens,
+        cache=inference_cache,
+        **engine_kwargs,
+    )
 
     inputs = [
         truncate(instruction, max_len=truncate_input_chars)
         for instruction in instructions
     ]
 
-    completions = model.batch(
-        inputs=inputs,
-        max_tokens=max_tokens,
+    completions = do_inference(
+        chat_model,
+        inputs,
+        use_tqdm=use_tqdm,
+        cache_metadata=[{"instruction_id": index} for index in instructions.index],
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
 
     df_outputs = pd.DataFrame(
         data={
