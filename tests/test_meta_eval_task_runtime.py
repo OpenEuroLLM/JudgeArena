@@ -7,11 +7,16 @@ import pandas as pd
 import pytest
 
 import judgearena.benchmarks.meta_eval.annotate as annotate_module
+import judgearena.benchmarks.meta_eval.cost as meta_cost
 import judgearena.benchmarks.meta_eval.runner as runner_module
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
     invert_winner,
     serialize_judge_input,
+)
+from judgearena.benchmarks.meta_eval.cost import (
+    annotation_telemetry,
+    estimate_annotation_cost_usd,
 )
 from judgearena.benchmarks.meta_eval.parsers import (
     parse_pairscore_pref,
@@ -222,6 +227,9 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert set(results["language_summary"]) == {"English", "Multilingual"}
     assert results["elo_gap_all"][0]["num_battles"] == 2
     assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
+    assert results["judge_passes_per_battle"] == 1
+    assert results["token_count_source"] == "estimated_chars_div_4"
+    assert results["estimated_input_tokens"] > 0
     summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
     assert set(summary["split"]) == {"English", "Multilingual"}
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
@@ -256,6 +264,8 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     ranking_n = sum(split["n"] for split in results["language_summary"].values())
     assert ranking_n == int((forward["winner"] != "tie").sum())
     assert ranking_n < results["n_annotations"]
+    assert results["judge_passes_per_battle"] == 2
+    assert results["estimated_input_tokens"] == 2 * len(forward) * (len("prompt") // 4)
 
 
 def test_empty_language_split_reports_na():
@@ -299,3 +309,38 @@ def test_elo_gap_summary_runs():
         exclude_ties=False,
     )
     assert not summary.empty
+
+
+def test_cost_uses_offline_reference_pricing(monkeypatch, tmp_path):
+    pricing_file = tmp_path / "openrouter_pricing.json"
+    pricing_file.write_text(
+        json.dumps({"provider/model": [1.0, 2.0]}), encoding="utf-8"
+    )
+    monkeypatch.setattr(meta_cost, "_PRICING_CACHE_FILE", pricing_file)
+    meta_cost._openrouter_pricing_cache.clear()
+    cost, source = estimate_annotation_cost_usd(
+        judge_input="a" * 40,
+        judge_completion="b" * 20,
+        judge_model="OpenRouter/provider/model",
+    )
+    assert cost == pytest.approx((10 * 1.0 + 5 * 2.0) / 1e6)
+    assert source == "estimated"
+    meta_cost._openrouter_pricing_cache.clear()
+
+
+def test_swapped_pass_telemetry_counts_both_judgements():
+    telemetry = annotation_telemetry(
+        pd.DataFrame(
+            {
+                "cost_usd": [0.1, 0.2],
+                "cost_source": ["estimated", "estimated"],
+                "estimated_input_tokens": [10, 11],
+                "estimated_output_tokens": [5, 6],
+            }
+        ),
+        swap_mode="both",
+    )
+    assert telemetry["judge_passes_per_battle"] == 2
+    assert telemetry["total_cost_usd"] == pytest.approx(0.3)
+    assert telemetry["estimated_input_tokens"] == 21
+    assert telemetry["estimated_output_tokens"] == 11

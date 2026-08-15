@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
+from judgearena.benchmarks.meta_eval.cost import (
+    estimate_annotation_cost_usd,
+    estimate_token_count,
+)
 from judgearena.benchmarks.meta_eval.parsers import parse_pref, parse_winner
 from judgearena.evaluate import annotate_battles
 
@@ -78,6 +82,12 @@ def _judge_pass(
     rows = []
     for annotation, (_, battle) in zip(annotations, df_batch.iterrows(), strict=True):
         completion = annotation.judge_completion
+        judge_input = serialize_judge_input(annotation.judge_input)
+        cost_usd, cost_source = estimate_annotation_cost_usd(
+            judge_input=judge_input,
+            judge_completion=completion,
+            judge_model=cfg.judge.model,
+        )
         rows.append(
             {
                 "question_id": battle["question_id"],
@@ -88,8 +98,12 @@ def _judge_pass(
                 "instruction": annotation.instruction,
                 "completion_a": annotation.completion_A,
                 "completion_b": annotation.completion_B,
-                "judge_input": serialize_judge_input(annotation.judge_input),
+                "judge_input": judge_input,
                 "judge_completion": completion,
+                "estimated_input_tokens": estimate_token_count(judge_input),
+                "estimated_output_tokens": estimate_token_count(completion),
+                "cost_usd": cost_usd,
+                "cost_source": cost_source,
                 "winner_llm": parse_winner(completion, resolved_prompt.preset_name),
                 "pref_llm": parse_pref(completion, resolved_prompt.preset_name),
             }
