@@ -56,7 +56,9 @@ class MetaEvalReport(Report):
     n_battles: int
     """Sampled battles, counting a battle once per model it was drawn for."""
     n_annotations: int
-    """Judge passes written to annotations.parquet (one per sampled battle)."""
+    """Judge passes written to annotations.parquet (one or two per sampled battle)."""
+    swap_mode: str
+    """Position-bias handling used for judging: "fixed" or "both"."""
     battles_per_language: dict[str, int]
     """Sampled battle count per language code."""
     human_winner_counts: dict[str, int]
@@ -67,7 +69,10 @@ class MetaEvalReport(Report):
     def render(self) -> None:
         print(f"\n=== Meta-eval: {self.task} ===")
         print(f"Arena: {self.arena}  |  Judge: {self.judge_model}")
-        print(f"Models: {len(self.top_models)}  |  Battles: {self.n_battles}")
+        print(
+            f"Models: {len(self.top_models)}  |  Battles: {self.n_battles}  |  "
+            f"Judge passes: {self.n_annotations} ({self.swap_mode})"
+        )
         print(f"  Languages: {_format_counts(self.battles_per_language)}")
         print(f"  Human votes: {_format_counts(self.human_winner_counts)}")
         all_view = self.agreement["all"]
@@ -148,6 +153,7 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         top_models=top_models,
         n_battles=len(sample),
         n_annotations=len(annotations),
+        swap_mode=cfg.judge.swap_mode,
         battles_per_language=sample["lang"].value_counts().to_dict(),
         human_winner_counts=sample["winner"].value_counts().to_dict(),
         agreement=agreement,

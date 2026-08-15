@@ -1,4 +1,4 @@
-"""Judge a sampled arena battle set in the stored A/B order."""
+"""Judge a sampled arena battle set, optionally in both A/B orders."""
 
 from __future__ import annotations
 
@@ -49,6 +49,14 @@ def parse_pairscore_winner(
     return "model_b" if score > 0.5 + eps else "model_a"
 
 
+def invert_winner(winner: str) -> str:
+    if winner == "model_a":
+        return "model_b"
+    if winner == "model_b":
+        return "model_a"
+    return winner
+
+
 def _battle_texts(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     instructions = [extract_turn_text(conv[0]) for conv in df["conversation_a"]]
     completions_a = [
@@ -62,14 +70,23 @@ def _battle_texts(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     return instructions, completions_a, completions_b
 
 
-def annotate_sample(
-    df_sample: pd.DataFrame,
+def _swap_batch(df: pd.DataFrame) -> pd.DataFrame:
+    swapped = df.copy()
+    swapped["conversation_a"] = df["conversation_b"]
+    swapped["conversation_b"] = df["conversation_a"]
+    swapped["model_a"] = df["model_b"]
+    swapped["model_b"] = df["model_a"]
+    return swapped
+
+
+def _judge_pass(
+    df_batch: pd.DataFrame,
     cfg: RunConfig,
     *,
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
 ) -> pd.DataFrame:
-    instructions, completions_a, completions_b = _battle_texts(df_sample)
+    instructions, completions_a, completions_b = _battle_texts(df_batch)
     annotations = annotate_battles(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
@@ -84,7 +101,7 @@ def annotate_sample(
         use_tqdm=cfg.run.use_tqdm,
     )
     rows = []
-    for annotation, (_, battle) in zip(annotations, df_sample.iterrows(), strict=True):
+    for annotation, (_, battle) in zip(annotations, df_batch.iterrows(), strict=True):
         completion = annotation.judge_completion
         rows.append(
             {
@@ -103,3 +120,61 @@ def annotate_sample(
             }
         )
     return pd.DataFrame(rows)
+
+
+def _normalize_pass(
+    pass_frame: pd.DataFrame, original: pd.DataFrame, *, orientation: str
+) -> pd.DataFrame:
+    """Map a judged pass back onto the arena's stored A/B identity."""
+    normalized = pass_frame.copy()
+    normalized["orientation"] = orientation
+    normalized["presented_model_a"] = pass_frame["model_a"].tolist()
+    normalized["presented_model_b"] = pass_frame["model_b"].tolist()
+    normalized["presented_completion_a"] = pass_frame["completion_a"].tolist()
+    normalized["presented_completion_b"] = pass_frame["completion_b"].tolist()
+    normalized["model_a"] = original["model_a"].tolist()
+    normalized["model_b"] = original["model_b"].tolist()
+    normalized["winner"] = original["winner"].tolist()
+    if orientation == "swapped":
+        normalized["completion_a"] = pass_frame["completion_b"].tolist()
+        normalized["completion_b"] = pass_frame["completion_a"].tolist()
+        normalized["winner_llm"] = [
+            invert_winner(winner) for winner in pass_frame["winner_llm"]
+        ]
+        normalized["pref_llm"] = 1.0 - pass_frame["pref_llm"]
+    return normalized
+
+
+def annotate_sample(
+    df_sample: pd.DataFrame,
+    cfg: RunConfig,
+    *,
+    judge_chat_model,
+    resolved_prompt: ResolvedJudgePrompt,
+) -> pd.DataFrame:
+    parts = [
+        _normalize_pass(
+            _judge_pass(
+                df_sample,
+                cfg,
+                judge_chat_model=judge_chat_model,
+                resolved_prompt=resolved_prompt,
+            ),
+            df_sample,
+            orientation="forward",
+        )
+    ]
+    if cfg.judge.swap_mode == "both":
+        parts.append(
+            _normalize_pass(
+                _judge_pass(
+                    _swap_batch(df_sample),
+                    cfg,
+                    judge_chat_model=judge_chat_model,
+                    resolved_prompt=resolved_prompt,
+                ),
+                df_sample,
+                orientation="swapped",
+            )
+        )
+    return pd.concat(parts, ignore_index=True)

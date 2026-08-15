@@ -317,9 +317,12 @@ judgearena \
 | `--meta_eval.battles_per_model` | `50` | Battles sampled per selected model |
 | `--meta_eval.languages` | all | Restrict to language codes, e.g. `'["en", "es"]'` |
 | `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement standard errors |
+| `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
 Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties.
+
+With `--judge.swap_mode both`, accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
 
 ## 📈 Estimating ELO Ratings
 

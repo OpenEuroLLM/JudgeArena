@@ -10,6 +10,7 @@ import judgearena.benchmarks.meta_eval.annotate as annotate_module
 import judgearena.benchmarks.meta_eval.runner as runner_module
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
+    invert_winner,
     parse_pairscore_pref,
     parse_pairscore_winner,
     serialize_judge_input,
@@ -66,12 +67,13 @@ def _battles() -> pd.DataFrame:
 
 
 def _cfg(tmp_path, **overrides) -> RunConfig:
-    return RunConfig(
-        task="meta-eval-comparia",
-        judge={"model": "Dummy/j"},
-        run={"result_folder": str(tmp_path), "no_log_file": True},
-        **overrides,
-    )
+    values = {
+        "task": "meta-eval-comparia",
+        "judge": {"model": "Dummy/j"},
+        "run": {"result_folder": str(tmp_path), "no_log_file": True},
+    }
+    values.update(overrides)
+    return RunConfig(**values)
 
 
 def _fake_annotations(**kwargs):
@@ -135,6 +137,8 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
     assert parse_pairscore_winner("score_A: 5\nscore_B: 5") == "tie"
     assert parse_pairscore_pref("score_A: 10\nscore_B: 0") < 0.5
     assert serialize_judge_input(SimpleNamespace(to_string=lambda: "p")) == "p"
+    assert invert_winner("model_a") == "model_b"
+    assert invert_winner("tie") == "tie"
 
 
 def test_agreement_metrics_on_fixture():
@@ -173,8 +177,37 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
     assert results["n_battles"] == results["n_annotations"] == len(sample) == 15
     assert len(annotations) == 15
+    assert set(annotations["orientation"]) == {"forward"}
     assert set(annotations["winner_llm"]) == {"model_a"}
     assert annotations["judge_input"].tolist() == ["prompt"] * 15
     assert results["agreement"]["all"]["n"] == 15
     assert results["agreement"]["no_human_ties"]["n"] < 15
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
+
+
+def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
+    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+    monkeypatch.setattr(annotate_module, "annotate_battles", _fake_annotations)
+    cfg = _cfg(
+        tmp_path,
+        judge={"model": "Dummy/j", "swap_mode": "both"},
+        meta_eval={"top_models": 3, "battles_per_model": 5},
+    )
+
+    results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+
+    annotations = pd.read_parquet(
+        tmp_path / "meta-eval-comparia-dummy-j" / ANNOTATIONS_FILENAME
+    )
+    assert results["n_battles"] == 15
+    assert results["n_annotations"] == results["agreement"]["all"]["n"] == 30
+    assert set(annotations["orientation"]) == {"forward", "swapped"}
+    forward = annotations[annotations["orientation"] == "forward"]
+    swapped = annotations[annotations["orientation"] == "swapped"]
+    assert set(forward["winner_llm"]) == {"model_a"}
+    assert set(swapped["winner_llm"]) == {"model_b"}
+    assert forward["model_a"].tolist() == swapped["model_a"].tolist()
+    assert (
+        forward["presented_model_a"].tolist() == swapped["presented_model_b"].tolist()
+    )
