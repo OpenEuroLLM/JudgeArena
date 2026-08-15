@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 import judgearena.benchmarks.meta_eval.annotate as annotate_module
 import judgearena.benchmarks.meta_eval.cost as meta_cost
@@ -161,21 +162,36 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
 
 
 def test_prompt_presets_select_their_parsers():
-    assert parse_winner("score_A: 9\nscore_B: 1", "default") == "model_a"
-    assert parse_winner("[[A=B]]", "arena-hard") == "tie"
-    assert parse_winner("[[B>>A]]", "arena-hard") == "model_b"
+    assert parse_winner("score_A: 9\nscore_B: 1", "score") == "model_a"
+    assert parse_winner("[[A=B]]", "arena_hard_likert") == "tie"
+    assert parse_winner("[[B>>A]]", "arena_hard_likert") == "model_b"
     assert (
         parse_winner(
             '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 2}]}',
-            "alpaca-eval",
+            "alpaca_eval_json",
         )
         == "model_a"
     )
-    assert parse_pref("[[A=B]]", "arena-hard") == 0.5
-    for preset in ("arena-hard", "alpaca-eval", "alpaca-eval-pair-score"):
+    assert parse_pref("[[A=B]]", "arena_hard_likert") == 0.5
+    expected_modes = {
+        "arena-hard": "arena_hard_likert",
+        "alpaca-eval": "alpaca_eval_json",
+        "alpaca-eval-pair-score": "score",
+    }
+    for preset, parser_mode in expected_modes.items():
         resolved = resolve_judge_prompt(preset=preset)
         assert resolved.system_prompt
         assert resolved.user_prompt_template
+        assert resolved.parser_mode == parser_mode
+
+
+def test_non_meta_eval_task_rejects_a_preset_it_cannot_parse():
+    with pytest.raises(ValidationError, match="only meta-eval tasks can parse"):
+        RunConfig(
+            task="alpaca-eval",
+            model={"name": "Dummy/m", "baseline": "Dummy/b"},
+            judge={"model": "Dummy/j", "prompt_preset": "arena-hard"},
+        )
 
 
 def test_agreement_metrics_on_fixture():
@@ -217,7 +233,7 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
-    res_dir = tmp_path / "meta-eval-comparia-dummy-j"
+    res_dir = tmp_path / "meta-eval-comparia-default-dummy-j-fixed"
     sample = pd.read_parquet(res_dir / SAMPLE_FILENAME)
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
     assert results["n_battles"] == results["n_annotations"] == len(sample) == 15
@@ -255,7 +271,7 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
     annotations = pd.read_parquet(
-        tmp_path / "meta-eval-comparia-dummy-j" / ANNOTATIONS_FILENAME
+        tmp_path / "meta-eval-comparia-default-dummy-j-both" / ANNOTATIONS_FILENAME
     )
     assert results["n_battles"] == 15
     assert results["n_annotations"] == results["agreement"]["all"]["n"] == 30

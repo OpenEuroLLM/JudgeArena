@@ -104,8 +104,8 @@ def _judge_pass(
                 "estimated_output_tokens": estimate_token_count(completion),
                 "cost_usd": cost_usd,
                 "cost_source": cost_source,
-                "winner_llm": parse_winner(completion, resolved_prompt.preset_name),
-                "pref_llm": parse_pref(completion, resolved_prompt.preset_name),
+                "winner_llm": parse_winner(completion, resolved_prompt.parser_mode),
+                "pref_llm": parse_pref(completion, resolved_prompt.parser_mode),
             }
         )
     return pd.DataFrame(rows)

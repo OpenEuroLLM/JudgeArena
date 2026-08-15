@@ -6,6 +6,7 @@ from pydantic import ValidationError
 import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.config import RunConfig
+from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 
 
 def _base_generate() -> dict:
@@ -43,6 +44,7 @@ def _registered_task(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
                 judge=SimpleNamespace(
+                    default_prompt=DEFAULT_JUDGE_PROMPT_PRESET,
                     default_swap_mode=default_swap_mode,
                     allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
