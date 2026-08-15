@@ -346,6 +346,9 @@ class MetaEvalArgs(BaseModel):
     """Battles sampled per selected model. A battle involving two selected
     models can be drawn for either of them."""
 
+    n_bootstraps: int = Field(default=20, gt=0)
+    """Bootstrap resamples used for agreement standard errors."""
+
     languages: list[str] | None = None
     """Restrict battles to these language codes (e.g. ``["en", "fr"]``).
     Defaults to all languages of the task."""

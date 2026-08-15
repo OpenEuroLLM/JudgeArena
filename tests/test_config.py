@@ -123,6 +123,7 @@ def test_meta_eval_config_derives_arena():
 
     assert cfg.meta_eval is not None
     assert cfg.meta_eval.arena == "ComparIA"
+    assert cfg.meta_eval.n_bootstraps == 20
     assert cfg.elo is None
 
 

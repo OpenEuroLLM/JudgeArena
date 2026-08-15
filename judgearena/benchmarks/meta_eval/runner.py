@@ -1,4 +1,4 @@
-"""Select the human-labeled battles a judge meta-evaluation will score."""
+"""Score a judge against human-labeled arena battles."""
 
 from __future__ import annotations
 
@@ -12,6 +12,12 @@ from judgearena.artifacts import (
     write_run_metadata_safely,
 )
 from judgearena.benchmarks.arena import resolve_task_languages
+from judgearena.benchmarks.execution import build_judge
+from judgearena.benchmarks.meta_eval.agreement import (
+    agreement_view,
+    compute_agreement_metrics,
+)
+from judgearena.benchmarks.meta_eval.annotate import annotate_sample
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
     normalize_human_winner,
@@ -19,6 +25,7 @@ from judgearena.benchmarks.meta_eval.sampling import (
     select_top_models,
 )
 from judgearena.datasets import load_battles
+from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.log import get_logger
 from judgearena.tasks.schema import MetaEvalProtocol, ResolvedTaskSpec
 from judgearena.utils.eval import Report
@@ -29,37 +36,52 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 SAMPLE_FILENAME = "sample.parquet"
-# Identity and label columns only: the conversations stay in the pinned arena
-# snapshot, and question_id joins back to them.
+ANNOTATIONS_FILENAME = "annotations.parquet"
 SAMPLE_COLUMNS = ("question_id", "model_a", "model_b", "winner", "lang")
 
 
-class MetaEvalSampleReport(Report):
-    """The human-labeled battle sample a meta-evaluation run will judge."""
+class MetaEvalReport(Report):
+    """Agreement of one judge with the human votes in a sampled arena slice."""
 
     task: str
     """Task ID that selected the arena and its language variant."""
     arena: str
     """Arena supplying the human votes."""
     judge_model: str
-    """Judge the sample was drawn for."""
+    """Judge under evaluation."""
     languages: list[str]
     """Language codes the sample was restricted to (empty means all)."""
     top_models: list[str]
     """Most-battled models; only battles between two of them are sampled."""
     n_battles: int
     """Sampled battles, counting a battle once per model it was drawn for."""
+    n_annotations: int
+    """Judge passes written to annotations.parquet (one per sampled battle)."""
     battles_per_language: dict[str, int]
     """Sampled battle count per language code."""
     human_winner_counts: dict[str, int]
     """Sampled battle count per human verdict (model_a, model_b, tie)."""
+    agreement: dict[str, dict[str, float | int | str]]
+    """Accuracy and Cohen's kappa on all battles and on the no-human-tie subset."""
 
     def render(self) -> None:
-        print(f"\n=== Meta-eval sample: {self.task} ===")
+        print(f"\n=== Meta-eval: {self.task} ===")
         print(f"Arena: {self.arena}  |  Judge: {self.judge_model}")
         print(f"Models: {len(self.top_models)}  |  Battles: {self.n_battles}")
         print(f"  Languages: {_format_counts(self.battles_per_language)}")
         print(f"  Human votes: {_format_counts(self.human_winner_counts)}")
+        all_view = self.agreement["all"]
+        no_tie = self.agreement["no_human_ties"]
+        print(
+            f"  Agreement (all, n={all_view['n']}): "
+            f"acc {all_view['accuracy_formatted']}  "
+            f"κ {all_view['kappa_formatted']}"
+        )
+        print(
+            f"  Agreement (no human ties, n={no_tie['n']}): "
+            f"acc {no_tie['accuracy_formatted']}  "
+            f"κ {no_tie['kappa_formatted']}"
+        )
 
 
 def _format_counts(counts: dict[str, int]) -> str:
@@ -67,7 +89,7 @@ def _format_counts(counts: dict[str, int]) -> str:
 
 
 def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
-    """Sample the battles a judge will be scored against."""
+    """Sample arena battles, judge them, and report agreement with human labels."""
     protocol = task.spec.protocol if task is not None else None
     if not isinstance(protocol, MetaEvalProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define a meta-eval protocol.")
@@ -100,15 +122,35 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         "Sampled %d battles among the top %d models.", len(sample), len(top_models)
     )
 
-    report = MetaEvalSampleReport(
+    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    annotations = annotate_sample(
+        sample,
+        cfg,
+        judge_chat_model=build_judge(cfg),
+        resolved_prompt=resolved_prompt,
+    )
+    metrics = compute_agreement_metrics(
+        annotations["winner"].tolist(),
+        annotations["winner_llm"].tolist(),
+        n_bootstraps=cfg.meta_eval.n_bootstraps,
+        seed=cfg.run.seed,
+    )
+    agreement = {
+        "all": agreement_view(metrics, exclude_human_ties=False),
+        "no_human_ties": agreement_view(metrics, exclude_human_ties=True),
+    }
+
+    report = MetaEvalReport(
         task=cfg.task,
         arena=protocol.arena,
         judge_model=cfg.judge.model,
         languages=languages,
         top_models=top_models,
         n_battles=len(sample),
+        n_annotations=len(annotations),
         battles_per_language=sample["lang"].value_counts().to_dict(),
         human_winner_counts=sample["winner"].value_counts().to_dict(),
+        agreement=agreement,
     )
     results = report.to_dict()
     report.render()
@@ -120,13 +162,16 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
     )
     result_path = report.save(res_dir / "results.json")
     sample[list(SAMPLE_COLUMNS)].to_parquet(res_dir / SAMPLE_FILENAME, index=False)
+    annotations.to_parquet(res_dir / ANNOTATIONS_FILENAME, index=False)
     write_run_metadata_safely(
         output_dir=res_dir,
         entrypoint="judgearena.benchmarks.meta_eval.runner.run_meta_eval",
         run=cfg.model_dump(),
         results=results,
         input_payloads={"question_id": sample["question_id"].astype(str).tolist()},
+        judge_system_prompt=resolved_prompt.system_prompt,
+        judge_user_prompt_template=resolved_prompt.user_prompt_template,
         started_at_utc=run_started_at,
     )
-    logger.info("Meta-eval sample written to %s", res_dir)
+    logger.info("Meta-eval results written to %s", res_dir)
     return {**results, "result_path": str(result_path)}
