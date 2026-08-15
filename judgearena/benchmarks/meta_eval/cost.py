@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pandas as pd
 
@@ -64,8 +65,10 @@ def annotation_telemetry(df_ann: pd.DataFrame, *, swap_mode: str) -> dict[str, o
     """Roll up per-pass token and cost columns. ``swap_mode=both`` is two rows per battle."""
     costs = pd.to_numeric(df_ann["cost_usd"], errors="coerce").dropna()
     sources = df_ann["cost_source"].dropna()
-    total_cost = float(costs.sum()) if not costs.empty else None
-    cost_per_1k = float(costs.mean() * 1000) if not costs.empty else None
+    # NaN rather than None so the keys survive the report's exclude_none dump
+    # and still serialize as JSON null, like the NaN kappa of a degenerate run.
+    total_cost = float(costs.sum()) if not costs.empty else math.nan
+    cost_per_1k = float(costs.mean() * 1000) if not costs.empty else math.nan
     if costs.empty:
         logger.warning(
             "OpenRouter reference pricing is unavailable; cost fields will be null."

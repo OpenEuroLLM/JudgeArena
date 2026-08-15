@@ -235,7 +235,11 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert results["estimated_input_tokens"] > 0
     summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
     assert set(summary["split"]) == {"English", "Multilingual"}
-    assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
+    written = json.loads((res_dir / "results.json").read_text())
+    assert written["arena"] == "ComparIA"
+    # No pricing covers the dummy judge, so the keys stay put and read as null.
+    assert written["total_cost_usd"] is None
+    assert written["cost_per_1k_judgements_usd"] is None
 
 
 def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):

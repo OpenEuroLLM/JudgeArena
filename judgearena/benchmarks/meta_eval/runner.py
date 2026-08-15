@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -87,10 +88,11 @@ class MetaEvalReport(Report):
     """Sum of chars/4 token estimates over judge completions."""
     token_count_source: str
     """How tokens were counted (chars/4; never a provider usage API)."""
-    total_cost_usd: float | None
-    """OpenRouter reference price applied to the token estimates, or null."""
-    cost_per_1k_judgements_usd: float | None
-    """Mean estimated USD per 1,000 judge passes, or null if pricing is missing."""
+    total_cost_usd: float
+    """OpenRouter reference price applied to the token estimates; NaN (written as
+    null) when no local pricing covers the judge."""
+    cost_per_1k_judgements_usd: float
+    """Mean estimated USD per 1,000 judge passes, NaN if pricing is missing."""
     cost_source_counts: dict[str, int]
     """Per-row cost_source value counts (estimated vs unavailable)."""
 
@@ -124,7 +126,7 @@ class MetaEvalReport(Report):
             f"  Tokens (chars/4): {self.estimated_input_tokens} in / "
             f"{self.estimated_output_tokens} out"
         )
-        if self.total_cost_usd is None:
+        if math.isnan(self.total_cost_usd):
             print("  Cost: n/a (no local OpenRouter reference pricing)")
         else:
             print(
