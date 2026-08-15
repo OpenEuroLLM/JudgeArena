@@ -11,9 +11,13 @@ import judgearena.benchmarks.meta_eval.runner as runner_module
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
     invert_winner,
+    serialize_judge_input,
+)
+from judgearena.benchmarks.meta_eval.parsers import (
     parse_pairscore_pref,
     parse_pairscore_winner,
-    serialize_judge_input,
+    parse_pref,
+    parse_winner,
 )
 from judgearena.benchmarks.meta_eval.runner import (
     ANNOTATIONS_FILENAME,
@@ -30,6 +34,7 @@ from judgearena.benchmarks.meta_eval.scoring import summarize_language_splits
 from judgearena.benchmarks.registry import resolve_benchmark
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation
+from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -142,6 +147,24 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
     assert serialize_judge_input(SimpleNamespace(to_string=lambda: "p")) == "p"
     assert invert_winner("model_a") == "model_b"
     assert invert_winner("tie") == "tie"
+
+
+def test_prompt_presets_select_their_parsers():
+    assert parse_winner("score_A: 9\nscore_B: 1", "default") == "model_a"
+    assert parse_winner("[[A=B]]", "arena-hard") == "tie"
+    assert parse_winner("[[B>>A]]", "arena-hard") == "model_b"
+    assert (
+        parse_winner(
+            '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 2}]}',
+            "alpaca-eval",
+        )
+        == "model_a"
+    )
+    assert parse_pref("[[A=B]]", "arena-hard") == 0.5
+    for preset in ("arena-hard", "alpaca-eval", "alpaca-eval-pair-score"):
+        resolved = resolve_judge_prompt(preset=preset)
+        assert resolved.system_prompt
+        assert resolved.user_prompt_template
 
 
 def test_agreement_metrics_on_fixture():

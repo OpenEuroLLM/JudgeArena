@@ -13,6 +13,9 @@ DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
+ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
+ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
+ALPACA_EVAL_PAIRSCORE_PROMPT_PRESET = "alpaca-eval-pair-score"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -87,6 +90,21 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+    ),
+    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ARENA_HARD_JUDGE_PROMPT_PRESET,
+        system_file="arena_hard_system.txt",
+        user_file="arena_hard_user.txt",
+    ),
+    ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
+        system_file="alpaca_eval_system.txt",
+        user_file="alpaca_eval_user.txt",
+    ),
+    ALPACA_EVAL_PAIRSCORE_PROMPT_PRESET: JudgePromptPreset(
+        name=ALPACA_EVAL_PAIRSCORE_PROMPT_PRESET,
+        system_file="alpaca_eval_system.txt",
+        user_file="alpaca_eval_pair_score_user.txt",
     ),
 }
 

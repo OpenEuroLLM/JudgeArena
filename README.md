@@ -299,6 +299,15 @@ Meta-evaluation scores a judge against **human-labeled arena battles**. It does 
 
 The task keeps the most-battled models, samples battles among them, asks the judge to label the stored A/B order, and reports accuracy, Cohen's kappa, Spearman correlation of Bradley-Terry ratings, and Elo MAE (with bootstrap SE) against the human vote. PairScore uses temperature `0.5` here; generate+judge keeps `0.3`.
 
+Prompt presets are selected with `--judge.prompt_preset` (the task default is `default`):
+
+| `--judge.prompt_preset` | Parser |
+|---|---|
+| `default` | PairScore |
+| `arena-hard` | Arena-Hard Likert `[[A>>B]]` … `[[B>>A]]` |
+| `alpaca-eval` | AlpacaEval JSON `ordered_models` |
+| `alpaca-eval-pair-score` | AlpacaEval prompt with PairScore output |
+
 ```bash
 judgearena \
   --task meta-eval-lmarena-140k \
@@ -313,6 +322,7 @@ judgearena \
 |---|---|---|
 | `--task` | *(required)* | `meta-eval-lmarena-140k`, `meta-eval-comparia`, or a language variant |
 | `--judge.model` | *(required)* | Judge under evaluation |
+| `--judge.prompt_preset` | `default` | `default`, `arena-hard`, `alpaca-eval`, or `alpaca-eval-pair-score` |
 | `--meta_eval.top_models` | `20` | Keep the N models with the most battles |
 | `--meta_eval.battles_per_model` | `50` | Battles sampled per selected model |
 | `--meta_eval.languages` | all | Restrict to language codes, e.g. `'["en", "es"]'` |
