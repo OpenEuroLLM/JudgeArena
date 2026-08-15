@@ -17,6 +17,7 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.prompts.registry import PRESETS
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol, MetaEvalProtocol
 
@@ -483,6 +484,17 @@ class RunConfig(BaseSettings):
 
         if self.meta_eval is not None:
             raise ValueError("meta_eval config is only valid for meta-eval tasks.")
+
+        # Only meta-eval implements the Arena-Hard and AlpacaEval verdict
+        # parsers; elsewhere the judge output would only fail to parse after
+        # every judge call has been paid for.
+        preset = PRESETS.get(self.judge.prompt_preset or task_judge.default_prompt)
+        if preset is not None and preset.parser_mode != "score":
+            raise ValueError(
+                f"judge.prompt_preset={preset.name!r} produces "
+                f"{preset.parser_mode!r} verdicts, which only meta-eval tasks "
+                f"can parse; task {self.task!r} needs a score-based preset."
+            )
 
         is_elo = isinstance(protocol, EloProtocol)
         if is_elo:

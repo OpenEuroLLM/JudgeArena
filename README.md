@@ -301,12 +301,15 @@ The task keeps the most-battled models, samples battles among them, asks the jud
 
 Prompt presets are selected with `--judge.prompt_preset` (the task default is `default`):
 
-| `--judge.prompt_preset` | Parser |
-|---|---|
-| `default` | PairScore |
-| `arena-hard` | Arena-Hard Likert `[[A>>B]]` … `[[B>>A]]` |
-| `alpaca-eval` | AlpacaEval JSON `ordered_models` |
-| `alpaca-eval-pair-score` | AlpacaEval prompt with PairScore output |
+| `--judge.prompt_preset` | Parser | Available to |
+|---|---|---|
+| `default` | PairScore | all tasks |
+| `arena-hard` | Arena-Hard Likert `[[A>>B]]` … `[[B>>A]]` | meta-eval only |
+| `alpaca-eval` | AlpacaEval JSON `ordered_models` | meta-eval only |
+| `alpaca-eval-pair-score` | AlpacaEval prompt with PairScore output | all tasks |
+
+Only meta-eval parses the Likert and JSON verdict formats, so other tasks reject
+those two presets at config time rather than after the judge calls are paid for.
 
 ```bash
 judgearena \
@@ -333,7 +336,7 @@ judgearena \
 | `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
-Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, English vs multilingual ranking splits, and held-out Elo MAE vs annotation budget (`elo_gap_all` and `elo_gap_exclude_ties`).
+Results go under `[result_folder]/<task>-<prompt_preset>-<judge>-<swap_mode>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, English vs multilingual ranking splits, and held-out Elo MAE vs annotation budget (`elo_gap_all` and `elo_gap_exclude_ties`).
 
 With `--judge.swap_mode both`, overall accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). Ranking, language splits, and Elo-gap analyses keep one forward-order row per sampled battle. `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
 

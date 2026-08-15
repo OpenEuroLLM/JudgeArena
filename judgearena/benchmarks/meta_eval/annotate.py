@@ -90,8 +90,8 @@ def _judge_pass(
                 "completion_b": annotation.completion_B,
                 "judge_input": serialize_judge_input(annotation.judge_input),
                 "judge_completion": completion,
-                "winner_llm": parse_winner(completion, resolved_prompt.preset_name),
-                "pref_llm": parse_pref(completion, resolved_prompt.preset_name),
+                "winner_llm": parse_winner(completion, resolved_prompt.parser_mode),
+                "pref_llm": parse_pref(completion, resolved_prompt.parser_mode),
             }
         )
     return pd.DataFrame(rows)
