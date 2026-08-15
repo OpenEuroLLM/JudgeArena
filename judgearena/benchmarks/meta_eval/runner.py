@@ -49,6 +49,8 @@ class MetaEvalReport(Report):
     """Arena supplying the human votes."""
     judge_model: str
     """Judge under evaluation."""
+    prompt_preset: str
+    """Judge prompt preset the verdicts were parsed under."""
     languages: list[str]
     """Language codes the sample was restricted to (empty means all)."""
     top_models: list[str]
@@ -149,6 +151,7 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         task=cfg.task,
         arena=protocol.arena,
         judge_model=cfg.judge.model,
+        prompt_preset=resolved_prompt.preset_name,
         languages=languages,
         top_models=top_models,
         n_battles=len(sample),
@@ -161,10 +164,14 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
     results = report.to_dict()
     report.render()
 
+    # The prompt preset and the swap mode both change the verdicts, so they have
+    # to be part of the folder name: otherwise a second run under a different
+    # preset or swap mode silently overwrites the first run's artifacts.
     res_dir = prepare_run_directory(
         cfg,
         Path(cfg.run.result_folder)
-        / f"{safe_filename(cfg.task)}-{safe_filename(cfg.judge.model)}",
+        / f"{safe_filename(cfg.task)}-{safe_filename(resolved_prompt.preset_name)}-"
+        f"{safe_filename(cfg.judge.model)}-{cfg.judge.swap_mode}",
     )
     result_path = report.save(res_dir / "results.json")
     sample[list(SAMPLE_COLUMNS)].to_parquet(res_dir / SAMPLE_FILENAME, index=False)
