@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from judgearena.tasks.schema.base import StrictFrozenModel
-from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec
+from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec, ScoringSpec
 
 
 class MetaEvalProtocol(StrictFrozenModel):
@@ -21,3 +21,4 @@ class MetaEvalProtocol(StrictFrozenModel):
     runner: Literal["meta_eval"]
     arena: str = Field(min_length=1)
     judge: PairwiseJudgeSpec
+    scoring: ScoringSpec

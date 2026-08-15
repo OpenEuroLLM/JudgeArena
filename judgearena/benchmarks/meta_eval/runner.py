@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
@@ -24,6 +26,10 @@ from judgearena.benchmarks.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
+from judgearena.benchmarks.meta_eval.scoring import (
+    META_EVAL_SCORERS,
+    ranking_annotations,
+)
 from judgearena.datasets import load_battles
 from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.log import get_logger
@@ -37,6 +43,7 @@ logger = get_logger(__name__)
 
 SAMPLE_FILENAME = "sample.parquet"
 ANNOTATIONS_FILENAME = "annotations.parquet"
+SUMMARY_FILENAME = "summary.csv"
 SAMPLE_COLUMNS = ("question_id", "model_a", "model_b", "winner", "lang")
 
 
@@ -65,6 +72,8 @@ class MetaEvalReport(Report):
     """Sampled battle count per human verdict (model_a, model_b, tie)."""
     agreement: dict[str, dict[str, float | int | str]]
     """Accuracy and Cohen's kappa on all battles and on the no-human-tie subset."""
+    language_summary: dict[str, dict[str, str | int]]
+    """English vs multilingual ranking agreement, fit on forward-order rows."""
 
     def render(self) -> None:
         print(f"\n=== Meta-eval: {self.task} ===")
@@ -87,6 +96,11 @@ class MetaEvalReport(Report):
             f"acc {no_tie['accuracy_formatted']}  "
             f"κ {no_tie['kappa_formatted']}"
         )
+        for split, metrics in self.language_summary.items():
+            print(
+                f"  {split} (n={metrics['n']}): κ {metrics['kappa']}  "
+                f"ρ {metrics['spearman']}  MAE {metrics['mae_elo']}"
+            )
 
 
 def _format_counts(counts: dict[str, int]) -> str:
@@ -144,6 +158,13 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         "all": agreement_view(metrics, exclude_human_ties=False),
         "no_human_ties": agreement_view(metrics, exclude_human_ties=True),
     }
+    scorer = META_EVAL_SCORERS[protocol.scoring.adapter]
+    language_summary = scorer.language_splits(
+        ranking_annotations(annotations),
+        exclude_human_ties=not cfg.meta_eval.include_human_ties,
+        n_bootstraps=cfg.meta_eval.n_bootstraps,
+        seed=cfg.run.seed,
+    )
 
     report = MetaEvalReport(
         task=cfg.task,
@@ -157,6 +178,7 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         battles_per_language=sample["lang"].value_counts().to_dict(),
         human_winner_counts=sample["winner"].value_counts().to_dict(),
         agreement=agreement,
+        language_summary=language_summary,
     )
     results = report.to_dict()
     report.render()
@@ -169,6 +191,9 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
     result_path = report.save(res_dir / "results.json")
     sample[list(SAMPLE_COLUMNS)].to_parquet(res_dir / SAMPLE_FILENAME, index=False)
     annotations.to_parquet(res_dir / ANNOTATIONS_FILENAME, index=False)
+    pd.DataFrame(
+        [{"split": split, **metrics} for split, metrics in language_summary.items()]
+    ).to_csv(res_dir / SUMMARY_FILENAME, index=False)
     write_run_metadata_safely(
         output_dir=res_dir,
         entrypoint="judgearena.benchmarks.meta_eval.runner.run_meta_eval",

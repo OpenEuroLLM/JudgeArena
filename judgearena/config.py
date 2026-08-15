@@ -347,7 +347,11 @@ class MetaEvalArgs(BaseModel):
     models can be drawn for either of them."""
 
     n_bootstraps: int = Field(default=20, gt=0)
-    """Bootstrap resamples used for agreement standard errors."""
+    """Bootstrap resamples used for agreement and ranking standard errors."""
+
+    include_human_ties: bool = False
+    """If set, ranking language splits keep human-tie battles. Agreement
+    always reports both the full set and the no-tie subset."""
 
     languages: list[str] | None = None
     """Restrict battles to these language codes (e.g. ``["en", "fr"]``).

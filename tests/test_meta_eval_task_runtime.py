@@ -18,6 +18,7 @@ from judgearena.benchmarks.meta_eval.annotate import (
 from judgearena.benchmarks.meta_eval.runner import (
     ANNOTATIONS_FILENAME,
     SAMPLE_FILENAME,
+    SUMMARY_FILENAME,
     run_meta_eval,
 )
 from judgearena.benchmarks.meta_eval.sampling import (
@@ -25,6 +26,7 @@ from judgearena.benchmarks.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
+from judgearena.benchmarks.meta_eval.scoring import summarize_language_splits
 from judgearena.benchmarks.registry import resolve_benchmark
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation
@@ -100,6 +102,7 @@ def test_meta_eval_task_is_registered_with_the_arena_battle_stack():
     assert task.spec.protocol.runner == "meta_eval"
     assert task.spec.protocol.arena == "LMArena-140k"
     assert task.spec.dataset.adapter == "arena_battles"
+    assert task.spec.protocol.scoring.adapter == "ranking"
     assert resolve_benchmark("meta-eval-lmarena-140k").adapter.name == "meta_eval"
 
 
@@ -182,6 +185,9 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert annotations["judge_input"].tolist() == ["prompt"] * 15
     assert results["agreement"]["all"]["n"] == 15
     assert results["agreement"]["no_human_ties"]["n"] < 15
+    assert set(results["language_summary"]) == {"English", "Multilingual"}
+    summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
+    assert set(summary["split"]) == {"English", "Multilingual"}
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
 
 
@@ -211,3 +217,32 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     assert (
         forward["presented_model_a"].tolist() == swapped["presented_model_b"].tolist()
     )
+    ranking_n = sum(split["n"] for split in results["language_summary"].values())
+    assert ranking_n == int((forward["winner"] != "tie").sum())
+    assert ranking_n < results["n_annotations"]
+
+
+def test_empty_language_split_reports_na():
+    df = pd.DataFrame(
+        {
+            "lang": ["fr", "fr"],
+            "model_a": ["a", "a"],
+            "model_b": ["b", "b"],
+            "winner": ["model_a", "model_b"],
+            "winner_llm": ["model_a", "model_a"],
+            "pref_llm": [0.1, 0.2],
+            "orientation": ["forward", "forward"],
+        }
+    )
+    summary = summarize_language_splits(
+        df, exclude_human_ties=True, n_bootstraps=4, seed=0
+    )
+    assert summary["English"] == {
+        "n": 0,
+        "kappa": "n/a",
+        "spearman": "n/a",
+        "spearman_soft": "n/a",
+        "mae_elo": "n/a",
+        "mae_soft_elo": "n/a",
+    }
+    assert summary["Multilingual"]["n"] == 2

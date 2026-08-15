@@ -297,7 +297,7 @@ Language variants follow the ELO pattern (`meta-eval-lmarena-140k-uk`, `meta-eva
 
 Meta-evaluation scores a judge against **human-labeled arena battles**. It does not generate completions and does not rate a model. Use `elo-*` for that.
 
-The task keeps the most-battled models, samples battles among them, asks the judge to label the stored A/B order, and reports accuracy and Cohen's kappa (with bootstrap SE) against the human vote. PairScore uses temperature `0.5` here; generate+judge keeps `0.3`.
+The task keeps the most-battled models, samples battles among them, asks the judge to label the stored A/B order, and reports accuracy, Cohen's kappa, Spearman correlation of Bradley-Terry ratings, and Elo MAE (with bootstrap SE) against the human vote. PairScore uses temperature `0.5` here; generate+judge keeps `0.3`.
 
 ```bash
 judgearena \
@@ -316,13 +316,14 @@ judgearena \
 | `--meta_eval.top_models` | `20` | Keep the N models with the most battles |
 | `--meta_eval.battles_per_model` | `50` | Battles sampled per selected model |
 | `--meta_eval.languages` | all | Restrict to language codes, e.g. `'["en", "es"]'` |
-| `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement standard errors |
+| `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement and ranking standard errors |
+| `--meta_eval.include_human_ties` | off | Keep human-tie battles in the ranking language splits |
 | `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
-Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties.
+Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, plus English vs multilingual ranking splits.
 
-With `--judge.swap_mode both`, accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
+With `--judge.swap_mode both`, overall accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). Ranking, language splits, and later Elo-gap analyses keep one forward-order row per sampled battle. `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
 
 ## 📈 Estimating ELO Ratings
 

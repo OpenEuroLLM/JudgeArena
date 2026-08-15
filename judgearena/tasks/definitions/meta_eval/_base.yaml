@@ -15,3 +15,5 @@ protocol:
     default_prompt: default
     default_swap_mode: fixed
     allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: ranking
