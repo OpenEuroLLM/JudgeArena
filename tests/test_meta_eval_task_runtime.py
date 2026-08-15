@@ -30,7 +30,10 @@ from judgearena.benchmarks.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
-from judgearena.benchmarks.meta_eval.scoring import summarize_language_splits
+from judgearena.benchmarks.meta_eval.scoring import (
+    compute_elo_gap_summary,
+    summarize_language_splits,
+)
 from judgearena.benchmarks.registry import resolve_benchmark
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation
@@ -194,7 +197,15 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
     monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
     monkeypatch.setattr(annotate_module, "annotate_battles", _fake_annotations)
-    cfg = _cfg(tmp_path, meta_eval={"top_models": 3, "battles_per_model": 5})
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 1,
+        },
+    )
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
@@ -209,6 +220,8 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert results["agreement"]["all"]["n"] == 15
     assert results["agreement"]["no_human_ties"]["n"] < 15
     assert set(results["language_summary"]) == {"English", "Multilingual"}
+    assert results["elo_gap_all"][0]["num_battles"] == 2
+    assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
     summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
     assert set(summary["split"]) == {"English", "Multilingual"}
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
@@ -269,3 +282,20 @@ def test_empty_language_split_reports_na():
         "mae_soft_elo": "n/a",
     }
     assert summary["Multilingual"]["n"] == 2
+
+
+def test_elo_gap_summary_runs():
+    battles = _battles()
+    top, df_top = select_top_models(battles, top_models=3)
+    sample = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
+    sample["winner_llm"] = sample["winner"]
+    summary = compute_elo_gap_summary(
+        df_top,
+        sample,
+        top,
+        n_battles_list=[2],
+        n_seeds=2,
+        seed=0,
+        exclude_ties=False,
+    )
+    assert not summary.empty

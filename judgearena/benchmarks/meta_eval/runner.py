@@ -74,6 +74,10 @@ class MetaEvalReport(Report):
     """Accuracy and Cohen's kappa on all battles and on the no-human-tie subset."""
     language_summary: dict[str, dict[str, str | int]]
     """English vs multilingual ranking agreement, fit on forward-order rows."""
+    elo_gap_all: list[dict[str, float | int | str | bool]]
+    """Held-out Elo MAE vs annotation budget, keeping LLM-predicted ties."""
+    elo_gap_exclude_ties: list[dict[str, float | int | str | bool]]
+    """Held-out Elo MAE vs annotation budget, dropping LLM-predicted ties after sampling."""
 
     def render(self) -> None:
         print(f"\n=== Meta-eval: {self.task} ===")
@@ -159,11 +163,25 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         "no_human_ties": agreement_view(metrics, exclude_human_ties=True),
     }
     scorer = META_EVAL_SCORERS[protocol.scoring.adapter]
+    ranking_ann = ranking_annotations(annotations)
     language_summary = scorer.language_splits(
-        ranking_annotations(annotations),
+        ranking_ann,
         exclude_human_ties=not cfg.meta_eval.include_human_ties,
         n_bootstraps=cfg.meta_eval.n_bootstraps,
         seed=cfg.run.seed,
+    )
+    elo_gap_kwargs = {
+        "df_top": df_top,
+        "df_ann": ranking_ann,
+        "top_models": top_models,
+        "n_battles_list": list(cfg.meta_eval.elo_gap_battles),
+        "n_seeds": cfg.meta_eval.elo_gap_seeds,
+    }
+    elo_gap_all = scorer.elo_gap(
+        **elo_gap_kwargs, seed=cfg.run.seed, exclude_ties=False
+    )
+    elo_gap_no_tie = scorer.elo_gap(
+        **elo_gap_kwargs, seed=cfg.run.seed + 1000, exclude_ties=True
     )
 
     report = MetaEvalReport(
@@ -179,6 +197,8 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         human_winner_counts=sample["winner"].value_counts().to_dict(),
         agreement=agreement,
         language_summary=language_summary,
+        elo_gap_all=elo_gap_all.to_dict(orient="records"),
+        elo_gap_exclude_ties=elo_gap_no_tie.to_dict(orient="records"),
     )
     results = report.to_dict()
     report.render()

@@ -353,6 +353,12 @@ class MetaEvalArgs(BaseModel):
     """If set, ranking language splits keep human-tie battles. Agreement
     always reports both the full set and the no-tie subset."""
 
+    elo_gap_battles: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50])
+    """Annotation budgets at which to measure held-out Elo error."""
+
+    elo_gap_seeds: int = Field(default=10, gt=0)
+    """Repeats of the held-out Elo-gap sampling at each budget."""
+
     languages: list[str] | None = None
     """Restrict battles to these language codes (e.g. ``["en", "fr"]``).
     Defaults to all languages of the task."""

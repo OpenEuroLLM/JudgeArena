@@ -179,13 +179,90 @@ def summarize_language_splits(
     return rows
 
 
+def compute_elo_gap_summary(
+    df_top: pd.DataFrame,
+    df_ann: pd.DataFrame,
+    top_models: list[str],
+    *,
+    n_battles_list: list[int],
+    n_seeds: int,
+    seed: int,
+    exclude_ties: bool,
+) -> pd.DataFrame:
+    """Measure ELO error by annotation budget.
+
+    Tie predictions are excluded after sampling so ``num_battles`` remains the
+    number of judge annotations purchased, matching the reference experiment.
+    """
+    df_battles = df_top[["model_a", "model_b", "winner"]].copy()
+    human_ratings = _hard_bradley_terry(df_battles, "winner")
+    rows: list[dict[str, float | int | str | bool]] = []
+
+    for num_battles in n_battles_list:
+        for offset in range(n_seeds):
+            rng = np.random.default_rng(seed + offset)
+            gaps: list[float] = []
+            for model in top_models:
+                model_mask_ann = (df_ann["model_a"] == model) | (
+                    df_ann["model_b"] == model
+                )
+                if model_mask_ann.sum() < num_battles:
+                    continue
+                model_mask_top = (df_battles["model_a"] == model) | (
+                    df_battles["model_b"] == model
+                )
+                other_human = df_battles[~model_mask_top].copy()
+                sample = df_ann[model_mask_ann].sample(
+                    n=num_battles,
+                    replace=False,
+                    random_state=int(rng.integers(0, 2**32 - 1)),
+                )
+                if exclude_ties:
+                    sample = sample[sample["winner_llm"] != "tie"]
+                if sample.empty:
+                    continue
+                model_llm = sample[["model_a", "model_b", "winner_llm"]].rename(
+                    columns={"winner_llm": "winner"}
+                )
+                hybrid = pd.concat([other_human, model_llm], ignore_index=True)
+                hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
+                if model in hybrid_ratings and model in human_ratings:
+                    gaps.append(abs(hybrid_ratings[model] - human_ratings[model]))
+            if gaps:
+                rows.append(
+                    {
+                        "num_battles": num_battles,
+                        "seed": offset,
+                        "mean_gap": float(np.mean(gaps)),
+                        "exclude_ties": exclude_ties,
+                    }
+                )
+
+    if not rows:
+        return pd.DataFrame(columns=["num_battles", "mean", "se", "exclude_ties"])
+
+    df_rows = pd.DataFrame(rows)
+    return (
+        df_rows.groupby(["num_battles", "exclude_ties"])["mean_gap"]
+        .agg(mean="mean", se=lambda values: values.std() / np.sqrt(len(values)))
+        .reset_index()
+    )
+
+
+EloGapFunction = Callable[..., pd.DataFrame]
+
+
 @dataclass(frozen=True)
 class MetaEvalScorer:
     """Ranking implementation selected by a meta-eval task's scoring adapter."""
 
     language_splits: RankingFunction
+    elo_gap: EloGapFunction
 
 
 META_EVAL_SCORERS = {
-    "ranking": MetaEvalScorer(language_splits=summarize_language_splits),
+    "ranking": MetaEvalScorer(
+        language_splits=summarize_language_splits,
+        elo_gap=compute_elo_gap_summary,
+    ),
 }
