@@ -146,7 +146,10 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
     assert parse_pairscore_winner("score_A: 10\nscore_B: 0") == "model_a"
     assert parse_pairscore_winner("score_A: 0\nscore_B: 10") == "model_b"
     assert parse_pairscore_winner("score_A: 5\nscore_B: 5") == "tie"
-    assert parse_pairscore_pref("score_A: 10\nscore_B: 0") < 0.5
+    completion = "score_A: 10\nscore_B: 0"
+    preference = parse_pairscore_pref(completion)
+    assert preference < 0.5
+    assert parse_pairscore_winner(completion, eps=abs(preference - 0.5)) == "tie"
     assert serialize_judge_input(SimpleNamespace(to_string=lambda: "p")) == "p"
     assert invert_winner("model_a") == "model_b"
     assert invert_winner("tie") == "tie"
