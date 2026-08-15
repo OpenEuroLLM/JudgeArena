@@ -319,7 +319,7 @@ judgearena \
 | `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement standard errors |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
-Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties.
+Results go under `[result_folder]/<task>-<prompt_preset>-<judge>-<swap_mode>/` as `sample.parquet`, `annotations.parquet`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties.
 
 ## 📈 Estimating ELO Ratings
 
