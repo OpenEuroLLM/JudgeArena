@@ -44,9 +44,9 @@ def parse_pairscore_winner(
     eps: float = TIE_EPSILON,
 ) -> str:
     score = parse_pairscore_pref(judge_completion, temperature=temperature)
-    if abs(score - 0.5) < eps:
+    if abs(score - 0.5) <= eps:
         return "tie"
-    return "model_b" if score > 0.5 + eps else "model_a"
+    return "model_b" if score > 0.5 else "model_a"
 
 
 def invert_winner(winner: str) -> str:

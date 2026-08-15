@@ -175,7 +175,7 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
-    res_dir = tmp_path / "meta-eval-comparia-dummy-j"
+    res_dir = tmp_path / "meta-eval-comparia-default-dummy-j-fixed"
     sample = pd.read_parquet(res_dir / SAMPLE_FILENAME)
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
     assert results["n_battles"] == results["n_annotations"] == len(sample) == 15
@@ -204,7 +204,7 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
     annotations = pd.read_parquet(
-        tmp_path / "meta-eval-comparia-dummy-j" / ANNOTATIONS_FILENAME
+        tmp_path / "meta-eval-comparia-default-dummy-j-both" / ANNOTATIONS_FILENAME
     )
     assert results["n_battles"] == 15
     assert results["n_annotations"] == results["agreement"]["all"]["n"] == 30
