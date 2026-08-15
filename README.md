@@ -334,7 +334,7 @@ judgearena \
 | `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
-Results go under `[result_folder]/meta-eval-*-<judge>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, plus English vs multilingual ranking splits.
+Results go under `[result_folder]/<task>-<prompt_preset>-<judge>-<swap_mode>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, plus English vs multilingual ranking splits.
 
 With `--judge.swap_mode both`, overall accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). Ranking, language splits, and later Elo-gap analyses keep one forward-order row per sampled battle. `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
 
