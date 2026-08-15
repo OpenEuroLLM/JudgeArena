@@ -6,7 +6,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-JudgeParserMode = Literal["score"]
+JudgeParserMode = Literal["score", "arena_hard_likert", "alpaca_eval_json"]
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
@@ -93,11 +93,13 @@ PRESETS: dict[str, JudgePromptPreset] = {
     ),
     ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=ARENA_HARD_JUDGE_PROMPT_PRESET,
+        parser_mode="arena_hard_likert",
         system_file="arena_hard_system.txt",
         user_file="arena_hard_user.txt",
     ),
     ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
+        parser_mode="alpaca_eval_json",
         system_file="alpaca_eval_system.txt",
         user_file="alpaca_eval_user.txt",
     ),

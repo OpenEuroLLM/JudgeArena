@@ -301,12 +301,15 @@ The task keeps the most-battled models, samples battles among them, asks the jud
 
 Prompt presets are selected with `--judge.prompt_preset` (the task default is `default`):
 
-| `--judge.prompt_preset` | Parser |
-|---|---|
-| `default` | PairScore |
-| `arena-hard` | Arena-Hard Likert `[[A>>B]]` … `[[B>>A]]` |
-| `alpaca-eval` | AlpacaEval JSON `ordered_models` |
-| `alpaca-eval-pair-score` | AlpacaEval prompt with PairScore output |
+| `--judge.prompt_preset` | Parser | Available to |
+|---|---|---|
+| `default` | PairScore | all tasks |
+| `arena-hard` | Arena-Hard Likert `[[A>>B]]` … `[[B>>A]]` | meta-eval only |
+| `alpaca-eval` | AlpacaEval JSON `ordered_models` | meta-eval only |
+| `alpaca-eval-pair-score` | AlpacaEval prompt with PairScore output | all tasks |
+
+Only meta-eval parses the Likert and JSON verdict formats, so other tasks reject
+those two presets at config time rather than after the judge calls are paid for.
 
 ```bash
 judgearena \

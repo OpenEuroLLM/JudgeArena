@@ -1,4 +1,4 @@
-"""Winner parsers for meta-eval prompt presets."""
+"""Winner parsers for the judge parser modes meta-eval supports."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import re
 import numpy as np
 
 from judgearena.evaluate import PairScore
+from judgearena.prompts.registry import JudgeParserMode
 
 TIE_EPSILON = 0.01
 META_EVAL_PAIRSCORE_TEMPERATURE = 0.5
@@ -100,15 +101,16 @@ def winner_to_pref(winner: str) -> float:
     return {"model_a": 0.0, "model_b": 1.0}.get(winner, 0.5)
 
 
-def parse_winner(judge_completion: str, prompt_preset: str) -> str:
-    if prompt_preset == "arena-hard":
+def parse_winner(judge_completion: str, parser_mode: JudgeParserMode) -> str:
+    if parser_mode == "arena_hard_likert":
         return parse_arena_hard_winner(judge_completion)
-    if prompt_preset == "alpaca-eval":
+    if parser_mode == "alpaca_eval_json":
         return parse_alpaca_eval_winner(judge_completion)
     return parse_pairscore_winner(judge_completion)
 
 
-def parse_pref(judge_completion: str, prompt_preset: str) -> float:
-    if prompt_preset in ("arena-hard", "alpaca-eval"):
-        return winner_to_pref(parse_winner(judge_completion, prompt_preset))
-    return parse_pairscore_pref(judge_completion)
+def parse_pref(judge_completion: str, parser_mode: JudgeParserMode) -> float:
+    """Preference in [0, 1]; the categorical modes only yield 0, 0.5 or 1."""
+    if parser_mode == "score":
+        return parse_pairscore_pref(judge_completion)
+    return winner_to_pref(parse_winner(judge_completion, parser_mode))
