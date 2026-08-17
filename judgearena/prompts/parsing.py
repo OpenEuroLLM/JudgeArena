@@ -108,7 +108,7 @@ def parser_name(parse) -> str:
 # Parsers selectable by name for runtime prompt overrides (judge.parser);
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, JudgeParser] = {
-    parser.name: parser for parser in (PairScore(),)
+    "score": PairScore(),
 }
 
 
