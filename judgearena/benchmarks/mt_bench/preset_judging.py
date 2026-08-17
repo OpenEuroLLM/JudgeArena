@@ -38,12 +38,16 @@ class MTBenchPresetPrompt:
     ref_based: bool
 
 
-def _extract_output_section(user_prompt_template: str) -> str:
-    marker = "# Your output"
-    marker_index = user_prompt_template.find(marker)
-    if marker_index < 0:
-        raise ValueError("Could not find '# Your output' section in preset template.")
-    return user_prompt_template[marker_index:].lstrip()
+def _extract_judge_instructions(user_prompt_template: str) -> str:
+    markers = ("# Your task", "# Your output")
+    marker_indices = [
+        index for marker in markers if (index := user_prompt_template.find(marker)) >= 0
+    ]
+    if not marker_indices:
+        raise ValueError(
+            "Could not find '# Your task' or '# Your output' in preset template."
+        )
+    return user_prompt_template[min(marker_indices) :].lstrip()
 
 
 def _build_mt_bench_preset_user_prompt_template(
@@ -56,8 +60,10 @@ def _build_mt_bench_preset_user_prompt_template(
         multi_turn=multi_turn,
         ref_based=ref_based,
     )
-    output_section = _extract_output_section(resolved_prompt.user_prompt_template)
-    return f"{base_template}\n\n{output_section}"
+    judge_instructions = _extract_judge_instructions(
+        resolved_prompt.user_prompt_template
+    )
+    return f"{base_template}\n\n{judge_instructions}"
 
 
 def _build_mt_bench_prompt(

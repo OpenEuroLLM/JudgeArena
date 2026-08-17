@@ -178,7 +178,9 @@ def test_build_mt_bench_prompt_uses_resolved_named_parser(tmp_path):
     user_file = tmp_path / "user.txt"
     system_file.write_text("Custom system", encoding="utf-8")
     user_file.write_text(
-        "Q: {user_prompt} A: {completion_A} B: {completion_B}\n# Your output\nscores"
+        "Q: {user_prompt} A: {completion_A} B: {completion_B}\n"
+        "# Your task\nJudge correctness and clarity.\n"
+        "# Your output\nscores"
     )
 
     resolved_prompt = resolve_judge_prompt(
@@ -194,6 +196,10 @@ def test_build_mt_bench_prompt_uses_resolved_named_parser(tmp_path):
     )
 
     assert prompt.parse is JUDGE_PARSERS["score"]
+    assert "# Your task\nJudge correctness and clarity." in (
+        prompt.user_prompt_template
+    )
+    assert "# Your output\nscores" in prompt.user_prompt_template
 
 
 def test_build_items_resolves_each_enabled_turn_once():
