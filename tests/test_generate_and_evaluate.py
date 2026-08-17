@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -349,14 +350,24 @@ def test_run_writes_roundtrippable_config(tmp_path):
 
 
 def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
-    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
+    from judgearena.benchmarks.pairwise.scoring import (
+        PAIRWISE_SCORERS,
+        PairwiseScorer,
+        ScoringResult,
+    )
 
     captured = {}
     win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
 
-    def recording_summarize(battles):
+    def recording_score(battles):
         captured["battles"] = battles
-        return win_rate.summarize(battles)
+        summary = win_rate.score(battles).summary
+        return ScoringResult(
+            summary=summary,
+            metrics={"adjusted_winrate": 0.75},
+            breakdowns={"category": {"all": summary.to_dict()}},
+            methodology={"bootstrap_rounds": 100},
+        )
 
     monkeypatch.setitem(
         PAIRWISE_SCORERS,
@@ -364,7 +375,7 @@ def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
         PairwiseScorer(
             primary_metric="winrate",
             higher_is_better=True,
-            summarize=recording_summarize,
+            score=recording_score,
         ),
     )
 
@@ -382,3 +393,9 @@ def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
     battles = captured["battles"]
     assert battles["score_a"].tolist() == [0.0, 0.0]
     assert battles["score_b"].tolist() == [10.0, 10.0]
+    report = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert report["per_category"]["all"]["winrate"] == 0.0
+    assert report["metadata"]["scoring"] == {
+        "metrics": {"adjusted_winrate": 0.75},
+        "methodology": {"bootstrap_rounds": 100},
+    }

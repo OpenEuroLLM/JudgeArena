@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
 from judgearena.utils.eval import PrefSummary, compute_pref_summary
+
+
+@dataclass(frozen=True)
+class ScoringResult:
+    """Complete output produced by one scoring pass.
+
+    Breakdowns are keyed by dimension, such as ``category`` or ``turn``.
+    """
+
+    summary: PrefSummary
+    metrics: dict[str, float | None] = field(default_factory=dict)
+    breakdowns: dict[str, object] = field(default_factory=dict)
+    methodology: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -22,22 +35,20 @@ class PairwiseScorer:
 
     primary_metric: str
     higher_is_better: bool
-    summarize: Callable[[pd.DataFrame], PrefSummary]
-    report_metadata: Callable[[pd.DataFrame], dict[str, object]] | None = None
-    """Optional scorer-specific details merged into the run report metadata."""
+    score: Callable[[pd.DataFrame], ScoringResult]
     check_requirements: Callable[[], None] | None = None
     """Optional pre-run check that raises when a scorer dependency is missing;
     runners call it before generation so a run fails fast."""
 
 
-def _summarize_win_rate(battles: pd.DataFrame) -> PrefSummary:
-    return compute_pref_summary(battles["pref"])
+def _score_win_rate(battles: pd.DataFrame) -> ScoringResult:
+    return ScoringResult(summary=compute_pref_summary(battles["pref"]))
 
 
 PAIRWISE_SCORERS = {
     "pairwise_win_rate": PairwiseScorer(
         primary_metric="winrate",
         higher_is_better=True,
-        summarize=_summarize_win_rate,
+        score=_score_win_rate,
     ),
 }
