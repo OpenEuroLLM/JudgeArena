@@ -33,6 +33,24 @@ from judgearena.tasks.schema import (
 logger = get_logger(__name__)
 
 
+def _runner_names() -> frozenset[str]:
+    from judgearena.benchmarks.registry import benchmark_runner_names
+
+    return benchmark_runner_names()
+
+
+def _instruction_dataset_names() -> frozenset[str]:
+    from judgearena.datasets.registry import instruction_dataset_names
+
+    return instruction_dataset_names()
+
+
+def _battle_dataset_names() -> frozenset[str]:
+    from judgearena.datasets.registry import battle_dataset_names
+
+    return battle_dataset_names()
+
+
 class TaskDefinitionError(ValueError):
     """A packaged task definition is malformed or unsafe."""
 
@@ -273,20 +291,11 @@ def _load_prompt_files(
 class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
-    runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
-    # Keep in sync with judgearena.datasets.registry; importing it here
-    # would create a cycle.
-    instruction_datasets: frozenset[str] = frozenset(
-        {
-            "alpaca_eval",
-            "arena_hard",
-            "fluency",
-            "judgearena_tables",
-            "m_arena_hard",
-            "mt_bench",
-        }
+    runners: frozenset[str] = field(default_factory=_runner_names)
+    instruction_datasets: frozenset[str] = field(
+        default_factory=_instruction_dataset_names
     )
-    battle_datasets: frozenset[str] = frozenset({"arena_battles"})
+    battle_datasets: frozenset[str] = field(default_factory=_battle_dataset_names)
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     # Snapshot at construction so parsers registered via register_judge_parser
     # before load_tasks() are accepted.

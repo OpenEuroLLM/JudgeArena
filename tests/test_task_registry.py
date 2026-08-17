@@ -9,8 +9,18 @@ import pytest
 import yaml
 
 from judgearena import cli as cli_module
+from judgearena.benchmarks.registry import benchmark_runner_names
+from judgearena.datasets.registry import (
+    battle_dataset_names,
+    instruction_dataset_names,
+)
 from judgearena.tasks.cli import run_task_command
-from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
+from judgearena.tasks.registry import (
+    AdapterCatalog,
+    TaskDefinitionError,
+    load_tasks,
+    resolve_task,
+)
 
 
 def test_task_local_prompts_are_included_in_package_data():
@@ -20,6 +30,14 @@ def test_task_local_prompts_are_included_in_package_data():
     ]
 
     assert "definitions/*/*.txt" in package_data["judgearena.tasks"]
+
+
+def test_adapter_catalog_uses_owning_registries():
+    catalog = AdapterCatalog()
+
+    assert catalog.runners == benchmark_runner_names()
+    assert catalog.instruction_datasets == instruction_dataset_names()
+    assert catalog.battle_datasets == battle_dataset_names()
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:

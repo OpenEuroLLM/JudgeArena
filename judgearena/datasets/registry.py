@@ -90,6 +90,16 @@ def _battle_datasets() -> dict[str, BattleDatasetAdapter]:
     }
 
 
+def instruction_dataset_names() -> frozenset[str]:
+    """Return instruction-adapter IDs owned by the dataset registry."""
+    return frozenset(_instruction_datasets())
+
+
+def battle_dataset_names() -> frozenset[str]:
+    """Return battle-adapter IDs owned by the dataset registry."""
+    return frozenset(_battle_datasets())
+
+
 def resolve_dataset_adapter(name: str) -> InstructionDatasetAdapter:
     """Return the instruction-dataset implementation registered under ``name``."""
     return _instruction_datasets()[name]
