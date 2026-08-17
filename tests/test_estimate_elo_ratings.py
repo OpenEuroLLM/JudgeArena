@@ -100,6 +100,8 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
     calibrate_temperature = kwargs.pop("calibrate_temperature", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
+    prompt_preset = kwargs.pop("prompt_preset", None)
+    criteria_file = kwargs.pop("criteria_file", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
         "model": judge_model,
@@ -108,6 +110,10 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     }
     if battle_thinking_token_budget is not None:
         judge["battle_thinking_token_budget"] = battle_thinking_token_budget
+    if prompt_preset is not None:
+        judge["prompt_preset"] = prompt_preset
+    if criteria_file is not None:
+        judge["criteria_file"] = criteria_file
     return RunConfig(
         task=task,
         model={"name": model},
@@ -526,3 +532,34 @@ def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
 
     # The default preset's registered parser instance, not a fresh fallback.
     assert captured["parse"] is JUDGE_PARSERS["score"]
+
+
+def test_run_elo_uses_composite_criteria_scores_and_saves_annotations(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text(
+        "name: focused\n"
+        "criteria:\n"
+        "  - name: correctness\n"
+        "    description: Is correct.\n"
+        "  - name: clarity\n"
+        "    description: Is clear.\n",
+        encoding="utf-8",
+    )
+
+    result = run_elo_with_task(
+        _default_args(
+            result_folder=str(tmp_path),
+            judge_model="Dummy/correctness: A=8 B=4\nclarity: A=6 B=2",
+            prompt_preset="criteria",
+            criteria_file=criteria_file,
+        )
+    )
+
+    annotations_path = next(tmp_path.glob("*/judge-annotations.parquet"))
+    annotations = pd.read_parquet(annotations_path)
+    assert 0.0 <= result["winrate"] <= 1.0
+    assert annotations["correctness_a"].tolist() == [8.0] * 10
+    assert annotations["clarity_b"].tolist() == [2.0] * 10
+    assert annotations["score_a"].tolist() == [7.0] * 10
+    assert annotations["score_b"].tolist() == [3.0] * 10
+    assert annotations["question_id"].notna().all()

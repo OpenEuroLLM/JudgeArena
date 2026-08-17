@@ -34,6 +34,7 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
+from judgearena.prompts.parsing import JudgeParser
 from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
@@ -43,6 +44,14 @@ if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
+
+
+def _parser_raw_scores(
+    parser: JudgeParser, judge_completion: str
+) -> tuple[float | None, float | None]:
+    """Read the common composite A/B scores exposed by score-based parsers."""
+    values = parser.parse_values(judge_completion) or {}
+    return values.get("score_a"), values.get("score_b")
 
 
 class EloReport(Report):
@@ -350,6 +359,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 "opponent_model": row_opponents,
             }
         )
+        values = pd.DataFrame([a.judge_values or {} for a in row_annotations])
+        if not values.empty:
+            frame = pd.concat([frame, values.set_axis(frame.index)], axis=1)
         return frame
 
     # Stripping reasoning traces changes the judged text but not the cached
@@ -476,7 +488,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             for ann, human_winner in zip(
                 cal_annotations, cal_battles["winner"].tolist(), strict=True
             ):
-                sa, sb = PairScore.parse_raw_scores(ann.judge_completion)
+                sa, sb = _parser_raw_scores(
+                    resolved_prompt.parser,
+                    ann.judge_completion,
+                )
                 if sa is None or sb is None:
                     continue
                 human_pref = winner_to_pref(human_winner)
@@ -514,8 +529,15 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # judge completions with this run's score_parser so the soft-ELO bootstrap
     # uses the requested temperature.
     if cfg.elo.soft_elo:
+
+        def parse_with_run_temperature(completion: str) -> float | None:
+            score_a, score_b = _parser_raw_scores(resolved_prompt.parser, completion)
+            if score_a is not None and score_b is not None:
+                return float(score_parser.preference_from_scores(score_a, score_b))
+            return resolved_prompt.parser(completion)
+
         new_prefs_ab = pd.Series(
-            [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
+            [parse_with_run_temperature(c) for c in df_judge["judge_completion"]]
         ).apply(lambda x: float("nan") if x is None else x)
 
         if cfg.judge.swap_mode == "both":
@@ -640,6 +662,13 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         res_dir / "battles.parquet",
         df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
     )
+    if resolved_prompt.criteria_names is not None:
+        criteria_annotations = df_judge.copy()
+        criteria_annotations["question_id"] = question_ids
+        criteria_annotations.to_parquet(
+            res_dir / "judge-annotations.parquet",
+            index=False,
+        )
     if bootstrap_ratings:
         pd.DataFrame(bootstrap_ratings).to_csv(
             res_dir / "bootstrap_ratings.csv", index=False

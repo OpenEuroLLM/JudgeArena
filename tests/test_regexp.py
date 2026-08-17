@@ -4,6 +4,7 @@ import pytest
 
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
+    CriteriaScoreParser,
     PairScore,
     weighted_token_preference,
 )
@@ -165,6 +166,70 @@ def test_alpaca_eval_token_weights_by_logprobs_when_present():
     ) == pytest.approx(0.75)
     # Without logprobs the sampled token decides.
     assert parse_alpaca_eval_token("M") == 1.0
+
+
+def test_pair_score_parse_values_exposes_raw_scores():
+    parser = PairScore()
+
+    assert parser.parse_values("Score A: 3 Score B: 9") == {
+        "score_a": 3.0,
+        "score_b": 9.0,
+    }
+    assert parser.parse_values("no scores here") is None
+    # Parsers without structured values inherit the base behaviour.
+    assert parse_arena_hard_verdict.parse_values("[[A>B]]") is None
+
+
+def test_criteria_parser_averages_complete_criteria():
+    parser = CriteriaScoreParser(
+        ("correctness", "clarity"),
+        scale_min=1,
+        scale_max=10,
+    )
+    judgment = "correctness: A=8 B=4\nclarity: A=6 B=2"
+
+    assert parser.parse_values(judgment) == {
+        "correctness_a": 8.0,
+        "correctness_b": 4.0,
+        "clarity_a": 6.0,
+        "clarity_b": 2.0,
+        "score_a": 7.0,
+        "score_b": 3.0,
+    }
+    assert parser(judgment) == pytest.approx(
+        PairScore().preference_from_scores(7.0, 3.0)
+    )
+
+
+def test_criteria_parser_keeps_partial_values_but_rejects_overall_result():
+    parser = CriteriaScoreParser(
+        ("correctness", "clarity"),
+        scale_min=1,
+        scale_max=10,
+    )
+    judgment = "correctness: A=8 B=4\nclarity: A=11 B=2"
+
+    assert parser.parse_values(judgment) == {
+        "correctness_a": 8.0,
+        "correctness_b": 4.0,
+        "clarity_b": 2.0,
+    }
+    assert parser(judgment) is None
+
+
+def test_judge_and_parse_prefs_collects_parser_values():
+    from judgearena.evaluate import judge_and_parse_prefs
+    from judgearena.models import make_model
+
+    annotations, _, prefs = judge_and_parse_prefs(
+        judge_chat_model=make_model("Dummy/score A: 2 score B: 8"),
+        instructions=["q"],
+        completions_A=["a"],
+        completions_B=["b"],
+    )
+
+    assert annotations[0].judge_values == {"score_a": 2.0, "score_b": 8.0}
+    assert prefs.iloc[0] == pytest.approx(0.8582, abs=1e-3)
 
 
 def test_alpaca_eval_preset_resolves_token_parser():

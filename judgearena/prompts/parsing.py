@@ -35,6 +35,10 @@ class JudgeParser(abc.ABC):
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None: ...
 
+    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
+        """Return structured values behind the preference, when available."""
+        return None
+
 
 # Graded preferences for the official Arena-Hard verdict labels. The spacing
 # keeps decisiveness recoverable downstream (< 0.5 is an A win either way,
@@ -159,6 +163,12 @@ class PairScore(JudgeParser):
     ) -> float | None:
         return self.parse_model_raw(judge_completion)
 
+    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
+        score_a, score_b = self.parse_raw_scores(judge_completion)
+        if score_a is None or score_b is None:
+            return None
+        return {"score_a": score_a, "score_b": score_b}
+
     def parse_model_raw(self, judge_completion: str) -> float | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
@@ -237,6 +247,72 @@ class AlpacaEvalJSON(JudgeParser):
         except (json.JSONDecodeError, KeyError, TypeError):
             return None
         return None
+
+
+class CriteriaScoreParser(JudgeParser):
+    """Parse per-criterion A/B scores and derive one composite preference."""
+
+    name = "criteria-score"
+
+    def __init__(
+        self,
+        criteria_names: tuple[str, ...],
+        *,
+        scale_min: int,
+        scale_max: int,
+        temperature: float = 0.3,
+    ):
+        if not criteria_names:
+            raise ValueError("CriteriaScoreParser requires at least one criterion.")
+        self.criteria_names = criteria_names
+        self.scale_min = scale_min
+        self.scale_max = scale_max
+        self._pair_score = PairScore(temperature=temperature)
+
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None:
+        values = self.parse_values(judge_completion) or {}
+        score_a = values.get("score_a")
+        score_b = values.get("score_b")
+        if score_a is None or score_b is None:
+            return None
+        return float(self._pair_score.preference_from_scores(score_a, score_b))
+
+    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
+        text = strip_thinking_tags(judge_completion)
+        values: dict[str, float] = {}
+        for name in self.criteria_names:
+            match = re.search(
+                rf"^\s*{re.escape(name)}\s*:\s*"
+                rf"A\s*=\s*(-?\d+(?:\.\d+)?)\s+"
+                rf"B\s*=\s*(-?\d+(?:\.\d+)?)\s*$",
+                text,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            if match is None:
+                continue
+            for side, raw_score in zip(("a", "b"), match.groups(), strict=True):
+                score = float(raw_score)
+                if self.scale_min <= score <= self.scale_max:
+                    values[f"{name}_{side}"] = score
+
+        # An overall result is valid only when both assistants have a valid
+        # score for every requested criterion. Partial values remain available
+        # in annotations for diagnosing malformed judge output.
+        if all(
+            f"{name}_{side}" in values
+            for name in self.criteria_names
+            for side in ("a", "b")
+        ):
+            for side in ("a", "b"):
+                values[f"score_{side}"] = float(
+                    np.mean([values[f"{name}_{side}"] for name in self.criteria_names])
+                )
+        return values or None
 
 
 def parser_name(parse) -> str:

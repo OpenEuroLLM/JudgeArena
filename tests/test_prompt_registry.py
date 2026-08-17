@@ -20,6 +20,7 @@ from judgearena.prompts.registry import (
 class FakeCliArgs:
     prompt_preset: str | None = None
     prompt: object | None = None
+    criteria_file: object | None = None
 
 
 def test_default_presets_are_owned_by_task_yaml():
@@ -151,6 +152,54 @@ def test_file_overrides_accept_named_parser(tmp_path):
 def test_named_parser_without_prompt_files_is_rejected():
     with pytest.raises(ValueError, match="requires judge prompt files"):
         resolve_judge_prompt(task="alpaca-eval", parser="score")
+
+
+def test_criteria_preset_materializes_default_criteria():
+    resolved = resolve_judge_prompt(preset="criteria")
+
+    assert resolved.criteria_name == "default"
+    assert resolved.criteria_names == (
+        "adherence",
+        "helpfulness",
+        "factuality",
+        "completeness",
+        "clarity",
+        "fluency",
+    )
+    assert resolved.parser.name == "criteria-score"
+    assert "**Adherence** (1–10)" in resolved.user_prompt_template
+    assert "adherence: A=<1-10> B=<1-10>" in resolved.user_prompt_template
+    assert "{criteria_block}" not in resolved.user_prompt_template
+    assert resolved.metadata()["judge_criteria_name"] == "default"
+
+
+def test_criteria_preset_materializes_custom_file(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text(
+        "name: concise\n"
+        "criteria:\n"
+        "  - name: brevity\n"
+        "    description: Avoids unnecessary text.\n",
+        encoding="utf-8",
+    )
+
+    resolved = resolve_judge_prompt(
+        preset="criteria",
+        criteria_file=criteria_file,
+    )
+
+    assert resolved.criteria_name == "concise"
+    assert resolved.criteria_names == ("brevity",)
+    assert "Avoids unnecessary text." in resolved.user_prompt_template
+    assert "brevity: A=<1-10> B=<1-10>" in resolved.user_prompt_template
+
+
+def test_criteria_file_requires_criteria_preset(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text("name: empty\ncriteria: []\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not a criteria preset"):
+        resolve_judge_prompt(preset="default", criteria_file=criteria_file)
 
 
 def test_unknown_named_parser_lists_available(tmp_path):

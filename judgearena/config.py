@@ -248,6 +248,10 @@ class JudgeArgs(BaseModel):
     """Custom judge prompt bundle (system/user template files plus the parser
     for the judge's output), overriding any preset."""
 
+    criteria_file: Path | None = None
+    """Custom criteria YAML for a criteria judge preset. When unset, the
+    packaged default criteria are used."""
+
     battle_thinking_token_budget: int | None = None
     """Token budget allotted to a thinking judge's reasoning block. Unset
     leaves the model default."""
@@ -451,6 +455,15 @@ class RunConfig(BaseSettings):
             for path in (self.judge.prompt.system_file, self.judge.prompt.user_file):
                 if not path.is_file():
                     raise ValueError(f"judge prompt file not found: {path}")
+        if self.judge.criteria_file is not None:
+            if self.judge.prompt is not None:
+                raise ValueError(
+                    "judge.criteria_file cannot be combined with judge.prompt."
+                )
+            if not self.judge.criteria_file.is_file():
+                raise ValueError(
+                    f"judge criteria file not found: {self.judge.criteria_file}"
+                )
 
         resolved_task = get_packaged_task(self.task)
         if resolved_task is None:
@@ -549,6 +562,10 @@ class RunConfig(BaseSettings):
                 and native_pairwise_baseline(self.task) is None
             ):
                 raise ValueError(f"model.baseline is required for task {self.task!r}.")
+        if self.judge.criteria_file is not None:
+            from judgearena.prompts.registry import resolve_run_judge_prompt
+
+            resolve_run_judge_prompt(self.task, self.judge)
         return self
 
     @classmethod
@@ -610,5 +627,5 @@ def load_config(path: str | Path) -> RunConfig:
 def dump_config(cfg: RunConfig, path: str | Path) -> None:
     """Write the resolved config as YAML (round-trippable via ``--config_path``)."""
     Path(path).write_text(
-        yaml.safe_dump(cfg.model_dump(), sort_keys=False), encoding="utf-8"
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
     )

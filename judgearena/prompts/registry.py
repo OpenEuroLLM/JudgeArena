@@ -8,6 +8,7 @@ from typing import Literal
 
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
+    CriteriaScoreParser,
     JudgeParser,
     parser_name,
     resolve_judge_parser,
@@ -25,6 +26,7 @@ ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
 META_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-pair-score"
 META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET = "meta-eval-alpaca-eval-json"
 META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-alpaca-eval-pair-score"
+CRITERIA_JUDGE_PROMPT_PRESET = "criteria"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -53,6 +55,7 @@ class JudgePromptPreset:
     inline_system: str | None = None
     delegated: bool = False
     with_explanation: bool = False
+    criteria_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,9 +70,11 @@ class ResolvedJudgePrompt:
     system_sha256: str | None = None
     user_sha256: str | None = None
     delegated: bool = False
+    criteria_name: str | None = None
+    criteria_names: tuple[str, ...] | None = None
 
-    def metadata(self) -> dict[str, str | bool | None]:
-        return {
+    def metadata(self) -> dict[str, object]:
+        metadata: dict[str, object] = {
             "judge_prompt_preset": self.preset_name,
             "judge_parser": (
                 parser_name(self.parser) if self.parser is not None else None
@@ -81,6 +86,10 @@ class ResolvedJudgePrompt:
             "judge_prompt_system_sha256": self.system_sha256,
             "judge_prompt_user_sha256": self.user_sha256,
         }
+        if self.criteria_name is not None:
+            metadata["judge_criteria_name"] = self.criteria_name
+            metadata["judge_criteria"] = list(self.criteria_names or ())
+        return metadata
 
 
 SCORE_PARSER = JUDGE_PARSERS["score"]
@@ -153,6 +162,12 @@ PRESETS: dict[str, JudgePromptPreset] = {
         parser=JUDGE_PARSERS["meta-eval-score"],
         system_file="meta-eval-alpaca-eval-system-prompt.txt",
         user_file="meta-eval-alpaca-eval-pair-score-prompt.txt",
+    ),
+    CRITERIA_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=CRITERIA_JUDGE_PROMPT_PRESET,
+        system_file="system-prompt.txt",
+        user_file="prompt-criteria.txt",
+        criteria_name="default",
     ),
 }
 
@@ -233,6 +248,7 @@ def resolve_judge_prompt(
     user_file: str | Path | None = None,
     multi_turn: bool = False,
     parser: str | None = None,
+    criteria_file: str | Path | None = None,
 ) -> ResolvedJudgePrompt:
     if (system_file is None) != (user_file is None):
         raise ValueError(
@@ -240,6 +256,10 @@ def resolve_judge_prompt(
             "be provided together."
         )
     if system_file is not None and user_file is not None:
+        if criteria_file is not None:
+            raise ValueError(
+                "criteria_file can only be used with a criteria prompt preset."
+            )
         return _resolve_file_prompt(
             system_file=system_file,
             user_file=user_file,
@@ -259,6 +279,10 @@ def resolve_judge_prompt(
     if spec is None:
         raise KeyError(
             f"Unknown judge prompt preset {preset!r}. Available: {sorted(PRESETS)}"
+        )
+    if criteria_file is not None and spec.criteria_name is None:
+        raise ValueError(
+            f"criteria_file is set but preset {spec.name!r} is not a criteria preset."
         )
 
     if spec.delegated:
@@ -284,9 +308,37 @@ def resolve_judge_prompt(
         multi_turn=multi_turn,
         with_explanation=spec.with_explanation,
     )
+    parser_impl = spec.parser
+    criteria_name: str | None = None
+    criteria_names: tuple[str, ...] | None = None
+    if spec.criteria_name is not None:
+        from judgearena.criteria.io import resolve_criteria
+        from judgearena.criteria.schema import (
+            SCALE_MAX,
+            SCALE_MIN,
+            criterion_names,
+            prompt_block,
+        )
+
+        criteria_name, criteria = resolve_criteria(spec.criteria_name, criteria_file)
+        criteria_names = tuple(criterion_names(criteria))
+        output_lines = "\n".join(
+            f"{name}: A=<{SCALE_MIN}-{SCALE_MAX}> B=<{SCALE_MIN}-{SCALE_MAX}>"
+            for name in criteria_names
+        )
+        user_prompt_template = user_prompt_template.replace(
+            "{criteria_block}", prompt_block(criteria)
+        ).replace("{criteria_output_lines}", output_lines)
+        parser_impl = CriteriaScoreParser(
+            criteria_names,
+            scale_min=SCALE_MIN,
+            scale_max=SCALE_MAX,
+        )
+    if parser_impl is None:
+        raise ValueError(f"Judge prompt preset {spec.name!r} is missing a parser.")
     return ResolvedJudgePrompt(
         preset_name=spec.name,
-        parser=spec.parser,
+        parser=parser_impl,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="preset",
@@ -294,6 +346,8 @@ def resolve_judge_prompt(
         user_path=spec.user_file,
         system_sha256=_sha256(system_prompt),
         user_sha256=_sha256(user_prompt_template),
+        criteria_name=criteria_name,
+        criteria_names=criteria_names,
     )
 
 
@@ -311,4 +365,5 @@ def resolve_run_judge_prompt(
         user_file=prompt.user_file if prompt is not None else None,
         multi_turn=multi_turn,
         parser=prompt.parser if prompt is not None else None,
+        criteria_file=getattr(judge_cfg, "criteria_file", None),
     )

@@ -33,6 +33,46 @@ def test_generate_config_constructs():
     assert cfg.elo is None
 
 
+def test_config_accepts_custom_criteria_file(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text(
+        "name: custom\n"
+        "criteria:\n"
+        "  - name: correctness\n"
+        "    description: Is correct.\n",
+        encoding="utf-8",
+    )
+    data = _base_generate()
+    data["judge"].update(
+        {
+            "prompt_preset": "criteria",
+            "criteria_file": criteria_file,
+        }
+    )
+
+    cfg = RunConfig(**data)
+
+    assert cfg.judge.criteria_file == criteria_file
+
+
+def test_config_rejects_missing_criteria_file(tmp_path):
+    data = _base_generate()
+    data["judge"]["criteria_file"] = tmp_path / "missing.yaml"
+
+    with pytest.raises(ValidationError, match="criteria file not found"):
+        RunConfig(**data)
+
+
+def test_config_rejects_criteria_file_without_criteria_preset(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text("name: empty\ncriteria: []\n", encoding="utf-8")
+    data = _base_generate()
+    data["judge"]["criteria_file"] = criteria_file
+
+    with pytest.raises(ValidationError, match="not a criteria preset"):
+        RunConfig(**data)
+
+
 def _registered_task(
     *,
     default_swap_mode: str = "both",

@@ -1,6 +1,7 @@
 """Prompt templates and registry bundled with JudgeArena."""
 
 from judgearena.prompts.registry import (
+    CRITERIA_JUDGE_PROMPT_PRESET,
     DEFAULT_JUDGE_PROMPT_PRESET,
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -16,6 +17,7 @@ from judgearena.prompts.registry import (
 )
 
 __all__ = [
+    "CRITERIA_JUDGE_PROMPT_PRESET",
     "DEFAULT_JUDGE_PROMPT_PRESET",
     "DEFAULT_WITH_EXPLANATION_PRESET",
     "FASTCHAT_PAIRWISE_PROMPT_PRESET",

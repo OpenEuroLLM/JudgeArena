@@ -32,6 +32,8 @@ def _cfg(
     max_judge_model_len: int | None = None,
     engine_kwargs: dict | None = None,
     judge_engine_kwargs: dict | None = None,
+    prompt_preset: str | None = None,
+    criteria_file: str | None = None,
 ) -> RunConfig:
     return RunConfig(
         task=task,
@@ -45,6 +47,8 @@ def _cfg(
             "swap_mode": swap_mode,
             "max_model_len": max_judge_model_len,
             "engine_kwargs": judge_engine_kwargs or {},
+            "prompt_preset": prompt_preset,
+            "criteria_file": criteria_file,
         },
         generation={
             "n_instructions": n_instructions,
@@ -486,6 +490,72 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
     # Judged pref is P(M)=0.75 everywhere; unswitched rows (2, 3 under the
     # golden mask) show the baseline in slot A and re-orient to 0.25.
     assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
+
+
+def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
+    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
+
+    captured = {}
+    win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
+
+    def recording_score(battles):
+        captured["battles"] = battles
+        return win_rate.score(battles)
+
+    monkeypatch.setitem(
+        PAIRWISE_SCORERS,
+        "pairwise_win_rate",
+        PairwiseScorer(score=recording_score),
+    )
+
+    run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
+
+    battles = captured["battles"]
+    assert battles["score_a"].tolist() == [0.0, 0.0]
+    assert battles["score_b"].tolist() == [10.0, 10.0]
+
+
+def test_run_pairwise_saves_flat_criteria_annotations(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text(
+        "name: focused\n"
+        "criteria:\n"
+        "  - name: correctness\n"
+        "    description: Is correct.\n"
+        "  - name: clarity\n"
+        "    description: Is clear.\n",
+        encoding="utf-8",
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/correctness: A=8 B=4\nclarity: A=6 B=2",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+            prompt_preset="criteria",
+            criteria_file=str(criteria_file),
+        )
+    )
+
+    annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
+    assert all(pref < 0.5 for pref in prefs)
+    assert "judge_values" not in annotations
+    assert annotations["correctness_a"].tolist() == [8.0, 8.0]
+    assert annotations["clarity_b"].tolist() == [2.0, 2.0]
+    assert annotations["score_a"].tolist() == [7.0, 7.0]
+    assert annotations["score_b"].tolist() == [3.0, 3.0]
 
 
 def test_run_pairwise_random_swap_reorients_prefs(tmp_path):

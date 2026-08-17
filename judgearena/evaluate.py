@@ -148,6 +148,7 @@ class JudgeAnnotation:
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
     # first-token top logprobs, only collected for logprob-weighted presets
     judge_top_logprobs: dict[str, float] | None = None
+    judge_values: dict[str, float] | None = None
 
 
 def annotate_battles(
@@ -345,6 +346,8 @@ def judge_and_parse_prefs(
                     len(ann_list),
                     label,
                 )
+        for annotation in ann_list:
+            annotation.judge_values = parse.parse_values(annotation.judge_completion)
         results = [
             parse(a.judge_completion, top_logprobs=a.judge_top_logprobs)
             for a in ann_list

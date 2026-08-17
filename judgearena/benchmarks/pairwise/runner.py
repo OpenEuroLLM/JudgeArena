@@ -321,6 +321,13 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         df_reversed["judge"] = cfg.judge.model
         df = pd.concat([df, df_reversed])
 
+    df = df.reset_index(drop=True)
+    if "judge_values" in df:
+        parsed_values = pd.DataFrame(
+            [(values or {}) for values in df.pop("judge_values")]
+        )
+        if not parsed_values.empty:
+            df = pd.concat([df, parsed_values], axis=1)
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
     # Scorers see one canonically-oriented row per judged battle; under
@@ -343,6 +350,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             instructions_df.loc[eval_instruction_index, "category"].tolist() * repeats
         )
     battles = pd.DataFrame(battle_data)
+    values = pd.DataFrame(
+        [a.judge_values or {} for a in annotations + (annotations_reversed or [])]
+    )
+    if not values.empty:
+        battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
     scoring_result = scorer.score(battles)
     scoring_details = {
         **scoring_result.metrics,

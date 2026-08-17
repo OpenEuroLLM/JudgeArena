@@ -199,29 +199,31 @@ def judge_mt_bench_with_preset(
         ):
             prompt: MTBenchPresetPrompt = item.prompt
             parsed_preference = prompt.parser(raw_judgment)
+            parsed_values = prompt.parser.parse_values(raw_judgment)
             normalized_preference = _normalize_preference(
                 parsed_preference,
                 swapped=swapped,
             )
-            annotations.append(
-                {
-                    "question_id": item.question_id,
-                    "category": item.category,
-                    "turn": item.turn,
-                    "model_A": model_b if swapped else model_a,
-                    "model_B": model_a if swapped else model_b,
-                    "judge": judge_model,
-                    "prompt_name": prompt.name,
-                    "prompt_preset": prompt.preset_name,
-                    "parser_mode": parser_name(prompt.parser),
-                    "system_prompt": prompt.system_prompt,
-                    "user_prompt_template": prompt.user_prompt_template,
-                    "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
-                    "judge_completion": raw_judgment,
-                    "preference": normalized_preference,
-                    "swapped": swapped,
-                }
-            )
+            annotation = {
+                "question_id": item.question_id,
+                "category": item.category,
+                "turn": item.turn,
+                "model_A": model_b if swapped else model_a,
+                "model_B": model_a if swapped else model_b,
+                "judge": judge_model,
+                "prompt_name": prompt.name,
+                "prompt_preset": prompt.preset_name,
+                "parser_mode": parser_name(prompt.parser),
+                "system_prompt": prompt.system_prompt,
+                "user_prompt_template": prompt.user_prompt_template,
+                "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
+                "judge_completion": raw_judgment,
+                "preference": normalized_preference,
+                "swapped": swapped,
+            }
+            if parsed_values:
+                annotation.update(parsed_values)
+            annotations.append(annotation)
             metadata.append(
                 {
                     "question_id": item.question_id,

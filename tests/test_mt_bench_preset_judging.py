@@ -171,6 +171,47 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     ]
 
 
+def test_mt_bench_saves_criteria_values_from_resolved_prompt(tmp_path):
+    criteria_file = tmp_path / "criteria.yaml"
+    criteria_file.write_text(
+        "name: focused\n"
+        "criteria:\n"
+        "  - name: correctness\n"
+        "    description: Is factually correct.\n"
+        "  - name: clarity\n"
+        "    description: Is easy to understand.\n",
+        encoding="utf-8",
+    )
+    judge = SequenceJudge(["correctness: A=8 B=4\nclarity: A=6 B=2"])
+
+    prefs, annotations, _ = judge_mt_bench_with_preset(
+        judge_chat_model=judge,
+        judge_model="judge",
+        questions=_questions_df(category="writing"),
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+        model_a="model-a",
+        model_b="model-b",
+        turns_mode="single",
+        swap_mode="fixed",
+        truncate_input_chars=None,
+        use_tqdm=False,
+        reference_categories=REFERENCE_CATEGORIES,
+        prompt_for_turn=lambda multi_turn: resolve_judge_prompt(
+            preset="criteria",
+            criteria_file=criteria_file,
+            multi_turn=multi_turn,
+        ),
+    )
+
+    assert prefs.iloc[0] < 0.5
+    assert annotations[0]["correctness_a"] == 8.0
+    assert annotations[0]["clarity_b"] == 2.0
+    assert annotations[0]["score_a"] == 7.0
+    assert annotations[0]["score_b"] == 3.0
+    assert "Is factually correct." in annotations[0]["user_prompt_template"]
+
+
 def test_build_mt_bench_prompt_uses_resolved_named_parser(tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
