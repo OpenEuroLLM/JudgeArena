@@ -23,9 +23,12 @@ def _battles(prefs: list, **overrides) -> pd.DataFrame:
 def test_pairwise_win_rate_scorer_owns_metric_semantics():
     scorer = PAIRWISE_SCORERS["pairwise_win_rate"]
 
-    summary = scorer.summarize(_battles([0.0, 1.0, 0.5]))
+    result = scorer.score(_battles([0.0, 1.0, 0.5]))
 
     assert scorer.primary_metric == "winrate"
     assert scorer.higher_is_better is True
-    assert summary.num_battles == 3
-    assert summary.winrate == pytest.approx(0.5)
+    assert result.summary.num_battles == 3
+    assert result.summary.winrate == pytest.approx(0.5)
+    assert result.metrics == {}
+    assert result.breakdowns == {}
+    assert result.methodology == {}
