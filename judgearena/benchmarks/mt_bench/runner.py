@@ -19,7 +19,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, ScoringInputs
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -207,9 +207,7 @@ def _finalize_mt_bench_run(
     scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
     # MT-Bench battles carry per-turn prefs only; the win-rate scorer reads
     # just the pref column of the canonical battles frame.
-    stats = scorer.summarize(
-        ScoringInputs(battles=pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
-    )
+    stats = scorer.summarize(pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,

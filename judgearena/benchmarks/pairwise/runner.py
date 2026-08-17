@@ -13,7 +13,7 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, ScoringInputs
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
@@ -29,14 +29,14 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _resolve_prompt_groups(
+def _build_judge_batches(
     cfg: "RunConfig",
     resolved_task: ResolvedTaskSpec,
     instructions_df: pd.DataFrame,
     eval_index: pd.Index,
     resolved_prompt,
 ) -> list[tuple[object, pd.Index]]:
-    """Split judging into one group per judge prompt.
+    """Group evaluation rows that share the same resolved judge prompt.
 
     Tasks may map categories to prompt presets (e.g. Arena-Hard v2.0 judges
     creative writing with a different system prompt). Runtime prompt overrides
@@ -68,13 +68,7 @@ def _resolve_prompt_groups(
 
 
 def _random_swap_mask(instructions: pd.Series) -> pd.Series:
-    """Deterministic per-instruction pair-order flips (swap_mode='random').
-
-    Replicates AlpacaEval's RandomSwitchTwoColumnsProcessor seed derivation
-    (switch-column name "is_switched_outputs" + instruction text + annotator
-    seed 0), so the swap decisions are bit-identical to the official
-    annotator's.
-    """
+    """Return deterministic per-instruction pair-order flips."""
     return pd.Series(
         [
             random.Random(f"is_switched_outputs{instruction}0").choices(
@@ -110,8 +104,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         raise ValueError(f"Unknown task {cfg.task!r}.")
     # Resolve before generation so a missing scorer dependency fails fast.
     scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
-    if scorer.check_available is not None:
-        scorer.check_available()
+    if scorer.check_requirements is not None:
+        scorer.check_requirements()
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
@@ -234,14 +228,13 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
     eval_index = instructions.head(n_instructions).index
-    prompt_groups = _resolve_prompt_groups(
+    prompt_groups = _build_judge_batches(
         cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
 
-    # swap_mode="random" follows AlpacaEval's presentation order: the baseline
-    # fills the first judged slot unless the per-instruction mask switches the
-    # pair; prefs are re-oriented to the canonical model/baseline frame after
-    # parsing.
+    # The baseline fills the first judged slot unless the deterministic mask
+    # switches the pair. Preferences are re-oriented to the canonical
+    # model/baseline frame after parsing.
     swap_mask = (
         _random_swap_mask(instructions) if cfg.judge.swap_mode == "random" else None
     )
@@ -336,8 +329,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     values = pd.DataFrame([a.judge_values or {} for a in judged_annotations])
     if not values.empty:
         battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
-    scoring_inputs = ScoringInputs(battles=battles)
-    summary = scorer.summarize(scoring_inputs)
+    summary = scorer.summarize(battles)
 
     report = BattleReport(
         task=cfg.task,
@@ -361,13 +353,13 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
                         for a in annotations + (annotations_reversed or [])
                     ),
                 }
-                if getattr(resolved_prompt.parse, "uses_top_logprobs", False)
+                if getattr(resolved_prompt.parse, "requires_top_logprobs", False)
                 else {}
             ),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             **(
-                scorer.report_metadata(scoring_inputs)
+                scorer.report_metadata(battles)
                 if scorer.report_metadata is not None
                 else {}
             ),
