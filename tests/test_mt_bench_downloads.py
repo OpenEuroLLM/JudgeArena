@@ -485,9 +485,9 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
 
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
-    assert captured["preset"]["resolved_prompt"].preset_name == (
-        "default_with_explanation"
-    )
+    prompt_for_turn = captured["preset"]["prompt_for_turn"]
+    assert prompt_for_turn(False).preset_name == "default_with_explanation"
+    assert prompt_for_turn(True).preset_name == "default_with_explanation"
     assert "temperature" not in captured["make_model"]
 
 

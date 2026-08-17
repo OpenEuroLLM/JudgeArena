@@ -15,9 +15,10 @@ from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.scoring import resolve_pairwise_scorer
 from judgearena.datasets.pairwise import load_pairwise_task_data
-from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
+from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
+from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, generation_cache_token

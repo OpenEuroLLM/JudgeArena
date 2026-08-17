@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,10 +21,10 @@ from judgearena.benchmarks.mt_bench.prompt_templates import (
 )
 from judgearena.prompts.parsing import JudgeParser, parser_name
 from judgearena.prompts.registry import (
-    DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
-    resolve_judge_prompt,
 )
+
+MTBenchPromptResolver = Callable[[bool], ResolvedJudgePrompt]
 
 
 @dataclass(frozen=True)
@@ -60,28 +60,22 @@ def _build_mt_bench_preset_user_prompt_template(
     return f"{base_template}\n\n{output_section}"
 
 
-def _select_preset_prompt(
+def _build_mt_bench_prompt(
     category: str | None,
     multi_turn: bool,
     *,
     reference_categories: Collection[str],
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    system_file: str | None = None,
-    user_file: str | None = None,
-    parser: str | None = None,
+    resolved_prompt: ResolvedJudgePrompt,
 ) -> MTBenchPresetPrompt:
     ref_based = is_reference_based_category(category, reference_categories)
-    resolved_prompt = resolve_judge_prompt(
-        preset=prompt_preset,
-        system_file=system_file,
-        user_file=user_file,
-        multi_turn=multi_turn,
-        parser=parser,
-    )
     if resolved_prompt.delegated:
         raise ValueError(
             f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
             "cannot be used for MT-Bench preset judging."
+        )
+    if resolved_prompt.parse is None:
+        raise ValueError(
+            f"Judge prompt preset '{resolved_prompt.preset_name}' has no parser."
         )
     suffix = "multi" if multi_turn else "single"
     if ref_based:
@@ -110,12 +104,14 @@ def _build_mt_bench_preset_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     reference_categories: Collection[str],
-    prompt_preset: str,
-    system_file: str | None = None,
-    user_file: str | None = None,
-    parser: str | None = None,
+    prompt_for_turn: MTBenchPromptResolver,
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
+    prompts_by_turn: dict[bool, ResolvedJudgePrompt] = {}
+    if eval_single:
+        prompts_by_turn[False] = prompt_for_turn(False)
+    if eval_multi:
+        prompts_by_turn[True] = prompt_for_turn(True)
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
@@ -123,14 +119,11 @@ def _build_mt_bench_preset_items(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
-        select_prompt=lambda category, multi_turn: _select_preset_prompt(
+        select_prompt=lambda category, multi_turn: _build_mt_bench_prompt(
             category,
             multi_turn=multi_turn,
             reference_categories=reference_categories,
-            prompt_preset=prompt_preset,
-            system_file=system_file,
-            user_file=user_file,
-            parser=parser,
+            resolved_prompt=prompts_by_turn[multi_turn],
         ),
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
@@ -156,10 +149,7 @@ def judge_mt_bench_with_preset(
     truncate_input_chars: int | None,
     use_tqdm: bool,
     reference_categories: Collection[str],
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    system_file: str | None = None,
-    user_file: str | None = None,
-    parser: str | None = None,
+    prompt_for_turn: MTBenchPromptResolver,
     strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
@@ -173,10 +163,7 @@ def judge_mt_bench_with_preset(
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         reference_categories=reference_categories,
-        prompt_preset=prompt_preset,
-        system_file=system_file,
-        user_file=user_file,
-        parser=parser,
+        prompt_for_turn=prompt_for_turn,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
     judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(

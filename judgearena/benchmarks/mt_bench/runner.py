@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,7 +18,10 @@ from judgearena.artifacts import prepare_run_directory, write_run_metadata_safel
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
-from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.benchmarks.mt_bench.preset_judging import (
+    MTBenchPromptResolver,
+    judge_mt_bench_with_preset,
+)
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.benchmarks.pairwise.scoring import resolve_pairwise_scorer
 from judgearena.datasets import load_instructions
@@ -307,9 +311,10 @@ def _run_mt_bench_preset(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    resolved_prompt: ResolvedJudgePrompt,
+    prompt_for_turn: MTBenchPromptResolver,
     started_at_utc: datetime,
 ) -> pd.Series:
+    resolved_prompt = prompt_for_turn(True)
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
         judge_model=cfg.judge.model,
@@ -323,10 +328,7 @@ def _run_mt_bench_preset(
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
-        prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
-        system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
-        user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
-        parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
+        prompt_for_turn=prompt_for_turn,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
@@ -382,7 +384,16 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         protocol=protocol,
         questions_df=questions_df,
     )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+
+    @cache
+    def prompt_for_turn(multi_turn: bool) -> ResolvedJudgePrompt:
+        return resolve_run_judge_prompt(
+            cfg.task,
+            cfg.judge,
+            multi_turn=multi_turn,
+        )
+
+    resolved_prompt = prompt_for_turn(True)
     if resolved_prompt.delegated:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
@@ -419,6 +430,6 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         completions_a=completions_a,
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
-        resolved_prompt=resolved_prompt,
+        prompt_for_turn=prompt_for_turn,
         started_at_utc=run_started_at,
     )

@@ -5,12 +5,22 @@ import pytest
 
 from judgearena.benchmarks.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
-    _select_preset_prompt,
+    _build_mt_bench_prompt,
     judge_mt_bench_with_preset,
 )
-from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
+from judgearena.prompts.registry import (
+    FASTCHAT_PAIRWISE_PROMPT_PRESET,
+    resolve_judge_prompt,
+)
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
+
+
+def _prompt_for_preset(preset: str = "default"):
+    return lambda multi_turn: resolve_judge_prompt(
+        preset=preset,
+        multi_turn=multi_turn,
+    )
 
 
 class SequenceJudge:
@@ -48,13 +58,15 @@ def _completions_df(prefix: str) -> pd.DataFrame:
     )
 
 
-def test_select_preset_prompt_rejects_delegated_preset():
+def test_build_mt_bench_prompt_rejects_delegated_preset():
     with pytest.raises(ValueError, match="delegated"):
-        _select_preset_prompt(
+        _build_mt_bench_prompt(
             "writing",
             multi_turn=False,
             reference_categories=REFERENCE_CATEGORIES,
-            prompt_preset=FASTCHAT_PAIRWISE_PROMPT_PRESET,
+            resolved_prompt=resolve_judge_prompt(
+                preset=FASTCHAT_PAIRWISE_PROMPT_PRESET
+            ),
         )
 
 
@@ -67,17 +79,20 @@ def test_select_preset_prompt_rejects_delegated_preset():
         ("math", True, "default-multi_ref", True),
     ],
 )
-def test_select_preset_prompt_variants(
+def test_build_mt_bench_prompt_variants(
     category: str,
     multi_turn: bool,
     expected_name: str,
     expected_ref_based: bool,
 ):
-    prompt = _select_preset_prompt(
+    prompt = _build_mt_bench_prompt(
         category,
         multi_turn=multi_turn,
         reference_categories=REFERENCE_CATEGORIES,
-        prompt_preset="default",
+        resolved_prompt=resolve_judge_prompt(
+            preset="default",
+            multi_turn=multi_turn,
+        ),
     )
 
     assert prompt.name == expected_name
@@ -96,7 +111,7 @@ def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
         eval_multi=True,
         truncate_input_chars=None,
         reference_categories=REFERENCE_CATEGORIES,
-        prompt_preset="default",
+        prompt_for_turn=_prompt_for_preset(),
     )
 
     assert [item.turn for item in items] == [1, 2]
@@ -139,7 +154,7 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
         truncate_input_chars=None,
         use_tqdm=False,
         reference_categories=REFERENCE_CATEGORIES,
-        prompt_preset="default",
+        prompt_for_turn=_prompt_for_preset(),
     )
 
     assert len(judge.calls) == 2
@@ -156,7 +171,7 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     ]
 
 
-def test_select_preset_prompt_forwards_named_parser(tmp_path):
+def test_build_mt_bench_prompt_uses_resolved_named_parser(tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
     system_file = tmp_path / "system.txt"
@@ -166,13 +181,37 @@ def test_select_preset_prompt_forwards_named_parser(tmp_path):
         "Q: {user_prompt} A: {completion_A} B: {completion_B}\n# Your output\nscores"
     )
 
-    prompt = _select_preset_prompt(
+    resolved_prompt = resolve_judge_prompt(
+        system_file=system_file,
+        user_file=user_file,
+        parser="score",
+    )
+    prompt = _build_mt_bench_prompt(
         "writing",
         multi_turn=False,
         reference_categories=REFERENCE_CATEGORIES,
-        system_file=str(system_file),
-        user_file=str(user_file),
-        parser="score",
+        resolved_prompt=resolved_prompt,
     )
 
     assert prompt.parse is JUDGE_PARSERS["score"]
+
+
+def test_build_items_resolves_each_enabled_turn_once():
+    calls: list[bool] = []
+
+    def prompt_for_turn(multi_turn: bool):
+        calls.append(multi_turn)
+        return resolve_judge_prompt(preset="default", multi_turn=multi_turn)
+
+    _build_mt_bench_preset_items(
+        questions=_questions_df(),
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+        eval_single=True,
+        eval_multi=True,
+        truncate_input_chars=None,
+        reference_categories=REFERENCE_CATEGORIES,
+        prompt_for_turn=prompt_for_turn,
+    )
+
+    assert calls == [False, True]

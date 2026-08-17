@@ -30,11 +30,11 @@ from judgearena.evaluate import (
     calibrate_temperature,
     combine_swapped_prefs,
     judge_and_parse_prefs,
-    resolve_run_judge_prompt,
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
+from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
