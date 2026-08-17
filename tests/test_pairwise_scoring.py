@@ -3,7 +3,10 @@
 import pandas as pd
 import pytest
 
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.pairwise.scoring import (
+    PAIRWISE_SCORERS,
+    resolve_pairwise_scorer,
+)
 from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     _official_annotations,
     _summarize,
@@ -22,6 +25,16 @@ def _battles(prefs: list, **overrides) -> pd.DataFrame:
     }
     columns.update(overrides)
     return pd.DataFrame(columns)
+
+
+def test_pairwise_scorer_resolver_reports_available_names():
+    assert (
+        resolve_pairwise_scorer("pairwise_win_rate")
+        is PAIRWISE_SCORERS["pairwise_win_rate"]
+    )
+
+    with pytest.raises(ValueError, match="Unknown pairwise scorer.*available"):
+        resolve_pairwise_scorer("missing")
 
 
 def test_pairwise_win_rate_scorer_owns_metric_semantics():

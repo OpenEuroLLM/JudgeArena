@@ -23,6 +23,16 @@ class EloScorer:
     fit: RatingFunction
 
 
-ELO_SCORERS = {
+ELO_SCORERS: dict[str, EloScorer] = {
     "bradley_terry": EloScorer(fit=fit_bradley_terry),
 }
+
+
+def resolve_elo_scorer(name: str) -> EloScorer:
+    """Return the scorer selected by an ELO task."""
+    try:
+        return ELO_SCORERS[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown ELO scorer {name!r}; available: {sorted(ELO_SCORERS)}"
+        ) from exc

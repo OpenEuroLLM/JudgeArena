@@ -24,3 +24,13 @@ PAIRWISE_SCORERS: dict[str, PairwiseScorer] = {
         check_requirements=alpaca_eval.check_requirements,
     ),
 }
+
+
+def resolve_pairwise_scorer(name: str) -> PairwiseScorer:
+    """Return the scorer selected by a pairwise task."""
+    try:
+        return PAIRWISE_SCORERS[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown pairwise scorer {name!r}; available: {sorted(PAIRWISE_SCORERS)}"
+        ) from exc
