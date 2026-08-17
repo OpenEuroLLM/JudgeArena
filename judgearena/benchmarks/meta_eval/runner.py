@@ -21,7 +21,10 @@ from judgearena.benchmarks.meta_eval.agreement import (
     compute_agreement_metrics,
 )
 from judgearena.benchmarks.meta_eval.annotate import annotate_sample
-from judgearena.benchmarks.meta_eval.cost import annotation_telemetry
+from judgearena.benchmarks.meta_eval.cost import (
+    AnnotationTelemetry,
+    annotation_telemetry,
+)
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
     normalize_human_winner,
@@ -82,21 +85,8 @@ class MetaEvalReport(Report):
     """Held-out Elo MAE vs annotation budget, keeping LLM-predicted ties."""
     elo_gap_exclude_ties: list[dict[str, float | int | str | bool]]
     """Held-out Elo MAE vs annotation budget, dropping LLM-predicted ties after sampling."""
-    judge_passes_per_battle: int
-    """1 for swap_mode=fixed, 2 for swap_mode=both."""
-    estimated_input_tokens: int
-    """Sum of chars/4 token estimates over judge inputs."""
-    estimated_output_tokens: int
-    """Sum of chars/4 token estimates over judge completions."""
-    token_count_source: str
-    """How tokens were counted (chars/4; never a provider usage API)."""
-    total_cost_usd: float
-    """OpenRouter reference price applied to the token estimates; NaN (written as
-    null) when no local pricing covers the judge."""
-    cost_per_1k_judgements_usd: float
-    """Mean estimated USD per 1,000 judge passes, NaN if pricing is missing."""
-    cost_source_counts: dict[str, int]
-    """Per-row cost_source value counts (estimated vs unavailable)."""
+    telemetry: AnnotationTelemetry
+    """Token and cost rollup over the judge passes."""
 
     def render(self) -> None:
         print(f"\n=== Meta-eval: {self.task} ===")
@@ -125,15 +115,16 @@ class MetaEvalReport(Report):
                 f"ρ {metrics['spearman']}  MAE {metrics['mae_elo']}"
             )
         print(
-            f"  Tokens (chars/4): {self.estimated_input_tokens} in / "
-            f"{self.estimated_output_tokens} out"
+            f"  Tokens (chars/4): {self.telemetry.estimated_input_tokens} in / "
+            f"{self.telemetry.estimated_output_tokens} out"
         )
-        if math.isnan(self.total_cost_usd):
+        if math.isnan(self.telemetry.total_cost_usd):
             print("  Cost: n/a (no local OpenRouter reference pricing)")
         else:
             print(
-                f"  Cost (OpenRouter reference): ${self.total_cost_usd:.4f}  "
-                f"(${self.cost_per_1k_judgements_usd:.4f}/1k passes)"
+                f"  Cost (OpenRouter reference): "
+                f"${self.telemetry.total_cost_usd:.4f}  "
+                f"(${self.telemetry.cost_per_1k_judgements_usd:.4f}/1k passes)"
             )
 
 
@@ -213,8 +204,6 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
     elo_gap_no_tie = scorer.elo_gap(
         **elo_gap_kwargs, seed=cfg.run.seed + 1000, exclude_ties=True
     )
-    telemetry = annotation_telemetry(annotations, swap_mode=cfg.judge.swap_mode)
-
     report = MetaEvalReport(
         task=cfg.task,
         arena=protocol.arena,
@@ -231,7 +220,7 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         language_summary=language_summary,
         elo_gap_all=elo_gap_all.to_dict(orient="records"),
         elo_gap_exclude_ties=elo_gap_no_tie.to_dict(orient="records"),
-        **telemetry,
+        telemetry=annotation_telemetry(annotations, swap_mode=cfg.judge.swap_mode),
     )
     results = report.to_dict()
     report.render()

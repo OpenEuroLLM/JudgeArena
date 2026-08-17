@@ -246,16 +246,16 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert set(results["language_summary"]) == {"English", "Multilingual"}
     assert results["elo_gap_all"][0]["num_battles"] == 2
     assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
-    assert results["judge_passes_per_battle"] == 1
-    assert results["token_count_source"] == "estimated_chars_div_4"
-    assert results["estimated_input_tokens"] > 0
+    assert results["telemetry"]["judge_passes_per_battle"] == 1
+    assert results["telemetry"]["token_count_source"] == "estimated_chars_div_4"
+    assert results["telemetry"]["estimated_input_tokens"] > 0
     summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
     assert set(summary["split"]) == {"English", "Multilingual"}
     written = json.loads((res_dir / "results.json").read_text())
     assert written["arena"] == "ComparIA"
     # No pricing covers the dummy judge, so the keys stay put and read as null.
-    assert written["total_cost_usd"] is None
-    assert written["cost_per_1k_judgements_usd"] is None
+    assert written["telemetry"]["total_cost_usd"] is None
+    assert written["telemetry"]["cost_per_1k_judgements_usd"] is None
 
 
 def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
@@ -287,8 +287,10 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     ranking_n = sum(split["n"] for split in results["language_summary"].values())
     assert ranking_n == int((forward["winner"] != "tie").sum())
     assert ranking_n < results["n_annotations"]
-    assert results["judge_passes_per_battle"] == 2
-    assert results["estimated_input_tokens"] == 2 * len(forward) * (len("prompt") // 4)
+    assert results["telemetry"]["judge_passes_per_battle"] == 2
+    assert results["telemetry"]["estimated_input_tokens"] == 2 * len(forward) * (
+        len("prompt") // 4
+    )
 
 
 def test_empty_language_split_reports_na():
@@ -363,7 +365,7 @@ def test_swapped_pass_telemetry_counts_both_judgements():
         ),
         swap_mode="both",
     )
-    assert telemetry["judge_passes_per_battle"] == 2
-    assert telemetry["total_cost_usd"] == pytest.approx(0.3)
-    assert telemetry["estimated_input_tokens"] == 21
-    assert telemetry["estimated_output_tokens"] == 11
+    assert telemetry.judge_passes_per_battle == 2
+    assert telemetry.total_cost_usd == pytest.approx(0.3)
+    assert telemetry.estimated_input_tokens == 21
+    assert telemetry.estimated_output_tokens == 11

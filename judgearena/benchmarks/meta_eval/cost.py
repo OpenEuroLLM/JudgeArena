@@ -6,6 +6,7 @@ import json
 import math
 
 import pandas as pd
+from pydantic import BaseModel
 
 from judgearena.log import get_logger
 from judgearena.paths import data_root
@@ -61,34 +62,52 @@ def estimate_annotation_cost_usd(
     return float(cost), "estimated"
 
 
-def annotation_telemetry(df_ann: pd.DataFrame, *, swap_mode: str) -> dict[str, object]:
+class AnnotationTelemetry(BaseModel):
+    """Token and cost rollup over the judge passes of one meta-eval run."""
+
+    judge_passes_per_battle: int
+    """1 for swap_mode=fixed, 2 for swap_mode=both."""
+    estimated_input_tokens: int
+    """Sum of chars/4 token estimates over judge inputs."""
+    estimated_output_tokens: int
+    """Sum of chars/4 token estimates over judge completions."""
+    token_count_source: str
+    """How tokens were counted (chars/4; never a provider usage API)."""
+    total_cost_usd: float
+    """OpenRouter reference price applied to the token estimates; NaN (written as
+    null) when no local pricing covers the judge."""
+    cost_per_1k_judgements_usd: float
+    """Mean estimated USD per 1,000 judge passes, NaN if pricing is missing."""
+    cost_source_counts: dict[str, int]
+    """Per-row cost_source value counts (estimated vs unavailable)."""
+
+
+def _column_sum(df_ann: pd.DataFrame, column: str) -> int:
+    return int(pd.to_numeric(df_ann[column], errors="coerce").fillna(0).sum())
+
+
+def annotation_telemetry(
+    df_ann: pd.DataFrame, *, swap_mode: str
+) -> AnnotationTelemetry:
     """Roll up per-pass token and cost columns. ``swap_mode=both`` is two rows per battle."""
     costs = pd.to_numeric(df_ann["cost_usd"], errors="coerce").dropna()
     sources = df_ann["cost_source"].dropna()
-    # NaN rather than None so the keys survive the report's exclude_none dump
-    # and still serialize as JSON null, like the NaN kappa of a degenerate run.
-    total_cost = float(costs.sum()) if not costs.empty else math.nan
-    cost_per_1k = float(costs.mean() * 1000) if not costs.empty else math.nan
     if costs.empty:
         logger.warning(
             "OpenRouter reference pricing is unavailable; cost fields will be null."
         )
-    return {
-        "judge_passes_per_battle": 2 if swap_mode == "both" else 1,
-        "estimated_input_tokens": int(
-            pd.to_numeric(df_ann["estimated_input_tokens"], errors="coerce")
-            .fillna(0)
-            .sum()
+    return AnnotationTelemetry(
+        judge_passes_per_battle=2 if swap_mode == "both" else 1,
+        estimated_input_tokens=_column_sum(df_ann, "estimated_input_tokens"),
+        estimated_output_tokens=_column_sum(df_ann, "estimated_output_tokens"),
+        token_count_source="estimated_chars_div_4",
+        # NaN rather than None so the keys survive the report's exclude_none dump
+        # and still serialize as JSON null, like the NaN kappa of a degenerate run.
+        total_cost_usd=float(costs.sum()) if not costs.empty else math.nan,
+        cost_per_1k_judgements_usd=(
+            float(costs.mean() * 1000) if not costs.empty else math.nan
         ),
-        "estimated_output_tokens": int(
-            pd.to_numeric(df_ann["estimated_output_tokens"], errors="coerce")
-            .fillna(0)
-            .sum()
-        ),
-        "token_count_source": "estimated_chars_div_4",
-        "total_cost_usd": total_cost,
-        "cost_per_1k_judgements_usd": cost_per_1k,
-        "cost_source_counts": {
+        cost_source_counts={
             str(source): int(count) for source, count in sources.value_counts().items()
         },
-    }
+    )
