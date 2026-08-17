@@ -113,11 +113,21 @@ def _build_mt_bench_preset_items(
     prompt_for_turn: MTBenchPromptResolver,
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
-    prompts_by_turn: dict[bool, ResolvedJudgePrompt] = {}
-    if eval_single:
-        prompts_by_turn[False] = prompt_for_turn(False)
-    if eval_multi:
-        prompts_by_turn[True] = prompt_for_turn(True)
+    single_turn_prompt = prompt_for_turn(False) if eval_single else None
+    multi_turn_prompt = prompt_for_turn(True) if eval_multi else None
+
+    def select_prompt(category: str | None, multi_turn: bool) -> MTBenchPresetPrompt:
+        resolved_prompt = multi_turn_prompt if multi_turn else single_turn_prompt
+        if resolved_prompt is None:
+            turn_name = "multi-turn" if multi_turn else "single-turn"
+            raise ValueError(f"Prompt requested for disabled {turn_name} judging.")
+        return _build_mt_bench_prompt(
+            category,
+            multi_turn=multi_turn,
+            reference_categories=reference_categories,
+            resolved_prompt=resolved_prompt,
+        )
+
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
@@ -125,12 +135,7 @@ def _build_mt_bench_preset_items(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
-        select_prompt=lambda category, multi_turn: _build_mt_bench_prompt(
-            category,
-            multi_turn=multi_turn,
-            reference_categories=reference_categories,
-            resolved_prompt=prompts_by_turn[multi_turn],
-        ),
+        select_prompt=select_prompt,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
