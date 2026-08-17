@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
-from judgearena.benchmarks.pairwise.scoring_alpaca_eval import (
+from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     _official_annotations,
     _summarize,
 )

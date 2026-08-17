@@ -6,6 +6,7 @@ import math
 
 import pandas as pd
 
+from judgearena.benchmarks.pairwise.scoring.models import ScoringResult
 from judgearena.log import get_logger
 from judgearena.utils.eval import PrefSummary
 
@@ -54,12 +55,9 @@ def _official_annotations(battles: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def score(battles: pd.DataFrame):
+def score(battles: pd.DataFrame) -> ScoringResult:
     """Return raw and official length-controlled AlpacaEval metrics."""
     from alpaca_eval.metrics import get_length_controlled_winrate
-
-    # Imported lazily to avoid a module cycle with the scorer registry.
-    from judgearena.benchmarks.pairwise.scoring import ScoringResult
 
     if battles["instruction_index"].duplicated().any():
         logger.warning(

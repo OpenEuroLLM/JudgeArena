@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from judgearena.benchmarks.pairwise.scoring.models import ScoringResult
 from judgearena.utils.eval import PrefSummary
 
 DECISIVE_WEIGHT = 3
@@ -104,11 +105,8 @@ def _summarize_by_category(battles: pd.DataFrame) -> dict[str, dict[str, object]
     return summaries
 
 
-def score(battles: pd.DataFrame):
+def score(battles: pd.DataFrame) -> ScoringResult:
     """Return official aggregate, grouped results, and scoring details."""
-    # Imported lazily to avoid a module cycle with the scorer registry.
-    from judgearena.benchmarks.pairwise.scoring import ScoringResult
-
     has_categories = "category" in battles and battles["category"].notna().any()
     metrics: dict[str, float | None] = {}
     grouped_results: dict[str, object] = {}
