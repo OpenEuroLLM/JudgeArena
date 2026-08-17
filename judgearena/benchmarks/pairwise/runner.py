@@ -102,10 +102,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     resolved_task = resolved_task or get_packaged_task(cfg.task)
     if resolved_task is None:
         raise ValueError(f"Unknown task {cfg.task!r}.")
-    # Resolve before generation so a missing scorer dependency fails fast.
     scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
-    if scorer.check_requirements is not None:
-        scorer.check_requirements()
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
@@ -329,26 +326,16 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     values = pd.DataFrame([a.judge_values or {} for a in judged_annotations])
     if not values.empty:
         battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
-    scoring_result = scorer.score(battles)
-    scoring_details = {
-        **({"metrics": scoring_result.metrics} if scoring_result.metrics else {}),
-        **(
-            {"methodology": scoring_result.methodology}
-            if scoring_result.methodology
-            else {}
-        ),
-    }
+    summary = scorer(battles)
 
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=baseline_plan.display_name,
         judge_model=cfg.judge.model,
-        summary=scoring_result.summary,
+        summary=summary,
         swap_mode=cfg.judge.swap_mode,
         result_folder=str(res_folder),
-        per_category=scoring_result.breakdowns.get("category"),
-        per_turn=scoring_result.breakdowns.get("turn"),
         preferences=prefs.tolist(),
         metadata={
             "baseline_assignment": "per-row"
@@ -358,7 +345,6 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
-            **({"scoring": scoring_details} if scoring_details else {}),
         },
     )
     results = report.to_dict()

@@ -207,9 +207,7 @@ def _finalize_mt_bench_run(
     scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
     # MT-Bench battles carry per-turn prefs only; the win-rate scorer reads
     # just the pref column of the canonical battles frame.
-    stats = scorer.score(
-        pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")})
-    ).summary
+    stats = scorer(pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
