@@ -36,13 +36,13 @@ class PairwiseTaskData:
                 f"Pairwise model outputs are missing canonical columns: {missing}."
             )
 
-    def model_completion(
+    def load_model_completions(
         self,
         model: str,
         *,
-        required_index: pd.Index | None = None,
+        instruction_ids: pd.Index | None = None,
     ) -> pd.Series | None:
-        """Return model completions aligned to the instructions that need them."""
+        """Return model completions aligned to the requested instruction IDs."""
         if self.model_outputs is None:
             return None
 
@@ -61,8 +61,8 @@ class PairwiseTaskData:
         )
         target_index = (
             self.instructions.index
-            if required_index is None
-            else pd.Index(required_index, name=self.instructions.index.name)
+            if instruction_ids is None
+            else pd.Index(instruction_ids, name=self.instructions.index.name)
         )
         missing = target_index[~target_index.isin(completions.index)]
         if len(missing):

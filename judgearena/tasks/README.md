@@ -16,8 +16,7 @@ Task YAML describes **what benchmark is being run**. A run config describes
 tasks/
 ├── definitions/       # Packaged task YAML, grouped by benchmark family
 ├── schema/            # Typed YAML contracts, separated by responsibility
-├── loader.py          # Inheritance, strict YAML loading, and stable hashes
-├── registry.py        # Discovery, task lookup, and component validation
+├── registry.py        # Loading, discovery, task lookup, and validation
 └── cli.py             # `judgearena tasks ...` commands
 ```
 

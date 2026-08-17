@@ -176,11 +176,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         model_spec: str,
         *,
         role: str,
-        required_index: pd.Index | None = None,
+        instruction_ids: pd.Index | None = None,
     ) -> pd.Series:
-        preloaded = task_data.model_completion(
+        preloaded = task_data.load_model_completions(
             model_spec,
-            required_index=required_index,
+            instruction_ids=instruction_ids,
         )
         if preloaded is not None:
             return preloaded
@@ -199,7 +199,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
         completions = _align_completion_series(generated)
         return (
-            completions if required_index is None else completions.loc[required_index]
+            completions if instruction_ids is None else completions.loc[instruction_ids]
         )
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
@@ -214,7 +214,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             model: _load_or_generate_completions(
                 model,
                 role="B",
-                required_index=baseline_per_index.index[baseline_per_index == model],
+                instruction_ids=baseline_per_index.index[baseline_per_index == model],
             )
             for model in baseline_plan.unique_models
         }

@@ -15,7 +15,6 @@ from judgearena.datasets.arena_hard import (
     _build_instructions,
     _build_model_outputs,
     _extract_assistant_output,
-    arena_hard_native_baseline,
     normalize_official_arena_hard,
 )
 from judgearena.tasks.registry import get_packaged_task
@@ -77,19 +76,6 @@ def test_alpaca_eval_builders_normalize_official_baseline_file():
     assert outputs["model"].unique().tolist() == ["gpt4_1106_preview"]
     assert outputs["output"].tolist() == ["out0", "out1"]
     assert outputs["instruction_index"].tolist() == ["0000", "0001"]
-
-
-def test_arena_hard_native_baseline_v01_is_flat_string():
-    assert arena_hard_native_baseline("arena-hard-v0.1") == "gpt-4-0314"
-
-
-def test_arena_hard_native_baseline_v20_is_per_category_mapping():
-    native = arena_hard_native_baseline("arena-hard-v2.0")
-    assert isinstance(native, dict)
-    assert native["hard_prompt"] == "o3-mini-2025-01-31"
-    assert native["coding"] == "o3-mini-2025-01-31"
-    assert native["math"] == "o3-mini-2025-01-31"
-    assert native["creative_writing"] == "gemini-2.0-flash-001"
 
 
 def test_arena_hard_source_is_owned_by_task_yaml():
@@ -170,18 +156,6 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
 
     assert loaded is not None
     pd.testing.assert_frame_equal(loaded, expected)
-
-
-def test_mt_bench_native_baseline_is_flat_string():
-    from judgearena.datasets.mt_bench import (
-        is_mt_bench_dataset,
-        mt_bench_native_baseline,
-    )
-
-    assert is_mt_bench_dataset("mt-bench") is True
-    assert is_mt_bench_dataset("alpaca-eval") is False
-    assert mt_bench_native_baseline("mt-bench") == "gpt-4"
-    assert mt_bench_native_baseline("alpaca-eval") is None
 
 
 def test_normalize_official_arena_hard_v01_drops_no_category():
@@ -436,7 +410,7 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
         task, local_tables_path=tmp_path / "tables"
     )
 
-    loaded = task_data.model_completion("baseline")
+    loaded = task_data.load_model_completions("baseline")
 
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]
@@ -458,17 +432,17 @@ def test_pairwise_task_data_only_requires_selected_output_rows():
         ),
     )
 
-    loaded = task_data.model_completion(
+    loaded = task_data.load_model_completions(
         "category-baseline",
-        required_index=pd.Index(["q1"], name="instruction_index"),
+        instruction_ids=pd.Index(["q1"], name="instruction_index"),
     )
 
     assert loaded is not None
     assert loaded.to_dict() == {"q1": "answer"}
     with pytest.raises(ValueError, match="missing 1 required instruction"):
-        task_data.model_completion(
+        task_data.load_model_completions(
             "category-baseline",
-            required_index=pd.Index(["q0"], name="instruction_index"),
+            instruction_ids=pd.Index(["q0"], name="instruction_index"),
         )
 
 
