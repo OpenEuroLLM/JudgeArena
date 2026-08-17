@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, ScoringInputs
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 
 
 def _battles(prefs: list, **overrides) -> pd.DataFrame:
@@ -23,7 +23,7 @@ def _battles(prefs: list, **overrides) -> pd.DataFrame:
 def test_pairwise_win_rate_scorer_owns_metric_semantics():
     scorer = PAIRWISE_SCORERS["pairwise_win_rate"]
 
-    summary = scorer.summarize(ScoringInputs(battles=_battles([0.0, 1.0, 0.5])))
+    summary = scorer.summarize(_battles([0.0, 1.0, 0.5]))
 
     assert scorer.primary_metric == "winrate"
     assert scorer.higher_is_better is True

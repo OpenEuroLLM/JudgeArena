@@ -354,9 +354,9 @@ def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
     captured = {}
     win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
 
-    def recording_summarize(inputs):
-        captured["battles"] = inputs.battles
-        return win_rate.summarize(inputs)
+    def recording_summarize(battles):
+        captured["battles"] = battles
+        return win_rate.summarize(battles)
 
     monkeypatch.setitem(
         PAIRWISE_SCORERS,

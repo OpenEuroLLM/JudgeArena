@@ -314,7 +314,7 @@ def judge_and_parse_prefs(
         prompt_preset=prompt_preset,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
-        collect_top_logprobs=parse.uses_top_logprobs,
+        collect_top_logprobs=parse.requires_top_logprobs,
     )
 
     annotations_reversed = None
@@ -330,14 +330,14 @@ def judge_and_parse_prefs(
             prompt_preset=prompt_preset,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
-            collect_top_logprobs=parse.uses_top_logprobs,
+            collect_top_logprobs=parse.requires_top_logprobs,
         )
 
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        if parse.uses_top_logprobs:
+        if parse.requires_top_logprobs:
             n_no_logprobs = sum(1 for a in ann_list if a.judge_top_logprobs is None)
             if n_no_logprobs:
                 logger.warning(

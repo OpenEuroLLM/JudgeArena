@@ -14,7 +14,7 @@ class JudgeParser(abc.ABC):
     """Parses what the judge returned into the universal preference.
 
     ``__call__`` receives the completion text plus, for parsers that declare
-    ``uses_top_logprobs``, the first generated token's top logprobs — and
+    ``requires_top_logprobs``, the first generated token's top logprobs — and
     returns the preference every pipeline consumes (0 = A wins, 0.5 = tie,
     1 = B wins, None = unparseable). ``parse_values`` optionally exposes the
     parser's structured values as a flat ``str -> float`` dict: per-side keys
@@ -25,7 +25,7 @@ class JudgeParser(abc.ABC):
     name: str
     """Registry key and run-metadata identifier."""
 
-    uses_top_logprobs: bool = False
+    requires_top_logprobs: bool = False
     """Whether judging should collect first-token top logprobs for this
     parser (the backend must also be asked for them via judge.top_logprobs)."""
 
@@ -40,7 +40,6 @@ class JudgeParser(abc.ABC):
     def parse_values(self, judge_completion: str) -> dict[str, float] | None:
         """Structured values behind the preference; None when there are none."""
         return None
-
 
 
 class PairScore(JudgeParser):
