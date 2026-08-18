@@ -76,6 +76,38 @@ def test_write_run_metadata_hashes_instruction_indices_as_set(tmp_path, monkeypa
     )
 
 
+def test_write_run_metadata_hashes_named_judge_prompts(tmp_path, monkeypatch):
+    monkeypatch.setattr(repro, "_get_dependency_versions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: None)
+
+    metadata_path = repro.write_run_metadata(
+        output_dir=tmp_path,
+        entrypoint="judgearena.test.entrypoint",
+        run={"dataset": "mt-bench"},
+        judge_prompts={
+            "single_turn": {
+                "system_prompt": "single system",
+                "user_prompt_template": "single user",
+            },
+            "multi_turn": {
+                "system_prompt": "multi system",
+                "user_prompt_template": "multi user",
+            },
+        },
+    )
+
+    metadata = json.loads(metadata_path.read_text())
+    assert set(metadata["judge_prompts"]) == {"single_turn", "multi_turn"}
+    assert metadata["judge_prompts"]["single_turn"] == {
+        "system_prompt_sha256": repro._hash_string_sha256("single system"),
+        "user_prompt_template_sha256": repro._hash_string_sha256("single user"),
+    }
+    assert metadata["judge_prompts"]["multi_turn"] == {
+        "system_prompt_sha256": repro._hash_string_sha256("multi system"),
+        "user_prompt_template_sha256": repro._hash_string_sha256("multi user"),
+    }
+
+
 def test_write_run_metadata_omits_optional_fields_when_inputs_missing(
     tmp_path, monkeypatch
 ):

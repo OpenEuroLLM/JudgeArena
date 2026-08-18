@@ -7,8 +7,37 @@ import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
 import judgearena.datasets.mt_bench as mt_bench
 import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
-from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
+from judgearena.prompts.registry import (
+    FASTCHAT_PAIRWISE_PROMPT_PRESET,
+    resolve_judge_prompt,
+)
 from judgearena.tasks.registry import get_packaged_task
+
+
+@pytest.mark.parametrize(
+    ("turns_mode", "expected_names", "expected_calls"),
+    [
+        ("single", {"single_turn"}, [False]),
+        ("multi", {"multi_turn"}, [True]),
+        ("both", {"single_turn", "multi_turn"}, [False, True]),
+    ],
+)
+def test_resolve_mt_bench_prompts_tracks_enabled_turns(
+    turns_mode, expected_names, expected_calls
+):
+    calls = []
+
+    def prompt_for_turn(multi_turn):
+        calls.append(multi_turn)
+        return object()
+
+    resolved = mt_bench_runner._resolve_mt_bench_prompts(
+        turns_mode=turns_mode,
+        prompt_for_turn=prompt_for_turn,
+    )
+
+    assert set(resolved) == expected_names
+    assert calls == expected_calls
 
 
 def test_mt_bench_sources_are_owned_by_task_yaml():
@@ -265,6 +294,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         judge={"model": "judge"},
     )
     started_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    resolved_prompt = resolve_judge_prompt(preset="default", multi_turn=False)
 
     mt_bench_runner._save_mt_bench_results(
         cfg=cfg,
@@ -274,8 +304,7 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         annotations_df=pd.DataFrame([{"preference": 1.0}]),
         started_at_utc=started_at,
         input_payloads={"instruction_index": [1]},
-        judge_system_prompt="system",
-        judge_user_prompt_template="user",
+        resolved_prompts={"single_turn": resolved_prompt},
     )
 
     assert (tmp_path / "mt-bench-test-annotations.csv").exists()
@@ -284,8 +313,12 @@ def test_save_mt_bench_results_writes_run_metadata(monkeypatch, tmp_path):
         == "judgearena.benchmarks.mt_bench.runner.run_mt_bench_benchmark"
     )
     assert captured["input_payloads"] == {"instruction_index": [1]}
-    assert captured["judge_system_prompt"] == "system"
-    assert captured["judge_user_prompt_template"] == "user"
+    assert captured["judge_prompts"] == {
+        "single_turn": {
+            "system_prompt": resolved_prompt.system_prompt,
+            "user_prompt_template": resolved_prompt.user_prompt_template,
+        }
+    }
     assert captured["started_at_utc"] == started_at
 
 
@@ -357,9 +390,14 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     assert captured["make_model"]["tensor_parallel_size"] == 4
     assert captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
     assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
-    assert captured["fastchat"]["resolved_prompt"].preset_name == (
-        FASTCHAT_PAIRWISE_PROMPT_PRESET
-    )
+    assert set(captured["fastchat"]["resolved_prompts"]) == {
+        "single_turn",
+        "multi_turn",
+    }
+    assert {
+        prompt.preset_name
+        for prompt in captured["fastchat"]["resolved_prompts"].values()
+    } == {FASTCHAT_PAIRWISE_PROMPT_PRESET}
 
 
 def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
@@ -423,9 +461,14 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     assert cfg.model.baseline == "gpt-4"
     assert captured["make_model"]["temperature"] == 0.0
     assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
-    assert captured["fastchat"]["resolved_prompt"].preset_name == (
-        FASTCHAT_PAIRWISE_PROMPT_PRESET
-    )
+    assert set(captured["fastchat"]["resolved_prompts"]) == {
+        "single_turn",
+        "multi_turn",
+    }
+    assert {
+        prompt.preset_name
+        for prompt in captured["fastchat"]["resolved_prompts"].values()
+    } == {FASTCHAT_PAIRWISE_PROMPT_PRESET}
 
 
 def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tmp_path):
@@ -488,6 +531,10 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     prompt_for_turn = captured["preset"]["prompt_for_turn"]
     assert prompt_for_turn(False).preset_name == "default_with_explanation"
     assert prompt_for_turn(True).preset_name == "default_with_explanation"
+    assert set(captured["preset"]["resolved_prompts"]) == {
+        "single_turn",
+        "multi_turn",
+    }
     assert "temperature" not in captured["make_model"]
 
 

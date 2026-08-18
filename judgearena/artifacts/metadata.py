@@ -261,6 +261,7 @@ def write_run_metadata(
     input_payloads: dict[str, Any] | None = None,
     judge_system_prompt: str | None = None,
     judge_user_prompt_template: str | None = None,
+    judge_prompts: dict[str, dict[str, str | None]] | None = None,
     started_at_utc: datetime | None = None,
     metadata_filename: str = METADATA_FILENAME,
 ) -> Path:
@@ -321,6 +322,22 @@ def write_run_metadata(
     judge_user_prompt_template_hash = _hash_string_sha256(judge_user_prompt_template)
     if judge_user_prompt_template_hash:
         metadata["judge_user_prompt_template_sha256"] = judge_user_prompt_template_hash
+
+    if judge_prompts:
+        prompt_hashes: dict[str, dict[str, str]] = {}
+        for name, prompt in sorted(judge_prompts.items()):
+            hashes = {
+                "system_prompt_sha256": _hash_string_sha256(
+                    prompt.get("system_prompt")
+                ),
+                "user_prompt_template_sha256": _hash_string_sha256(
+                    prompt.get("user_prompt_template")
+                ),
+            }
+            prompt_hashes[name] = {
+                key: value for key, value in hashes.items() if value is not None
+            }
+        metadata["judge_prompts"] = prompt_hashes
 
     metadata["artifacts"] = _collect_artifacts(
         output_path, metadata_filename=metadata_filename

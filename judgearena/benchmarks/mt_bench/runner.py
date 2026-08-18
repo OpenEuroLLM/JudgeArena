@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.benchmarks.mt_bench.common import resolve_mt_bench_turn_flags
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
@@ -44,6 +45,19 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
     from judgearena.tasks.schema import ResolvedTaskSpec
+
+
+def _resolve_mt_bench_prompts(
+    *, turns_mode: str, prompt_for_turn: MTBenchPromptResolver
+) -> dict[str, ResolvedJudgePrompt]:
+    """Resolve only the judge prompts used by the configured turn modes."""
+    eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
+    resolved: dict[str, ResolvedJudgePrompt] = {}
+    if eval_single:
+        resolved["single_turn"] = prompt_for_turn(False)
+    if eval_multi:
+        resolved["multi_turn"] = prompt_for_turn(True)
+    return resolved
 
 
 def _align_mt_bench_completions(
@@ -174,8 +188,7 @@ def _save_mt_bench_results(
     annotations_df: pd.DataFrame,
     started_at_utc: datetime,
     input_payloads: dict[str, object],
-    judge_system_prompt: str | None = None,
-    judge_user_prompt_template: str | None = None,
+    resolved_prompts: dict[str, ResolvedJudgePrompt],
 ) -> None:
     """Persist MT-Bench arguments, annotations, aggregate results, and metadata."""
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
@@ -186,8 +199,13 @@ def _save_mt_bench_results(
         run=cfg.model_dump(),
         results=results,
         input_payloads=input_payloads,
-        judge_system_prompt=judge_system_prompt,
-        judge_user_prompt_template=judge_user_prompt_template,
+        judge_prompts={
+            name: {
+                "system_prompt": prompt.system_prompt,
+                "user_prompt_template": prompt.user_prompt_template,
+            }
+            for name, prompt in resolved_prompts.items()
+        },
         started_at_utc=started_at_utc,
     )
 
@@ -201,7 +219,7 @@ def _finalize_mt_bench_run(
     prefs: pd.Series,
     annotations: list[dict[str, object]],
     combined_metadata: list[dict[str, object]],
-    resolved_prompt: ResolvedJudgePrompt,
+    resolved_prompts: dict[str, ResolvedJudgePrompt],
     questions_df: pd.DataFrame,
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
@@ -224,7 +242,9 @@ def _finalize_mt_bench_run(
         per_turn=_compute_grouped_stats(prefs, combined_metadata, "turn"),
         preferences=prefs.tolist(),
         metadata={
-            **resolved_prompt.metadata(),
+            "judge_prompts": {
+                name: prompt.metadata() for name, prompt in resolved_prompts.items()
+            },
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             **(extra_result_fields or {}),
@@ -247,8 +267,7 @@ def _finalize_mt_bench_run(
             completions_a=completions_a,
             completions_b=completions_b,
         ),
-        judge_system_prompt=resolved_prompt.system_prompt,
-        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        resolved_prompts=resolved_prompts,
     )
     return prefs
 
@@ -263,7 +282,7 @@ def _run_mt_bench_fastchat(
     completions_a: pd.DataFrame,
     completions_b: pd.DataFrame,
     judge_chat_model,
-    resolved_prompt: ResolvedJudgePrompt,
+    resolved_prompts: dict[str, ResolvedJudgePrompt],
     started_at_utc: datetime,
 ) -> pd.Series:
     prefs, annotations, combined_metadata, num_inconsistent = (
@@ -292,7 +311,7 @@ def _run_mt_bench_fastchat(
         prefs=prefs,
         annotations=annotations,
         combined_metadata=combined_metadata,
-        resolved_prompt=resolved_prompt,
+        resolved_prompts=resolved_prompts,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,
@@ -312,9 +331,9 @@ def _run_mt_bench_preset(
     completions_b: pd.DataFrame,
     judge_chat_model,
     prompt_for_turn: MTBenchPromptResolver,
+    resolved_prompts: dict[str, ResolvedJudgePrompt],
     started_at_utc: datetime,
 ) -> pd.Series:
-    resolved_prompt = prompt_for_turn(True)
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
         judge_model=cfg.judge.model,
@@ -339,7 +358,7 @@ def _run_mt_bench_preset(
         prefs=prefs,
         annotations=annotations,
         combined_metadata=combined_metadata,
-        resolved_prompt=resolved_prompt,
+        resolved_prompts=resolved_prompts,
         questions_df=questions_df,
         completions_a=completions_a,
         completions_b=completions_b,
@@ -393,8 +412,18 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             multi_turn=multi_turn,
         )
 
-    resolved_prompt = prompt_for_turn(True)
-    if resolved_prompt.delegated:
+    resolved_prompts = _resolve_mt_bench_prompts(
+        turns_mode=protocol.judge.turns_mode,
+        prompt_for_turn=prompt_for_turn,
+    )
+    delegated_modes = {prompt.delegated for prompt in resolved_prompts.values()}
+    if len(delegated_modes) != 1:
+        raise ValueError(
+            "MT-Bench single-turn and multi-turn prompts must use the same "
+            "judging implementation."
+        )
+    delegated = delegated_modes.pop()
+    if delegated:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."
@@ -403,12 +432,12 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         base_engine_kwargs=cfg.model.engine_kwargs,
         fallback_chat_template=cfg.model.chat_template,
     )
-    if resolved_prompt.delegated and cfg.judge.temperature is None:
+    if delegated and cfg.judge.temperature is None:
         judge_model_kwargs.setdefault(
             "temperature", protocol.judge.fastchat_temperature
         )
     judge_chat_model = make_model(model=cfg.judge.model, **judge_model_kwargs)
-    if resolved_prompt.delegated:
+    if delegated:
         return _run_mt_bench_fastchat(
             cfg=cfg,
             protocol=protocol,
@@ -418,7 +447,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             completions_a=completions_a,
             completions_b=completions_b,
             judge_chat_model=judge_chat_model,
-            resolved_prompt=resolved_prompt,
+            resolved_prompts=resolved_prompts,
             started_at_utc=run_started_at,
         )
     return _run_mt_bench_preset(
@@ -431,5 +460,6 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
         prompt_for_turn=prompt_for_turn,
+        resolved_prompts=resolved_prompts,
         started_at_utc=run_started_at,
     )
