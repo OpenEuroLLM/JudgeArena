@@ -19,7 +19,12 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol, NoBaseline
+from judgearena.tasks.schema import (
+    EloProtocol,
+    NoBaseline,
+    OfficialOutputsBaseline,
+    WildBenchProtocol,
+)
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -346,6 +351,16 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class WildBenchArgs(BaseModel):
+    """Runtime settings specific to WildBench evaluation."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    length_penalty_chars: int | None = Field(default=None, ge=0)
+    """Turn a slight win into a tie when the winner exceeds the loser by this
+    many characters. Unset disables the official optional length penalty."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -398,6 +413,9 @@ class RunConfig(BaseSettings):
 
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
+
+    wildbench: WildBenchArgs | None = None
+    """Runtime settings used only by WildBench tasks."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -486,6 +504,7 @@ class RunConfig(BaseSettings):
             )
 
         is_elo = isinstance(protocol, EloProtocol)
+        is_wildbench = isinstance(protocol, WildBenchProtocol)
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
@@ -513,11 +532,30 @@ class RunConfig(BaseSettings):
                     raise ValueError(
                         f"model.baseline is not used by task {self.task!r}."
                     )
+            elif isinstance(baseline, OfficialOutputsBaseline) and baseline.references:
+                pass
             elif (
                 self.model.baseline is None
                 and native_pairwise_baseline(self.task) is None
             ):
                 raise ValueError(f"model.baseline is required for task {self.task!r}.")
+
+        if is_wildbench:
+            if self.wildbench is None:
+                self.wildbench = WildBenchArgs()
+            if "length_penalty_chars" not in self.wildbench.model_fields_set:
+                self.wildbench.length_penalty_chars = (
+                    protocol.scoring.default_length_penalty_chars
+                )
+            if (
+                protocol.mode != "reward"
+                and self.wildbench.length_penalty_chars is not None
+            ):
+                raise ValueError(
+                    "wildbench.length_penalty_chars is only valid for WB-Reward tasks."
+                )
+        elif self.wildbench is not None:
+            raise ValueError("wildbench config is only valid for WildBench tasks.")
         return self
 
     @classmethod
