@@ -37,7 +37,10 @@ def generate_instructions(
     completions = do_inference(
         chat_model=chat_model,
         inputs=inputs,
-        use_tqdm=use_tqdm,
+        # This path historically used one synchronous batch regardless of the
+        # progress setting; preserve that execution behavior here.
+        use_tqdm=False,
+        stage="generation",
     )
     df_outputs = pd.DataFrame(
         data={
@@ -88,6 +91,7 @@ def _infer_grouped_by_temperature(
             chat_model=group_model,
             inputs=group_inputs,
             use_tqdm=use_tqdm,
+            stage="generation",
         )
         for i, out in zip(idxs, group_outs, strict=True):
             outputs[i] = out
@@ -152,6 +156,7 @@ def generate_multiturn(
             chat_model=chat_model,
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
+            stage="generation",
         )
 
     turn2_inputs = []
@@ -206,6 +211,7 @@ def generate_multiturn(
             chat_model=chat_model,
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
+            stage="generation",
         )
 
     return pd.DataFrame(
@@ -225,18 +231,19 @@ def generate_base(
     use_tqdm: bool = False,
     **engine_kwargs,
 ) -> pd.DataFrame:
-    model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
+    chat_model = make_model(model, max_tokens=max_tokens, **engine_kwargs)
 
     inputs = [
         truncate(instruction, max_len=truncate_input_chars)
         for instruction in instructions
     ]
 
-    completions = model.batch(
+    completions = do_inference(
+        chat_model=chat_model,
         inputs=inputs,
-        max_tokens=max_tokens,
+        use_tqdm=use_tqdm,
+        stage="generation",
     )
-    completions = [x.content if hasattr(x, "content") else x for x in completions]
 
     df_outputs = pd.DataFrame(
         data={

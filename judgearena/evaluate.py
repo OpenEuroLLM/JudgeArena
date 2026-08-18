@@ -230,6 +230,7 @@ def annotate_battles(
         inputs=inputs,
         use_tqdm=use_tqdm,
         return_top_logprobs=collect_top_logprobs,
+        stage="judging",
     )
     if not collect_top_logprobs:
         judge_results = [InferenceResult(text=text) for text in judge_results]
