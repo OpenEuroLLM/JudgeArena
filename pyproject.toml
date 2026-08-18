@@ -52,9 +52,8 @@ include = ["judgearena*"]
 exclude = ["slurmpilot_scripts*"]
 
 [tool.setuptools.package-data]
-"judgearena.criteria" = ["data/*.yaml"]
-"judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt"]
-"judgearena.tasks" = ["definitions/*/*.yaml"]
+"judgearena.prompts" = ["templates/*.txt", "templates/*.yaml", "templates/*/*.txt"]
+"judgearena.tasks" = ["definitions/*/*.yaml", "definitions/*/*.txt"]
 
 [dependency-groups]
 dev = [

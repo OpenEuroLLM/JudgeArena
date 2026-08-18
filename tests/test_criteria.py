@@ -1,10 +1,13 @@
 import pytest
 
-from judgearena.criteria.defaults import CRITERIA_BY_NAME
-from judgearena.criteria.io import (
+from judgearena.prompts.criteria import (
+    CRITERIA_BY_NAME,
+    SCALE_MAX,
+    SCALE_MIN,
+    Criterion,
+    criterion_names,
     load_criteria_from_file,
 )
-from judgearena.criteria.schema import SCALE_MAX, SCALE_MIN, Criterion, criterion_names
 
 
 def test_get_default_criteria():

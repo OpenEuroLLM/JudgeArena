@@ -312,12 +312,12 @@ def resolve_judge_prompt(
     criteria_name: str | None = None
     criteria_names: tuple[str, ...] | None = None
     if spec.criteria_name is not None:
-        from judgearena.criteria.io import resolve_criteria
-        from judgearena.criteria.schema import (
+        from judgearena.prompts.criteria import (
             SCALE_MAX,
             SCALE_MIN,
             criterion_names,
             prompt_block,
+            resolve_criteria,
         )
 
         criteria_name, criteria = resolve_criteria(spec.criteria_name, criteria_file)
