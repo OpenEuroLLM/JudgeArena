@@ -7,7 +7,7 @@ import json
 import os
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
@@ -16,6 +16,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
 from judgearena.log import get_logger
+from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
 
 logger = get_logger(__name__)
@@ -447,11 +448,11 @@ class ChatVLLM:
 
 @dataclass(frozen=True)
 class InferenceResult:
-    """A text completion with the first generated token's top logprobs, when
-    the backend was asked for (and returned) them."""
+    """A text completion and optional provider response details."""
 
     text: str
     first_token_top_logprobs: dict[str, float] | None = None
+    usage: RequestUsage | None = None
 
 
 def _first_token_top_logprobs(response) -> dict[str, float] | None:
@@ -466,24 +467,97 @@ def _first_token_top_logprobs(response) -> dict[str, float] | None:
     }
 
 
-def _to_inference_result(response) -> InferenceResult:
+def _optional_number(value, number_type):
+    if value is None:
+        return None
+    try:
+        return number_type(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _request_usage(
+    response,
+    *,
+    stage: str,
+    default_model: str | None,
+) -> RequestUsage:
+    response_metadata = getattr(response, "response_metadata", None) or {}
+    raw_usage = response_metadata.get("token_usage") or {}
+    prompt_details = raw_usage.get("prompt_tokens_details") or {}
+    completion_details = raw_usage.get("completion_tokens_details") or {}
+
+    input_tokens = _optional_number(raw_usage.get("prompt_tokens"), int)
+    output_tokens = _optional_number(raw_usage.get("completion_tokens"), int)
+    total_tokens = _optional_number(raw_usage.get("total_tokens"), int)
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    model = response_metadata.get("model_name") or default_model
+    return RequestUsage(
+        stage=stage,
+        model=str(model) if model is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        reasoning_tokens=_optional_number(
+            completion_details.get("reasoning_tokens"), int
+        ),
+        cached_tokens=_optional_number(prompt_details.get("cached_tokens"), int),
+        cost_usd=_optional_number(raw_usage.get("cost"), float),
+    )
+
+
+def _model_name(chat_model) -> str | None:
+    for attribute in ("model_name", "model", "model_path", "name"):
+        value = getattr(chat_model, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _to_inference_result(
+    response,
+    *,
+    stage: str,
+    default_model: str | None,
+) -> InferenceResult:
     if isinstance(response, InferenceResult):
-        return response
+        if response.usage is not None:
+            return response
+        return replace(
+            response,
+            usage=RequestUsage(stage=stage, model=default_model),
+        )
     if hasattr(response, "content"):
         return InferenceResult(
             text=response.content,
             first_token_top_logprobs=_first_token_top_logprobs(response),
+            usage=_request_usage(
+                response,
+                stage=stage,
+                default_model=default_model,
+            ),
         )
-    return InferenceResult(text=response)
+    return InferenceResult(
+        text=response,
+        usage=RequestUsage(stage=stage, model=default_model),
+    )
 
 
 def do_inference(
-    chat_model, inputs, use_tqdm: bool = False, return_top_logprobs: bool = False
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    return_top_logprobs: bool = False,
+    *,
+    stage: str = "unspecified",
 ):
     """Run inference over *inputs*, returning a list of text completions.
 
     With ``return_top_logprobs=True``, returns ``InferenceResult`` objects
     carrying the first token's top logprobs where the backend provided them.
+    ``stage`` labels request usage for the run-level summary.
 
     Retries on rate-limit/server errors with exponential backoff. The async
     path (``use_tqdm=True``) retries individual calls; the batch path splits
@@ -573,7 +647,33 @@ def do_inference(
 
     # Langchain chat models return AIMessage objects, barebones models plain
     # strings, and ChatVLLM with logprobs enabled InferenceResult objects.
-    res = [_to_inference_result(x) for x in res]
+    res = [
+        _to_inference_result(
+            response,
+            stage=stage,
+            default_model=_model_name(chat_model),
+        )
+        for response in res
+    ]
+    request_usage = [result.usage for result in res if result.usage is not None]
+    record_usage(request_usage)
+
+    batch_summary = RunUsage(tuple(request_usage)).summary()
+    if batch_summary["usage_reported_requests"]:
+        cost = batch_summary["cost_usd"]
+        input_tokens = batch_summary["input_tokens"]
+        output_tokens = batch_summary["output_tokens"]
+        cost_text = (
+            f", ${float(cost):.6f}" if cost is not None else ", cost unavailable"
+        )
+        logger.info(
+            "Model usage (%s): %d request(s), %s input / %s output tokens%s.",
+            stage,
+            batch_summary["requests"],
+            f"{int(input_tokens):,}" if input_tokens is not None else "unknown",
+            f"{int(output_tokens):,}" if output_tokens is not None else "unknown",
+            cost_text,
+        )
     if return_top_logprobs:
         return res
     return [r.text for r in res]
