@@ -260,6 +260,61 @@ def test_wildbench_score_run_writes_reproducible_artifacts(tmp_path, monkeypatch
     assert (result_path.parent / "run-metadata.v1.json").exists()
 
 
+def test_wildbench_reward_run_judges_three_official_references(tmp_path, monkeypatch):
+    examples = _examples()
+    references = [
+        "gpt-4-turbo-2024-04-09",
+        "claude-3-haiku-20240307",
+        "Llama-2-70b-chat-hf",
+    ]
+    official_outputs = pd.DataFrame(
+        {
+            "instruction_index": ["session-1"] * 3,
+            "model": references,
+            "output": ["reference answer"] * 3,
+        }
+    )
+    adapter = SimpleNamespace(
+        load_instructions=lambda *_args: examples,
+        load_model_outputs=lambda *_args: official_outputs,
+    )
+    monkeypatch.setattr(runner, "resolve_dataset_adapter", lambda _name: adapter)
+    monkeypatch.setattr(
+        runner,
+        "_load_or_generate_outputs",
+        lambda _cfg, frame: pd.Series(
+            ["candidate answer"],
+            index=pd.Index(frame["instruction_index"].astype(str)),
+        ),
+    )
+    monkeypatch.setattr(runner, "build_judge", lambda _cfg: object())
+    monkeypatch.setattr(
+        runner,
+        "do_inference",
+        lambda _model, inputs, **_kwargs: ['{"choice": "A++"}'] * len(inputs),
+    )
+
+    result = runner.run_wildbench(
+        RunConfig(
+            task="wildbench-v2-reward-official",
+            model={"name": "Dummy/candidate"},
+            judge={"model": "Dummy/judge"},
+            run={"result_folder": str(tmp_path), "no_log_file": True},
+        )
+    )
+
+    result_folder = Path(result["result_folder"])
+    annotations = pd.read_parquet(result_folder / "annotations.parquet")
+    model_outputs = pd.read_parquet(result_folder / "model_outputs.parquet")
+    assert result["reference_models"] == references
+    assert result["num_examples"] == 1
+    assert result["num_judgments"] == 3
+    assert result["wb_reward"] == -100.0
+    assert annotations["baseline_model"].tolist() == references
+    assert annotations["candidate_is_a"].tolist() == [False, False, False]
+    assert len(model_outputs) == 4
+
+
 def test_wildbench_score_rejects_runtime_baseline():
     with pytest.raises(ValueError, match="baseline is not used"):
         RunConfig(
