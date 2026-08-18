@@ -7,7 +7,7 @@ protocol:
   baseline:
     strategy: none
   judge:
-    prompt_file: score-prompt.md
+    prompt_file: score-prompt.txt
     parser: wildbench-score
     reference_judge: gpt-4o-2024-05-13
     max_words_to_eval: null

@@ -24,7 +24,7 @@ protocol:
       - Llama-2-70b-chat-hf
     allow_runtime_override: true
   judge:
-    prompt_file: reward-prompt.md
+    prompt_file: reward-prompt.txt
     parser: wildbench-choice
     reference_judge: gpt-4-turbo-2024-04-09
     max_words_to_eval: 1000
