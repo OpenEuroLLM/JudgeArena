@@ -23,6 +23,7 @@ from judgearena.benchmarks.wildbench.scoring import (
     [
         ('{"score": "8"}', 8.0),
         ('{"strengths": "good", "score": 6}', 6.0),
+        ('```json\n{"strengths": "good", "score": 9}\n```', 9.0),
         ('analysis before {"score": "4"}', 4.0),
         ('{"score": "11"}', None),
         ('{"score": "invalid"}', None),
@@ -96,6 +97,7 @@ def test_category_scores_exclude_empty_and_truncated_outputs():
     ("completion", "expected"),
     [
         ('{"choice": "A++"}', "A++"),
+        ('```json\n{"choice": "B++"}\n```', "B++"),
         ('analysis {"choice": "A=B"}', "A=B"),
         ('{"choice": "B+"}', "B+"),
         ('{"choice": "A"}', None),

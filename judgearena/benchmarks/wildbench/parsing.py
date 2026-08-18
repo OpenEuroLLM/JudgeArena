@@ -10,18 +10,28 @@ WildBenchParsedValue = float | str | None
 WildBenchParser = Callable[[str], WildBenchParsedValue]
 
 
+def _json_object(text: str) -> dict[str, object] | None:
+    stripped = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
+    candidate = fenced.group(1) if fenced is not None else stripped
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def parse_wildbench_score(judge_completion: str) -> float | None:
     """Parse the official JSON score field and enforce its 1–10 range."""
     text = judge_completion.strip()
     value: object | None = None
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            value = payload.get("score")
-    except json.JSONDecodeError:
-        match = re.search(r'"score"\s*:\s*"([^"]*?)"', text)
+    payload = _json_object(text)
+    if payload is not None:
+        value = payload.get("score")
+    else:
+        match = re.search(r'"score"\s*:\s*(?:"([^"]*?)"|(-?\d+(?:\.\d+)?))', text)
         if match is not None:
-            value = match.group(1)
+            value = match.group(1) or match.group(2)
 
     try:
         score = float(value)
@@ -43,11 +53,10 @@ def parse_wildbench_choice(judge_completion: str) -> str | None:
     """Parse one of the five official WB-Reward choices."""
     text = judge_completion.strip()
     value: object | None = None
-    try:
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            value = payload.get("choice")
-    except json.JSONDecodeError:
+    payload = _json_object(text)
+    if payload is not None:
+        value = payload.get("choice")
+    else:
         match = re.search(r'"choice"\s*:\s*"([^"]*?)"', text)
         if match is not None:
             value = match.group(1)
