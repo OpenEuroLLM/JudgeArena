@@ -43,6 +43,7 @@ def _instruction_datasets() -> dict[str, InstructionDatasetAdapter]:
         judgearena_tables,
         m_arenahard,
         mt_bench,
+        wildbench,
     )
 
     return {
@@ -75,6 +76,11 @@ def _instruction_datasets() -> dict[str, InstructionDatasetAdapter]:
             mt_bench.download_task_sources,
             mt_bench.load_task_instructions,
             mt_bench.load_task_model_outputs,
+        ),
+        "wildbench": InstructionDatasetAdapter(
+            wildbench.download_task_sources,
+            wildbench.load_task_instructions,
+            wildbench.load_task_model_outputs,
         ),
     }
 
