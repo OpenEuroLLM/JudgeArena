@@ -14,6 +14,7 @@ from judgearena.datasets.registry import (
     battle_dataset_names,
     instruction_dataset_names,
 )
+from judgearena.tasks import cli as task_cli_module
 from judgearena.tasks.cli import run_task_command
 from judgearena.tasks.registry import (
     AdapterCatalog,
@@ -516,6 +517,38 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
 
     run_task_command(["validate"], tasks=tasks)
     assert "Validated 1 task(s)." in capsys.readouterr().out
+
+
+def test_task_download_uses_resolved_dataset_adapter(tmp_path, capsys, monkeypatch):
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=_task_definition(),
+    )
+    tasks = load_tasks(tmp_path)
+    downloads = []
+
+    class FakeAdapter:
+        @staticmethod
+        def download(task, tables_path):
+            downloads.append((task.task, tables_path))
+
+    monkeypatch.setattr(task_cli_module, "data_root", tmp_path / "data")
+    monkeypatch.setattr(
+        task_cli_module, "resolve_download_adapter", lambda _name: FakeAdapter()
+    )
+
+    run_task_command(["download", "test-task"], tasks=tasks)
+
+    assert downloads == [("test-task", tmp_path / "data" / "tables")]
+    assert "Downloaded task 'test-task'." in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv", [["download"], ["download", "--all", "test-task"]])
+def test_task_download_requires_one_selection(tmp_path, argv):
+    with pytest.raises(SystemExit):
+        run_task_command(argv, tasks={})
 
 
 def test_task_show_reports_resolved_selection(tmp_path, capsys):

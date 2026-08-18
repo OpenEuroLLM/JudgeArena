@@ -8,6 +8,8 @@ from dataclasses import asdict
 
 import yaml
 
+from judgearena.datasets.registry import resolve_download_adapter
+from judgearena.paths import data_root
 from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 
@@ -27,6 +29,14 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = commands.add_parser("validate", help="Validate packaged tasks.")
     validate.add_argument("task", nargs="?")
+
+    download = commands.add_parser(
+        "download", help="Download the pinned sources for packaged tasks."
+    )
+    download.add_argument("tasks", nargs="*")
+    download.add_argument(
+        "--all", action="store_true", help="Download sources for every packaged task."
+    )
     return parser
 
 
@@ -56,6 +66,21 @@ def run_task_command(
                 print(f"Validated task {args.task!r}.")
             else:
                 print(f"Validated {len(tasks)} task(s).")
+        elif args.command == "download":
+            if args.all and args.tasks:
+                parser.error("download accepts task IDs or --all, not both")
+            if not args.all and not args.tasks:
+                parser.error("download requires at least one task ID or --all")
+            selected = (
+                list(tasks.values())
+                if args.all
+                else [_require(parser, tasks, task_id) for task_id in args.tasks]
+            )
+            tables_path = data_root / "tables"
+            for resolved in selected:
+                adapter = resolve_download_adapter(resolved.spec.dataset.adapter)
+                adapter.download(resolved, tables_path)
+                print(f"Downloaded task {resolved.task!r}.")
     except TaskDefinitionError as exc:
         parser.error(str(exc))
 
