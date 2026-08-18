@@ -6,6 +6,8 @@ import pandas as pd
 
 from judgearena.utils import truncate
 
+EMPTY_RESPONSE = "[This model response is empty.]"
+
 
 def _prompt_field(
     value: object, *, max_words: int | None, max_chars: int | None
