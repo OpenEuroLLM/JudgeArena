@@ -1,0 +1,19 @@
+extends: _base.yaml
+task: wildbench-v2-score-official
+description: Official WildBench V2 checklist-based individual scoring.
+
+protocol:
+  mode: score
+  baseline:
+    strategy: none
+  judge:
+    prompt_file: score-prompt.md
+    parser: wildbench-score
+    reference_judge: gpt-4o-2024-05-13
+    max_words_to_eval: null
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed]
+    default_temperature: 0.0
+    default_max_out_tokens: 1024
+  scoring:
+    adapter: wildbench-score-v2

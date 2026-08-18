@@ -46,10 +46,17 @@ from judgearena.tasks.schema.task import (
     TaskMetadata,
     TaskSpec,
 )
+from judgearena.tasks.schema.wildbench import (
+    ConversationGeneration,
+    WildBenchJudgeSpec,
+    WildBenchProtocol,
+    WildBenchScoringSpec,
+)
 
 __all__ = [
     "BaselineSpec",
     "CategoryDefaultsBaseline",
+    "ConversationGeneration",
     "DatasetFields",
     "DatasetSpec",
     "EloProtocol",
@@ -79,4 +86,7 @@ __all__ = [
     "TaskProvenance",
     "TaskSelection",
     "TaskSpec",
+    "WildBenchJudgeSpec",
+    "WildBenchProtocol",
+    "WildBenchScoringSpec",
 ]

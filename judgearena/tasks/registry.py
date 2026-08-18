@@ -18,6 +18,8 @@ from pydantic import ValidationError
 
 from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.wildbench.parsing import WILDBENCH_PARSERS
+from judgearena.benchmarks.wildbench.scoring import WILDBENCH_SCORERS
 from judgearena.log import get_logger
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
@@ -28,6 +30,7 @@ from judgearena.tasks.schema import (
     TaskProvenance,
     TaskSelection,
     TaskSpec,
+    WildBenchProtocol,
 )
 
 logger = get_logger(__name__)
@@ -268,13 +271,20 @@ def _load_prompt_files(
     root: Traversable, spec: TaskSpec, relative_path: str
 ) -> tuple[dict[str, str] | None, tuple[ResourceDigest, ...]]:
     """Read task-shipped judge prompt files and fingerprint them."""
-    prompt_spec = getattr(spec.protocol.judge, "prompt", None)
-    if prompt_spec is None:
+    judge = spec.protocol.judge
+    prompt_spec = getattr(judge, "prompt", None)
+    prompt_file = getattr(judge, "prompt_file", None)
+    if prompt_spec is None and prompt_file is None:
         return None, ()
     parent = PurePosixPath(relative_path).parent
     texts: dict[str, str] = {}
     digests: list[ResourceDigest] = []
-    for filename in (prompt_spec.system_file, prompt_spec.user_file):
+    filenames = (
+        (prompt_spec.system_file, prompt_spec.user_file)
+        if prompt_spec is not None
+        else (prompt_file,)
+    )
+    for filename in filenames:
         file_path = _normalize_root_path(str(parent / filename))
         resource = _resource(root, file_path)
         if not resource.is_file():
@@ -302,6 +312,8 @@ class AdapterCatalog:
     parsers: frozenset[str] = field(default_factory=lambda: frozenset(JUDGE_PARSERS))
     pairwise_scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
     elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
+    wildbench_parsers: frozenset[str] = frozenset(WILDBENCH_PARSERS)
+    wildbench_scorers: frozenset[str] = frozenset(WILDBENCH_SCORERS)
 
 
 def load_tasks(
@@ -347,7 +359,12 @@ def _discover_tasks(
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
     is_elo = isinstance(spec.protocol, EloProtocol)
-    scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
+    is_wildbench = isinstance(spec.protocol, WildBenchProtocol)
+    scorer_names = (
+        adapters.elo_scorers
+        if is_elo
+        else (adapters.wildbench_scorers if is_wildbench else adapters.pairwise_scorers)
+    )
     dataset_names = (
         adapters.battle_datasets if is_elo else adapters.instruction_datasets
     )
@@ -357,7 +374,9 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
         "scorer": (spec.protocol.scoring.adapter, scorer_names),
     }
     judge = spec.protocol.judge
-    if judge.prompt is not None:
+    if is_wildbench:
+        references["parser"] = (judge.parser, adapters.wildbench_parsers)
+    elif judge.prompt is not None:
         references["parser"] = (judge.prompt.parser, adapters.parsers)
     else:
         references["prompt"] = (judge.default_prompt, adapters.prompts)

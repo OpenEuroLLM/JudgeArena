@@ -122,6 +122,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "m-arena-hard-v2.0",
         "mt-bench",
         "mt-bench-official",
+        "wildbench-v2-score-official",
     ]
     assert all(path == tables_dir for _, path in hf_datasets)
 

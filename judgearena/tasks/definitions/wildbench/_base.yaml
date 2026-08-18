@@ -1,0 +1,30 @@
+schema_version: 1
+task_version: 1
+tags: [wildbench, instruction-following, multi-turn]
+
+dataset:
+  adapter: wildbench
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: allenai/WildBench
+      revision: "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec"
+      config: v2
+      allow_patterns: [v2/*.parquet]
+  fields:
+    id: session_id
+    instruction: conversation_input
+    category: primary_tag
+
+protocol:
+  runner: wildbench
+  generation:
+    mode: conversation_chat
+    default_temperature: 0.0
+    default_top_p: 1.0
+    default_max_out_tokens: 4096
+    default_input_char_limit: null
+
+metadata:
+  reference_implementation: https://github.com/allenai/WildBench
+  paper: https://allenai.github.io/WildBench/WildBench_paper.pdf

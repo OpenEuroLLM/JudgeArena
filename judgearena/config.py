@@ -19,7 +19,7 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, NoBaseline
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -294,7 +294,7 @@ class GenerationArgs(BaseModel):
     n_instructions: int | None = None
     """Number of instructions/battles to evaluate. Defaults to the full task."""
 
-    truncate_all_input_chars: int = 8192
+    truncate_all_input_chars: int | None = 8192
     """Character cap applied to each instruction before model generation."""
 
     truncate_judge_input_chars: int | None = None
@@ -447,6 +447,34 @@ class RunConfig(BaseSettings):
         ):
             self.judge.top_logprobs = task_judge.default_top_logprobs
 
+        task_generation = getattr(protocol, "generation", None)
+        if (
+            task_generation is not None
+            and self.model.temperature is None
+            and hasattr(task_generation, "default_temperature")
+        ):
+            self.model.temperature = task_generation.default_temperature
+        if (
+            task_generation is not None
+            and self.model.top_p is None
+            and hasattr(task_generation, "default_top_p")
+        ):
+            self.model.top_p = task_generation.default_top_p
+        if (
+            task_generation is not None
+            and "max_out_tokens" not in self.model.model_fields_set
+            and hasattr(task_generation, "default_max_out_tokens")
+        ):
+            self.model.max_out_tokens = task_generation.default_max_out_tokens
+        if (
+            task_generation is not None
+            and "truncate_all_input_chars" not in self.generation.model_fields_set
+            and hasattr(task_generation, "default_input_char_limit")
+        ):
+            self.generation.truncate_all_input_chars = (
+                task_generation.default_input_char_limit
+            )
+
         baseline = protocol.baseline
         if (
             self.model.baseline is not None
@@ -480,7 +508,12 @@ class RunConfig(BaseSettings):
                 raise ValueError("elo config is only valid for ELO tasks.")
             if self.model.name is None:
                 raise ValueError("model.name is required.")
-            if (
+            if isinstance(baseline, NoBaseline):
+                if self.model.baseline is not None:
+                    raise ValueError(
+                        f"model.baseline is not used by task {self.task!r}."
+                    )
+            elif (
                 self.model.baseline is None
                 and native_pairwise_baseline(self.task) is None
             ):
