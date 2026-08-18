@@ -19,6 +19,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from judgearena.usage import current_run_usage
+
 METADATA_FILENAME = "run-metadata.v1.json"
 METADATA_SCHEMA_VERSION = "judgearena-run-metadata/v1"
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)")
@@ -294,6 +296,10 @@ def write_run_metadata(
     task_definition = _task_definition_metadata(run)
     if task_definition is not None:
         metadata["task_definition"] = task_definition
+
+    usage = current_run_usage()
+    if usage is not None:
+        metadata["usage"] = usage.to_dict()
 
     git_hash = _get_git_hash(start_path=Path(__file__).resolve().parent)
     if git_hash:
