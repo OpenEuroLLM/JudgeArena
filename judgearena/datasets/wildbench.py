@@ -182,6 +182,46 @@ def load_task_instructions(
 def load_task_model_outputs(
     task: ResolvedTaskSpec, local_tables_path: Path
 ) -> pd.DataFrame | None:
-    """WB-Score has no reference outputs; WB-Reward extends this adapter."""
+    """Load the pinned model outputs declared by a WB-Reward task."""
     _require_adapter(task)
-    return None
+    if "official_outputs" not in task.spec.dataset.sources:
+        return None
+    root = _download_source(task, "official_outputs", local_tables_path)
+    frames: list[pd.DataFrame] = []
+    for model_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        parquet_files = sorted(model_dir.rglob("*.parquet"))
+        if not parquet_files:
+            continue
+        raw_df = pd.concat(
+            [pd.read_parquet(path) for path in parquet_files], ignore_index=True
+        )
+        frames.append(normalize_model_outputs(raw_df, model_dir.name))
+    if not frames:
+        raise FileNotFoundError(f"No official WildBench outputs found under {root}.")
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["instruction_index", "model"], keep="last"
+    )
+
+
+def normalize_model_outputs(raw_df: pd.DataFrame, model_name: str) -> pd.DataFrame:
+    """Normalize one model directory from the official output dataset."""
+    required = {"session_id", "output"}
+    missing = sorted(required.difference(raw_df.columns))
+    if missing:
+        raise ValueError(
+            f"WildBench outputs for {model_name!r} are missing columns: {missing}"
+        )
+
+    def first_output(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        values = _as_list(value)
+        return str(values[0]) if values else ""
+
+    return pd.DataFrame(
+        {
+            "instruction_index": raw_df["session_id"].astype(str),
+            "model": model_name,
+            "output": raw_df["output"].apply(first_output),
+        }
+    )

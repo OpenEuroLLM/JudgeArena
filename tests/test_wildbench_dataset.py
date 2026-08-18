@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from judgearena.datasets.wildbench import normalize_wildbench
+from judgearena.datasets.wildbench import normalize_model_outputs, normalize_wildbench
 
 
 def test_normalize_wildbench_preserves_multiturn_context():
@@ -52,3 +52,27 @@ def test_normalize_wildbench_rejects_non_user_final_turn():
 
     with pytest.raises(ValueError, match="must end with a user turn"):
         normalize_wildbench(raw)
+
+
+def test_normalize_official_model_outputs_uses_first_generation():
+    raw = pd.DataFrame(
+        {
+            "session_id": ["s1", "s2"],
+            "output": [["answer 1"], "answer 2"],
+        }
+    )
+
+    outputs = normalize_model_outputs(raw, "reference-model")
+
+    assert outputs.to_dict(orient="records") == [
+        {
+            "instruction_index": "s1",
+            "model": "reference-model",
+            "output": "answer 1",
+        },
+        {
+            "instruction_index": "s2",
+            "model": "reference-model",
+            "output": "answer 2",
+        },
+    ]
