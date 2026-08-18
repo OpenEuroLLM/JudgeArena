@@ -29,16 +29,6 @@ class RequestUsage:
         )
 
 
-def _coverage_status(reported: int, total: int) -> str:
-    if total == 0:
-        return "no_requests"
-    if reported == 0:
-        return "unavailable"
-    if reported < total:
-        return "partial"
-    return "complete"
-
-
 def _sum_optional(requests: tuple[RequestUsage, ...], field: str) -> int | None:
     values = [getattr(request, field) for request in requests]
     reported = [int(value) for value in values if value is not None]
@@ -59,10 +49,8 @@ def _summarize(requests: tuple[RequestUsage, ...]) -> dict[str, object]:
         "reasoning_tokens": _sum_optional(requests, "reasoning_tokens"),
         "cached_tokens": _sum_optional(requests, "cached_tokens"),
         "cost_usd": sum(cost_values) if cost_values else None,
-        "usage_reported_requests": token_reported,
-        "cost_reported_requests": cost_reported,
-        "usage_status": _coverage_status(token_reported, len(requests)),
-        "cost_status": _coverage_status(cost_reported, len(requests)),
+        "requests_with_token_usage": token_reported,
+        "requests_with_cost": cost_reported,
     }
 
 
@@ -125,19 +113,22 @@ def _format_summary(summary: dict[str, object]) -> str:
     input_tokens = summary["input_tokens"]
     output_tokens = summary["output_tokens"]
     cost = summary["cost_usd"]
-    cost_status = str(summary["cost_status"])
+    requests_with_tokens = int(summary["requests_with_token_usage"])
+    requests_with_cost = int(summary["requests_with_cost"])
 
     if input_tokens is None or output_tokens is None:
         tokens = "token usage unavailable"
     else:
         tokens = f"{int(input_tokens):,} input / {int(output_tokens):,} output tokens"
+        if requests_with_tokens < requests:
+            tokens += " reported (partial)"
 
-    if cost_status == "unavailable":
-        cost_text = "cost unavailable"
-    elif cost_status == "partial":
-        cost_text = f"${float(cost):.6f} reported (partial)"
-    elif cost_status == "no_requests":
+    if requests == 0:
         cost_text = "$0.000000"
+    elif requests_with_cost == 0:
+        cost_text = "cost unavailable"
+    elif requests_with_cost < requests:
+        cost_text = f"${float(cost):.6f} reported (partial)"
     else:
         cost_text = f"${float(cost):.6f}"
     return f"{requests} request(s), {tokens}, {cost_text}"

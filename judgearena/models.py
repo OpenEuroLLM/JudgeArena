@@ -659,7 +659,7 @@ def do_inference(
     record_usage(request_usage)
 
     batch_summary = RunUsage(tuple(request_usage)).summary()
-    if batch_summary["usage_reported_requests"]:
+    if batch_summary["requests_with_token_usage"]:
         cost = batch_summary["cost_usd"]
         input_tokens = batch_summary["input_tokens"]
         output_tokens = batch_summary["output_tokens"]
