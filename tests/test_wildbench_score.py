@@ -60,3 +60,24 @@ def test_wildbench_score_tracks_unparseable_annotations():
 
     assert result["num_missing"] == 1
     assert math.isnan(result["wb_score"])
+
+
+def test_category_scores_exclude_empty_and_truncated_outputs():
+    examples = pd.DataFrame(
+        {
+            "instruction_index": ["s1", "s2", "s3"],
+            "task_categories": [["Creative Tasks"]] * 3,
+        }
+    )
+    annotations = pd.DataFrame(
+        {
+            "session_id": ["s1", "s2", "s3"],
+            "model_output": ["valid", "", "cut... (truncated)"],
+            "score": [8.0, 1.0, 1.0],
+        }
+    )
+
+    result = score_wildbench_v2(examples, annotations)
+
+    assert result["raw_mean_score"] == pytest.approx(10 / 3)
+    assert result["per_category"] == {"Creative Tasks": 6.0}

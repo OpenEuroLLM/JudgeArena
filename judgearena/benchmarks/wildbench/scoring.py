@@ -29,9 +29,15 @@ def score_wildbench_v2(
     valid = annotations.dropna(subset=["score"])
     raw_mean = float(valid["score"].mean()) if not valid.empty else float("nan")
 
+    category_valid = valid
+    if "model_output" in category_valid:
+        outputs = category_valid["model_output"].fillna("").astype(str)
+        category_valid = category_valid.loc[
+            outputs.str.len().gt(0) & ~outputs.str.endswith("... (truncated)")
+        ]
     categories_by_session = examples.set_index("instruction_index")["task_categories"]
     category_scores: dict[str, list[float]] = {}
-    for row in valid.itertuples(index=False):
+    for row in category_valid.itertuples(index=False):
         for category in categories_by_session.loc[str(row.session_id)]:
             category_scores.setdefault(category, []).append(float(row.score))
     per_category = {
