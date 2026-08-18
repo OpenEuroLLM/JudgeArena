@@ -9,7 +9,11 @@ import pandas as pd
 import pytest
 
 from judgearena.benchmarks.wildbench import runner
-from judgearena.benchmarks.wildbench.prompting import render_score_prompt
+from judgearena.benchmarks.wildbench.prompting import (
+    EMPTY_RESPONSE,
+    render_reward_prompt,
+    render_score_prompt,
+)
 from judgearena.config import RunConfig
 from judgearena.tasks.registry import get_packaged_task
 
@@ -122,6 +126,52 @@ def test_wildbench_score_prompt_contains_official_context_fields():
             "{$checklist}",
         )
     )
+
+
+def test_wildbench_reward_prompt_preserves_orientation_and_visible_outputs():
+    task = get_packaged_task("wildbench-v2-reward-official")
+    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+
+    rendered = render_reward_prompt(
+        prompt,
+        _examples().iloc[0],
+        "candidate",
+        "",
+        candidate_is_a=False,
+        max_words=1000,
+        max_chars=None,
+    )
+
+    assert rendered.candidate_output == "candidate"
+    assert rendered.baseline_output == EMPTY_RESPONSE
+    assert rendered.text.index(EMPTY_RESPONSE) < rendered.text.index("candidate")
+    assert not any(
+        placeholder in rendered.text
+        for placeholder in (
+            "{$history}",
+            "{$user_query}",
+            "{$candidate_A}",
+            "{$candidate_B}",
+            "{$checklist}",
+        )
+    )
+
+
+def test_wildbench_reward_prompt_uses_official_word_truncation_marker():
+    task = get_packaged_task("wildbench-v2-reward-official")
+    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+
+    rendered = render_reward_prompt(
+        prompt,
+        _examples().iloc[0],
+        "one two three",
+        "reference",
+        candidate_is_a=True,
+        max_words=2,
+        max_chars=None,
+    )
+
+    assert rendered.candidate_output == "one two... (truncated)"
 
 
 def test_wildbench_score_run_writes_reproducible_artifacts(tmp_path, monkeypatch):
