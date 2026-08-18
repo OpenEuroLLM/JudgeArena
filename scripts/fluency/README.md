@@ -33,7 +33,7 @@ lithuanian, slovene, latvian, albanian, macedonian, estonian, basque,
 galician, bosnian, serbian, icelandic, maltese, irish
 ```
 
-The list of available languages is available at `judgearena/instruction_dataset/fluency.py`.
+The list of available languages is available at `judgearena/datasets/fluency.py`.
 
 ## Validation against human annotations
 
