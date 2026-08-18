@@ -121,6 +121,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "m-arena-hard-v2.0",
         "mt-bench",
         "mt-bench-official",
+        "wildbench-v2-reward-official",
         "wildbench-v2-score-official",
     ]
     assert alpaca.spec.dataset.sources["examples"].revision == (

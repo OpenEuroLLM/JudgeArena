@@ -57,6 +57,7 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
         ("hf", "m-arena-hard-v2.0", tables_dir),
         ("hf", "mt-bench", tables_dir),
         ("hf", "mt-bench-official", tables_dir),
+        ("hf", "wildbench-v2-reward-official", tables_dir),
         ("hf", "wildbench-v2-score-official", tables_dir),
     ]
 
