@@ -168,9 +168,7 @@ class SuffixVariants(_StrictFrozenModel):
             if not members:
                 raise ValueError(f"variant group {group!r} must not be empty")
             if len(set(members)) != len(members):
-                raise ValueError(
-                    f"variant group {group!r} must not contain duplicates"
-                )
+                raise ValueError(f"variant group {group!r} must not contain duplicates")
             unknown = sorted(set(members) - known)
             if unknown:
                 raise ValueError(
