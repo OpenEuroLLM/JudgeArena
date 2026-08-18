@@ -3,7 +3,7 @@
 This is a tiny leaf module so it can be imported by every other module
 (including ``judgearena.datasets``) without pulling in the rest of
 ``judgearena.utils``, which would create an import cycle with the
-``instruction_dataset`` package.
+``judgearena.datasets`` package.
 
 Symbols here are re-exported from :mod:`judgearena.utils` for backward
 compatibility, so existing ``from judgearena.utils import data_root`` /
