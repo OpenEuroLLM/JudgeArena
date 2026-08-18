@@ -116,10 +116,8 @@ def test_run_usage_reports_partial_cost_without_presenting_it_as_complete():
         "reasoning_tokens": None,
         "cached_tokens": None,
         "cost_usd": pytest.approx(0.1),
-        "usage_reported_requests": 2,
-        "cost_reported_requests": 1,
-        "usage_status": "complete",
-        "cost_status": "partial",
+        "requests_with_token_usage": 2,
+        "requests_with_cost": 1,
     }
     assert set(usage["by_stage"]) == {"generation", "judging"}
     assert set(usage["by_model"]) == {"candidate", "local-judge"}
