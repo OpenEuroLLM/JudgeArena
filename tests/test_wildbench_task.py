@@ -101,6 +101,53 @@ def test_official_reward_task_pins_references_prompt_and_defaults():
     assert cfg.wildbench.length_penalty_chars is None
 
 
+def test_wildbench_reward_reference_override_must_be_official():
+    cfg = RunConfig(
+        task="wildbench-v2-reward-official",
+        model={"name": "Dummy/candidate", "baseline": "Llama-2-70b-chat-hf"},
+        judge={"model": "Dummy/judge"},
+    )
+    task = get_packaged_task(cfg.task)
+
+    assert runner._reward_references(cfg, task.spec.protocol) == (
+        "Llama-2-70b-chat-hf",
+    )
+
+    with pytest.raises(ValueError, match="Unknown WB-Reward reference"):
+        bad_cfg = cfg.model_copy(deep=True)
+        bad_cfg.model.baseline = "unregistered-reference"
+        runner._reward_references(bad_cfg, task.spec.protocol)
+
+
+def test_wildbench_reference_outputs_align_by_session_id():
+    official_outputs = pd.DataFrame(
+        {
+            "instruction_index": ["session-2", "session-1"],
+            "model": ["reference", "reference"],
+            "output": ["second", "first"],
+        }
+    )
+    examples = pd.DataFrame({"instruction_index": ["session-1", "session-2"]})
+
+    aligned = runner._aligned_reference_outputs(official_outputs, examples, "reference")
+
+    assert aligned.tolist() == ["first", "second"]
+
+
+def test_wildbench_reference_outputs_reject_missing_sessions():
+    official_outputs = pd.DataFrame(
+        {
+            "instruction_index": ["session-1"],
+            "model": ["reference"],
+            "output": ["first"],
+        }
+    )
+    examples = pd.DataFrame({"instruction_index": ["session-1", "session-2"]})
+
+    with pytest.raises(ValueError, match="first missing session: session-2"):
+        runner._aligned_reference_outputs(official_outputs, examples, "reference")
+
+
 def test_wildbench_score_prompt_contains_official_context_fields():
     task = get_packaged_task("wildbench-v2-score-official")
     prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]

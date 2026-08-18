@@ -26,7 +26,11 @@ from judgearena.datasets.registry import resolve_dataset_adapter
 from judgearena.log import get_logger
 from judgearena.models import do_inference, make_model
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import ResolvedTaskSpec, WildBenchProtocol
+from judgearena.tasks.schema import (
+    OfficialOutputsBaseline,
+    ResolvedTaskSpec,
+    WildBenchProtocol,
+)
 from judgearena.utils import (
     cache_function_dataframe,
     data_root,
@@ -107,6 +111,40 @@ def _load_or_generate_outputs(cfg: RunConfig, examples: pd.DataFrame) -> pd.Seri
             f"first missing session: {missing[0]}."
         )
     return indexed.loc[expected, "completion"].fillna("").astype(str)
+
+
+def _reward_references(cfg: RunConfig, protocol: WildBenchProtocol) -> tuple[str, ...]:
+    baseline = protocol.baseline
+    if not isinstance(baseline, OfficialOutputsBaseline):
+        raise ValueError("WB-Reward requires official reference outputs.")
+    if cfg.model.baseline is None:
+        return baseline.references
+    if cfg.model.baseline not in baseline.references:
+        raise ValueError(
+            f"Unknown WB-Reward reference {cfg.model.baseline!r}; choose from "
+            f"{list(baseline.references)}."
+        )
+    return (cfg.model.baseline,)
+
+
+def _aligned_reference_outputs(
+    official_outputs: pd.DataFrame,
+    examples: pd.DataFrame,
+    reference: str,
+) -> pd.Series:
+    selected = official_outputs.loc[official_outputs["model"] == reference].copy()
+    selected["instruction_index"] = selected["instruction_index"].astype(str)
+    indexed = selected.drop_duplicates("instruction_index").set_index(
+        "instruction_index"
+    )
+    expected = pd.Index(examples["instruction_index"].astype(str))
+    missing = expected.difference(indexed.index)
+    if not missing.empty:
+        raise ValueError(
+            f"Official outputs for {reference!r} are missing {len(missing)} "
+            f"WildBench sessions; first missing session: {missing[0]}."
+        )
+    return indexed.loc[expected, "output"].fillna("").astype(str)
 
 
 def _score_annotations(
