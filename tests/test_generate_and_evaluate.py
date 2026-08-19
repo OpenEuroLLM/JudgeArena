@@ -346,35 +346,3 @@ def test_run_writes_roundtrippable_config(tmp_path):
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval"
     assert reloaded.model.name == "Dummy/no answer"
-
-
-def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
-    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
-
-    captured = {}
-    win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
-
-    def recording_score(battles):
-        captured["battles"] = battles
-        return win_rate(battles)
-
-    monkeypatch.setitem(
-        PAIRWISE_SCORERS,
-        "pairwise_win_rate",
-        recording_score,
-    )
-
-    run_pairwise(
-        _cfg(
-            task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-        )
-    )
-
-    battles = captured["battles"]
-    assert battles["score_a"].tolist() == [0.0, 0.0]
-    assert battles["score_b"].tolist() == [10.0, 10.0]

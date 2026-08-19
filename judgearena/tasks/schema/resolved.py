@@ -41,9 +41,6 @@ class ResolvedTaskSpec:
     spec: TaskSpec
     provenance: TaskProvenance
     invocation_task: str | None = None
-    prompt_texts: dict[str, str] | None = None
-    """Task-shipped judge prompt files (``protocol.judge.prompt``), file name
-    to text, read by the loader so resolution needs no filesystem access."""
     selection: TaskSelection | None = None
 
     @property

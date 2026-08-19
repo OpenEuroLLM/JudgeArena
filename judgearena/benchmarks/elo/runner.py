@@ -329,7 +329,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
             prompt_preset=resolved_prompt.preset_name,
-            parse=resolved_prompt.parse,
+            parse=resolved_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
         )
@@ -362,11 +362,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 "opponent_model": row_opponents,
             }
         )
-        # Parser side-channel values (e.g. per-criterion scores) become battle
-        # columns so downstream scoring can aggregate them.
-        values = pd.DataFrame([a.judge_values or {} for a in row_annotations])
-        if not values.empty:
-            frame = pd.concat([frame, values.set_axis(frame.index)], axis=1)
         return frame
 
     # Stripping reasoning traces changes the judged text but not the cached
@@ -482,7 +477,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 system_prompt=resolved_prompt.system_prompt,
                 user_prompt_template=resolved_prompt.user_prompt_template,
                 prompt_preset=resolved_prompt.preset_name,
-                parse=resolved_prompt.parse,
+                parse=resolved_prompt.parser,
                 truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             )
 

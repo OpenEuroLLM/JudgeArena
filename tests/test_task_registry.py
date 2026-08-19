@@ -40,7 +40,7 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
                 "allow_runtime_override": True,
             },
             "judge": {
-                "default_prompt": "default",
+                "default_prompt_preset": "default",
                 "default_swap_mode": "fixed",
                 "allowed_swap_modes": ["fixed", "both"],
             },
@@ -110,7 +110,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert fluency is not None
     assert fluency.spec.protocol.generation.mode == "base_completion"
     assert fluency.spec.protocol.baseline.strategy == "runtime_required"
-    assert fluency.spec.protocol.judge.default_prompt == "fluency"
+    assert fluency.spec.protocol.judge.default_prompt_preset == "fluency"
     assert fluency.selection is not None
     assert fluency.selection.values == ("french",)
     assert [resource.path for resource in arena_v20.provenance.resources] == [
@@ -143,7 +143,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.protocol.runner == "mt_bench"
     assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
     assert mt_bench.spec.protocol.baseline.reference_id == "gpt-4"
-    assert mt_bench.spec.protocol.judge.default_prompt == "fastchat-pairwise"
+    assert mt_bench.spec.protocol.judge.default_prompt_preset == "fastchat-pairwise"
     assert mt_bench.spec.protocol.judge.reference_categories == (
         "math",
         "reasoning",
@@ -520,48 +520,3 @@ def test_main_cli_intercepts_task_commands(monkeypatch, capsys):
     cli_module.cli(["tasks", "list"])
 
     assert "alpaca-eval" in capsys.readouterr().out
-
-
-def test_task_shipped_prompt_files_load_and_resolve(tmp_path, monkeypatch):
-    definition = _task_definition("criteria-task")
-    definition["protocol"]["judge"] = {
-        "prompt": {
-            "system_file": "criteria-system.txt",
-            "user_file": "criteria-user.txt",
-        },
-        "default_swap_mode": "fixed",
-        "allowed_swap_modes": ["fixed"],
-    }
-    _write_family(
-        tmp_path,
-        family="criteria",
-        filename="criteria-task.yaml",
-        definition=definition,
-    )
-    (tmp_path / "criteria" / "criteria-system.txt").write_text("You judge by rubric.")
-    (tmp_path / "criteria" / "criteria-user.txt").write_text("Rate: {instruction}")
-
-    resolved = load_tasks(tmp_path)["criteria-task"]
-
-    assert resolved.prompt_texts == {
-        "criteria-system.txt": "You judge by rubric.",
-        "criteria-user.txt": "Rate: {instruction}",
-    }
-    digest_paths = [r.path for r in resolved.provenance.resources]
-    assert "criteria/criteria-system.txt" in digest_paths
-    assert "criteria/criteria-user.txt" in digest_paths
-
-    import judgearena.tasks.registry as tasks_registry
-    from judgearena.prompts.registry import resolve_judge_prompt
-
-    monkeypatch.setattr(
-        tasks_registry,
-        "get_packaged_task",
-        lambda task: resolved if task == "criteria-task" else None,
-    )
-    prompt = resolve_judge_prompt(task="criteria-task")
-
-    assert prompt.source == "task"
-    assert prompt.system_prompt == "You judge by rubric."
-    assert prompt.user_prompt_template == "Rate: {instruction}"
-    assert prompt.parse is not None and prompt.parse.name == "score"
