@@ -47,7 +47,8 @@ def _examples() -> pd.DataFrame:
 def test_official_score_task_pins_upstream_inputs_and_defaults():
     task = get_packaged_task("wildbench-v2-score-official")
     assert task is not None
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     assert task.spec.dataset.sources["examples"].revision == (
         "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec"
@@ -76,7 +77,8 @@ def test_official_reward_task_pins_references_prompt_and_defaults():
     task = get_packaged_task("wildbench-v2-reward-official")
     assert task is not None
     protocol = task.spec.protocol
-    prompt = task.prompt_texts[protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     assert task.spec.dataset.sources["official_outputs"].revision == (
         "d6755bc68220df853c0825a733430f73f5af2501"
@@ -150,7 +152,8 @@ def test_wildbench_reference_outputs_reject_missing_sessions():
 
 def test_wildbench_score_prompt_contains_official_context_fields():
     task = get_packaged_task("wildbench-v2-score-official")
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     rendered = render_score_prompt(
         prompt,
@@ -177,7 +180,8 @@ def test_wildbench_score_prompt_contains_official_context_fields():
 
 def test_wildbench_reward_prompt_preserves_orientation_and_visible_outputs():
     task = get_packaged_task("wildbench-v2-reward-official")
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     rendered = render_reward_prompt(
         prompt,
@@ -206,7 +210,8 @@ def test_wildbench_reward_prompt_preserves_orientation_and_visible_outputs():
 
 def test_wildbench_reward_prompt_uses_official_word_truncation_marker():
     task = get_packaged_task("wildbench-v2-reward-official")
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     rendered = render_reward_prompt(
         prompt,

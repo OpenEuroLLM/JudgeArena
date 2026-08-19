@@ -26,7 +26,6 @@ from judgearena.tasks.schema.pairwise import (
     ScoringSpec,
     SingleTurnGeneration,
     SwapMode,
-    TaskPromptSpec,
 )
 from judgearena.tasks.schema.resolved import (
     ResolvedTaskSpec,
@@ -71,7 +70,6 @@ __all__ = [
     "OfficialOutputsBaseline",
     "PairwiseJudgeSpec",
     "PairwiseProtocol",
-    "TaskPromptSpec",
     "ProtocolSpec",
     "ResolvedTaskSpec",
     "ResourceDigest",

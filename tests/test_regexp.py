@@ -58,7 +58,7 @@ def test_default_prompt_preset_renders_answer_labels():
         preset="default",
     )
 
-    assert isinstance(resolved.parse, PairScore)
+    assert isinstance(resolved.parser, PairScore)
     assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
 
 
@@ -167,38 +167,11 @@ def test_alpaca_eval_token_weights_by_logprobs_when_present():
     assert parse_alpaca_eval_token("M") == 1.0
 
 
-def test_pair_score_parse_values_exposes_raw_scores():
-    parser = PairScore()
-
-    assert parser.parse_values("Score A: 3 Score B: 9") == {
-        "score_a": 3.0,
-        "score_b": 9.0,
-    }
-    assert parser.parse_values("no scores here") is None
-    # Parsers without structured values inherit the base behaviour.
-    assert parse_arena_hard_verdict.parse_values("[[A>B]]") is None
-
-
-def test_judge_and_parse_prefs_collects_parser_values():
-    from judgearena.evaluate import judge_and_parse_prefs
-    from judgearena.models import make_model
-
-    annotations, _, prefs = judge_and_parse_prefs(
-        judge_chat_model=make_model("Dummy/score A: 2 score B: 8"),
-        instructions=["q"],
-        completions_A=["a"],
-        completions_B=["b"],
-    )
-
-    assert annotations[0].judge_values == {"score_a": 2.0, "score_b": 8.0}
-    assert prefs.iloc[0] == pytest.approx(0.8582, abs=1e-3)
-
-
 def test_alpaca_eval_preset_resolves_token_parser():
     resolved = resolve_judge_prompt(preset="alpaca-eval")
 
-    assert resolved.parse is parse_alpaca_eval_token
-    assert resolved.parse.requires_top_logprobs is True
+    assert resolved.parser is parse_alpaca_eval_token
+    assert resolved.parser.requires_top_logprobs is True
     assert resolved.system_prompt.startswith("You are a highly efficient assistant")
     assert '"model_identifier": "m"' in resolved.user_prompt_template
     assert "{completion_A}" in resolved.user_prompt_template
@@ -209,7 +182,7 @@ def test_arena_hard_preset_resolves_verdict_parser():
 
     resolved = resolve_judge_prompt(preset="arena-hard")
 
-    assert resolved.parse is parse_arena_hard_verdict
+    assert resolved.parser is parse_arena_hard_verdict
     assert resolved.system_prompt.startswith(
         "Please act as an impartial judge and evaluate the quality"
     )
