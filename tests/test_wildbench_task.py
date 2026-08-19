@@ -47,6 +47,9 @@ def test_official_score_task_pins_upstream_inputs_and_defaults():
         "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec"
     )
     assert hashlib.sha256(prompt.encode()).hexdigest() == (OFFICIAL_SCORE_PROMPT_SHA256)
+    prompt_resource = task.provenance.resources[-1]
+    assert prompt_resource.path == "wildbench/score-prompt.txt"
+    assert prompt_resource.sha256 == OFFICIAL_SCORE_PROMPT_SHA256
     assert task.spec.protocol.judge.reference_judge == "gpt-4o-2024-05-13"
     assert task.spec.protocol.judge.max_words_to_eval is None
 
