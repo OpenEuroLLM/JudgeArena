@@ -196,8 +196,9 @@ def run_wildbench(
             "prompt overrides are not supported."
         )
     protocol = resolved_task.spec.protocol
-    prompt_texts = resolved_task.prompt_texts or {}
-    prompt_template = prompt_texts[protocol.judge.prompt_file]
+    if resolved_task.prompt_text is None:
+        raise ValueError(f"Task {cfg.task!r} did not load its judge prompt.")
+    prompt_template = resolved_task.prompt_text
 
     adapter = resolve_dataset_adapter(resolved_task.spec.dataset.adapter)
     examples = adapter.load_instructions(resolved_task, data_root / "tables")

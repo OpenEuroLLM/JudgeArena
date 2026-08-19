@@ -57,7 +57,7 @@ protocol:
     strategy: task_default
     reference_id: example-baseline
   judge:
-    default_prompt: default
+    default_prompt_preset: default
   scoring:
     adapter: pairwise_win_rate
 ```

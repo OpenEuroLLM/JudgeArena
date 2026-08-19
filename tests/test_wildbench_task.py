@@ -40,7 +40,8 @@ def _examples() -> pd.DataFrame:
 def test_official_score_task_pins_upstream_inputs_and_defaults():
     task = get_packaged_task("wildbench-v2-score-official")
     assert task is not None
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     assert task.spec.dataset.sources["examples"].revision == (
         "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec"
@@ -67,7 +68,8 @@ def test_wildbench_task_defaults_are_applied_to_run_config():
 
 def test_wildbench_score_prompt_contains_official_context_fields():
     task = get_packaged_task("wildbench-v2-score-official")
-    prompt = task.prompt_texts[task.spec.protocol.judge.prompt_file]
+    prompt = task.prompt_text
+    assert prompt is not None
 
     rendered = render_score_prompt(
         prompt,

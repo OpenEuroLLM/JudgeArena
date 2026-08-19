@@ -31,7 +31,7 @@ protocol:
     reference_id: gpt4_1106_preview
     allow_runtime_override: true
   judge:
-    default_prompt: alpaca-eval
+    default_prompt_preset: alpaca-eval
     default_swap_mode: random
     allowed_swap_modes: [fixed, both, random]
     default_temperature: 1
