@@ -16,10 +16,7 @@ class JudgeParser(abc.ABC):
     ``__call__`` receives the completion text plus, for parsers that declare
     ``requires_top_logprobs``, the first generated token's top logprobs — and
     returns the preference every pipeline consumes (0 = A wins, 0.5 = tie,
-    1 = B wins, None = unparseable). ``parse_values`` optionally exposes the
-    parser's structured values as a flat ``str -> float`` dict: per-side keys
-    carry ``_a``/``_b`` suffixes in judged positions, battle-level keys are
-    unsuffixed, and the key set is owned by the parser.
+    1 = B wins, None = unparseable).
     """
 
     name: str
@@ -36,10 +33,6 @@ class JudgeParser(abc.ABC):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None: ...
-
-    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
-        """Structured values behind the preference; None when there are none."""
-        return None
 
 
 # Graded preferences for the official Arena-Hard verdict labels. The spacing
@@ -163,12 +156,6 @@ class PairScore(JudgeParser):
     ) -> float | None:
         return self.parse_model_raw(judge_completion)
 
-    def parse_values(self, judge_completion: str) -> dict[str, float] | None:
-        score_a, score_b = self.parse_raw_scores(judge_completion)
-        if score_a is None or score_b is None:
-            return None
-        return {"score_a": score_a, "score_b": score_b}
-
     def parse_model_raw(self, judge_completion: str) -> float | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
@@ -222,11 +209,3 @@ def resolve_judge_parser(name: str) -> JudgeParser:
         raise ValueError(
             f"Unknown judge parser {name!r}; available: {sorted(JUDGE_PARSERS)}"
         ) from exc
-
-
-def register_judge_parser(parser: JudgeParser) -> JudgeParser:
-    """Make a custom parser addressable by name in prompts and task YAML."""
-    if parser.name in JUDGE_PARSERS:
-        raise ValueError(f"Judge parser {parser.name!r} is already registered.")
-    JUDGE_PARSERS[parser.name] = parser
-    return parser

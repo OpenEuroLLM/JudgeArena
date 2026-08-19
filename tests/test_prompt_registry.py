@@ -120,6 +120,15 @@ def test_file_overrides_take_precedence_over_preset(tmp_path):
     assert resolved.user_sha256 is not None
 
 
+def test_inline_prompt_overrides_keep_their_source():
+    resolved = resolve_judge_prompts(
+        system_prompt="Custom system",
+        user_prompt_template="Custom {instruction}",
+    )
+
+    assert resolved.source == "override"
+
+
 def test_file_overrides_accept_named_parser(tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
@@ -134,8 +143,8 @@ def test_file_overrides_accept_named_parser(tmp_path):
         parser="arena-hard-verdict",
     )
 
-    assert resolved.parse is JUDGE_PARSERS["arena-hard-verdict"]
-    assert resolved.parse("verdict: [[A>B]]") == 0.25
+    assert resolved.parser is JUDGE_PARSERS["arena-hard-verdict"]
+    assert resolved.parser("verdict: [[A>B]]") == 0.25
     assert resolved.metadata()["judge_parser"] == "arena-hard-verdict"
 
 
