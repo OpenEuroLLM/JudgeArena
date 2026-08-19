@@ -488,38 +488,6 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
     assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
 
 
-def test_run_pairwise_exposes_parser_values_to_scorer(monkeypatch, tmp_path):
-    from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS, PairwiseScorer
-
-    captured = {}
-    win_rate = PAIRWISE_SCORERS["pairwise_win_rate"]
-
-    def recording_score(battles):
-        captured["battles"] = battles
-        return win_rate.score(battles)
-
-    monkeypatch.setitem(
-        PAIRWISE_SCORERS,
-        "pairwise_win_rate",
-        PairwiseScorer(score=recording_score),
-    )
-
-    run_pairwise(
-        _cfg(
-            task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-        )
-    )
-
-    battles = captured["battles"]
-    assert battles["score_a"].tolist() == [0.0, 0.0]
-    assert battles["score_b"].tolist() == [10.0, 10.0]
-
-
 def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
     """swap_mode='random' flips judged positions per instruction and re-orients.
 

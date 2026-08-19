@@ -23,7 +23,7 @@ protocol:
       creative_writing: gemini-2.0-flash-001
     allow_runtime_override: true
   judge:
-    default_prompt: arena-hard
+    default_prompt_preset: arena-hard
     category_prompts:
       creative_writing: arena-hard-creative
     default_swap_mode: both
