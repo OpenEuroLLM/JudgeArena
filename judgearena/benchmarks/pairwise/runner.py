@@ -255,7 +255,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             system_prompt=group_prompt.system_prompt,
             user_prompt_template=group_prompt.user_prompt_template,
             prompt_preset=group_prompt.preset_name,
-            parse=group_prompt.parse,
+            parse=group_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
         )
@@ -320,12 +320,6 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             "pref": pd.Series(prefs, dtype="float64").to_numpy(),
         }
     )
-    # Parser side-channel values (e.g. per-criterion scores) become battle
-    # columns so scorers can aggregate them.
-    judged_annotations = annotations + (annotations_reversed or [])
-    values = pd.DataFrame([a.judge_values or {} for a in judged_annotations])
-    if not values.empty:
-        battles = pd.concat([battles, values.set_axis(battles.index)], axis=1)
     summary = scorer(battles)
 
     report = BattleReport(

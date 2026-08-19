@@ -89,7 +89,7 @@ def _select_preset_prompt(
     return MTBenchPresetPrompt(
         name=f"{resolved_prompt.preset_name}-{suffix}",
         preset_name=resolved_prompt.preset_name,
-        parse=resolved_prompt.parse,
+        parse=resolved_prompt.parser,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=_build_mt_bench_preset_user_prompt_template(
             resolved_prompt=resolved_prompt,
