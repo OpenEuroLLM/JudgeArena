@@ -134,8 +134,8 @@ def test_file_overrides_accept_named_parser(tmp_path):
         parser="arena-hard-verdict",
     )
 
-    assert resolved.parse is JUDGE_PARSERS["arena-hard-verdict"]
-    assert resolved.parse("verdict: [[A>B]]") == 0.25
+    assert resolved.parser is JUDGE_PARSERS["arena-hard-verdict"]
+    assert resolved.parser("verdict: [[A>B]]") == 0.25
     assert resolved.metadata()["judge_parser"] == "arena-hard-verdict"
 
 

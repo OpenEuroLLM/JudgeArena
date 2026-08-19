@@ -13,7 +13,7 @@ from judgearena.prompts.parsing import (
     resolve_judge_parser,
 )
 
-PromptSource = Literal["preset", "file", "task", "override", "delegated"]
+PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
@@ -43,7 +43,7 @@ FLUENCY_SYSTEM_PROMPT = (
 @dataclass(frozen=True)
 class JudgePromptPreset:
     name: str
-    parse: JudgeParser | None = None
+    parser: JudgeParser | None = None
     """Parser for this preset's judge-output format; None only when delegated."""
     system_file: str | None = None
     user_file: str | None = None
@@ -55,7 +55,7 @@ class JudgePromptPreset:
 @dataclass(frozen=True)
 class ResolvedJudgePrompt:
     preset_name: str
-    parse: JudgeParser | None
+    parser: JudgeParser | None
     system_prompt: str | None
     user_prompt_template: str
     source: PromptSource
@@ -68,7 +68,9 @@ class ResolvedJudgePrompt:
     def metadata(self) -> dict[str, str | bool | None]:
         return {
             "judge_prompt_preset": self.preset_name,
-            "judge_parser": parser_name(self.parse) if self.parse is not None else None,
+            "judge_parser": (
+                parser_name(self.parser) if self.parser is not None else None
+            ),
             "judge_prompt_source": self.source,
             "judge_prompt_delegated": self.delegated,
             "judge_prompt_system_path": self.system_path,
@@ -83,20 +85,20 @@ SCORE_PARSER = JUDGE_PARSERS["score"]
 PRESETS: dict[str, JudgePromptPreset] = {
     DEFAULT_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=DEFAULT_JUDGE_PROMPT_PRESET,
-        parse=SCORE_PARSER,
+        parser=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt.txt",
     ),
     DEFAULT_WITH_EXPLANATION_PRESET: JudgePromptPreset(
         name=DEFAULT_WITH_EXPLANATION_PRESET,
-        parse=SCORE_PARSER,
+        parser=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt-with-explanation.txt",
         with_explanation=True,
     ),
     FLUENCY_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=FLUENCY_JUDGE_PROMPT_PRESET,
-        parse=SCORE_PARSER,
+        parser=SCORE_PARSER,
         inline_system=FLUENCY_SYSTEM_PROMPT,
         user_file="prompt.txt",
     ),
@@ -109,7 +111,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
     # graded verdict label ([[A>>B]] ... [[B>>A]]).
     ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=ARENA_HARD_JUDGE_PROMPT_PRESET,
-        parse=JUDGE_PARSERS["arena-hard-verdict"],
+        parser=JUDGE_PARSERS["arena-hard-verdict"],
         system_file="arena-hard-system-prompt.txt",
         user_file="arena-hard-prompt.txt",
     ),
@@ -117,7 +119,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
     # judge is not asked to answer the prompt itself first.
     ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
-        parse=JUDGE_PARSERS["arena-hard-verdict"],
+        parser=JUDGE_PARSERS["arena-hard-verdict"],
         system_file="arena-hard-creative-system-prompt.txt",
         user_file="arena-hard-prompt.txt",
     ),
@@ -127,7 +129,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
     # "M" (completion_B).
     ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-        parse=JUDGE_PARSERS["alpaca-eval-token"],
+        parser=JUDGE_PARSERS["alpaca-eval-token"],
         system_file="alpaca-eval-system-prompt.txt",
         user_file="alpaca-eval-prompt.txt",
     ),
@@ -143,42 +145,9 @@ def default_preset_for_task(task: str | None) -> str:
     from judgearena.tasks.registry import get_packaged_task
 
     resolved = get_packaged_task(task)
-    if resolved is not None and resolved.spec.protocol.judge.default_prompt:
-        return resolved.spec.protocol.judge.default_prompt
+    if resolved is not None:
+        return resolved.spec.protocol.judge.default_prompt_preset
     return DEFAULT_JUDGE_PROMPT_PRESET
-
-
-def _task_file_prompt(
-    task: str | None, *, multi_turn: bool
-) -> ResolvedJudgePrompt | None:
-    """Resolve a prompt shipped inside the task's folder, if declared."""
-    if task is None:
-        return None
-    from judgearena.tasks.registry import get_packaged_task
-
-    resolved = get_packaged_task(task)
-    if resolved is None:
-        return None
-    prompt_spec = getattr(resolved.spec.protocol.judge, "prompt", None)
-    if prompt_spec is None:
-        return None
-    system_prompt = resolved.prompt_texts[prompt_spec.system_file]
-    user_prompt_template = _materialize_user_template(
-        resolved.prompt_texts[prompt_spec.user_file],
-        multi_turn=multi_turn,
-        with_explanation=False,
-    )
-    return ResolvedJudgePrompt(
-        preset_name=f"task:{resolved.definition_task}",
-        parse=resolve_judge_parser(prompt_spec.parser),
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
-        source="task",
-        system_path=prompt_spec.system_file,
-        user_path=prompt_spec.user_file,
-        system_sha256=_sha256(system_prompt),
-        user_sha256=_sha256(user_prompt_template),
-    )
 
 
 def _sha256(text: str) -> str:
@@ -212,7 +181,7 @@ def _resolve_file_prompt(
     system_file: str | Path,
     user_file: str | Path,
     multi_turn: bool,
-    parse: JudgeParser,
+    parser: JudgeParser,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file)
     user_path = Path(user_file)
@@ -224,7 +193,7 @@ def _resolve_file_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=f"file:{system_path.name}+{user_path.name}",
-        parse=parse,
+        parser=parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="file",
@@ -254,7 +223,7 @@ def resolve_judge_prompt(
             system_file=system_file,
             user_file=user_file,
             multi_turn=multi_turn,
-            parse=resolve_judge_parser(parser or "score"),
+            parser=resolve_judge_parser(parser or "score"),
         )
     if parser is not None:
         raise ValueError(
@@ -263,9 +232,6 @@ def resolve_judge_prompt(
         )
 
     if preset is None:
-        task_prompt = _task_file_prompt(task, multi_turn=multi_turn)
-        if task_prompt is not None:
-            return task_prompt
         preset = default_preset_for_task(task)
 
     spec = PRESETS.get(preset)
@@ -277,7 +243,7 @@ def resolve_judge_prompt(
     if spec.delegated:
         return ResolvedJudgePrompt(
             preset_name=spec.name,
-            parse=spec.parse,
+            parser=spec.parser,
             system_prompt=None,
             user_prompt_template="",
             source="delegated",
@@ -299,7 +265,7 @@ def resolve_judge_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=spec.name,
-        parse=spec.parse,
+        parser=spec.parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="preset",
