@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
+from judgearena.benchmarks.elo.runner import main as main_elo
+from judgearena.benchmarks.runner import run_benchmark
 from judgearena.config import build_run_config
 from judgearena.constants import ELO_TASK_PREFIX
-from judgearena.estimate_elo_ratings import main as main_elo
-from judgearena.generate_and_evaluate import main as main_generate_and_evaluate
 from judgearena.log import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ def cli(argv: list[str] | None = None) -> None:
     if cfg.task.startswith(ELO_TASK_PREFIX):
         main_elo(cfg)
     else:
-        main_generate_and_evaluate(cfg)
+        run_benchmark(cfg)
 
 
 if __name__ == "__main__":

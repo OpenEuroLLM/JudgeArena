@@ -1,6 +1,4 @@
 import hashlib
-import json
-import re
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -8,11 +6,23 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
 
 from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.artifacts import (
+    prepare_run_directory,
+    safe_filename,
+    write_run_metadata_safely,
+)
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
-from judgearena.benchmark import build_generation_kwargs
+from judgearena.benchmarks.elo.rating import (
+    arena_anchor_battles,
+    fit_bradley_terry,
+    prefs_to_battle_results,
+    sampling_cache_token,
+    select_seeded_random_arena_battles,
+    winner_to_pref,
+)
+from judgearena.benchmarks.execution import build_generation_kwargs
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -23,7 +33,6 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
-from judgearena.repro import write_run_metadata
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
 
@@ -31,156 +40,6 @@ if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
-
-
-def _winner_to_pref(winner: str) -> float | None:
-    """Convert a hard winner label to a continuous preference value."""
-    if winner == "model_a":
-        return 0.0
-    elif winner == "model_b":
-        return 1.0
-    elif winner in ("tie", "tie (bothbad)"):
-        return 0.5
-    return None
-
-
-def _is_nan_pref(p) -> bool:
-    return p is None or (isinstance(p, float) and np.isnan(p))
-
-
-def fit_bradley_terry(
-    df: pd.DataFrame,
-    pref_col: str = "pref",
-    scale: float = 400,
-    base: float = 10,
-    init_rating: float = 1000,
-    baseline_model: str | None = None,
-    baseline_rating: float = 1000,
-) -> dict[str, float]:
-    """Fit Bradley-Terry ratings via weighted logistic regression.
-
-    Each row in *df* is a battle with columns ``model_a``, ``model_b`` and
-    ``pref_col`` ∈ [0, 1] where 0 means A wins, 1 means B wins, 0.5 is a tie.
-    Hard win/loss/tie labels are the special case ``pref ∈ {0, 0.5, 1}``.
-
-    The soft cross-entropy for a battle is decomposed into two weighted
-    hard-label rows so sklearn's ``LogisticRegression`` can be reused:
-
-        Y=1, weight = (1 − pref) · count   (evidence A wins)
-        Y=0, weight =  pref      · count   (evidence B wins)
-
-    Identical ``(model_a, model_b, pref)`` triples are aggregated first so
-    the design matrix stays small when prefs are quantised (e.g. human
-    arena labels) and untouched when prefs are continuous floats.
-    """
-    df = df.dropna(subset=[pref_col])
-    if df.empty:
-        return {}
-
-    grouped = (
-        df.groupby(["model_a", "model_b", pref_col]).size().reset_index(name="count")
-    )
-
-    all_models = sorted(set(grouped["model_a"]) | set(grouped["model_b"]))
-    models = pd.Series(np.arange(len(all_models)), index=all_models)
-    p = len(models)
-
-    m_a_idx = grouped["model_a"].map(models).to_numpy()
-    m_b_idx = grouped["model_b"].map(models).to_numpy()
-    prefs = grouped[pref_col].to_numpy(dtype=float)
-    counts = grouped["count"].to_numpy(dtype=float)
-    n = len(grouped)
-
-    log_base = np.log(base)
-    X = np.zeros((2 * n, p))
-    top = np.arange(n)
-    bot = n + top
-    X[top, m_a_idx] = +log_base
-    X[top, m_b_idx] = -log_base
-    X[bot, m_a_idx] = +log_base
-    X[bot, m_b_idx] = -log_base
-
-    Y = np.concatenate([np.ones(n), np.zeros(n)])
-    sample_weights = np.concatenate([(1.0 - prefs) * counts, prefs * counts])
-
-    # Keep zero-weight rows so sklearn LR always sees both Y classes — when
-    # every pref collapses to 0 or 1 the missing-class rows contribute nothing
-    # to the loss but stop the solver from raising on n_classes < 2.
-    if sample_weights.sum() == 0:
-        return {}
-
-    lr = LogisticRegression(fit_intercept=False, C=1e10, tol=1e-6, max_iter=1000)
-    lr.fit(X, Y, sample_weight=sample_weights)
-    elo_scores = scale * lr.coef_[0] + init_rating
-
-    if baseline_model is not None and baseline_model in models.index:
-        elo_scores += baseline_rating - elo_scores[models[baseline_model]]
-
-    return dict(pd.Series(elo_scores, index=models.index))
-
-
-def _sample_fingerprint(sampled: pd.DataFrame) -> str:
-    rows = []
-    for index, row in sampled.iterrows():
-        rows.append(
-            {
-                "index": int(index)
-                if isinstance(index, int | np.integer)
-                else str(index),
-                "question_id": str(row["question_id"]),
-                "model_a": str(row["model_a"]),
-                "model_b": str(row["model_b"]),
-            }
-        )
-    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
-
-
-def select_seeded_random_arena_battles(
-    df_battles: pd.DataFrame,
-    *,
-    n_battles: int,
-    seed: int,
-) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Select a shared random battle panel for outside-model Elo estimation."""
-    n = min(n_battles, len(df_battles))
-    sampled = df_battles.sample(n=n, random_state=seed, replace=False)
-    metadata: dict[str, object] = {
-        "sampling_mode": "seeded_random",
-        "random_seed": seed,
-        "requested_rows": n_battles,
-        "sampled_rows": len(sampled),
-        "sampled_original_indices": [
-            int(index) if isinstance(index, int | np.integer) else str(index)
-            for index in sampled.index
-        ],
-        "sampled_question_ids": [
-            str(value) for value in sampled["question_id"].tolist()
-        ],
-        "sample_fingerprint": _sample_fingerprint(sampled),
-    }
-    return sampled.reset_index(drop=True), metadata
-
-
-def _sampling_cache_token(
-    sampling_metadata: dict[str, object],
-    *,
-    n_instructions: int | None,
-    n_instructions_per_language: int | None,
-) -> str:
-    mode = sampling_metadata.get("sampling_mode")
-    if mode == "seeded_random":
-        return (
-            "seeded-random_"
-            f"{sampling_metadata['requested_rows']}_"
-            f"seed-{sampling_metadata['random_seed']}_"
-            f"{str(sampling_metadata['sample_fingerprint'])[:12]}"
-        )
-    return f"head_{n_instructions}_{n_instructions_per_language}"
-
-
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return slug or "model"
 
 
 class EloReport(Report):
@@ -276,82 +135,6 @@ class EloReport(Report):
             print("\n  No overlapping arena models to compute MAE.")
 
 
-def _prefs_to_battle_results(
-    prefs,
-    our_model_is_position_a,
-    opponent_models,
-    model_name: str,
-    *,
-    judge_model: str | None = None,
-    question_ids=None,
-) -> pd.DataFrame:
-    """Map per-battle judge prefs into model-name-level battle rows.
-
-    The judge prompt placed our model at position A or B independently per
-    battle.  Here we re-orient each row so ``model_a``/``model_b`` carry
-    the actual model names and ``pref`` is consistent with that ordering
-    (``pref=0`` ⇒ ``model_a`` wins).  ``pref_hard`` is the quantised
-    {0, 0.5, 1} version used by the non-soft Bradley-Terry fit.
-    """
-    records = []
-    for pref, is_pos_a, opp in zip(
-        prefs, our_model_is_position_a, opponent_models, strict=True
-    ):
-        if _is_nan_pref(pref) or pref == 0.5:
-            winner = "tie"
-        elif pref < 0.5:
-            winner = "model_a"
-        else:
-            winner = "model_b"
-
-        if is_pos_a:
-            rec = {
-                "model_a": model_name,
-                "model_b": opp,
-                "winner": winner,
-                "pref": pref,
-            }
-        else:
-            rec = {
-                "model_a": opp,
-                "model_b": model_name,
-                "winner": winner,
-                "pref": None if _is_nan_pref(pref) else pref,
-            }
-        rec["pref_hard"] = _winner_to_pref(winner)
-        records.append(rec)
-    df = pd.DataFrame(records)
-    df["source"] = "llm-judge"
-    df["judge_model"] = judge_model
-    if question_ids is not None:
-        df["question_id"] = question_ids
-    return df
-
-
-def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
-    """Human anchor battles from a loaded arena frame.
-
-    Keeps battles between models with at least 500 human votes and shapes them
-    like the persisted rows (``pref``/``pref_hard`` from the hard winner label,
-    ``source="human"``).
-
-    These anchors are a deterministic function of the (revision-pinned) arena,
-    so runs persist only their own llm-judge battles; recompute ELO with
-    ``arena_anchor_battles(load_arena_dataframe(arena))`` + the run's saved
-    ``battles.parquet``. The original ``df_arena_all`` index is preserved so
-    callers can still look up the full conversation rows by row label.
-    """
-    df = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
-    counts = pd.concat([df["model_a"], df["model_b"]]).value_counts()
-    well_represented = set(counts[counts >= 500].index)
-    df = df[df["model_a"].isin(well_represented) & df["model_b"].isin(well_represented)]
-    # Hard human labels → pref ∈ {0, 0.5, 1}; pref_hard == pref.
-    df["pref"] = df["winner"].map(_winner_to_pref)
-    df["pref_hard"] = df["pref"]
-    df["source"] = "human"
-    return df
-
-
 def main(cfg: "RunConfig") -> dict:
     assert cfg.elo is not None  # main is dispatched only for elo tasks
     run_started_at = datetime.now(UTC)
@@ -434,14 +217,14 @@ def main(cfg: "RunConfig") -> dict:
         if extra_kwargs
         else ""
     )
-    sampling_cache_token = _sampling_cache_token(
+    cache_token = sampling_cache_token(
         sampling_metadata,
         n_instructions=cfg.generation.n_instructions,
         n_instructions_per_language=cfg.elo.n_instructions_per_language,
     )
     cache_suffix = (
         f"{cfg.elo.arena}_{replace_slash(cfg.model.name)}_"
-        f"{sampling_cache_token}_"
+        f"{cache_token}_"
         f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{extra_kwargs['max_tokens']}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
     )
@@ -586,7 +369,7 @@ def main(cfg: "RunConfig") -> dict:
 
     # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
-    df_llm_judge = _prefs_to_battle_results(
+    df_llm_judge = prefs_to_battle_results(
         prefs,
         our_model_is_position_a,
         opponent_models,
@@ -678,7 +461,7 @@ def main(cfg: "RunConfig") -> dict:
                 sa, sb = PairScore.parse_raw_scores(ann.judge_completion)
                 if sa is None or sb is None:
                     continue
-                human_pref = _winner_to_pref(human_winner)
+                human_pref = winner_to_pref(human_winner)
                 if human_pref is None or human_pref == 0.5:
                     continue  # skip ties and missing
                 delta_s_cal.append(sa - sb)
@@ -728,7 +511,7 @@ def main(cfg: "RunConfig") -> dict:
             prefs = new_prefs_ab.tolist()
 
         # Rebuild battle results with the re-parsed prefs.
-        df_llm_judge = _prefs_to_battle_results(
+        df_llm_judge = prefs_to_battle_results(
             prefs,
             our_model_is_position_a,
             opponent_models,
@@ -811,11 +594,13 @@ def main(cfg: "RunConfig") -> dict:
     # ELO artifacts (ratings, battles, bootstrap CSV, metadata) are judge-specific,
     # so key the folder on the judge too — otherwise re-running the same
     # arena/model under a different judge silently overwrites the previous run.
-    result_path = report.save(
+    res_dir = prepare_run_directory(
+        cfg,
         Path(cfg.run.result_folder)
-        / f"elo-{_slugify(cfg.elo.arena)}-{_slugify(model_name)}-{_slugify(cfg.judge.model)}"
-        / f"results-{_slugify(model_name)}.json"
+        / f"elo-{safe_filename(cfg.elo.arena)}-{safe_filename(model_name)}-"
+        f"{safe_filename(cfg.judge.model)}",
     )
+    result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
 
     # Persist only the run's own llm-judge battles (a few KB). The human arena
     # anchors are identical across every run, so we do not duplicate them per
@@ -823,7 +608,6 @@ def main(cfg: "RunConfig") -> dict:
     # arena_anchor_battles(load_arena_dataframe(arena)). question_id is the
     # instruction-index join key back to the arena initial table / completion
     # cache. battles.parquet keeps pref_hard so both hard and soft ELO recompute.
-    res_dir = result_path.parent
     battle_cols = [
         "model_a",
         "model_b",
@@ -854,23 +638,20 @@ def main(cfg: "RunConfig") -> dict:
     # Reproducibility manifest (git hash, dependency versions, timings) — parity
     # with the other entrypoints, all of which write run-metadata. Best-effort:
     # a metadata-write failure should not sink an already-completed run.
-    try:
-        write_run_metadata(
-            output_dir=res_dir,
-            entrypoint="judgearena.estimate_elo_ratings.main",
-            run=cfg.model_dump(),
-            results=results,
-            input_payloads=(
-                {"question_id": df_battles["question_id"].tolist()}
-                if "question_id" in df_battles.columns
-                else None
-            ),
-            judge_system_prompt=resolved_prompt.system_prompt,
-            judge_user_prompt_template=resolved_prompt.user_prompt_template,
-            started_at_utc=run_started_at,
-        )
-    except OSError as e:
-        logger.warning("Failed to write run metadata: %s", e)
+    write_run_metadata_safely(
+        output_dir=res_dir,
+        entrypoint="judgearena.benchmarks.elo.runner.main",
+        run=cfg.model_dump(),
+        results=results,
+        input_payloads=(
+            {"question_id": df_battles["question_id"].tolist()}
+            if "question_id" in df_battles.columns
+            else None
+        ),
+        judge_system_prompt=resolved_prompt.system_prompt,
+        judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        started_at_utc=run_started_at,
+    )
 
     return {
         **results,

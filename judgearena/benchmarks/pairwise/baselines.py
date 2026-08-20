@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from judgearena.instruction_dataset.arena_hard import ARENA_HARD_BASELINES
-from judgearena.instruction_dataset.m_arenahard import (
+from judgearena.datasets.arena_hard import ARENA_HARD_BASELINES
+from judgearena.datasets.m_arenahard import (
     M_ARENA_HARD_BASELINES,
     split_m_arena_hard_dataset,
 )
-from judgearena.instruction_dataset.mt_bench import MT_BENCH_BASELINES
+from judgearena.datasets.mt_bench import MT_BENCH_BASELINES
 
 ALPACA_EVAL_BASELINES: dict[str, str] = {
     "alpaca-eval": "gpt4_1106_preview",

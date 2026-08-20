@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from judgearena.repro import _to_jsonable
+from judgearena.artifacts import to_jsonable
 
 # Winners accepted by compute_bradley_terry.
 WINNERS = frozenset({"model_a", "model_b", "tie", "tie (bothbad)"})
@@ -76,7 +76,7 @@ class RatingEntry:
 class Leaderboard:
     """Per-model ratings (mean + bootstrap CI) plus the run metadata that produced them.
 
-    Named distinctly from :class:`judgearena.estimate_elo_ratings.EloReport`,
+    Named distinctly from :class:`judgearena.benchmarks.elo.runner.EloReport`,
     which is the console/``results-*.json`` run report; this is the narrower
     ``elo_ratings.json`` leaderboard artifact with per-model CIs.
     """
@@ -90,7 +90,7 @@ class Leaderboard:
 
     def write(self, path: str | Path) -> None:
         with Path(path).open("w") as f:
-            json.dump(_to_jsonable(asdict(self)), f, indent=2, allow_nan=False)
+            json.dump(to_jsonable(asdict(self)), f, indent=2, allow_nan=False)
 
 
 def summarize_bootstrap(

@@ -5,7 +5,7 @@ from datasets import Dataset
 from langchain_community.cache import SQLiteCache
 from langchain_core.globals import set_llm_cache
 
-from judgearena.instruction_dataset.fluency import FLUENCY_HF_REPO, FLUENCY_LANGUAGES
+from judgearena.datasets.fluency import FLUENCY_HF_REPO, FLUENCY_LANGUAGES
 from judgearena.models import do_inference, make_model
 from judgearena.utils import data_root
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.instruction_dataset.arena_hard import (
+from judgearena.datasets.arena_hard import (
     download_arena_hard,
     is_arena_hard_dataset,
 )
@@ -69,8 +69,8 @@ def safe_parse_int(env_var: str) -> int | None:
 
 
 def download_all():
-    from judgearena.instruction_dataset.fluency import download_fluency_dataset
-    from judgearena.instruction_dataset.m_arenahard import M_ARENA_HARD_BASELINES
+    from judgearena.datasets.fluency import download_fluency_dataset
+    from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
@@ -87,7 +87,7 @@ def download_all():
 
     download_fluency_dataset(data_root)
 
-    from judgearena.instruction_dataset.mt_bench import download_mt_bench
+    from judgearena.datasets.mt_bench import download_mt_bench
 
     download_mt_bench()
 

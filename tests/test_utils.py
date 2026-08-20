@@ -1,7 +1,7 @@
 import pytest
 
-import judgearena.instruction_dataset.fluency as fluency_mod
-import judgearena.instruction_dataset.mt_bench as mt_bench_mod
+import judgearena.datasets.fluency as fluency_mod
+import judgearena.datasets.mt_bench as mt_bench_mod
 import judgearena.models as utils_models
 import judgearena.utils as utils
 import judgearena.utils.io as utils_io

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from judgearena.mt_bench.fastchat_compat import (
+from judgearena.benchmarks.mt_bench.fastchat_compat import (
     _conservative_winner,
     _map_verdict_to_winner,
     _parse_fastchat_verdict,

@@ -165,7 +165,7 @@ def test_battlereport_save_round_trip(tmp_path):
 
 
 def test_eloreport_to_dict_envelope():
-    from judgearena.estimate_elo_ratings import EloReport
+    from judgearena.benchmarks.elo.runner import EloReport
 
     report = EloReport(
         arena="chatbot-arena",

@@ -4,13 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import judgearena.estimate_elo_ratings as estimate_elo_ratings
-from judgearena.config import RunConfig
-from judgearena.estimate_elo_ratings import (
-    _winner_to_pref,
+import judgearena.benchmarks.elo.runner as estimate_elo_ratings
+from judgearena.benchmarks.elo.rating import (
+    arena_anchor_battles,
     fit_bradley_terry,
-    main,
+    winner_to_pref,
 )
+from judgearena.benchmarks.elo.runner import main
+from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
 
@@ -115,7 +116,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
 
 def _records_with_pref(records: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(records)
-    df["pref"] = df["winner"].map(_winner_to_pref)
+    df["pref"] = df["winner"].map(winner_to_pref)
     return df
 
 
@@ -415,7 +416,7 @@ def test_arena_anchor_battles_filters_and_preserves_index():
         },
         index=range(1000, 1000 + n + 1),
     )
-    out = estimate_elo_ratings.arena_anchor_battles(df_all)
+    out = arena_anchor_battles(df_all)
 
     # x, y have >= 500 battles -> kept; 'rare' (1 battle) -> its row dropped
     assert set(out["model_a"]) | set(out["model_b"]) == {"x", "y"}
