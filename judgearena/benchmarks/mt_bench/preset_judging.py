@@ -31,7 +31,7 @@ MTBenchPromptResolver = Callable[[bool], ResolvedJudgePrompt]
 class MTBenchPresetPrompt:
     name: str
     preset_name: str
-    parse: JudgeParser
+    parser: JudgeParser
     system_prompt: str | None
     user_prompt_template: str
     multi_turn: bool
@@ -79,7 +79,7 @@ def _build_mt_bench_prompt(
             f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
             "cannot be used for MT-Bench preset judging."
         )
-    if resolved_prompt.parse is None:
+    if resolved_prompt.parser is None:
         raise ValueError(
             f"Judge prompt preset '{resolved_prompt.preset_name}' has no parser."
         )
@@ -89,7 +89,7 @@ def _build_mt_bench_prompt(
     return MTBenchPresetPrompt(
         name=f"{resolved_prompt.preset_name}-{suffix}",
         preset_name=resolved_prompt.preset_name,
-        parse=resolved_prompt.parser,
+        parser=resolved_prompt.parser,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=_build_mt_bench_preset_user_prompt_template(
             resolved_prompt=resolved_prompt,
@@ -198,7 +198,7 @@ def judge_mt_bench_with_preset(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
             prompt: MTBenchPresetPrompt = item.prompt
-            parsed_preference = prompt.parse(raw_judgment)
+            parsed_preference = prompt.parser(raw_judgment)
             normalized_preference = _normalize_preference(
                 parsed_preference,
                 swapped=swapped,
@@ -213,7 +213,7 @@ def judge_mt_bench_with_preset(
                     "judge": judge_model,
                     "prompt_name": prompt.name,
                     "prompt_preset": prompt.preset_name,
-                    "parser_mode": parser_name(prompt.parse),
+                    "parser_mode": parser_name(prompt.parser),
                     "system_prompt": prompt.system_prompt,
                     "user_prompt_template": prompt.user_prompt_template,
                     "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),

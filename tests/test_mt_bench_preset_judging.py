@@ -195,7 +195,7 @@ def test_build_mt_bench_prompt_uses_resolved_named_parser(tmp_path):
         resolved_prompt=resolved_prompt,
     )
 
-    assert prompt.parse is JUDGE_PARSERS["score"]
+    assert prompt.parser is JUDGE_PARSERS["score"]
     assert "# Your task\nJudge correctness and clarity." in (
         prompt.user_prompt_template
     )
