@@ -97,8 +97,9 @@ If a benchmark needs a genuinely different evaluation algorithm:
 1. Add its typed protocol under `schema/`.
 2. Add that protocol to `ProtocolSpec` in `schema/task.py`.
 3. Implement and register its benchmark runner.
-4. Keep algorithm-specific fields in that protocol, as MT-Bench and ELO do in
-   `MTBenchProtocol` and `EloProtocol`.
+4. Keep algorithm-specific fields in that protocol, as MT-Bench, ELO, and
+   meta-evaluation do in `MTBenchProtocol`, `EloProtocol`, and
+   `MetaEvalProtocol`.
 
 Adding a schema field makes it valid in task YAML; it does not automatically
 make it a run-config or CLI option. Runtime overrides must be explicitly added

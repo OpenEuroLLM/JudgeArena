@@ -34,8 +34,8 @@ def _download_arena_dataset(
     )
 
 
-def _extract_instruction_text(turn: dict) -> str:
-    """Extract plain instruction text from a conversation turn.
+def extract_turn_text(turn: dict) -> str:
+    """Extract plain text from a conversation turn (user or assistant).
 
     Handles both the 100k schema (content is a plain string) and the 140k
     schema (content is an array of {type, text, ...} objects). Moderated or
@@ -170,7 +170,7 @@ def _load_arena_dataframe(
         df["question_id"] = df["id"]
 
     df["lang"] = df["conversation_a"].apply(
-        lambda conv: detect_language(_extract_instruction_text(conv[0])).lower()
+        lambda conv: detect_language(extract_turn_text(conv[0])).lower()
     )
 
     cols = [

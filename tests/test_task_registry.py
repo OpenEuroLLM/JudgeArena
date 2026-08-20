@@ -107,6 +107,8 @@ def test_packaged_registry_discovers_versioned_tasks():
         "fluency",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
+        "meta-eval-comparia",
+        "meta-eval-lmarena-140k",
         "mt-bench",
         "mt-bench-official",
     ]

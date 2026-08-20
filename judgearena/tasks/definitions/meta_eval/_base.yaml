@@ -1,0 +1,19 @@
+schema_version: 1
+task_version: 1
+tags: [meta-eval, arena, judge]
+
+dataset:
+  adapter: arena_battles
+  fields:
+    id: question_id
+    instruction: conversation_a
+    category: lang
+
+protocol:
+  runner: meta_eval
+  judge:
+    default_prompt_preset: meta-eval-pair-score
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: ranking

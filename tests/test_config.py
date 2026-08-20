@@ -6,6 +6,7 @@ from pydantic import ValidationError
 import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.config import RunConfig, dump_config, load_config
+from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 
 
 def _base_generate() -> dict:
@@ -43,6 +44,7 @@ def _registered_task(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
                 judge=SimpleNamespace(
+                    default_prompt_preset=DEFAULT_JUDGE_PROMPT_PRESET,
                     default_swap_mode=default_swap_mode,
                     default_temperature=default_temperature,
                     default_max_out_tokens=default_max_out_tokens,
@@ -112,6 +114,31 @@ def test_elo_config_allows_runtime_scoring_overrides():
     assert cfg.elo is not None
     assert cfg.elo.soft_elo is False
     assert cfg.elo.soft_elo_temperature == 0.7
+
+
+def test_meta_eval_config_derives_arena():
+    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
+
+    assert cfg.meta_eval is not None
+    assert cfg.meta_eval.arena == "ComparIA"
+    assert cfg.meta_eval.n_bootstraps == 20
+    assert cfg.elo is None
+
+
+def test_meta_eval_rejects_a_model_under_evaluation():
+    with pytest.raises(ValidationError, match="not used"):
+        RunConfig(
+            task="meta-eval-comparia",
+            model={"name": "Dummy/m"},
+            judge={"model": "Dummy/j"},
+        )
+
+
+def test_meta_eval_block_rejected_on_elo_task():
+    data = _base_elo()
+    data["meta_eval"] = {"top_models": 5}
+    with pytest.raises(ValidationError, match="only valid for meta-eval"):
+        RunConfig(**data)
 
 
 def test_elo_requires_model_path():
