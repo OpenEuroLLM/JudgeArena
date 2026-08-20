@@ -85,6 +85,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "elo-lmarena",
         "elo-lmarena-100k",
         "elo-lmarena-140k",
+        "fluency",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",
@@ -105,6 +106,13 @@ def test_packaged_registry_discovers_versioned_tasks():
     )
     assert elo_lmarena.spec.protocol.arena == "LMArena"
     assert len(elo_lmarena.spec.dataset.sources) == 3
+    fluency = resolve_task(tasks, "fluency-french")
+    assert fluency is not None
+    assert fluency.spec.protocol.generation.mode == "base_completion"
+    assert fluency.spec.protocol.baseline.strategy == "runtime_required"
+    assert fluency.spec.protocol.judge.default_prompt == "fluency"
+    assert fluency.selection is not None
+    assert fluency.selection.values == ("french",)
     assert [resource.path for resource in arena_v20.provenance.resources] == [
         "arena_hard/_base.yaml",
         "arena_hard/arena-hard-v2.0.yaml",

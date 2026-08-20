@@ -11,7 +11,6 @@ from judgearena.prompts.registry import (
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
     FLUENCY_JUDGE_PROMPT_PRESET,
     PRESETS,
-    TASK_DEFAULT_PRESET,
     default_preset_for_task,
     resolve_judge_prompt,
 )
@@ -25,19 +24,8 @@ class FakeCliArgs:
     provide_explanation: bool = False
 
 
-def test_default_preset_for_task_known_keys():
-    for task, preset in TASK_DEFAULT_PRESET.items():
-        assert default_preset_for_task(task) == preset
-
-
-def test_alpaca_eval_prompt_default_is_not_duplicated_in_legacy_registry():
-    assert "alpaca-eval" not in TASK_DEFAULT_PRESET
+def test_default_presets_are_owned_by_task_yaml():
     assert default_preset_for_task("alpaca-eval") == "default"
-
-
-def test_arena_hard_prompt_defaults_are_not_duplicated_in_legacy_registry():
-    assert "arena-hard-v0.1" not in TASK_DEFAULT_PRESET
-    assert "arena-hard-v2.0" not in TASK_DEFAULT_PRESET
     assert default_preset_for_task("arena-hard-v2.0") == "default"
 
 
@@ -47,7 +35,6 @@ def test_default_preset_for_fluency_prefix():
 
 
 def test_m_arena_hard_prompt_defaults_are_owned_by_task_yaml():
-    assert not any(key.startswith("m-arena-hard") for key in TASK_DEFAULT_PRESET)
     assert default_preset_for_task("m-arena-hard-v0.1-uk") == "default"
     assert default_preset_for_task("m-arena-hard-v2.0-EU") == "default"
 
@@ -58,7 +45,6 @@ def test_default_preset_for_unknown_task():
 
 
 def test_mt_bench_default_is_delegated_fastchat():
-    assert "mt-bench" not in TASK_DEFAULT_PRESET
     resolved = resolve_judge_prompt(task="mt-bench")
 
     assert resolved.preset_name == FASTCHAT_PAIRWISE_PROMPT_PRESET

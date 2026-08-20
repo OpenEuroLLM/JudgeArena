@@ -1,0 +1,79 @@
+schema_version: 1
+task: fluency
+task_version: 1
+description: Base-model sentence-completion fluency evaluation; select a language via fluency-<language>.
+tags: [pairwise, fluency, multilingual, base-model]
+
+variants:
+  selector: language
+  values:
+    - albanian
+    - basque
+    - bengali
+    - bosnian
+    - bulgarian
+    - catalan
+    - croatian
+    - czech
+    - danish
+    - dutch
+    - english
+    - estonian
+    - finnish
+    - french
+    - galician
+    - georgian
+    - german
+    - greek
+    - hindi
+    - hungarian
+    - icelandic
+    - indonesian
+    - irish
+    - italian
+    - japanese
+    - latvian
+    - lithuanian
+    - macedonian
+    - maltese
+    - mandarin-chinese
+    - norwegian
+    - polish
+    - portuguese
+    - romanian
+    - russian
+    - serbian
+    - slovak
+    - slovene
+    - spanish
+    - standard-arabic
+    - swedish
+    - turkish
+    - ukrainian
+
+dataset:
+  adapter: fluency
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: geoalgo/multilingual-fluency
+      revision: "ea6acc306273cc9cfa49bf5029e6fee74e22b985"
+  fields:
+    id: instruction_index
+    instruction: sentence
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: base_completion
+  baseline:
+    strategy: runtime_required
+  judge:
+    default_prompt: fluency
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: pairwise_win_rate
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/geoalgo/multilingual-fluency

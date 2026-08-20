@@ -26,6 +26,3 @@ PAIRWISE_SCORERS = {
         summarize=compute_pref_summary,
     )
 }
-
-# Used by legacy tasks that have no YAML definition to declare a scorer.
-DEFAULT_PAIRWISE_SCORER = "pairwise_win_rate"

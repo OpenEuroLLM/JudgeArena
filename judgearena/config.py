@@ -17,7 +17,6 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.datasets.fluency import is_fluency_task
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol
 
@@ -390,19 +389,10 @@ class RunConfig(BaseSettings):
     def _validate(self) -> RunConfig:
         resolved_task = get_packaged_task(self.task)
         if resolved_task is None:
-            if not is_fluency_task(self.task):
-                raise ValueError(
-                    f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
-                    "inspect packaged tasks."
-                )
-            # Fluency tasks are not packaged yet and run through the legacy path.
-            if self.elo is not None:
-                raise ValueError("elo config is only valid for ELO tasks.")
-            if self.model.name is None:
-                raise ValueError("model.name is required.")
-            if self.model.baseline is None:
-                raise ValueError(f"model.baseline is required for task {self.task!r}.")
-            return self
+            raise ValueError(
+                f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
+                "inspect packaged tasks."
+            )
 
         protocol = resolved_task.spec.protocol
         task_judge = protocol.judge

@@ -65,26 +65,6 @@ def mock_external_data_and_cache(monkeypatch):
 
     monkeypatch.setattr(
         generate_and_evaluate,
-        "load_instructions",
-        lambda dataset, n_instructions=None: (
-            instructions.head(n_instructions)
-            if n_instructions is not None
-            else instructions
-        ),
-    )
-    monkeypatch.setattr(
-        generate_and_evaluate,
-        "load_fluency_contexts",
-        lambda local_path, task: instructions.loc[:, "instruction"],
-    )
-
-    monkeypatch.setattr(
-        generate_and_evaluate,
-        "_try_load_legacy_dataset_completions",
-        lambda dataset, model, n_instructions: None,
-    )
-    monkeypatch.setattr(
-        generate_and_evaluate,
         "load_pairwise_task_data",
         lambda task, n_instructions=None: PairwiseTaskData(
             instructions=(

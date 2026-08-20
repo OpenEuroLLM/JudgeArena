@@ -12,65 +12,20 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import (
-    DEFAULT_PAIRWISE_SCORER,
-    PAIRWISE_SCORERS,
-)
-from judgearena.datasets import load_instructions
-from judgearena.datasets.fluency import is_fluency_task as task_is_fluency
-from judgearena.datasets.fluency import load_fluency_contexts
-from judgearena.datasets.pairwise import PairwiseTaskData, load_pairwise_task_data
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
-from judgearena.utils import (
-    cache_function_dataframe,
-    data_root,
-    download_hf,
-    generation_cache_token,
-    read_df,
-)
+from judgearena.utils import cache_function_dataframe, generation_cache_token
 from judgearena.utils.eval import BattleReport
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
-
-
-def _try_load_legacy_dataset_completions(
-    dataset: str, model: str, n_instructions: int | None
-) -> pd.DataFrame | None:
-    """Try loading pre-existing completions for an unregistered legacy task.
-
-    Registered tasks load outputs through ``PairwiseTaskData`` instead.
-    """
-    local_path_tables = data_root / "tables"
-    download_hf(name=dataset, local_path=local_path_tables)
-    output_path = local_path_tables / "model_outputs" / f"{dataset}.csv.zip"
-    if not output_path.exists():
-        return None
-    df_outputs = read_df(output_path)
-    df_outputs.loc[:, "output"] = df_outputs.loc[:, "output"].fillna("")
-    df_outputs = df_outputs.pivot_table(
-        index="instruction_index", columns="model", values="output", aggfunc="last"
-    ).sort_index()
-    if model not in df_outputs.columns:
-        return None
-    logger.info(
-        "Found pre-existing completions for '%s' in dataset '%s'.", model, dataset
-    )
-    completions = df_outputs.loc[:, model]
-    if n_instructions is not None:
-        completions = completions.head(n_instructions)
-    return pd.DataFrame(
-        {
-            "completion": completions.values,
-            "instruction_index": completions.index.tolist(),
-        }
-    )
 
 
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
@@ -92,28 +47,15 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     #     set_langchain_cache()
     ignore_cache = cfg.run.ignore_cache
 
-    # Currrently, we run context evaluation
-    is_fluency_task = task_is_fluency(cfg.task)
     resolved_task = resolved_task or get_packaged_task(cfg.task)
-    task_data: PairwiseTaskData | None = None
-    if resolved_task is not None:
-        task_data = load_pairwise_task_data(
-            resolved_task,
-            n_instructions=cfg.generation.n_instructions,
-        )
-        instructions_df = task_data.instructions
-        instructions = instructions_df.loc[:, "instruction"]
-    elif is_fluency_task:
-        # if cfg.task = "fluency-french", we map to the "French" config of
-        # https://huggingface.co/datasets/geoalgo/multilingual-fluency
-        instructions = load_fluency_contexts(data_root, cfg.task)
-        instructions_df = pd.DataFrame({"instruction": instructions.values})
-        instructions_df.index = instructions.index
-    else:
-        instructions_df = load_instructions(
-            dataset=cfg.task, n_instructions=cfg.generation.n_instructions
-        )
-        instructions = instructions_df.loc[:, "instruction"]
+    if resolved_task is None:
+        raise ValueError(f"Unknown task {cfg.task!r}.")
+    task_data = load_pairwise_task_data(
+        resolved_task,
+        n_instructions=cfg.generation.n_instructions,
+    )
+    instructions_df = task_data.instructions
+    instructions = instructions_df.loc[:, "instruction"]
 
     n_instructions = (
         cfg.generation.n_instructions
@@ -155,7 +97,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     )
 
     # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    generation_function = generate_base if is_fluency_task else generate_instructions
+    generation_function = (
+        generate_base
+        if resolved_task.spec.protocol.generation.mode == "base_completion"
+        else generate_instructions
+    )
 
     def _run_generation(
         model_spec: str, *, generation_kwargs: dict[str, object]
@@ -171,20 +117,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _preloaded_completions(model_spec: str) -> pd.Series | None:
-        """Aligned completions shipped with the dataset, if any."""
-        if task_data is not None:
-            preloaded = task_data.model_completion(model_spec)
-            return None if preloaded is None else preloaded.loc[instructions.index]
-        legacy = _try_load_legacy_dataset_completions(
-            cfg.task, model_spec, n_instructions
-        )
-        return None if legacy is None else _align_completion_series(legacy)
-
     def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = _preloaded_completions(model_spec)
+        preloaded = task_data.model_completion(model_spec)
         if preloaded is not None:
-            return preloaded
+            return preloaded.loc[instructions.index]
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -269,11 +205,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    scorer = PAIRWISE_SCORERS[
-        resolved_task.spec.protocol.scoring.adapter
-        if resolved_task is not None
-        else DEFAULT_PAIRWISE_SCORER
-    ]
+    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
     summary = scorer.summarize(prefs)
 
     report = BattleReport(
