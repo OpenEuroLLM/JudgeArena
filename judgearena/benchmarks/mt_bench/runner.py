@@ -19,6 +19,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -27,11 +28,9 @@ from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
 from judgearena.models import is_thinking_model, make_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MTBenchProtocol
 from judgearena.utils import (
     cache_function_dataframe,
-    compute_pref_summary,
     generation_cache_token,
 )
 from judgearena.utils.eval import BattleReport, _compute_grouped_stats
@@ -40,13 +39,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
-
-
-def _task_protocol(task_id: str) -> MTBenchProtocol:
-    task = get_packaged_task(task_id)
-    if task is None or not isinstance(task.spec.protocol, MTBenchProtocol):
-        raise ValueError(f"Task {task_id!r} does not define an MT-Bench protocol.")
-    return task.spec.protocol
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 
 def _align_mt_bench_completions(
@@ -90,10 +83,10 @@ def _build_mt_bench_generation_kwargs(
 
 def _generate_mt_bench_completions(
     cfg: RunConfig,
+    protocol: MTBenchProtocol,
     questions_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cache_prefix = cfg.task
-    protocol = _task_protocol(cfg.task)
 
     def _run_generation(
         model_name: str, *, generation_kwargs: dict[str, object]
@@ -198,6 +191,7 @@ def _save_mt_bench_results(
 def _finalize_mt_bench_run(
     *,
     cfg: RunConfig,
+    protocol: MTBenchProtocol,
     res_folder: Path,
     result_name: str,
     prefs: pd.Series,
@@ -210,7 +204,8 @@ def _finalize_mt_bench_run(
     started_at_utc: datetime,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
-    stats = compute_pref_summary(prefs)
+    scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
+    stats = scorer.summarize(prefs)
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
@@ -253,6 +248,7 @@ def _finalize_mt_bench_run(
 def _run_mt_bench_fastchat(
     *,
     cfg: RunConfig,
+    protocol: MTBenchProtocol,
     res_folder: Path,
     result_name: str,
     questions_df: pd.DataFrame,
@@ -260,10 +256,8 @@ def _run_mt_bench_fastchat(
     completions_b: pd.DataFrame,
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
-    fastchat_prompt_preset: str,
     started_at_utc: datetime,
 ) -> pd.Series:
-    protocol = _task_protocol(cfg.task)
     prefs, annotations, combined_metadata, num_inconsistent = (
         judge_mt_bench_pairwise_fastchat(
             judge_chat_model=judge_chat_model,
@@ -278,12 +272,13 @@ def _run_mt_bench_fastchat(
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
             reference_categories=protocol.judge.reference_categories,
-            prompt_preset=fastchat_prompt_preset,
+            prompt_preset=protocol.judge.fastchat_prompt_preset,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         )
     )
     return _finalize_mt_bench_run(
         cfg=cfg,
+        protocol=protocol,
         res_folder=res_folder,
         result_name=result_name,
         prefs=prefs,
@@ -301,6 +296,7 @@ def _run_mt_bench_fastchat(
 def _run_mt_bench_preset(
     *,
     cfg: RunConfig,
+    protocol: MTBenchProtocol,
     res_folder: Path,
     result_name: str,
     questions_df: pd.DataFrame,
@@ -310,7 +306,6 @@ def _run_mt_bench_preset(
     resolved_prompt: ResolvedJudgePrompt,
     started_at_utc: datetime,
 ) -> pd.Series:
-    protocol = _task_protocol(cfg.task)
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge_chat_model,
         judge_model=cfg.judge.model,
@@ -332,6 +327,7 @@ def _run_mt_bench_preset(
     )
     return _finalize_mt_bench_run(
         cfg=cfg,
+        protocol=protocol,
         res_folder=res_folder,
         result_name=result_name,
         prefs=prefs,
@@ -345,10 +341,12 @@ def _run_mt_bench_preset(
     )
 
 
-def run_mt_bench_benchmark(cfg: RunConfig):
+def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None):
     """Run the registered MT-Bench generation, judging, and reporting lifecycle."""
     run_started_at = datetime.now(UTC)
-    protocol = _task_protocol(cfg.task)
+    protocol = task.spec.protocol if task is not None else None
+    if not isinstance(protocol, MTBenchProtocol):
+        raise ValueError(f"Task {cfg.task!r} does not define an MT-Bench protocol.")
     if cfg.model.baseline is None:
         baseline = native_pairwise_baseline(cfg.task)
         cfg.model.baseline = baseline if isinstance(baseline, str) else None
@@ -357,7 +355,6 @@ def run_mt_bench_benchmark(cfg: RunConfig):
             f"--model_B is required for dataset '{cfg.task}'; "
             "no dataset-native baseline registered."
         )
-
     result_name = (
         f"{cfg.task}-{cfg.model.name}-{cfg.model.baseline}-{cfg.judge.model}-"
         f"{cfg.judge.swap_mode}"
@@ -378,6 +375,7 @@ def run_mt_bench_benchmark(cfg: RunConfig):
     )
     completions_a, completions_b = _generate_mt_bench_completions(
         cfg=cfg,
+        protocol=protocol,
         questions_df=questions_df,
     )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
@@ -398,6 +396,7 @@ def run_mt_bench_benchmark(cfg: RunConfig):
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
             cfg=cfg,
+            protocol=protocol,
             res_folder=res_folder,
             result_name=result_name,
             questions_df=questions_df,
@@ -405,11 +404,11 @@ def run_mt_bench_benchmark(cfg: RunConfig):
             completions_b=completions_b,
             judge_chat_model=judge_chat_model,
             resolved_prompt=resolved_prompt,
-            fastchat_prompt_preset=protocol.judge.fastchat_prompt_preset,
             started_at_utc=run_started_at,
         )
     return _run_mt_bench_preset(
         cfg=cfg,
+        protocol=protocol,
         res_folder=res_folder,
         result_name=result_name,
         questions_df=questions_df,

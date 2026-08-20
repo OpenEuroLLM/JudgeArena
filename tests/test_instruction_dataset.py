@@ -1,13 +1,14 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
-import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.m_arenahard as m_arenahard
+import judgearena.datasets.pairwise as pairwise_data
 from judgearena.datasets.arena_hard import (
     _build_instructions,
     _build_model_outputs,
@@ -384,7 +385,7 @@ def test_load_instructions_surfaces_category_for_v20(monkeypatch):
     assert df.loc["q2", "category"] == "creative_writing"
 
 
-def test_try_load_dataset_completions_uses_dataset_output_file(monkeypatch, tmp_path):
+def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path):
     tables_dir = tmp_path / "tables" / "model_outputs"
     tables_dir.mkdir(parents=True, exist_ok=True)
     output_path = tables_dir / "arena-hard-v2.0.csv.zip"
@@ -396,17 +397,26 @@ def test_try_load_dataset_completions_uses_dataset_output_file(monkeypatch, tmp_
         }
     ).to_csv(output_path, index=False)
 
-    monkeypatch.setattr(generate_and_evaluate, "data_root", tmp_path)
-    monkeypatch.setattr(
-        arena_hard,
-        "load_task_model_outputs",
-        lambda task, path: pd.read_csv(output_path),
+    adapter = SimpleNamespace(
+        name="arena_hard",
+        load_instructions=lambda task, path: pd.DataFrame(
+            {
+                "instruction_index": [0, 1],
+                "instruction": ["q0", "q1"],
+            }
+        ),
+        load_model_outputs=lambda task, path: pd.read_csv(output_path),
+    )
+    monkeypatch.setattr(pairwise_data, "resolve_dataset_adapter", lambda name: adapter)
+    task = get_packaged_task("arena-hard-v2.0")
+    assert task is not None
+
+    task_data = pairwise_data.load_pairwise_task_data(
+        task, local_tables_path=tmp_path / "tables"
     )
 
-    loaded = generate_and_evaluate.try_load_dataset_completions(
-        dataset="arena-hard-v2.0", model="baseline", n_instructions=None
-    )
+    loaded = task_data.model_completion("baseline")
 
     assert loaded is not None
-    assert loaded["completion"].tolist() == ["b0", "b1"]
-    assert loaded["instruction_index"].tolist() == [0, 1]
+    assert loaded.tolist() == ["b0", "b1"]
+    assert loaded.index.tolist() == [0, 1]

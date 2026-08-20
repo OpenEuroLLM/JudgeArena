@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
@@ -249,10 +250,7 @@ class AdapterCatalog:
         {"arena_hard", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    parsers: frozenset[str] = frozenset(
-        {"fastchat_pairwise_verdict", "pairwise_preference"}
-    )
-    scorers: frozenset[str] = frozenset({"pairwise_win_rate"})
+    scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
 
 
 def load_tasks(
@@ -301,7 +299,6 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, adapters.datasets),
         "prompt": (spec.protocol.judge.default_prompt, adapters.prompts),
-        "parser": (spec.protocol.judge.parser, adapters.parsers),
         "scorer": (spec.protocol.scoring.adapter, adapters.scorers),
     }
     for kind, (adapter_id, available) in references.items():

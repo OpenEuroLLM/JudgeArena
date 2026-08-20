@@ -6,14 +6,17 @@ import pytest
 import judgearena.benchmarks.execution as benchmark_execution
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.benchmarks.registry as benchmark_registry
-from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.pairwise.runner import (
+import judgearena.benchmarks.runner as benchmark_runner
+from judgearena.benchmarks.pairwise.baselines import (
     BaselinePlan,
-    _resolve_baseline_plan,
-    run_pairwise,
+    native_pairwise_baseline,
+    resolve_baseline_plan,
 )
+from judgearena.benchmarks.pairwise.runner import run_pairwise
 from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
 from judgearena.config import RunConfig
+from judgearena.datasets.pairwise import PairwiseTaskData
+from judgearena.tasks.registry import get_packaged_task
 
 
 def _cfg(
@@ -77,8 +80,19 @@ def mock_external_data_and_cache(monkeypatch):
 
     monkeypatch.setattr(
         generate_and_evaluate,
-        "try_load_dataset_completions",
+        "_try_load_legacy_dataset_completions",
         lambda dataset, model, n_instructions: None,
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda task, n_instructions=None: PairwiseTaskData(
+            instructions=(
+                instructions.head(n_instructions)
+                if n_instructions is not None
+                else instructions
+            )
+        ),
     )
 
     def _run_without_cache(fun, **_kwargs):
@@ -97,49 +111,53 @@ def _instructions(ids: list[str], categories: list[str] | None = None) -> pd.Dat
 
 
 def test_resolve_plan_v01_flat_default():
-    plan = _resolve_baseline_plan(
-        task="arena-hard-v0.1",
-        model_b=None,
-        instructions_df=_instructions(["q1", "q2"]),
+    plan = resolve_baseline_plan(
+        task_id="arena-hard-v0.1",
+        task=get_packaged_task("arena-hard-v0.1"),
+        runtime_baseline=None,
+        instructions=_instructions(["q1", "q2"]),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "gpt-4-0314"
 
 
 def test_resolve_plan_v20_routes_per_category():
-    plan = _resolve_baseline_plan(
-        task="arena-hard-v2.0",
-        model_b=None,
-        instructions_df=_instructions(
+    plan = resolve_baseline_plan(
+        task_id="arena-hard-v2.0",
+        task=get_packaged_task("arena-hard-v2.0"),
+        runtime_baseline=None,
+        instructions=_instructions(
             ["qh", "qc"],
             categories=["hard_prompt", "creative_writing"],
         ),
     )
-    assert not plan.is_flat
+    assert not plan.is_single_model
     assert plan.baseline_by_index.loc["qh"] == "o3-mini-2025-01-31"
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
 
 
 def test_resolve_plan_alpaca_eval_uses_native_baseline():
-    plan = _resolve_baseline_plan(
-        task="alpaca-eval",
-        model_b=None,
-        instructions_df=_instructions(["q1", "q2"]),
+    plan = resolve_baseline_plan(
+        task_id="alpaca-eval",
+        task=get_packaged_task("alpaca-eval"),
+        runtime_baseline=None,
+        instructions=_instructions(["q1", "q2"]),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "gpt4_1106_preview"
 
 
 def test_resolve_plan_explicit_model_b_overrides_native():
-    plan = _resolve_baseline_plan(
-        task="arena-hard-v2.0",
-        model_b="override",
-        instructions_df=_instructions(
+    plan = resolve_baseline_plan(
+        task_id="arena-hard-v2.0",
+        task=get_packaged_task("arena-hard-v2.0"),
+        runtime_baseline="override",
+        instructions=_instructions(
             ["q1", "q2"],
             categories=["hard_prompt", "creative_writing"],
         ),
     )
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.single_model == "override"
 
 
@@ -181,43 +199,66 @@ def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
     assert benchmark_registry.resolve_benchmark_adapter("yaml-task") is pairwise
 
 
+def test_benchmark_dispatch_passes_the_resolved_task(monkeypatch):
+    resolved = SimpleNamespace(
+        spec=SimpleNamespace(protocol=SimpleNamespace(runner="pairwise"))
+    )
+    captured = {}
+    pairwise = BenchmarkAdapter(
+        "pairwise",
+        frozenset(),
+        lambda cfg, task: captured.update(cfg=cfg, task=task) or "result",
+    )
+    monkeypatch.setattr(benchmark_registry, "benchmark_adapters", lambda: (pairwise,))
+    monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
+    cfg = SimpleNamespace(task="yaml-task")
+
+    result = benchmark_runner.run_benchmark(cfg)
+
+    assert result == "result"
+    assert captured == {"cfg": cfg, "task": resolved}
+
+
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
     with pytest.raises(ValueError, match="baseline"):
-        _resolve_baseline_plan(
-            task="fluency-french",
-            model_b=None,
-            instructions_df=_instructions(["q1"]),
+        resolve_baseline_plan(
+            task_id="fluency-french",
+            task=None,
+            runtime_baseline=None,
+            instructions=_instructions(["q1"]),
         )
 
 
 def test_resolve_plan_v20_missing_category_raises():
     with pytest.raises(ValueError, match="category"):
-        _resolve_baseline_plan(
-            task="arena-hard-v2.0",
-            model_b=None,
-            instructions_df=_instructions(["q1"]),
+        resolve_baseline_plan(
+            task_id="arena-hard-v2.0",
+            task=get_packaged_task("arena-hard-v2.0"),
+            runtime_baseline=None,
+            instructions=_instructions(["q1"]),
         )
 
 
 def test_resolve_plan_v20_unknown_category_raises():
     with pytest.raises(ValueError, match="brand_new"):
-        _resolve_baseline_plan(
-            task="arena-hard-v2.0",
-            model_b=None,
-            instructions_df=_instructions(["q1"], categories=["brand_new"]),
+        resolve_baseline_plan(
+            task_id="arena-hard-v2.0",
+            task=get_packaged_task("arena-hard-v2.0"),
+            runtime_baseline=None,
+            instructions=_instructions(["q1"], categories=["brand_new"]),
         )
 
 
 def test_baseline_plan_flat_repeats_model():
     plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
-    assert plan.is_flat
+    assert plan.is_single_model
     assert plan.baseline_by_index.tolist() == ["b", "b"]
 
 
 def test_baseline_plan_per_row_preserves_order():
     series = pd.Series(["m1", "m2"], index=["a", "b"], name="model_B")
     plan = BaselinePlan.per_row(series)
-    assert not plan.is_flat
+    assert not plan.is_single_model
     assert plan.unique_models == ["m1", "m2"]
 
 
