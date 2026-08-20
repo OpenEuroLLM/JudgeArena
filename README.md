@@ -288,10 +288,11 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 
 | Task                      | Description                                              |
 |---------------------------|----------------------------------------------------------|
+| `meta-eval-lmarena-100k`  | Score a judge against LMSYS Chatbot Arena 100k votes     |
 | `meta-eval-lmarena-140k`  | Score a judge against LMSYS Chatbot Arena 140k votes     |
 | `meta-eval-comparia`      | Score a judge against ComparIA human votes               |
 
-Language variants follow the ELO pattern (`meta-eval-lmarena-140k-uk`, `meta-eval-comparia-fr`).
+Language variants follow the ELO pattern (`meta-eval-lmarena-100k-en`, `meta-eval-lmarena-140k-uk`, `meta-eval-comparia-fr`).
 
 ## Judge meta-evaluation
 
@@ -320,7 +321,7 @@ judgearena \
 
 | Flag | Default | Description |
 |---|---|---|
-| `--task` | *(required)* | `meta-eval-lmarena-140k`, `meta-eval-comparia`, or a language variant |
+| `--task` | *(required)* | `meta-eval-lmarena-100k`, `meta-eval-lmarena-140k`, `meta-eval-comparia`, or a language variant |
 | `--judge.model` | *(required)* | Judge under evaluation |
 | `--judge.prompt_preset` | `meta-eval-pair-score` | Judge prompt and matching verdict parser |
 | `--meta_eval.top_models` | `20` | Keep the N models with the most battles |

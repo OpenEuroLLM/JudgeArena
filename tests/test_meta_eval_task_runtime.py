@@ -100,14 +100,21 @@ def _fake_annotations(**kwargs):
     ]
 
 
-def test_meta_eval_task_is_registered_with_the_arena_battle_stack():
-    task = get_packaged_task("meta-eval-lmarena-140k")
+@pytest.mark.parametrize(
+    ("task_name", "arena"),
+    [
+        ("meta-eval-lmarena-100k", "LMArena-100k"),
+        ("meta-eval-lmarena-140k", "LMArena-140k"),
+    ],
+)
+def test_meta_eval_task_is_registered_with_the_arena_battle_stack(task_name, arena):
+    task = get_packaged_task(task_name)
     assert task is not None
     assert task.spec.protocol.runner == "meta_eval"
-    assert task.spec.protocol.arena == "LMArena-140k"
+    assert task.spec.protocol.arena == arena
     assert task.spec.dataset.adapter == "arena_battles"
     assert task.spec.protocol.scoring.adapter == "ranking"
-    assert resolve_benchmark("meta-eval-lmarena-140k").adapter.name == "meta_eval"
+    assert resolve_benchmark(task_name).adapter.name == "meta_eval"
 
 
 def test_meta_eval_language_variant_selects_one_language():
