@@ -346,3 +346,180 @@ def test_run_writes_roundtrippable_config(tmp_path):
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval"
     assert reloaded.model.name == "Dummy/no answer"
+
+
+def test_run_pairwise_judges_categories_with_their_declared_prompts(
+    monkeypatch, tmp_path
+):
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["q0", "q1", "q2"],
+            "category": ["hard_prompt", "creative_writing", "hard_prompt"],
+        },
+        index=pd.Index([0, 1, 2], name="instruction_index"),
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="arena-hard-v2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/My final verdict is tie: [[A=B]]",
+            n_instructions=3,
+            result_folder=str(tmp_path),
+            swap_mode="both",
+        )
+    )
+
+    # 3 battles x both orders, every verdict parseable.
+    assert prefs.tolist() == [0.5] * 6
+
+    annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
+    by_preset = annotations.groupby("prompt_preset")["instruction_index"].apply(set)
+    assert by_preset["arena-hard"] == {0, 2}
+    assert by_preset["arena-hard-creative"] == {1}
+
+    import json
+
+    results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert set(results["per_category"]) == {"hard_prompt", "creative_writing"}
+    assert results["per_category"]["hard_prompt"]["num_ties"] == 4
+    assert results["per_category"]["creative_writing"]["num_ties"] == 2
+    assert results["metadata"]["scoring"]["official_scope"] == "per_category"
+
+
+def test_run_pairwise_only_loads_category_baseline_for_assigned_rows(
+    monkeypatch, tmp_path
+):
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["hard", "creative"],
+            "category": ["hard_prompt", "creative_writing"],
+        },
+        index=pd.Index(["qh", "qc"], name="instruction_index"),
+    )
+    model_outputs = pd.DataFrame(
+        {
+            "instruction_index": ["qh", "qc", "qh", "qc"],
+            "model": [
+                "candidate",
+                "candidate",
+                "o3-mini-2025-01-31",
+                "gemini-2.0-flash-001",
+            ],
+            "output": ["candidate hard", "candidate creative", "hard", "creative"],
+        }
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda task, n_instructions=None: PairwiseTaskData(
+            instructions=instructions,
+            model_outputs=model_outputs,
+        ),
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="arena-hard-v2.0-official",
+            model_A="candidate",
+            judge_model="Dummy/My final verdict is tie: [[A=B]]",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+            swap_mode="both",
+        )
+    )
+
+    assert prefs.tolist() == [0.5] * 4
+
+
+def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_path):
+    """The alpaca-eval preset weights verdicts by the judge's top logprobs."""
+    import math
+
+    from langchain_core.messages import AIMessage
+
+    message = AIMessage(
+        content="M",
+        response_metadata={
+            "logprobs": {
+                "content": [
+                    {
+                        "token": "M",
+                        "logprob": math.log(0.75),
+                        "top_logprobs": [
+                            {"token": "M", "logprob": math.log(0.75)},
+                            {"token": "m", "logprob": math.log(0.25)},
+                        ],
+                    }
+                ]
+            }
+        },
+    )
+
+    def fake_make_model(**kwargs):
+        class FakeJudge:
+            def batch(self, inputs, **_kwargs):
+                return [message] * len(inputs)
+
+        return FakeJudge()
+
+    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval-2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="OpenRouter/fake-judge",
+            n_instructions=4,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    # Judged pref is P(M)=0.75 everywhere; unswitched rows (2, 3 under the
+    # golden mask) show the baseline in slot A and re-orient to 0.25.
+    assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
+
+
+def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
+    """swap_mode='random' flips judged positions per instruction and re-orients.
+
+    The AlpacaEval-scheme mask for 'Synthetic instruction 0..3' is
+    [True, True, False, False]. Unswitched rows present the baseline in slot
+    A, so the judge's constant 'm' (slot A wins) re-orients to a baseline win
+    there and to a model win on switched rows.
+    """
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval-2.0-official",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/m",
+            n_instructions=4,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    assert prefs.tolist() == [0.0, 0.0, 1.0, 1.0]
+
+    annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
+    assert annotations["model_A"].tolist() == [
+        "Dummy/a",
+        "Dummy/a",
+        "Dummy/b",
+        "Dummy/b",
+    ]
+    assert annotations["model_B"].tolist() == [
+        "Dummy/b",
+        "Dummy/b",
+        "Dummy/a",
+        "Dummy/a",
+    ]

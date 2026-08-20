@@ -1,0 +1,46 @@
+schema_version: 1
+task: alpaca-eval-2.0-official
+task_version: 1
+description: >-
+  AlpacaEval 2.0 with the official dataset, GPT-4-Turbo baseline outputs,
+  annotator prompt, randomized pair order, and logprob-weighted preferences
+  (discrete single-token fallback when the judge backend returns no logprobs).
+  Reports the official length-controlled winrate via the upstream alpaca_eval
+  package (optional 'alpaca-eval' extra).
+tags: [pairwise, instruction-following, alpaca-eval]
+
+dataset:
+  adapter: alpaca_eval
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: tatsu-lab/alpaca_eval
+      revision: "2edc6fad8be6b14ea7230aabfd08188da6b8b814"
+      allow_patterns:
+        - alpaca_eval_gpt4_baseline.json
+  fields:
+    id: instruction_index
+    instruction: instruction
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  baseline:
+    strategy: task_default
+    reference_id: gpt4_1106_preview
+    allow_runtime_override: true
+  judge:
+    default_prompt_preset: alpaca-eval
+    default_swap_mode: random
+    allowed_swap_modes: [fixed, both, random]
+    default_temperature: 1
+    # The official annotator asks for exactly one token ("m" or "M") and
+    # weights the verdict by its top-5 logprobs.
+    default_max_out_tokens: 1
+    default_top_logprobs: 5
+  scoring:
+    adapter: alpaca_eval_lc_winrate
+
+metadata:
+  reference_implementation: https://github.com/tatsu-lab/alpaca_eval

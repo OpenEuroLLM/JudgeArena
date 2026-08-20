@@ -13,7 +13,7 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.pairwise.scoring import resolve_pairwise_scorer
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
@@ -102,7 +102,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     resolved_task = resolved_task or get_packaged_task(cfg.task)
     if resolved_task is None:
         raise ValueError(f"Unknown task {cfg.task!r}.")
-    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
+    scorer = resolve_pairwise_scorer(resolved_task.spec.protocol.scoring.adapter)
+    if scorer.check_requirements is not None:
+        scorer.check_requirements()
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
@@ -170,10 +172,18 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = task_data.model_completion(model_spec)
+    def _load_or_generate_completions(
+        model_spec: str,
+        *,
+        role: str,
+        instruction_ids: pd.Index | None = None,
+    ) -> pd.Series:
+        preloaded = task_data.load_model_completions(
+            model_spec,
+            instruction_ids=instruction_ids,
+        )
         if preloaded is not None:
-            return preloaded.loc[instructions.index]
+            return preloaded
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -187,7 +197,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
                 f"{sampling_token}"
             ),
         )
-        return _align_completion_series(generated)
+        completions = _align_completion_series(generated)
+        return (
+            completions if instruction_ids is None else completions.loc[instruction_ids]
+        )
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
@@ -198,7 +211,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
     else:
         per_baseline_completions = {
-            model: _load_or_generate_completions(model, role="B")
+            model: _load_or_generate_completions(
+                model,
+                role="B",
+                instruction_ids=baseline_per_index.index[baseline_per_index == model],
+            )
             for model in baseline_plan.unique_models
         }
         completions_B = pd.Series(
@@ -308,28 +325,39 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     # Scorers see one canonically-oriented row per judged battle; under
     # swap_mode="both" every instruction contributes two rows.
     repeats = 2 if cfg.judge.swap_mode == "both" else 1
-    battles = pd.DataFrame(
-        {
-            "instruction_index": list(eval_instruction_index) * repeats,
-            "model": cfg.model.name,
-            "baseline": baseline_per_eval.tolist() * repeats,
-            "completion_model": completions_A.loc[eval_instruction_index].tolist()
-            * repeats,
-            "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
-            * repeats,
-            "pref": pd.Series(prefs, dtype="float64").to_numpy(),
-        }
-    )
-    summary = scorer(battles)
+    battle_data = {
+        "instruction_index": list(eval_instruction_index) * repeats,
+        "model": cfg.model.name,
+        "baseline": baseline_per_eval.tolist() * repeats,
+        "completion_model": completions_A.loc[eval_instruction_index].tolist()
+        * repeats,
+        "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
+        * repeats,
+        "pref": pd.Series(prefs, dtype="float64").to_numpy(),
+        "orientation": ["direct"] * len(eval_instruction_index)
+        + (["reversed"] * len(eval_instruction_index) if repeats == 2 else []),
+    }
+    if "category" in instructions_df:
+        battle_data["category"] = (
+            instructions_df.loc[eval_instruction_index, "category"].tolist() * repeats
+        )
+    battles = pd.DataFrame(battle_data)
+    scoring_result = scorer.score(battles)
+    scoring_details = {
+        **scoring_result.metrics,
+        **scoring_result.scoring_details,
+    }
 
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=baseline_plan.display_name,
         judge_model=cfg.judge.model,
-        summary=summary,
+        summary=scoring_result.summary,
         swap_mode=cfg.judge.swap_mode,
         result_folder=str(res_folder),
+        per_category=scoring_result.grouped_results.get("category"),
+        per_turn=scoring_result.grouped_results.get("turn"),
         preferences=prefs.tolist(),
         metadata={
             "baseline_assignment": "per-row"
@@ -339,6 +367,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             **resolved_prompt.metadata(),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
+            **({"scoring": scoring_details} if scoring_details else {}),
         },
     )
     results = report.to_dict()

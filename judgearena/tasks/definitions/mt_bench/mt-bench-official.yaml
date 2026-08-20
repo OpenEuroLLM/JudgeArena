@@ -1,0 +1,7 @@
+extends: _base.yaml
+task: mt-bench-official
+description: MT-Bench with the official FastChat protocol, including judging both answer orders.
+
+protocol:
+  judge:
+    default_swap_mode: both

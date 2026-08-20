@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 import judgearena.datasets.arena_battles as arena_battles
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
-from judgearena.benchmarks.elo.scoring import ELO_SCORERS
+from judgearena.benchmarks.elo.scoring import resolve_elo_scorer
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -54,4 +55,11 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
 def test_elo_scoring_adapter_resolves_task_selection():
     task = _elo_task()
 
-    assert ELO_SCORERS[task.spec.protocol.scoring.adapter].fit is fit_bradley_terry
+    assert (
+        resolve_elo_scorer(task.spec.protocol.scoring.adapter).fit is fit_bradley_terry
+    )
+
+
+def test_elo_scorer_resolver_reports_available_names():
+    with pytest.raises(ValueError, match="Unknown ELO scorer.*available"):
+        resolve_elo_scorer("missing")

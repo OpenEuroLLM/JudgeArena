@@ -8,8 +8,26 @@ import pytest
 import yaml
 
 from judgearena import cli as cli_module
+from judgearena.benchmarks.registry import benchmark_runner_names
+from judgearena.datasets.registry import (
+    battle_dataset_names,
+    instruction_dataset_names,
+)
 from judgearena.tasks.cli import run_task_command
-from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
+from judgearena.tasks.registry import (
+    AdapterCatalog,
+    TaskDefinitionError,
+    load_tasks,
+    resolve_task,
+)
+
+
+def test_adapter_catalog_uses_owning_registries():
+    catalog = AdapterCatalog()
+
+    assert catalog.runners == benchmark_runner_names()
+    assert catalog.instruction_datasets == instruction_dataset_names()
+    assert catalog.battle_datasets == battle_dataset_names()
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
@@ -77,8 +95,11 @@ def test_packaged_registry_discovers_versioned_tasks():
 
     assert list(tasks) == [
         "alpaca-eval",
+        "alpaca-eval-2.0-official",
         "arena-hard-v0.1",
+        "arena-hard-v0.1-official",
         "arena-hard-v2.0",
+        "arena-hard-v2.0-official",
         "elo-comparia",
         "elo-lmarena",
         "elo-lmarena-100k",
@@ -87,6 +108,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",
+        "mt-bench-official",
     ]
     assert alpaca.spec.dataset.sources["examples"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
