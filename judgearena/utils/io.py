@@ -31,15 +31,25 @@ data_root = _data_root_path()
 
 
 def download_hf(name: str, local_path: Path):
-    local_path.mkdir(exist_ok=True, parents=True)
-    # downloads the model from huggingface into `local_path` folder
-    snapshot_download(
-        repo_id="judge-arena/judge-arena-dataset",
-        repo_type="dataset",
-        allow_patterns=f"*{name}*",
-        local_dir=local_path,
-        force_download=False,
-    )
+    # A `name` is either a packaged task (download the HF sources declared in
+    # its task YAML) or a legacy dataset name (pattern-matched out of the
+    # monolithic judge-arena-dataset repo).
+    from judgearena.tasks.registry import get_packaged_task
+
+    resolved_task = get_packaged_task(name)
+    if resolved_task is not None:
+        from judgearena.datasets.judgearena_tables import download_task_sources
+
+        download_task_sources(resolved_task, local_path)
+    else:
+        local_path.mkdir(exist_ok=True, parents=True)
+        snapshot_download(
+            repo_id="judge-arena/judge-arena-dataset",
+            repo_type="dataset",
+            allow_patterns=f"*{name}*",
+            local_dir=local_path,
+            force_download=False,
+        )
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
@@ -71,11 +81,17 @@ def safe_parse_int(env_var: str) -> int | None:
 def download_all():
     from judgearena.datasets.fluency import download_fluency_dataset
     from judgearena.datasets.m_arenahard import M_ARENA_HARD_BASELINES
+    from judgearena.tasks.registry import load_tasks
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
+    packaged_table_tasks = tuple(
+        task_id
+        for task_id, resolved in load_tasks().items()
+        if resolved.spec.dataset.adapter == "judgearena_tables"
+    )
     for dataset in (
-        "alpaca-eval",
+        *packaged_table_tasks,
         "arena-hard-v0.1",
         "arena-hard-v2.0",
         *M_ARENA_HARD_BASELINES,

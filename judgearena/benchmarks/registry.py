@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from judgearena.tasks.registry import get_packaged_task
+
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
@@ -39,8 +41,17 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
 
 
 def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
-    """Return the first adapter supporting ``task``."""
-    for adapter in benchmark_adapters():
+    """Resolve a YAML-selected runner, then fall back for unmigrated tasks."""
+    adapters = benchmark_adapters()
+    resolved = get_packaged_task(task)
+    if resolved is not None:
+        runner_id = resolved.spec.protocol.runner
+        for adapter in adapters:
+            if adapter.name == runner_id:
+                return adapter
+        raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
+
+    for adapter in adapters:
         if adapter.supports(task):
             return adapter
     raise ValueError(f"No generate-and-evaluate adapter supports task {task!r}.")

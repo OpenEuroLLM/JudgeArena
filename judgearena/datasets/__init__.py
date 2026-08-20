@@ -9,12 +9,22 @@ from judgearena.datasets.m_arenahard import (
     split_m_arena_hard_dataset,
 )
 from judgearena.log import get_logger
+from judgearena.tasks.registry import get_packaged_task
 
 logger = get_logger(__name__)
 
 
 def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.DataFrame:
-    if dataset == "mt-bench":
+    resolved_task = get_packaged_task(dataset)
+    if resolved_task is not None:
+        from judgearena import utils as judgearena_utils
+        from judgearena.datasets.judgearena_tables import load_task_instructions
+
+        df_instructions = load_task_instructions(
+            resolved_task, judgearena_utils.data_root / "tables"
+        )
+
+    elif dataset == "mt-bench":
         from judgearena.datasets.mt_bench import load_mt_bench
 
         df_instructions = load_mt_bench()
@@ -46,7 +56,6 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
 
     else:
         assert dataset in [
-            "alpaca-eval",
             "arena-hard-v0.1",
             "arena-hard-v2.0",
         ]

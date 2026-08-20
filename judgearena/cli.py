@@ -1,11 +1,12 @@
-"""Unified CLI entrypoint for judgearena.
+"""Unified CLI entrypoint for JudgeArena.
 
-Builds a ``RunConfig`` from CLI flags (derived from the config model) and/or a
-``--config_path`` YAML, then dispatches to the ELO or generate-and-judge flow
-based on ``--task`` (``elo-`` prefix runs the ELO rating flow).
+Task-management subcommands are handled before the existing model-driven run
+configuration and benchmark dispatch.
 """
 
 from __future__ import annotations
+
+import sys
 
 from pydantic import ValidationError
 
@@ -27,17 +28,28 @@ def _format_config_error(exc: ValidationError) -> str:
 
 
 def cli(argv: list[str] | None = None) -> None:
-    try:
-        cfg = build_run_config(argv)
-    except ValidationError as exc:
-        raise SystemExit(_format_config_error(exc)) from exc
+    args = list(sys.argv[1:] if argv is None else argv)
+    # `judgearena tasks {list,show,validate}` inspects packaged task definitions
+    # instead of running an evaluation, so it has its own argparse grammar (see
+    # tasks/cli.py) and must be routed before build_run_config, which only parses
+    # run/eval flags and would reject the subcommand form.
+    is_task_cli = args[:1] == ["tasks"]
+    if is_task_cli:
+        from judgearena.tasks.cli import run_task_command
 
-    configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
-    logger.debug("Running with config: %s", cfg.model_dump())
-    if cfg.task.startswith(ELO_TASK_PREFIX):
-        main_elo(cfg)
+        run_task_command(args[1:])
     else:
-        run_benchmark(cfg)
+        try:
+            cfg = build_run_config(args)
+        except ValidationError as exc:
+            raise SystemExit(_format_config_error(exc)) from exc
+
+        configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
+        logger.debug("Running with config: %s", cfg.model_dump())
+        if cfg.task.startswith(ELO_TASK_PREFIX):
+            main_elo(cfg)
+        else:
+            run_benchmark(cfg)
 
 
 if __name__ == "__main__":

@@ -1,15 +1,21 @@
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
 import judgearena.benchmarks.execution as benchmark_execution
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
-from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+import judgearena.benchmarks.registry as benchmark_registry
+from judgearena.benchmarks.pairwise.baselines import (
+    LEGACY_PAIRWISE_BASELINES,
+    native_pairwise_baseline,
+)
 from judgearena.benchmarks.pairwise.runner import (
     BaselinePlan,
     _resolve_baseline_plan,
     run_pairwise,
 )
-from judgearena.benchmarks.registry import resolve_benchmark_adapter
+from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
 from judgearena.config import RunConfig
 
 
@@ -127,6 +133,11 @@ def test_resolve_plan_alpaca_eval_uses_native_baseline():
     assert plan.single_model == "gpt4_1106_preview"
 
 
+def test_alpaca_eval_baseline_is_not_duplicated_in_legacy_registry():
+    assert "alpaca-eval" not in LEGACY_PAIRWISE_BASELINES
+    assert native_pairwise_baseline("alpaca-eval") == "gpt4_1106_preview"
+
+
 def test_resolve_plan_explicit_model_b_overrides_native():
     plan = _resolve_baseline_plan(
         task="arena-hard-v2.0",
@@ -155,6 +166,20 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
 
 def test_benchmark_adapter_resolution():
     assert resolve_benchmark_adapter("alpaca-eval").name == "pairwise"
+
+
+def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
+    fallback = BenchmarkAdapter("fallback", None, lambda _cfg: None)
+    pairwise = BenchmarkAdapter("pairwise", frozenset(), lambda _cfg: None)
+    resolved = SimpleNamespace(
+        spec=SimpleNamespace(protocol=SimpleNamespace(runner="pairwise"))
+    )
+    monkeypatch.setattr(
+        benchmark_registry, "benchmark_adapters", lambda: (fallback, pairwise)
+    )
+    monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
+
+    assert benchmark_registry.resolve_benchmark_adapter("yaml-task") is pairwise
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():

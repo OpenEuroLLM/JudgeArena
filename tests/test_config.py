@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
+import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.config import RunConfig
 
@@ -27,6 +30,65 @@ def test_generate_config_constructs():
     assert cfg.model.name == "Dummy/a"
     assert cfg.judge.model == "Dummy/j"
     assert cfg.elo is None
+
+
+def _registered_task(
+    *,
+    default_swap_mode: str = "both",
+    allowed_swap_modes: tuple[str, ...] = ("both",),
+    default_temperature: float | None = 0.25,
+    allow_runtime_override: bool = True,
+):
+    return SimpleNamespace(
+        spec=SimpleNamespace(
+            protocol=SimpleNamespace(
+                judge=SimpleNamespace(
+                    default_swap_mode=default_swap_mode,
+                    allowed_swap_modes=allowed_swap_modes,
+                    default_temperature=default_temperature,
+                ),
+                baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
+            )
+        )
+    )
+
+
+def test_registered_task_applies_judge_defaults(monkeypatch):
+    monkeypatch.setattr(
+        config_module, "get_packaged_task", lambda _task: _registered_task()
+    )
+    data = _base_generate()
+    data["task"] = "yaml-task"
+
+    cfg = RunConfig(**data)
+
+    assert cfg.judge.swap_mode == "both"
+    assert cfg.judge.temperature == 0.25
+
+
+def test_registered_task_rejects_unsupported_swap_mode(monkeypatch):
+    monkeypatch.setattr(
+        config_module, "get_packaged_task", lambda _task: _registered_task()
+    )
+    data = _base_generate()
+    data["task"] = "yaml-task"
+    data["judge"]["swap_mode"] = "fixed"
+
+    with pytest.raises(ValidationError, match="not supported"):
+        RunConfig(**data)
+
+
+def test_registered_task_can_forbid_baseline_override(monkeypatch):
+    monkeypatch.setattr(
+        config_module,
+        "get_packaged_task",
+        lambda _task: _registered_task(allow_runtime_override=False),
+    )
+    data = _base_generate()
+    data["task"] = "yaml-task"
+
+    with pytest.raises(ValidationError, match="cannot override"):
+        RunConfig(**data)
 
 
 def test_elo_config_derives_arena():

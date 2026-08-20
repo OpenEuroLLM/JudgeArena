@@ -18,6 +18,7 @@ from pydantic_settings import (
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
+from judgearena.tasks.registry import get_packaged_task
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -366,9 +367,8 @@ class RunConfig(BaseSettings):
     )
 
     task: str
-    """Benchmark to run. Generate+judge: ``alpaca-eval``, ``arena-hard-v2.0``,
-    ``m-arena-hard-*``, ``mt-bench``, ``fluency-*``. ELO: ``elo-lmarena-100k``,
-    ``elo-lmarena-140k``, ``elo-lmarena``, ``elo-comparia``."""
+    """Benchmark task ID. Use ``judgearena tasks list`` for packaged tasks;
+    legacy ELO task IDs use the ``elo-*`` prefix."""
 
     model: ModelArgs = Field(default_factory=ModelArgs)
     """Model(s) under evaluation and their generation settings."""
@@ -387,6 +387,33 @@ class RunConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
+        resolved_task = get_packaged_task(self.task)
+        if resolved_task is not None:
+            task_judge = resolved_task.spec.protocol.judge
+            if "swap_mode" not in self.judge.model_fields_set:
+                self.judge.swap_mode = task_judge.default_swap_mode
+            if self.judge.swap_mode not in task_judge.allowed_swap_modes:
+                raise ValueError(
+                    f"judge.swap_mode={self.judge.swap_mode!r} is not supported "
+                    f"by task {self.task!r}; choose from "
+                    f"{list(task_judge.allowed_swap_modes)}."
+                )
+            if (
+                self.judge.temperature is None
+                and task_judge.default_temperature is not None
+            ):
+                self.judge.temperature = task_judge.default_temperature
+
+            baseline = resolved_task.spec.protocol.baseline
+            if (
+                self.model.baseline is not None
+                and getattr(baseline, "allow_runtime_override", True) is False
+            ):
+                raise ValueError(
+                    f"model.baseline cannot override the baseline defined by "
+                    f"task {self.task!r}."
+                )
+
         is_elo = self.task.startswith(ELO_TASK_PREFIX)
         if is_elo:
             if self.elo is None:
