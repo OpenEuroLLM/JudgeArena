@@ -34,9 +34,9 @@ def download_hf(name: str, local_path: Path):
 
     resolved_task = get_packaged_task(name)
     if resolved_task is not None:
-        from judgearena.datasets.registry import resolve_dataset_adapter
+        from judgearena.datasets.registry import resolve_download_adapter
 
-        resolve_dataset_adapter(resolved_task.spec.dataset.adapter).download(
+        resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
             resolved_task, local_path
         )
     else:

@@ -16,10 +16,12 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
+    EloProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
@@ -245,12 +247,14 @@ def _load_task(root: Traversable, relative_path: str) -> ResolvedTaskSpec:
 class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
-    runners: frozenset[str] = frozenset({"mt_bench", "pairwise"})
-    datasets: frozenset[str] = frozenset(
+    runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
+    instruction_datasets: frozenset[str] = frozenset(
         {"arena_hard", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
+    battle_datasets: frozenset[str] = frozenset({"arena_battles"})
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
+    pairwise_scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
+    elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
 
 
 def load_tasks(
@@ -295,11 +299,16 @@ def _discover_tasks(
 
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
+    is_elo = isinstance(spec.protocol, EloProtocol)
+    scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
+    dataset_names = (
+        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+    )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
-        "dataset adapter": (spec.dataset.adapter, adapters.datasets),
+        "dataset adapter": (spec.dataset.adapter, dataset_names),
         "prompt": (spec.protocol.judge.default_prompt, adapters.prompts),
-        "scorer": (spec.protocol.scoring.adapter, adapters.scorers),
+        "scorer": (spec.protocol.scoring.adapter, scorer_names),
     }
     for kind, (adapter_id, available) in references.items():
         if adapter_id not in available:

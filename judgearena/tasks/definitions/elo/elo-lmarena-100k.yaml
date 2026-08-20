@@ -1,0 +1,21 @@
+extends: _base.yaml
+task: elo-lmarena-100k
+description: Arena-anchored ELO evaluation using LMSYS Chatbot Arena 100k battles.
+
+variants:
+  selector: language
+  values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
+
+dataset:
+  sources:
+    lmarena_100k:
+      type: huggingface_dataset
+      repo_id: lmarena-ai/arena-human-preference-100k
+      revision: "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
+      allow_patterns: [data/*.parquet]
+
+protocol:
+  arena: LMArena-100k
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/lmarena-ai/arena-human-preference-100k

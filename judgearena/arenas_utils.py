@@ -1,43 +1,73 @@
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
 
-from judgearena.dataset_revisions import hf_revision
 from judgearena.log import get_logger
+from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 logger = get_logger(__name__)
 
 
+def _download_arena_dataset(
+    *,
+    repo_id: str,
+    default_allow_patterns: str | tuple[str, ...],
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
+) -> str:
+    """Download one arena source at the revision pinned by its task definition."""
+    try:
+        source = dataset_sources[repo_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"Arena task does not declare required dataset source {repo_id!r}."
+        ) from exc
+    return snapshot_download(
+        repo_id=repo_id,
+        repo_type="dataset",
+        allow_patterns=source.allow_patterns or default_allow_patterns,
+        force_download=False,
+        revision=source.revision,
+    )
+
+
 def _extract_instruction_text(turn: dict) -> str:
-    """Extract plain instruction text from a conversation first turn.
+    """Extract plain instruction text from a conversation turn.
 
     Handles both the 100k schema (content is a plain string) and the 140k
-    schema (content is an array of {type, text, ...} objects).
+    schema (content is an array of {type, text, ...} objects). Moderated or
+    empty turns ship ``content: None`` and yield an empty string.
     """
-    content = turn["content"]
+    content = turn.get("content")
+    if content is None:
+        return ""
     if isinstance(content, str):
         return content
-    return " ".join(block["text"] for block in content if block.get("type") == "text")
+    return " ".join(
+        block.get("text") or ""
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
 
 
 KNOWN_ARENAS = ["LMArena-100k", "LMArena-55k", "LMArena-140k", "ComparIA"]
 
 
 def _load_arena_dataframe(
-    arena: str, comparia_revision: str | None = None
+    arena: str,
+    *,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
 ) -> pd.DataFrame:
     assert arena in KNOWN_ARENAS
     if arena == "LMArena-55k":
         repo_id = "lmarena-ai/arena-human-preference-55k"
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id=repo_id,
-            repo_type="dataset",
-            allow_patterns="*.csv",
-            force_download=False,
-            revision=hf_revision(repo_id),
+            default_allow_patterns="*.csv",
+            dataset_sources=dataset_sources,
         )
         df = pd.read_csv(Path(path) / "train.csv")
 
@@ -74,12 +104,10 @@ def _load_arena_dataframe(
     elif "LMArena" in arena:
         size = arena.split("-")[1]  # "100k" or "140k"
         repo_id = f"lmarena-ai/arena-human-preference-{size}"
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id=repo_id,
-            repo_type="dataset",
-            allow_patterns="*parquet",
-            force_download=False,
-            revision=hf_revision(repo_id),
+            default_allow_patterns="*parquet",
+            dataset_sources=dataset_sources,
         )
         parquet_files = sorted((Path(path) / "data").glob("*.parquet"))
         df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
@@ -101,12 +129,10 @@ def _load_arena_dataframe(
         df["benchmark"] = arena
 
     else:
-        path = snapshot_download(
+        path = _download_arena_dataset(
             repo_id="ministere-culture/comparia-votes",
-            repo_type="dataset",
-            allow_patterns="*",
-            revision=comparia_revision,
-            force_download=False,
+            default_allow_patterns="*",
+            dataset_sources=dataset_sources,
         )
 
         df = pd.read_parquet(Path(path) / "votes.parquet")
@@ -176,18 +202,16 @@ def _load_arena_dataframe(
     return df
 
 
-_DEFAULT_COMPARIA_REVISION = hf_revision("ministere-culture/comparia-votes")
-
-
 def load_arena_dataframe(
     arena: str | None,
-    comparia_revision: str | None = _DEFAULT_COMPARIA_REVISION,
+    *,
+    dataset_sources: Mapping[str, HuggingFaceDatasetSource],
 ) -> pd.DataFrame:
     """Load battles from one or all arenas.
 
     :param arena: one of "LMArena-100k", "LMArena-140k", "ComparIA", "LMArena"
                   (concatenation of both LMArena variants), or None (all arenas).
-    :param comparia_revision: pinned revision for the ComparIA dataset.
+    :param dataset_sources: pinned sources declared by the task, keyed by repo ID.
     :return: dataframe containing battles for the arena(s) selected.
     """
     if arena is None:
@@ -195,17 +219,24 @@ def load_arena_dataframe(
     elif arena == "LMArena":
         arenas = ["LMArena-100k", "LMArena-55k", "LMArena-140k"]
     else:
-        return _load_arena_dataframe(arena, comparia_revision)
+        return _load_arena_dataframe(arena, dataset_sources=dataset_sources)
     return pd.concat(
-        [_load_arena_dataframe(a, comparia_revision) for a in arenas],
+        [_load_arena_dataframe(a, dataset_sources=dataset_sources) for a in arenas],
         ignore_index=True,
     )
 
 
 def main():
-    for arena in KNOWN_ARENAS:
-        logger.info("Loading %s", arena)
-        df = _load_arena_dataframe(arena)
+    from judgearena.datasets import load_battles
+    from judgearena.tasks.registry import load_tasks
+    from judgearena.tasks.schema import EloProtocol
+
+    for task_id, task in load_tasks().items():
+        if not isinstance(task.spec.protocol, EloProtocol):
+            continue
+        logger.info("Loading %s", task_id)
+        df = load_battles(task)
+        arena = task.spec.protocol.arena
         n_battles = len(df)
         n_models = len(set(df["model_a"]) | set(df["model_b"]))
         n_languages = df["lang"].nunique()

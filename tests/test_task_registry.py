@@ -70,6 +70,8 @@ def test_packaged_registry_discovers_versioned_tasks():
     arena_v01 = tasks["arena-hard-v0.1"]
     arena_v20 = tasks["arena-hard-v2.0"]
 
+    elo_comparia = tasks["elo-comparia"]
+    elo_lmarena = tasks["elo-lmarena"]
     m_arena_v01 = tasks["m-arena-hard-v0.1"]
     m_arena_eu = resolve_task(tasks, "m-arena-hard-v2.0-EU")
     assert m_arena_eu is not None
@@ -79,6 +81,10 @@ def test_packaged_registry_discovers_versioned_tasks():
         "alpaca-eval",
         "arena-hard-v0.1",
         "arena-hard-v2.0",
+        "elo-comparia",
+        "elo-lmarena",
+        "elo-lmarena-100k",
+        "elo-lmarena-140k",
         "m-arena-hard-v0.1",
         "m-arena-hard-v2.0",
         "mt-bench",
@@ -91,6 +97,14 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert arena_v20.spec.protocol.baseline.references["hard_prompt"] == (
         "o3-mini-2025-01-31"
     )
+    assert elo_comparia.spec.protocol.runner == "elo"
+    assert elo_comparia.spec.protocol.arena == "ComparIA"
+    assert elo_comparia.spec.protocol.scoring.adapter == "bradley_terry"
+    assert elo_comparia.spec.dataset.sources["comparia"].revision == (
+        "7a40bce496c1f2aa3be4001da85a49cb4743042b"
+    )
+    assert elo_lmarena.spec.protocol.arena == "LMArena"
+    assert len(elo_lmarena.spec.dataset.sources) == 3
     assert [resource.path for resource in arena_v20.provenance.resources] == [
         "arena_hard/_base.yaml",
         "arena_hard/arena-hard-v2.0.yaml",
@@ -334,9 +348,37 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
+def test_registry_rejects_dataset_adapter_from_another_protocol(tmp_path):
+    definition = _task_definition()
+    definition["dataset"]["adapter"] = "arena_battles"
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="unknown dataset adapter"):
+        load_tasks(tmp_path)
+
+
 def test_registry_rejects_unknown_scorer_id(tmp_path):
     definition = _task_definition()
     definition["protocol"]["scoring"]["adapter"] = "missing_scorer"
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    with pytest.raises(TaskDefinitionError, match="unknown scorer"):
+        load_tasks(tmp_path)
+
+
+def test_registry_rejects_scorer_from_another_protocol(tmp_path):
+    definition = _task_definition()
+    definition["protocol"]["scoring"]["adapter"] = "bradley_terry"
     _write_family(
         tmp_path,
         family="example",

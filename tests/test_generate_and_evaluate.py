@@ -179,6 +179,7 @@ def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected:
     [
         ("alpaca-eval", "pairwise"),
         ("mt-bench", "mt_bench"),
+        ("elo-comparia", "elo"),
     ],
 )
 def test_benchmark_adapter_resolution(task: str, expected: str):

@@ -10,10 +10,11 @@ from judgearena.benchmarks.elo.rating import (
     fit_bradley_terry,
     winner_to_pref,
 )
-from judgearena.benchmarks.elo.runner import main
+from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
+from judgearena.tasks.registry import get_packaged_task
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]
@@ -26,12 +27,11 @@ def _make_conversation(content_user: str, content_assistant: str) -> list[dict]:
     ]
 
 
-@pytest.fixture
-def synthetic_arena_df() -> pd.DataFrame:
+def _arena_df(n_battles: int) -> pd.DataFrame:
     """Synthetic arena DataFrame matching the schema produced by load_arena_dataframe."""
     rng = np.random.default_rng(42)
     rows = []
-    for i in range(N_BATTLES):
+    for i in range(n_battles):
         ma, mb = rng.choice(ARENA_MODELS, size=2, replace=False)
         winner = rng.choice(["model_a", "model_b", "tie"])
         lang = rng.choice(["en", "fr"])
@@ -55,12 +55,17 @@ def synthetic_arena_df() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@pytest.fixture
+def synthetic_arena_df() -> pd.DataFrame:
+    return _arena_df(N_BATTLES)
+
+
 @pytest.fixture(autouse=True)
 def mock_external_deps(monkeypatch, synthetic_arena_df):
     monkeypatch.setattr(
         estimate_elo_ratings,
-        "load_arena_dataframe",
-        lambda arena: synthetic_arena_df,
+        "load_battles",
+        lambda _task: synthetic_arena_df,
     )
 
     def mock_generate(instructions, model, **kwargs):
@@ -84,7 +89,8 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
-    arena = kwargs.pop("arena", "ComparIA")
+    task = kwargs.pop("task", "elo-comparia")
+    arena = kwargs.pop("arena", None)
     model = kwargs.pop("model", "Dummy/my model")
     judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
     n_instructions = kwargs.pop("n_instructions", 10)
@@ -92,6 +98,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     languages = kwargs.pop("languages", None)
     swap_mode = kwargs.pop("swap_mode", "fixed")
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
+    calibrate_temperature = kwargs.pop("calibrate_temperature", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
@@ -102,11 +109,16 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     if battle_thinking_token_budget is not None:
         judge["battle_thinking_token_budget"] = battle_thinking_token_budget
     return RunConfig(
-        task="elo-comparia",
+        task=task,
         model={"name": model},
         judge=judge,
         generation={"n_instructions": n_instructions},
-        elo={"arena": arena, "n_bootstraps": n_bootstraps, "languages": languages},
+        elo={
+            "arena": arena,
+            "n_bootstraps": n_bootstraps,
+            "languages": languages,
+            "calibrate_temperature": calibrate_temperature,
+        },
         run={"result_folder": result_folder},
     )
 
@@ -164,11 +176,15 @@ def test_bradley_terry_soft_matches_hard():
     assert hard["B"] == pytest.approx(soft["B"], abs=1e-3)
 
 
-# --- main() integration tests ---
+# --- run_elo() integration tests ---
 
 
-def test_main_returns_summary(tmp_path):
-    result = main(_default_args(result_folder=str(tmp_path)))
+def run_elo_with_task(cfg: RunConfig) -> dict:
+    return run_elo(cfg, get_packaged_task(cfg.task))
+
+
+def test_run_elo_returns_summary(tmp_path):
+    result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert set(result.keys()) >= {
         "num_wins",
         "num_losses",
@@ -179,21 +195,21 @@ def test_main_returns_summary(tmp_path):
     }
 
 
-def test_main_winrate_in_valid_range(tmp_path):
-    result = main(_default_args(result_folder=str(tmp_path)))
+def test_run_elo_winrate_in_valid_range(tmp_path):
+    result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert 0.0 <= result["winrate"] <= 1.0
 
 
-def test_main_winrate_depends_on_judge(tmp_path):
+def test_run_elo_winrate_depends_on_judge(tmp_path):
     """A judge biased toward one position should yield different winrates depending on direction."""
     # With seed=0 and n=10 our model is always placed in position B, so:
     # judge favouring B → all wins; judge favouring A → all losses
-    result_wins = main(
+    result_wins = run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path), judge_model="Dummy/score A: 0 score B: 10"
         )
     )
-    result_loses = main(
+    result_loses = run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path), judge_model="Dummy/score A: 10 score B: 0"
         )
@@ -201,10 +217,12 @@ def test_main_winrate_depends_on_judge(tmp_path):
     assert result_wins["winrate"] > result_loses["winrate"]
 
 
-def test_main_language_filter_reduces_battles(tmp_path):
+def test_run_elo_language_filter_reduces_battles(tmp_path):
     """Filtering to a single language should use fewer battles than no filter."""
-    result_all = main(_default_args(result_folder=str(tmp_path), n_instructions=None))
-    result_en = main(
+    result_all = run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), n_instructions=None)
+    )
+    result_en = run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path), n_instructions=None, languages=["en"]
         )
@@ -216,17 +234,21 @@ def test_main_language_filter_reduces_battles(tmp_path):
     assert total_en < total_all
 
 
-def test_main_model_in_bootstrap_ratings(tmp_path):
+def test_run_elo_model_in_bootstrap_ratings(tmp_path):
     """Our model should appear in the bootstrap ELO leaderboard."""
-    result = main(_default_args(result_folder=str(tmp_path)))
+    result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     model_name = result["model_name"]
     assert all(model_name in r for r in result["bootstrap_ratings"])
 
 
-def test_main_n_instructions_limits_battles(tmp_path):
+def test_run_elo_n_instructions_limits_battles(tmp_path):
     """n_instructions caps the number of judged battles."""
-    result_5 = main(_default_args(result_folder=str(tmp_path), n_instructions=5))
-    result_10 = main(_default_args(result_folder=str(tmp_path), n_instructions=10))
+    result_5 = run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), n_instructions=5)
+    )
+    result_10 = run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), n_instructions=10)
+    )
     total_5 = (
         result_5["num_wins"]
         + result_5["num_losses"]
@@ -243,7 +265,7 @@ def test_main_n_instructions_limits_battles(tmp_path):
     assert total_10 == 10
 
 
-def test_main_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
+def test_run_elo_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
     """swap_mode from the run config must be forwarded to judge_and_parse_prefs.
 
     Regression test: previously run_judge() called judge_and_parse_prefs without
@@ -270,7 +292,7 @@ def test_main_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
         return [dummy] * n, None, pd.Series([1.0] * n)
 
     monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
-    main(_default_args(result_folder=str(tmp_path), swap_mode="both"))
+    run_elo_with_task(_default_args(result_folder=str(tmp_path), swap_mode="both"))
     assert captured.get("swap_mode") == "both"
 
 
@@ -297,7 +319,7 @@ def _spy_judge_capturing(captured):
     return spy_judge
 
 
-def test_main_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
+def test_run_elo_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
     """strip_thinking_before_judging from the run config must reach the judge.
 
     Regression test: the Elo entrypoint accepted the flag but never forwarded it
@@ -307,16 +329,18 @@ def test_main_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
     monkeypatch.setattr(
         estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
     )
-    main(_default_args(result_folder=str(tmp_path), strip_thinking_before_judging=True))
+    run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), strip_thinking_before_judging=True)
+    )
     assert captured.get("strip_thinking_before_judging") is True
 
 
-def test_main_strip_thinking_defaults_off(monkeypatch, tmp_path):
+def test_run_elo_strip_thinking_defaults_off(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(
         estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
     )
-    main(_default_args(result_folder=str(tmp_path)))
+    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert captured.get("strip_thinking_before_judging") is False
 
 
@@ -333,13 +357,13 @@ def _spy_generate_capturing(captured):
     return spy_generate
 
 
-def test_main_thinking_budget_injected_for_thinking_model(monkeypatch, tmp_path):
+def test_run_elo_thinking_budget_injected_for_thinking_model(monkeypatch, tmp_path):
     """battle_thinking_token_budget must reach generation for VLLM thinking models."""
     captured = {}
     monkeypatch.setattr(
         estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
     )
-    main(
+    run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path),
             model="VLLM/Qwen/Qwen3.5-9B",
@@ -349,7 +373,7 @@ def test_main_thinking_budget_injected_for_thinking_model(monkeypatch, tmp_path)
     assert captured["gen_kwargs"].get("thinking_token_budget") == 128
 
 
-def test_main_thinking_budget_capped_by_max_out_tokens(monkeypatch, tmp_path):
+def test_run_elo_thinking_budget_capped_by_max_out_tokens(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(
         estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
@@ -359,18 +383,18 @@ def test_main_thinking_budget_capped_by_max_out_tokens(monkeypatch, tmp_path):
         model="VLLM/Qwen/Qwen3.5-9B",
         battle_thinking_token_budget=10**9,
     )
-    main(cfg)
+    run_elo_with_task(cfg)
     assert (
         captured["gen_kwargs"].get("thinking_token_budget") == cfg.model.max_out_tokens
     )
 
 
-def test_main_thinking_budget_absent_for_nonthinking_model(monkeypatch, tmp_path):
+def test_run_elo_thinking_budget_absent_for_nonthinking_model(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(
         estimate_elo_ratings, "generate_instructions", _spy_generate_capturing(captured)
     )
-    main(
+    run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path),
             model="Dummy/my model",
@@ -423,3 +447,65 @@ def test_arena_anchor_battles_filters_and_preserves_index():
     assert list(out.index) == list(range(1000, 1000 + n))  # labels preserved, rare gone
     assert (out["source"] == "human").all()
     assert out.loc[1000, "pref"] == 0.0 and out.loc[1001, "pref"] == 1.0
+
+
+def test_elo_language_variant_resolves_and_filters(tmp_path):
+    variant = get_packaged_task("elo-lmarena-140k-en")
+    assert variant is not None
+    assert variant.selection is not None
+    assert variant.selection.values == ("en",)
+
+    result_en = run_elo(
+        _default_args(
+            result_folder=str(tmp_path), task="elo-lmarena-140k-en", n_instructions=None
+        ),
+        variant,
+    )
+    result_all = run_elo_with_task(
+        _default_args(
+            result_folder=str(tmp_path), task="elo-lmarena-140k", n_instructions=None
+        )
+    )
+    total_en = result_en["num_wins"] + result_en["num_losses"] + result_en["num_ties"]
+    total_all = (
+        result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
+    )
+    assert 0 < total_en < total_all
+
+
+def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
+    """Regression: the calibration path constructs its own judge model and once
+    crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
+    MLE fit itself is mocked."""
+    captured = {}
+
+    def fake_calibrate(delta_s, y):
+        captured["n_pairs"] = len(delta_s)
+        return 0.42
+
+    monkeypatch.setattr(estimate_elo_ratings, "calibrate_temperature", fake_calibrate)
+    # Anchor battles require models with >= 500 appearances; the default
+    # 30-battle fixture leaves the calibration pool empty.
+    monkeypatch.setattr(
+        estimate_elo_ratings, "load_battles", lambda _task: _arena_df(900)
+    )
+
+    result = run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), calibrate_temperature=True)
+    )
+
+    assert captured["n_pairs"] >= 10
+    assert 0.0 <= result["winrate"] <= 1.0
+
+
+def test_extract_instruction_text_tolerates_moderated_turns():
+    from judgearena.arenas_utils import _extract_instruction_text
+
+    assert _extract_instruction_text({"content": None}) == ""
+    assert _extract_instruction_text({"content": "plain"}) == "plain"
+    assert (
+        _extract_instruction_text(
+            {"content": [{"type": "text", "text": None}, {"type": "image"}, None]}
+        )
+        == ""
+    )

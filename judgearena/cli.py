@@ -10,10 +10,8 @@ import sys
 
 from pydantic import ValidationError
 
-from judgearena.benchmarks.elo.runner import main as main_elo
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.config import build_run_config
-from judgearena.constants import ELO_TASK_PREFIX
 from judgearena.log import configure_logging, get_logger
 
 logger = get_logger(__name__)
@@ -46,10 +44,7 @@ def cli(argv: list[str] | None = None) -> None:
 
         configure_logging(cfg.run.verbosity, log_file=cfg.run.log_file)
         logger.debug("Running with config: %s", cfg.model_dump())
-        if cfg.task.startswith(ELO_TASK_PREFIX):
-            main_elo(cfg)
-        else:
-            run_benchmark(cfg)
+        run_benchmark(cfg)
 
 
 if __name__ == "__main__":

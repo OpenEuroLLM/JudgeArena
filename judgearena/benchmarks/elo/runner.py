@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from judgearena.arenas_utils import _extract_instruction_text, load_arena_dataframe
+from judgearena.arenas_utils import _extract_instruction_text
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
@@ -16,13 +16,14 @@ from judgearena.artifacts import (
 from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
-    fit_bradley_terry,
     prefs_to_battle_results,
     sampling_cache_token,
     select_seeded_random_arena_battles,
     winner_to_pref,
 )
+from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.execution import build_generation_kwargs
+from judgearena.datasets import load_battles
 from judgearena.evaluate import (
     PairScore,
     calibrate_temperature,
@@ -33,6 +34,7 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
+from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, compute_pref_summary
 from judgearena.utils.eval import PrefSummary, Report
 
@@ -135,19 +137,42 @@ class EloReport(Report):
             print("\n  No overlapping arena models to compute MAE.")
 
 
-def main(cfg: "RunConfig") -> dict:
-    assert cfg.elo is not None  # main is dispatched only for elo tasks
+def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
+    """Rate one model against the human battles defined by an ELO task."""
+    protocol = task.spec.protocol if task is not None else None
+    if not isinstance(protocol, EloProtocol):
+        raise ValueError(f"Task {cfg.task!r} does not define an ELO protocol.")
+    if cfg.elo is None:
+        raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
+    arena = protocol.arena
+    scorer = ELO_SCORERS[protocol.scoring.adapter]
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
     # Step 1: Load arena battles
-    logger.info("Step 1: Loading battles from %s", cfg.elo.arena)
-    df_arena_all = load_arena_dataframe(arena=cfg.elo.arena)
+    logger.info("Step 1: Loading battles from %s", arena)
+    df_arena_all = load_battles(task)
 
-    # Filter by language if specified
+    # Filter by language: a task variant (e.g. elo-lmarena-140k-en) preselects
+    # languages; elo.languages narrows further within that selection.
+    selected_languages = list(cfg.elo.languages or [])
+    if task.selection is not None:
+        variant_languages = list(task.selection.values)
+        if selected_languages:
+            selected_languages = [
+                lang for lang in selected_languages if lang in set(variant_languages)
+            ]
+            if not selected_languages:
+                raise ValueError(
+                    f"elo.languages {cfg.elo.languages} has no overlap with the "
+                    f"languages of task {cfg.task!r} ({variant_languages})."
+                )
+        else:
+            selected_languages = variant_languages
+
     df_battles = df_arena_all
-    if cfg.elo.languages:
-        df_battles = df_battles[df_battles["lang"].isin(cfg.elo.languages)]
+    if selected_languages:
+        df_battles = df_battles[df_battles["lang"].isin(selected_languages)]
 
     random_sampling = cfg.elo.elo_random_battles is not None
     sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
@@ -211,7 +236,9 @@ def main(cfg: "RunConfig") -> dict:
     def replace_slash(s: str) -> str:
         return s.replace("/", "_")
 
-    languages_str = "-".join(sorted(cfg.elo.languages)) if cfg.elo.languages else "all"
+    languages_str = (
+        "-".join(sorted(selected_languages)) if selected_languages else "all"
+    )
     extra_kwargs_str = (
         "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
         if extra_kwargs
@@ -223,7 +250,7 @@ def main(cfg: "RunConfig") -> dict:
         n_instructions_per_language=cfg.elo.n_instructions_per_language,
     )
     cache_suffix = (
-        f"{cfg.elo.arena}_{replace_slash(cfg.model.name)}_"
+        f"{arena}_{replace_slash(cfg.model.name)}_"
         f"{cache_token}_"
         f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{extra_kwargs['max_tokens']}"
         + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
@@ -268,7 +295,7 @@ def main(cfg: "RunConfig") -> dict:
     ]
 
     our_completions = completions.tolist()
-    resolved_prompt = resolve_run_judge_prompt(cfg.elo.arena, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
     completions_A = [
         our_completions[i] if our_model_is_position_a[i] else opponent_completions[i]
@@ -394,7 +421,7 @@ def main(cfg: "RunConfig") -> dict:
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
     # Compute human-only BT ratings as ground-truth reference
-    human_elo = fit_bradley_terry(
+    human_elo = scorer.fit(
         df_arena, pref_col="pref_hard", baseline_model=cfg.elo.baseline_model
     )
 
@@ -438,7 +465,6 @@ def main(cfg: "RunConfig") -> dict:
 
             judge_chat_model_cal = make_model(
                 model=cfg.judge.model,
-                max_tokens=cfg.judge.max_out_tokens,
                 **judge_extra_kwargs,
             )
             cal_annotations, _, cal_prefs = judge_and_parse_prefs(
@@ -540,7 +566,7 @@ def main(cfg: "RunConfig") -> dict:
         df_sample = df_results.sample(
             n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
         )
-        ratings = fit_bradley_terry(
+        ratings = scorer.fit(
             df_sample, pref_col=pref_col, baseline_model=cfg.elo.baseline_model
         )
         bootstrap_ratings.append(ratings)
@@ -570,7 +596,7 @@ def main(cfg: "RunConfig") -> dict:
     )
 
     report = EloReport(
-        arena=cfg.elo.arena,
+        arena=arena,
         judge_model=cfg.judge.model,
         summary=summary,
         num_battles=n,
@@ -597,17 +623,17 @@ def main(cfg: "RunConfig") -> dict:
     res_dir = prepare_run_directory(
         cfg,
         Path(cfg.run.result_folder)
-        / f"elo-{safe_filename(cfg.elo.arena)}-{safe_filename(model_name)}-"
+        / f"elo-{safe_filename(arena)}-{safe_filename(model_name)}-"
         f"{safe_filename(cfg.judge.model)}",
     )
     result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
 
     # Persist only the run's own llm-judge battles (a few KB). The human arena
     # anchors are identical across every run, so we do not duplicate them per
-    # experiment — recompute ELO by recombining with
-    # arena_anchor_battles(load_arena_dataframe(arena)). question_id is the
-    # instruction-index join key back to the arena initial table / completion
-    # cache. battles.parquet keeps pref_hard so both hard and soft ELO recompute.
+    # experiment — recompute ELO by loading this task's pinned battles again and
+    # applying arena_anchor_battles(). question_id is the join key back to the
+    # arena table / completion cache. battles.parquet keeps pref_hard so both
+    # hard and soft ELO can be recomputed.
     battle_cols = [
         "model_a",
         "model_b",
@@ -627,7 +653,7 @@ def main(cfg: "RunConfig") -> dict:
             res_dir / "bootstrap_ratings.csv", index=False
         )
         Leaderboard(
-            arena=cfg.elo.arena,
+            arena=arena,
             model=model_name,
             judge_model=cfg.judge.model,
             n_bootstraps=n_bootstraps,
@@ -640,7 +666,7 @@ def main(cfg: "RunConfig") -> dict:
     # a metadata-write failure should not sink an already-completed run.
     write_run_metadata_safely(
         output_dir=res_dir,
-        entrypoint="judgearena.benchmarks.elo.runner.main",
+        entrypoint="judgearena.benchmarks.elo.runner.run_elo",
         run=cfg.model_dump(),
         results=results,
         input_payloads=(

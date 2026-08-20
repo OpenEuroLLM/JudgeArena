@@ -17,8 +17,9 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.constants import ELO_TASK_PREFIX, ELO_TASK_TO_ARENA
+from judgearena.datasets.fluency import is_fluency_task
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import EloProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -286,13 +287,13 @@ class GenerationArgs(BaseModel):
 
 
 class EloArgs(BaseModel):
-    """Settings specific to elo-rating tasks (``--task elo-*``)."""
+    """Experiment settings for tasks using the ELO protocol."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     arena: str | None = None
-    """Arena identifier whose battles supply the opponents. Derived from the
-    ``elo-*`` task when left unset."""
+    """Arena whose battles supply opponents. Derived from the task definition;
+    an explicit value must match it."""
 
     baseline_model: str | None = None
     """Model anchored at 1000 ELO; ratings are reported relative to it."""
@@ -367,8 +368,8 @@ class RunConfig(BaseSettings):
     )
 
     task: str
-    """Benchmark task ID. Use ``judgearena tasks list`` for packaged tasks;
-    legacy ELO task IDs use the ``elo-*`` prefix."""
+    """Packaged benchmark task ID. Use ``judgearena tasks list`` to inspect
+    available definitions."""
 
     model: ModelArgs = Field(default_factory=ModelArgs)
     """Model(s) under evaluation and their generation settings."""
@@ -380,7 +381,7 @@ class RunConfig(BaseSettings):
     """Instruction count and input truncation."""
 
     elo: EloArgs | None = None
-    """ELO-task settings (only for ``elo-*`` tasks)."""
+    """Runtime settings used only by tasks with an ELO protocol."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -388,50 +389,68 @@ class RunConfig(BaseSettings):
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
         resolved_task = get_packaged_task(self.task)
-        if resolved_task is not None:
-            task_judge = resolved_task.spec.protocol.judge
-            if "swap_mode" not in self.judge.model_fields_set:
-                self.judge.swap_mode = task_judge.default_swap_mode
-            if self.judge.swap_mode not in task_judge.allowed_swap_modes:
+        if resolved_task is None:
+            if not is_fluency_task(self.task):
                 raise ValueError(
-                    f"judge.swap_mode={self.judge.swap_mode!r} is not supported "
-                    f"by task {self.task!r}; choose from "
-                    f"{list(task_judge.allowed_swap_modes)}."
+                    f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
+                    "inspect packaged tasks."
                 )
-            if (
-                self.judge.temperature is None
-                and task_judge.default_temperature is not None
-            ):
-                self.judge.temperature = task_judge.default_temperature
+            # Fluency tasks are not packaged yet and run through the legacy path.
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for ELO tasks.")
+            if self.model.name is None:
+                raise ValueError("model.name is required.")
+            if self.model.baseline is None:
+                raise ValueError(f"model.baseline is required for task {self.task!r}.")
+            return self
 
-            baseline = resolved_task.spec.protocol.baseline
-            if (
-                self.model.baseline is not None
-                and getattr(baseline, "allow_runtime_override", True) is False
-            ):
-                raise ValueError(
-                    f"model.baseline cannot override the baseline defined by "
-                    f"task {self.task!r}."
-                )
+        protocol = resolved_task.spec.protocol
+        task_judge = protocol.judge
+        if "swap_mode" not in self.judge.model_fields_set:
+            self.judge.swap_mode = task_judge.default_swap_mode
+        if self.judge.swap_mode not in task_judge.allowed_swap_modes:
+            raise ValueError(
+                f"judge.swap_mode={self.judge.swap_mode!r} is not supported "
+                f"by task {self.task!r}; choose from "
+                f"{list(task_judge.allowed_swap_modes)}."
+            )
+        if (
+            self.judge.temperature is None
+            and task_judge.default_temperature is not None
+        ):
+            self.judge.temperature = task_judge.default_temperature
 
-        is_elo = self.task.startswith(ELO_TASK_PREFIX)
+        baseline = protocol.baseline
+        if (
+            self.model.baseline is not None
+            and getattr(baseline, "allow_runtime_override", True) is False
+        ):
+            raise ValueError(
+                f"model.baseline cannot override the baseline defined by "
+                f"task {self.task!r}."
+            )
+
+        is_elo = isinstance(protocol, EloProtocol)
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if self.elo.arena is None:
-                if self.task not in ELO_TASK_TO_ARENA:
-                    raise ValueError(
-                        f"Unknown elo task {self.task!r}; expected one of "
-                        f"{list(ELO_TASK_TO_ARENA)}."
-                    )
-                self.elo.arena = ELO_TASK_TO_ARENA[self.task]
+            if self.elo.arena is not None and self.elo.arena != protocol.arena:
+                raise ValueError(
+                    f"elo.arena={self.elo.arena!r} does not match task "
+                    f"{self.task!r} ({protocol.arena!r})."
+                )
+            self.elo.arena = protocol.arena
+            if "soft_elo" not in self.elo.model_fields_set:
+                self.elo.soft_elo = protocol.scoring.default_soft
+            if "soft_elo_temperature" not in self.elo.model_fields_set:
+                self.elo.soft_elo_temperature = protocol.scoring.default_temperature
             if self.model.name is None:
-                raise ValueError("model.name is required for elo tasks.")
+                raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
-                raise ValueError("model.baseline is not supported for elo tasks.")
+                raise ValueError("model.baseline is not supported for ELO tasks.")
         else:
             if self.elo is not None:
-                raise ValueError("elo config is only valid for elo-* tasks.")
+                raise ValueError("elo config is only valid for ELO tasks.")
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (

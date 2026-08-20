@@ -88,17 +88,18 @@ scoring adapter owns the calculation, primary metric, and metric direction;
 task YAML only selects those components by ID.
 
 If an upstream dataset has a new format, implement a dataset adapter under
-`judgearena/datasets/` and register its ID in both the dataset registry and the
-task adapter catalog. The adapter must return JudgeArena's canonical columns;
-the common runner should never check a task name.
+`judgearena/datasets/` and register it in the dataset registry. Task validation
+derives the available adapter IDs from that registry. The adapter must return
+JudgeArena's canonical columns; the common runner should never check a task
+name.
 
 If a benchmark needs a genuinely different evaluation algorithm:
 
 1. Add its typed protocol under `schema/`.
 2. Add that protocol to `ProtocolSpec` in `schema/task.py`.
 3. Implement and register its benchmark runner.
-4. Keep algorithm-specific fields in that protocol, as MT-Bench does in
-   `MTBenchProtocol` and `MTBenchJudgeSpec`.
+4. Keep algorithm-specific fields in that protocol, as MT-Bench and ELO do in
+   `MTBenchProtocol` and `EloProtocol`.
 
 Adding a schema field makes it valid in task YAML; it does not automatically
 make it a run-config or CLI option. Runtime overrides must be explicitly added

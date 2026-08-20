@@ -1,0 +1,31 @@
+extends: _base.yaml
+task: elo-lmarena
+description: Arena-anchored ELO evaluation using the combined LMSYS Chatbot Arena datasets.
+
+variants:
+  selector: language
+  values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
+
+dataset:
+  sources:
+    lmarena_55k:
+      type: huggingface_dataset
+      repo_id: lmarena-ai/arena-human-preference-55k
+      revision: "18c298340948c0e7f7727399fd459cca6ce0ca6f"
+      allow_patterns: [train.csv]
+    lmarena_100k:
+      type: huggingface_dataset
+      repo_id: lmarena-ai/arena-human-preference-100k
+      revision: "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
+      allow_patterns: [data/*.parquet]
+    lmarena_140k:
+      type: huggingface_dataset
+      repo_id: lmarena-ai/arena-human-preference-140k
+      revision: "6322995ab34d7c2693e3f47dd13fa5caa0789a74"
+      allow_patterns: [data/*.parquet]
+
+protocol:
+  arena: LMArena
+
+metadata:
+  reference_implementation: https://huggingface.co/lmarena-ai
