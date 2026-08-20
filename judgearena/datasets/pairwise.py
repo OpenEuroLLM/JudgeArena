@@ -36,8 +36,13 @@ class PairwiseTaskData:
                 f"Pairwise model outputs are missing canonical columns: {missing}."
             )
 
-    def model_completion(self, model: str) -> pd.Series | None:
-        """Return model completions aligned to the instruction index."""
+    def load_model_completions(
+        self,
+        model: str,
+        *,
+        instruction_ids: pd.Index | None = None,
+    ) -> pd.Series | None:
+        """Return model completions aligned to the requested instruction IDs."""
         if self.model_outputs is None:
             return None
 
@@ -54,8 +59,21 @@ class PairwiseTaskData:
             .set_index("instruction_index")["output"]
             .sort_index()
         )
+        target_index = (
+            self.instructions.index
+            if instruction_ids is None
+            else pd.Index(instruction_ids, name=self.instructions.index.name)
+        )
+        missing = target_index[~target_index.isin(completions.index)]
+        if len(missing):
+            preview = missing[:5].tolist()
+            suffix = "..." if len(missing) > len(preview) else ""
+            raise ValueError(
+                f"Pre-existing completions for model {model!r} are missing "
+                f"{len(missing)} required instruction(s): {preview}{suffix}"
+            )
         logger.info("Found pre-existing completions for model %r.", model)
-        return completions.loc[self.instructions.index].rename("completion")
+        return completions.loc[target_index].rename("completion")
 
 
 def load_pairwise_task_data(

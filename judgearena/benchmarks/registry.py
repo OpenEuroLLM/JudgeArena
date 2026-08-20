@@ -55,6 +55,11 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     )
 
 
+def benchmark_runner_names() -> frozenset[str]:
+    """Return runner IDs owned by the benchmark registry."""
+    return frozenset(adapter.name for adapter in benchmark_adapters())
+
+
 def resolve_benchmark(task: str) -> ResolvedBenchmark:
     """Resolve a runner and task definition with one registry lookup."""
     adapters = benchmark_adapters()
