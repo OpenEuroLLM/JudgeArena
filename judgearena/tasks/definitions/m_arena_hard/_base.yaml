@@ -1,0 +1,60 @@
+schema_version: 1
+task_version: 1
+tags: [pairwise, instruction-following, multilingual, arena-hard]
+
+dataset:
+  adapter: m_arena_hard
+  sources:
+    outputs:
+      type: huggingface_dataset
+      repo_id: judge-arena/judge-arena-dataset
+      revision: "004c4a992956eeefffd36b63ade470f32fd0a582"
+  fields:
+    id: question_id
+    instruction: prompt
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  judge:
+    default_prompt: default
+    parser: pairwise_preference
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+  scoring:
+    adapter: pairwise_win_rate
+    primary_metric: winrate
+    higher_is_better: true
+
+variants:
+  selector: language
+  values:
+    - ar
+    - cs
+    - de
+    - el
+    - en
+    - es
+    - fa
+    - fr
+    - he
+    - hi
+    - id
+    - it
+    - ja
+    - ko
+    - nl
+    - pl
+    - pt
+    - ro
+    - ru
+    - tr
+    - uk
+    - vi
+    - zh
+  groups:
+    EU: [cs, de, el, en, es, fr, it, nl, pl, pt, ro, uk]
+
+metadata:
+  reference_implementation: https://huggingface.co/CohereLabs

@@ -8,7 +8,7 @@ from dataclasses import asdict
 
 import yaml
 
-from judgearena.tasks.registry import TaskDefinitionError, load_tasks
+from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 
 
@@ -45,6 +45,8 @@ def run_task_command(
         elif args.command == "show":
             resolved = _require(parser, tasks, args.task)
             output = resolved.model_dump()
+            if resolved.selection is not None:
+                output["_selection"] = asdict(resolved.selection)
             if args.resolved:
                 output["_provenance"] = asdict(resolved.provenance)
             print(yaml.safe_dump(output, sort_keys=False).rstrip())
@@ -63,7 +65,8 @@ def _require(
     tasks: dict[str, ResolvedTaskSpec],
     task_id: str,
 ) -> ResolvedTaskSpec:
-    if task_id not in tasks:
+    resolved = resolve_task(tasks, task_id)
+    if resolved is None:
         known = ", ".join(sorted(tasks)) or "none"
         parser.error(f"unknown task {task_id!r}; registered tasks: {known}")
-    return tasks[task_id]
+    return resolved

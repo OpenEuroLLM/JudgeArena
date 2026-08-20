@@ -1,97 +1,171 @@
-"""Version-aware m-ArenaHard loader.
+"""Dataset adapter for YAML-defined m-ArenaHard task families."""
 
-Mirrors ``judgearena/instruction_dataset/arena_hard.py``: each supported
-``m-arena-hard-v{X.Y}`` maps to its dataset-native baseline, and a parallel
-private dict carries the upstream HF repo id. The dispatcher in
-``judgearena/instruction_dataset/__init__.py`` uses
-``split_m_arena_hard_dataset`` to parse ``m-arena-hard-v{X.Y}[-{lang}|-EU]``
-and then calls ``load_m_arenahard``.
-"""
+from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.dataset_revisions import hf_revision
-
-EU_LANGUAGES: tuple[str, ...] = (
-    "cs",
-    "de",
-    "el",
-    "en",
-    "es",
-    "fr",
-    "it",
-    "nl",
-    "pl",
-    "pt",
-    "ro",
-    "uk",
-)
-
-NON_EU_LANGUAGES: tuple[str, ...] = (
-    "ar",
-    "fa",
-    "he",
-    "hi",
-    "id",
-    "ja",
-    "ko",
-    "ru",
-    "tr",
-    "vi",
-    "zh",
-)
-
-ALL_LANGUAGES: tuple[str, ...] = (*EU_LANGUAGES, *NON_EU_LANGUAGES)
-
-# Dataset name -> dataset-native baseline model. Shape mirrors
-# `ARENA_HARD_BASELINES` in `arena_hard.py`. v0.1 uses Aya Expanse 8B (free
-# completions from CohereLabs/deja-vu-pairwise-evals); v2.0 uses Gemini 2.5 Flash.
-M_ARENA_HARD_BASELINES: dict[str, str] = {
-    "m-arena-hard-v0.1": "CohereLabs/aya-expanse-8b",
-    "m-arena-hard-v2.0": "google/gemini-2.5-flash",
-}
-
-# Dataset name -> upstream HF repo id. Kept private; the on-disk cache subdir
-# is derived from the repo's short name.
-_M_ARENA_HARD_HF_REPOS: dict[str, str] = {
-    "m-arena-hard-v0.1": "CohereLabs/m-ArenaHard",
-    "m-arena-hard-v2.0": "CohereLabs/m-ArenaHard-v2.0",
-}
+from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
 
 def is_m_arena_hard_dataset(dataset: str) -> bool:
-    return split_m_arena_hard_dataset(dataset) is not None
+    """Return whether ``dataset`` resolves to an m-ArenaHard task."""
+    task = get_packaged_task(dataset)
+    return task is not None and task.spec.dataset.adapter == "m_arena_hard"
 
 
 def split_m_arena_hard_dataset(dataset: str) -> tuple[str, str | None] | None:
-    """Parse ``m-arena-hard-v{X.Y}[-{lang}|-EU]`` into ``(version, suffix)``.
-
-    Returns ``None`` for any name that doesn't match a known version or that
-    carries an unknown suffix. ``suffix`` is ``None`` for the all-languages
-    variant, ``"EU"`` for the EU subset, or a 2-letter code in
-    :data:`ALL_LANGUAGES`. Versioned names only -- the unversioned
-    ``m-arena-hard`` alias is deliberately not accepted.
-    """
-    for version in M_ARENA_HARD_BASELINES:
-        if dataset == version:
-            return version, None
-        if dataset.startswith(f"{version}-"):
-            suffix = dataset[len(version) + 1 :]
-            if suffix == "EU" or suffix in ALL_LANGUAGES:
-                return version, suffix
-            return None
-    return None
-
-
-def m_arena_hard_native_baseline(dataset: str) -> str | None:
-    """Baseline for a dataset name, or ``None`` if it isn't m-arena-hard."""
-    parsed = split_m_arena_hard_dataset(dataset)
-    if parsed is None:
+    """Return the YAML definition ID and optional selected language view."""
+    task = get_packaged_task(dataset)
+    if task is None or task.spec.dataset.adapter != "m_arena_hard":
         return None
-    return M_ARENA_HARD_BASELINES[parsed[0]]
+    selection = task.selection.name if task.selection is not None else None
+    return task.definition_task, selection
+
+
+def m_arena_hard_native_baseline(
+    dataset: str,
+) -> str | Mapping[str, str] | None:
+    """Return the task-defined baseline for an m-ArenaHard invocation."""
+    if not is_m_arena_hard_dataset(dataset):
+        return None
+    from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+
+    return native_pairwise_baseline(dataset)
+
+
+def _source(task: ResolvedTaskSpec, name: str = "examples") -> HuggingFaceDatasetSource:
+    source = task.spec.dataset.sources.get(name)
+    if not isinstance(source, HuggingFaceDatasetSource):
+        raise ValueError(
+            f"Task {task.task!r} must define a Hugging Face dataset source "
+            f"named {name!r}."
+        )
+    return source
+
+
+def _source_local_dir(source: HuggingFaceDatasetSource, root: Path) -> Path:
+    """Keep raw source snapshots separate from normalized JudgeArena tables."""
+    return root / "_sources" / source.repo_id.replace("/", "--")
+
+
+def download_task_sources(task: ResolvedTaskSpec, local_tables_path: Path) -> None:
+    """Download the pinned examples and optional packaged model outputs."""
+    if task.spec.dataset.adapter != "m_arena_hard":
+        raise ValueError(f"Task {task.task!r} does not use the m-ArenaHard adapter.")
+
+    for name in task.spec.dataset.sources:
+        _download_source(task, name, local_tables_path)
+
+
+def _download_source(
+    task: ResolvedTaskSpec,
+    name: str,
+    local_tables_path: Path,
+    *,
+    allow_patterns: list[str] | None = None,
+) -> None:
+    declared_source = _source(task, name)
+    local_dir = (
+        _source_local_dir(declared_source, local_tables_path)
+        if name == "examples"
+        else local_tables_path
+    )
+    snapshot_download(
+        repo_id=declared_source.repo_id,
+        repo_type="dataset",
+        revision=declared_source.revision,
+        allow_patterns=(
+            allow_patterns
+            if allow_patterns is not None
+            else list(declared_source.allow_patterns) or None
+        ),
+        local_dir=local_dir,
+        force_download=False,
+    )
+
+
+def _selected_languages(task: ResolvedTaskSpec) -> tuple[str, ...]:
+    variants = task.spec.variants
+    if variants is None or variants.selector != "language":
+        raise ValueError(f"Task {task.task!r} must define language suffix variants.")
+    return task.selection.values if task.selection is not None else variants.values
+
+
+def _load_source_frames(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame:
+    _download_source(task, "examples", local_tables_path)
+    source = _source(task)
+    source_root = _source_local_dir(source, local_tables_path)
+    selected = set(_selected_languages(task))
+
+    frames: list[pd.DataFrame] = []
+    for parquet_path in sorted(source_root.rglob("*.parquet")):
+        language = parquet_path.parent.name
+        if language not in selected:
+            continue
+        frame = pd.read_parquet(parquet_path)
+        frame["lang"] = language
+        frames.append(frame)
+
+    if not frames:
+        raise FileNotFoundError(
+            f"No m-ArenaHard parquet files for {sorted(selected)} under {source_root}."
+        )
+
+    df = pd.concat(frames, ignore_index=True)
+    fields = task.spec.dataset.fields
+    missing = sorted({fields.id, fields.instruction} - set(df.columns))
+    if missing:
+        raise ValueError(
+            f"Task {task.task!r} is missing declared dataset fields: {missing}."
+        )
+    df[fields.id] = df[fields.id].astype(str) + "-" + df["lang"]
+    if df[fields.id].duplicated().any():
+        duplicates = df.loc[df[fields.id].duplicated(), fields.id].head().tolist()
+        raise ValueError(
+            f"Task {task.task!r} contains duplicate instruction IDs: {duplicates}."
+        )
+    return df
+
+
+def load_task_instructions(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame:
+    """Load and normalize the languages selected by the task invocation."""
+    df = _load_source_frames(task, local_tables_path)
+    fields = task.spec.dataset.fields
+    return (
+        df.rename(
+            columns={
+                fields.id: "instruction_index",
+                fields.instruction: "instruction",
+            }
+        )
+        .sort_values("instruction_index")
+        .reset_index(drop=True)
+    )
+
+
+def load_task_model_outputs(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame | None:
+    """Load pre-generated outputs when the selected task view ships them."""
+    if task.selection is None:
+        return None
+    path = local_tables_path / "model_outputs" / f"{task.task}.csv.zip"
+    _download_source(
+        task,
+        "outputs",
+        local_tables_path,
+        allow_patterns=[path.relative_to(local_tables_path).as_posix()],
+    )
+    return pd.read_csv(path) if path.exists() else None
 
 
 def load_m_arenahard(
@@ -99,53 +173,12 @@ def load_m_arenahard(
     version: str,
     language: str | None = None,
 ) -> pd.DataFrame:
-    """Load m-ArenaHard prompts for the requested version and language subset.
-
-    ``version`` must be a key in :data:`M_ARENA_HARD_BASELINES`. ``language``
-    is ``None`` for the full 23-language union, ``"EU"`` for the EU subset,
-    or a 2-letter language code for a single-language slice.
-
-    The returned DataFrame carries the upstream columns plus a ``lang``
-    column, with ``question_id`` rewritten to ``f"{question_id}-{lang}"`` so
-    multi-language slices have unique identifiers.
-    """
-    if version not in _M_ARENA_HARD_HF_REPOS:
-        raise ValueError(
-            f"Unsupported m-ArenaHard version: {version!r}. "
-            f"Known versions: {sorted(_M_ARENA_HARD_HF_REPOS)}."
-        )
-    repo_id = _M_ARENA_HARD_HF_REPOS[version]
-    local_subdir = repo_id.split("/", 1)[1]
-    snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        allow_patterns="*",
-        local_dir=local_path / local_subdir,
-        force_download=False,
-        revision=hf_revision(repo_id),
-    )
-    m_arena_root = local_path / local_subdir
-
-    df_union: list[pd.DataFrame] = []
-    for path in sorted(m_arena_root.rglob("*.parquet")):
-        lg = path.parent.name
-        if language == "EU" and lg in EU_LANGUAGES:
-            df = pd.read_parquet(path)
-            df["lang"] = lg
-            df_union.append(df)
-        elif language is None or language == lg:
-            df = pd.read_parquet(path)
-            df["lang"] = lg
-            df_union.append(df)
-
-    assert len(df_union) > 0, (
-        f"No parquet matched under {m_arena_root} for language={language!r}."
-    )
-    df_res = pd.concat(df_union, ignore_index=True)
-    df_res["question_id"] = df_res.apply(
-        lambda row: f"{row['question_id']}-{row['lang']}", axis=1
-    )
-    return df_res
+    """Compatibility wrapper returning the former source-shaped DataFrame."""
+    task_id = version if language is None else f"{version}-{language}"
+    task = get_packaged_task(task_id)
+    if task is None or task.spec.dataset.adapter != "m_arena_hard":
+        raise ValueError(f"Unsupported m-ArenaHard task: {task_id!r}.")
+    return _load_source_frames(task, local_path)
 
 
 if __name__ == "__main__":
