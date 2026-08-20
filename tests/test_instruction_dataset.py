@@ -5,10 +5,9 @@ import pytest
 
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.datasets as instruction_dataset
+import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.judgearena_tables as judgearena_tables
-import judgearena.utils as judgearena_utils
 from judgearena.datasets.arena_hard import (
-    ARENA_HARD_BASELINES,
     _build_instructions,
     _build_model_outputs,
     _extract_assistant_output,
@@ -69,20 +68,13 @@ def test_arena_hard_native_baseline_v20_is_per_category_mapping():
     assert native["creative_writing"] == "gemini-2.0-flash-001"
 
 
-def test_arena_hard_baselines_mapping_matches_upstream():
-    """Pin the exact baseline assignment so a silent edit to
-    ARENA_HARD_BASELINES can't drift away from upstream
-    (arena-hard-auto/utils/judge_utils.py::JUDGE_SETTINGS).
-    """
-    assert ARENA_HARD_BASELINES == {
-        "arena-hard-v0.1": "gpt-4-0314",
-        "arena-hard-v2.0": {
-            "hard_prompt": "o3-mini-2025-01-31",
-            "coding": "o3-mini-2025-01-31",
-            "math": "o3-mini-2025-01-31",
-            "creative_writing": "gemini-2.0-flash-001",
-        },
-    }
+def test_arena_hard_source_is_owned_by_task_yaml():
+    task = get_packaged_task("arena-hard-v2.0")
+    assert task is not None
+    source = task.spec.dataset.sources["examples"]
+    assert source.repo_id == "lmarena-ai/arena-hard-auto"
+    assert source.revision == "15f3746e21432264ce9b453999bde4f3c946d2e6"
+    assert source.config == "arena-hard-v2.0"
 
 
 def test_mt_bench_native_baseline_is_flat_string():
@@ -281,12 +273,9 @@ def test_build_instructions_drops_model_answer_rows():
 def test_load_instructions_uses_explicit_version_filename(monkeypatch):
     captured = {}
 
-    def _fake_ensure(dataset: str, local_tables_path: Path):
-        captured["dataset"] = dataset
+    def _fake_load(task, local_tables_path: Path):
+        captured["dataset"] = task.task
         captured["local_tables_path"] = local_tables_path
-
-    def _fake_read_df(path: Path):
-        captured["path"] = path
         return pd.DataFrame(
             {
                 "instruction_index": ["0", "1"],
@@ -294,12 +283,10 @@ def test_load_instructions_uses_explicit_version_filename(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(instruction_dataset, "download_arena_hard", _fake_ensure)
-    monkeypatch.setattr(judgearena_utils, "read_df", _fake_read_df)
+    monkeypatch.setattr(arena_hard, "load_task_instructions", _fake_load)
     df = instruction_dataset.load_instructions(dataset="arena-hard-v2.0")
 
     assert captured["dataset"] == "arena-hard-v2.0"
-    assert captured["path"].name == "arena-hard-v2.0.csv"
     assert df.index.tolist() == ["0", "1"]
 
 
@@ -309,14 +296,9 @@ def test_load_instructions_surfaces_category_for_v20(monkeypatch):
     from the cached CSV.
     """
     monkeypatch.setattr(
-        instruction_dataset,
-        "download_arena_hard",
-        lambda dataset, local_tables_path: None,
-    )
-    monkeypatch.setattr(
-        judgearena_utils,
-        "read_df",
-        lambda path: pd.DataFrame(
+        arena_hard,
+        "load_task_instructions",
+        lambda task, path: pd.DataFrame(
             {
                 "instruction_index": ["q1", "q2"],
                 "instruction": ["a", "b"],
@@ -346,9 +328,9 @@ def test_try_load_dataset_completions_uses_dataset_output_file(monkeypatch, tmp_
 
     monkeypatch.setattr(generate_and_evaluate, "data_root", tmp_path)
     monkeypatch.setattr(
-        generate_and_evaluate,
-        "download_arena_hard",
-        lambda dataset, local_tables_path: None,
+        arena_hard,
+        "load_task_model_outputs",
+        lambda task, path: pd.read_csv(output_path),
     )
 
     loaded = generate_and_evaluate.try_load_dataset_completions(

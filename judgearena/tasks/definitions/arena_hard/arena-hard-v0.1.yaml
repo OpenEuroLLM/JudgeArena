@@ -1,0 +1,17 @@
+extends: _base.yaml
+task: arena-hard-v0.1
+description: Pairwise evaluation on Arena-Hard v0.1.
+
+dataset:
+  sources:
+    examples:
+      config: arena-hard-v0.1
+      allow_patterns:
+        - data/arena-hard-v0.1/question.jsonl
+        - data/arena-hard-v0.1/model_answer/*.jsonl
+
+protocol:
+  baseline:
+    strategy: task_default
+    reference_id: gpt-4-0314
+    allow_runtime_override: true
