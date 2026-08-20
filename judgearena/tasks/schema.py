@@ -68,6 +68,24 @@ class SingleTurnGeneration(_StrictFrozenModel):
     mode: Literal["single_turn_chat"]
 
 
+class MultiTurnGeneration(_StrictFrozenModel):
+    mode: Literal["multi_turn_chat"]
+    category_temperatures: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_temperatures(self) -> MultiTurnGeneration:
+        invalid = {
+            category: temperature
+            for category, temperature in self.category_temperatures.items()
+            if not category or temperature < 0
+        }
+        if invalid:
+            raise ValueError(
+                f"category temperatures require names and non-negative values: {invalid}"
+            )
+        return self
+
+
 class NoBaseline(_StrictFrozenModel):
     strategy: Literal["none"]
 
@@ -140,6 +158,37 @@ class PairwiseProtocol(_StrictFrozenModel):
     scoring: ScoringSpec
 
 
+class MTBenchJudgeSpec(PairwiseJudgeSpec):
+    turns_mode: Literal["both", "single", "multi"] = "both"
+    fastchat_prompt_preset: str = Field(min_length=1)
+    fastchat_temperature: float = Field(ge=0)
+    reference_categories: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_reference_categories(self) -> MTBenchJudgeSpec:
+        if any(not category for category in self.reference_categories):
+            raise ValueError("reference categories must not be empty")
+        if len(set(self.reference_categories)) != len(self.reference_categories):
+            raise ValueError("reference categories must not contain duplicates")
+        return self
+
+
+class MTBenchProtocol(_StrictFrozenModel):
+    """Task policy used by the specialized multi-turn MT-Bench runner."""
+
+    runner: Literal["mt_bench"]
+    generation: MultiTurnGeneration
+    baseline: BaselineSpec
+    judge: MTBenchJudgeSpec
+    scoring: ScoringSpec
+
+
+ProtocolSpec = Annotated[
+    PairwiseProtocol | MTBenchProtocol,
+    Field(discriminator="runner"),
+]
+
+
 class TaskMetadata(_StrictFrozenModel):
     reference_implementation: str | None = None
     paper: str | None = None
@@ -186,7 +235,7 @@ class TaskSpec(_StrictFrozenModel):
     description: str = Field(min_length=1)
     tags: tuple[str, ...] = ()
     dataset: DatasetSpec
-    protocol: PairwiseProtocol
+    protocol: ProtocolSpec
     variants: SuffixVariants | None = None
     metadata: TaskMetadata = Field(default_factory=TaskMetadata)
 

@@ -4,17 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from judgearena.datasets.mt_bench import MT_BENCH_BASELINES
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import CategoryDefaultsBaseline, TaskDefaultBaseline
 
-LEGACY_PAIRWISE_BASELINES: dict[str, str | Mapping[str, str]] = {
-    **MT_BENCH_BASELINES,
-}
-
 
 def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
-    """Return the task-defined baseline, with fallback for unmigrated tasks."""
+    """Return the baseline declared by a registered task."""
     resolved = get_packaged_task(task)
     if resolved is not None:
         baseline = resolved.spec.protocol.baseline
@@ -24,6 +19,4 @@ def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
             return baseline.references
         return None
 
-    if task in LEGACY_PAIRWISE_BASELINES:
-        return LEGACY_PAIRWISE_BASELINES[task]
     return None

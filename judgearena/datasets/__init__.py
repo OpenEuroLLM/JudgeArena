@@ -17,11 +17,6 @@ def load_instructions(dataset: str, n_instructions: int | None = None) -> pd.Dat
             resolved_task, judgearena_utils.data_root / "tables"
         )
 
-    elif dataset == "mt-bench":
-        from judgearena.datasets.mt_bench import load_mt_bench
-
-        df_instructions = load_mt_bench()
-
     else:
         raise ValueError(f"Unsupported instruction dataset {dataset!r}.")
 

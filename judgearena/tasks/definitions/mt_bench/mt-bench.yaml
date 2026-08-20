@@ -1,0 +1,60 @@
+schema_version: 1
+task: mt-bench
+task_version: 1
+description: FastChat-compatible pairwise evaluation on the MT-Bench question set.
+tags: [pairwise, instruction-following, multi-turn, mt-bench]
+
+dataset:
+  adapter: mt_bench
+  sources:
+    benchmark:
+      type: huggingface_space
+      repo_id: lmsys/mt-bench
+      revision: "a4b674ca573c24143824ac7f60d9173e7081e37d"
+      allow_patterns:
+        - data/mt_bench/question.jsonl
+        - data/mt_bench/model_answer/gpt-4.jsonl
+    references:
+      type: git_raw
+      repository: https://github.com/lm-sys/FastChat
+      revision: "587d5cfa1609a43d192cedb8441cac3c17db105d"
+      path: fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl
+  fields:
+    id: question_id
+    instruction: turns
+    category: category
+
+protocol:
+  runner: mt_bench
+  generation:
+    mode: multi_turn_chat
+    category_temperatures:
+      writing: 0.7
+      roleplay: 0.7
+      extraction: 0.0
+      math: 0.0
+      coding: 0.0
+      reasoning: 0.0
+      stem: 0.1
+      humanities: 0.1
+      arena-hard-200: 0.0
+  baseline:
+    strategy: task_default
+    reference_id: gpt-4
+    allow_runtime_override: true
+  judge:
+    default_prompt: fastchat-pairwise
+    parser: fastchat_pairwise_verdict
+    default_swap_mode: fixed
+    allowed_swap_modes: [fixed, both]
+    turns_mode: both
+    fastchat_prompt_preset: default
+    fastchat_temperature: 0.0
+    reference_categories: [math, reasoning, coding, arena-hard-200]
+  scoring:
+    adapter: pairwise_win_rate
+    primary_metric: winrate
+    higher_is_better: true
+
+metadata:
+  reference_implementation: https://github.com/lm-sys/FastChat/tree/master/fastchat/llm_judge

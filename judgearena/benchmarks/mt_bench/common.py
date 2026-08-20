@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 
 import pandas as pd
 
 from judgearena.utils import safe_text
 
-MT_BENCH_REFERENCE_CATEGORIES: set[str] = {
-    "math",
-    "reasoning",
-    "coding",
-    "arena-hard-200",
-}
 
-
-def is_reference_based_category(category: str | None) -> bool:
-    return (category or "") in MT_BENCH_REFERENCE_CATEGORIES
+def is_reference_based_category(
+    category: str | None, reference_categories: Collection[str]
+) -> bool:
+    return (category or "") in reference_categories
 
 
 def resolve_mt_bench_turn_flags(turns_mode: str) -> tuple[bool, bool]:

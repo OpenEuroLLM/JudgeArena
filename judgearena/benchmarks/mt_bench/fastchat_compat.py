@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -220,6 +221,7 @@ def _select_prompt(
     category: str | None,
     multi_turn: bool,
     *,
+    reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
 ) -> FastChatPairwisePrompt:
     prompt_variants = _FASTCHAT_PROMPT_PRESET_REGISTRY.get(prompt_preset)
@@ -228,7 +230,7 @@ def _select_prompt(
         raise ValueError(
             f"Unsupported MT-Bench prompt preset '{prompt_preset}'. Choose from: {supported}."
         )
-    needs_ref = is_reference_based_category(category)
+    needs_ref = is_reference_based_category(category, reference_categories)
     if needs_ref and multi_turn:
         return prompt_variants["multi_ref"]
     if needs_ref:
@@ -246,6 +248,7 @@ def _build_fastchat_judge_items(
     eval_single: bool,
     eval_multi: bool,
     truncate_input_chars: int | None,
+    reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
@@ -259,6 +262,7 @@ def _build_fastchat_judge_items(
         select_prompt=lambda category, multi_turn: _select_prompt(
             category,
             multi_turn=multi_turn,
+            reference_categories=reference_categories,
             prompt_preset=prompt_preset,
         ),
         strip_thinking_before_judging=strip_thinking_before_judging,
@@ -345,6 +349,7 @@ def judge_mt_bench_pairwise_fastchat(
     swap_mode: str,
     truncate_input_chars: int | None,
     use_tqdm: bool,
+    reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]], int]:
@@ -359,6 +364,7 @@ def judge_mt_bench_pairwise_fastchat(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
+        reference_categories=reference_categories,
         prompt_preset=prompt_preset,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
