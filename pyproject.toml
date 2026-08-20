@@ -58,9 +58,11 @@ exclude = ["slurmpilot_scripts*"]
 
 [dependency-groups]
 dev = [
+    "alpaca-eval>=0.6",
     "pre-commit>=4.5.1",
     "pytest>=8.4.2",
     "ruff==0.15.16",
+    "setuptools>=80.10.2",
     "slurmpilot @ git+https://github.com/geoalgo/slurmpilot.git@main",
 ]
 # `llmcompressor` pins older `compressed-tensors` / `transformers` that clash
@@ -106,3 +108,7 @@ vllm = [
     "transformers>=5.5.1,<6.0.0",
 ]
 llamacpp = ["llama-cpp-python>=0.3.0"]
+alpaca-eval = [
+    "alpaca-eval>=0.6",
+    "setuptools>=80.10.2",
+]

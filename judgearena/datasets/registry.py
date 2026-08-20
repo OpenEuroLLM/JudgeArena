@@ -37,6 +37,7 @@ TaskDatasetAdapter = InstructionDatasetAdapter | BattleDatasetAdapter
 
 def _instruction_datasets() -> dict[str, InstructionDatasetAdapter]:
     from judgearena.datasets import (
+        alpaca_eval,
         arena_hard,
         fluency,
         judgearena_tables,
@@ -45,6 +46,11 @@ def _instruction_datasets() -> dict[str, InstructionDatasetAdapter]:
     )
 
     return {
+        "alpaca_eval": InstructionDatasetAdapter(
+            alpaca_eval.download_task_sources,
+            alpaca_eval.load_task_instructions,
+            alpaca_eval.load_task_model_outputs,
+        ),
         "judgearena_tables": InstructionDatasetAdapter(
             judgearena_tables.download_task_sources,
             judgearena_tables.load_task_instructions,
@@ -82,6 +88,16 @@ def _battle_datasets() -> dict[str, BattleDatasetAdapter]:
             arena_battles.load_task_battles,
         ),
     }
+
+
+def instruction_dataset_names() -> frozenset[str]:
+    """Return instruction-adapter IDs owned by the dataset registry."""
+    return frozenset(_instruction_datasets())
+
+
+def battle_dataset_names() -> frozenset[str]:
+    """Return battle-adapter IDs owned by the dataset registry."""
+    return frozenset(_battle_datasets())
 
 
 def resolve_dataset_adapter(name: str) -> InstructionDatasetAdapter:
