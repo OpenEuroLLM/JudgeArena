@@ -13,11 +13,12 @@ from judgearena.tasks.schema.baselines import (
 )
 from judgearena.tasks.schema.dataset import DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol
+from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.mt_bench import MTBenchProtocol
 from judgearena.tasks.schema.pairwise import PairwiseProtocol
 
 ProtocolSpec = Annotated[
-    PairwiseProtocol | MTBenchProtocol | EloProtocol,
+    PairwiseProtocol | MTBenchProtocol | EloProtocol | MetaEvalProtocol,
     Field(discriminator="runner"),
 ]
 
@@ -77,7 +78,9 @@ class TaskSpec(StrictFrozenModel):
         if len(set(self.tags)) != len(self.tags):
             raise ValueError("tags must not contain duplicates")
         source_names = set(self.dataset.sources)
-        baseline = self.protocol.baseline
+        # Meta-eval judges completions that already exist in the arena, so its
+        # protocol declares no baseline at all.
+        baseline = getattr(self.protocol, "baseline", None)
         if (
             isinstance(baseline, OfficialOutputsBaseline)
             and baseline.source not in source_names

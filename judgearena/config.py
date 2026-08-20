@@ -19,7 +19,7 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, MetaEvalProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -346,6 +346,41 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class MetaEvalArgs(BaseModel):
+    """Experiment settings for tasks using the meta-evaluation protocol."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    arena: str | None = None
+    """Arena supplying the human-labeled battles. Derived from the task
+    definition; an explicit value must match it."""
+
+    top_models: int = Field(default=20, gt=0)
+    """Keep the N models with the most battles, then judge only battles fought
+    between two of them."""
+
+    battles_per_model: int = Field(default=50, gt=0)
+    """Battles sampled per selected model. A battle involving two selected
+    models can be drawn for either of them."""
+
+    n_bootstraps: int = Field(default=20, gt=0)
+    """Bootstrap resamples used for agreement and ranking standard errors."""
+
+    include_human_ties: bool = False
+    """If set, ranking language splits keep human-tie battles. Agreement
+    always reports both the full set and the no-tie subset."""
+
+    elo_gap_battles: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50])
+    """Annotation budgets at which to measure held-out Elo error."""
+
+    elo_gap_seeds: int = Field(default=10, gt=0)
+    """Repeats of the held-out Elo-gap sampling at each budget."""
+
+    languages: list[str] | None = None
+    """Restrict battles to these language codes (e.g. ``["en", "fr"]``).
+    Defaults to all languages of the task."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -399,6 +434,9 @@ class RunConfig(BaseSettings):
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
 
+    meta_eval: MetaEvalArgs | None = None
+    """Runtime settings used only by tasks with a meta-evaluation protocol."""
+
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
 
@@ -447,7 +485,9 @@ class RunConfig(BaseSettings):
         ):
             self.judge.top_logprobs = task_judge.default_top_logprobs
 
-        baseline = protocol.baseline
+        # Meta-eval judges completions that already exist in the arena, so its
+        # protocol declares no baseline.
+        baseline = getattr(protocol, "baseline", None)
         if (
             self.model.baseline is not None
             and getattr(baseline, "allow_runtime_override", True) is False
@@ -456,6 +496,30 @@ class RunConfig(BaseSettings):
                 f"model.baseline cannot override the baseline defined by "
                 f"task {self.task!r}."
             )
+
+        if isinstance(protocol, MetaEvalProtocol):
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for ELO tasks.")
+            if self.model.name is not None or self.model.baseline is not None:
+                raise ValueError(
+                    "meta-eval tasks judge arena completions; model.name and "
+                    "model.baseline are not used."
+                )
+            if self.meta_eval is None:
+                self.meta_eval = MetaEvalArgs()
+            if (
+                self.meta_eval.arena is not None
+                and self.meta_eval.arena != protocol.arena
+            ):
+                raise ValueError(
+                    f"meta_eval.arena={self.meta_eval.arena!r} does not match task "
+                    f"{self.task!r} ({protocol.arena!r})."
+                )
+            self.meta_eval.arena = protocol.arena
+            return self
+
+        if self.meta_eval is not None:
+            raise ValueError("meta_eval config is only valid for meta-eval tasks.")
 
         is_elo = isinstance(protocol, EloProtocol)
         if is_elo:

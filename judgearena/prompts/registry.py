@@ -22,6 +22,9 @@ FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
 ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
 ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET = "arena-hard-creative"
 ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
+META_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-pair-score"
+META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET = "meta-eval-alpaca-eval-json"
+META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-alpaca-eval-pair-score"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -132,6 +135,24 @@ PRESETS: dict[str, JudgePromptPreset] = {
         parser=JUDGE_PARSERS["alpaca-eval-token"],
         system_file="alpaca-eval-system-prompt.txt",
         user_file="alpaca-eval-prompt.txt",
+    ),
+    META_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
+        name=META_EVAL_PAIR_SCORE_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["meta-eval-score"],
+        system_file="system-prompt.txt",
+        user_file="prompt.txt",
+    ),
+    META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET: JudgePromptPreset(
+        name=META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["alpaca-eval-json"],
+        system_file="meta-eval-alpaca-eval-system-prompt.txt",
+        user_file="meta-eval-alpaca-eval-json-prompt.txt",
+    ),
+    META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
+        name=META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["meta-eval-score"],
+        system_file="meta-eval-alpaca-eval-system-prompt.txt",
+        user_file="meta-eval-alpaca-eval-pair-score-prompt.txt",
     ),
 }
 

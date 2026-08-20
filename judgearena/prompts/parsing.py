@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import json
 import re
 
 import numpy as np
@@ -42,6 +43,8 @@ class JudgeParser(abc.ABC):
 ARENA_HARD_VERDICT_PREFERENCES: dict[str, float] = {
     "A>>B": 0.0,
     "A>B": 0.25,
+    "B<<A": 0.0,
+    "B<A": 0.25,
     "A=B": 0.5,
     "B>A": 0.75,
     "B>>A": 1.0,
@@ -183,6 +186,59 @@ class PairScore(JudgeParser):
             return float(m.group(group_index).strip(" "))
 
 
+class MetaEvalPairScore(PairScore):
+    """PairScore parser using the temperature from the meta-eval methodology."""
+
+    name = "meta-eval-score"
+
+    def __init__(self) -> None:
+        super().__init__(temperature=0.5)
+
+
+class AlpacaEvalJSON(JudgeParser):
+    """Parse the ordered-model JSON emitted by the meta-eval Alpaca prompt."""
+
+    name = "alpaca-eval-json"
+
+    def __call__(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> float | None:
+        text = strip_thinking_tags(judge_completion)
+        fenced = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1)
+        else:
+            obj_match = re.search(
+                r'\{[^{}]*"ordered_models"[^{}]*\[[^\[\]]*\][^{}]*\}',
+                text,
+                re.DOTALL,
+            )
+            if obj_match:
+                text = obj_match.group(0)
+        try:
+            data = json.loads(text)
+            model_a = next(
+                (
+                    entry
+                    for entry in data.get("ordered_models", [])
+                    if entry.get("model") == "m"
+                ),
+                None,
+            )
+            if model_a is None:
+                return None
+            if model_a["rank"] == 1:
+                return 0.0
+            if model_a["rank"] == 2:
+                return 1.0
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+        return None
+
+
 def parser_name(parse) -> str:
     """Short identifier of a parser for run metadata.
 
@@ -196,7 +252,9 @@ def parser_name(parse) -> str:
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, JudgeParser] = {
     "score": PairScore(),
+    "meta-eval-score": MetaEvalPairScore(),
     "arena-hard-verdict": ArenaHardVerdict(),
+    "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
 }
 

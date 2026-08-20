@@ -240,7 +240,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; tasks using the ELO protocol estimate a single model's rating against human-annotated arena opponents.
+Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; tasks using the ELO protocol estimate a single model's rating against human-annotated arena opponents; meta-eval tasks score a judge against those human votes.
 
 ### Generate + judge (pairwise)
 
@@ -283,6 +283,59 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 | `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
 | `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
 | `elo-comparia`      | Battles sampled from the ComparIA arena                            |
+
+### Judge meta-evaluation
+
+| Task                      | Description                                              |
+|---------------------------|----------------------------------------------------------|
+| `meta-eval-lmarena-140k`  | Score a judge against LMSYS Chatbot Arena 140k votes     |
+| `meta-eval-comparia`      | Score a judge against ComparIA human votes               |
+
+Language variants follow the ELO pattern (`meta-eval-lmarena-140k-uk`, `meta-eval-comparia-fr`).
+
+## Judge meta-evaluation
+
+Meta-evaluation scores a judge against **human-labeled arena battles**. It does not generate completions and does not rate a model. Use `elo-*` for that.
+
+The task keeps the most-battled models, samples battles among them, asks the judge to label the stored A/B order, and reports accuracy, Cohen's kappa, Spearman correlation of Bradley-Terry ratings, Elo MAE (with bootstrap SE), and held-out Elo gap vs annotation budget against the human vote. PairScore uses temperature `0.5` here; generate+judge keeps `0.3`.
+
+Prompt presets are selected with `--judge.prompt_preset` (the task default is `meta-eval-pair-score`):
+
+| `--judge.prompt_preset` | Output parser |
+|---|---|
+| `meta-eval-pair-score` | PairScore at the meta-eval temperature |
+| `arena-hard` | Arena-Hard verdict `[[A>>B]]` … `[[B>>A]]` |
+| `meta-eval-alpaca-eval-json` | AlpacaEval `ordered_models` JSON |
+| `meta-eval-alpaca-eval-pair-score` | PairScore from the AlpacaEval-style prompt |
+
+```bash
+judgearena \
+  --task meta-eval-lmarena-140k \
+  --judge.model OpenRouter/deepseek/deepseek-v3.2 \
+  --meta_eval.languages '["en", "es"]' \
+  --meta_eval.top_models 20 \
+  --meta_eval.battles_per_model 50 \
+  --meta_eval.n_bootstraps 20
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--task` | *(required)* | `meta-eval-lmarena-140k`, `meta-eval-comparia`, or a language variant |
+| `--judge.model` | *(required)* | Judge under evaluation |
+| `--judge.prompt_preset` | `meta-eval-pair-score` | Judge prompt and matching verdict parser |
+| `--meta_eval.top_models` | `20` | Keep the N models with the most battles |
+| `--meta_eval.battles_per_model` | `50` | Battles sampled per selected model |
+| `--meta_eval.languages` | all | Restrict to language codes, e.g. `'["en", "es"]'` |
+| `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement and ranking standard errors |
+| `--meta_eval.include_human_ties` | off | Keep human-tie battles in the ranking language splits |
+| `--meta_eval.elo_gap_battles` | `[10, 20, 30, 40, 50]` | Annotation budgets for held-out Elo MAE |
+| `--meta_eval.elo_gap_seeds` | `10` | Repeats of the held-out Elo-gap sampling at each budget |
+| `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
+| `--model.name` | unset | Not used: both completions already exist in the arena |
+
+Results go under `[result_folder]/<task>-<prompt_preset>-<judge>-<swap_mode>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, English vs multilingual ranking splits, and held-out Elo MAE vs annotation budget (`elo_gap_all` and `elo_gap_exclude_ties`).
+
+With `--judge.swap_mode both`, overall accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). Ranking, language splits, and Elo-gap analyses keep one forward-order row per sampled battle. `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
 
 ## 📈 Estimating ELO Ratings
 

@@ -498,13 +498,13 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     assert 0.0 <= result["winrate"] <= 1.0
 
 
-def test_extract_instruction_text_tolerates_moderated_turns():
-    from judgearena.arenas_utils import _extract_instruction_text
+def test_extract_turn_text_tolerates_moderated_turns():
+    from judgearena.arenas_utils import extract_turn_text
 
-    assert _extract_instruction_text({"content": None}) == ""
-    assert _extract_instruction_text({"content": "plain"}) == "plain"
+    assert extract_turn_text({"content": None}) == ""
+    assert extract_turn_text({"content": "plain"}) == "plain"
     assert (
-        _extract_instruction_text(
+        extract_turn_text(
             {"content": [{"type": "text", "text": None}, {"type": "image"}, None]}
         )
         == ""

@@ -17,11 +17,13 @@ import yaml
 from pydantic import ValidationError
 
 from judgearena.benchmarks.elo.scoring import ELO_SCORERS
+from judgearena.benchmarks.meta_eval.scoring import META_EVAL_SCORERS
 from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
     EloProtocol,
+    MetaEvalProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
@@ -273,6 +275,7 @@ class AdapterCatalog:
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
     pairwise_scorers: frozenset[str] = frozenset(PAIRWISE_SCORERS)
     elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
+    meta_eval_scorers: frozenset[str] = frozenset(META_EVAL_SCORERS)
 
 
 def load_tasks(
@@ -318,10 +321,18 @@ def _discover_tasks(
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
     is_elo = isinstance(spec.protocol, EloProtocol)
-    scorer_names = adapters.elo_scorers if is_elo else adapters.pairwise_scorers
+    is_meta_eval = isinstance(spec.protocol, MetaEvalProtocol)
     dataset_names = (
-        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+        adapters.battle_datasets
+        if is_elo or is_meta_eval
+        else adapters.instruction_datasets
     )
+    if is_elo:
+        scorer_names = adapters.elo_scorers
+    elif is_meta_eval:
+        scorer_names = adapters.meta_eval_scorers
+    else:
+        scorer_names = adapters.pairwise_scorers
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),

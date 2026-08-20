@@ -15,6 +15,7 @@ from judgearena.tasks.schema.baselines import (
 )
 from judgearena.tasks.schema.dataset import DatasetFields, DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol, EloScoringSpec
+from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.mt_bench import (
     MTBenchJudgeSpec,
     MTBenchProtocol,
@@ -58,6 +59,7 @@ __all__ = [
     "HuggingFaceSpaceSource",
     "MTBenchJudgeSpec",
     "MTBenchProtocol",
+    "MetaEvalProtocol",
     "MultiTurnGeneration",
     "NoBaseline",
     "OfficialOutputsBaseline",
