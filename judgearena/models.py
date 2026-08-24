@@ -702,6 +702,12 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
         openai_kwargs = dict(engine_kwargs)
+        # ChatOpenAI aliases its max_tokens field to max_completion_tokens,
+        # which breaks OpenRouter's require_parameters routing: providers
+        # advertise the OpenRouter-native max_tokens parameter instead.
+        extra_body = dict(openai_kwargs.pop("extra_body", {}) or {})
+        extra_body["max_tokens"] = openai_kwargs.pop("max_tokens")
+        openai_kwargs["extra_body"] = extra_body
         # OpenAI-compatible chat backends expose temperature/top_p/seed directly
         # but not top_k, which has to be tunneled through model_kwargs.
         _route_sampling_params(
