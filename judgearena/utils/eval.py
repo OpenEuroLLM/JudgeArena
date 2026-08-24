@@ -125,8 +125,8 @@ class BattleReport(Report):
         if s.num_missing > 0:
             parsed = s.num_battles - s.num_missing
             print(
-                f"   Total Battles: {s.num_battles}  ⚠️  {s.num_missing} unparseable "
-                f"(parsed: {parsed}/{s.num_battles})"
+                f"   Total Battles: {s.num_battles}  ⚠️  {s.num_missing} excluded "
+                f"from scoring (used: {parsed}/{s.num_battles})"
             )
         elif self.swap_mode == "both":
             print(
