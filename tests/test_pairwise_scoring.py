@@ -11,6 +11,7 @@ from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     _official_annotations,
     _summarize,
 )
+from judgearena.benchmarks.pairwise.scoring.arena_hard import _style_features
 
 
 def _battles(prefs: list, **overrides) -> pd.DataFrame:
@@ -115,17 +116,35 @@ def test_arena_hard_v2_reports_official_scores_per_category():
     result = PAIRWISE_SCORERS["arena_hard_score"].score(battles)
     per_category = result.grouped_results["category"]
 
-    assert per_category["hard_prompt"]["winrate"] == 1.0
+    assert per_category["hard_prompt"]["winrate"] == pytest.approx(1.0)
+    assert per_category["hard_prompt"]["raw_winrate"] == 1.0
     assert per_category["hard_prompt"]["baseline_model"] == "baseline-model"
-    assert per_category["hard_prompt"]["score_ci_low"] == 1.0
-    assert per_category["hard_prompt"]["score_ci_high"] == 1.0
+    assert per_category["hard_prompt"]["score_ci_low"] == pytest.approx(1.0)
+    assert per_category["hard_prompt"]["score_ci_high"] == pytest.approx(1.0)
+    assert per_category["hard_prompt"]["scoring_method"] == "style_controlled_bt"
     assert per_category["creative_writing"]["winrate"] == 0.0
     assert per_category["creative_writing"]["score_ci_low"] == 0.0
     assert per_category["creative_writing"]["score_ci_high"] == 0.0
+    assert per_category["creative_writing"]["scoring_method"] == "weighted_mean"
     assert result.scoring_details["official_scope"] == "per_category"
     assert result.scoring_details["aggregate_score_is_official"] is False
     assert "score_ci_low" not in result.metrics
     assert "score_ci_high" not in result.metrics
+
+
+def test_arena_hard_style_features_match_upstream_extraction():
+    completion = """# Header
+1. ordered
+- unordered
+**bold** and __also bold__
+```
+# ignored
+- ignored
+**ignored**
+```
+"""
+
+    assert _style_features(completion).tolist() == [31.0, 1.0, 2.0, 2.0]
 
 
 def test_alpaca_eval_summary_is_mean_preference_over_parsed_battles():
