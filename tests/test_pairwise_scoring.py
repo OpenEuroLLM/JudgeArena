@@ -54,11 +54,11 @@ def test_arena_hard_score_weights_decisive_battles_three_to_one():
     )
     summary = result.summary
 
-    assert summary.num_wins == 4
-    assert summary.num_losses == 4
+    assert summary.num_wins == 2
+    assert summary.num_losses == 2
     assert summary.num_ties == 1
     assert summary.num_missing == 1
-    assert summary.num_battles == 10
+    assert summary.num_battles == 6
     assert summary.winrate == pytest.approx((4 + 0.5) / 9)
 
 
@@ -96,6 +96,7 @@ def test_arena_hard_score_drops_both_orders_when_one_is_unparseable():
     assert summary.num_wins == 1
     assert summary.num_losses == 1
     assert summary.num_ties == 0
+    assert summary.num_battles == 4
     assert summary.num_missing == 2
     assert summary.winrate == pytest.approx(0.5)
 

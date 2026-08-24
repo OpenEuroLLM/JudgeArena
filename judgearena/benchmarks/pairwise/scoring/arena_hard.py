@@ -105,13 +105,14 @@ def _official_battles(battles: pd.DataFrame) -> tuple[pd.DataFrame, int]:
 
 def _summarize_battles(battles: pd.DataFrame) -> PrefSummary:
     valid, num_missing = _official_battles(battles)
-    outcomes = _outcomes(valid["pref"])
+    prefs = valid["pref"].astype("float64")
+    outcomes = _outcomes(prefs)
     return PrefSummary(
-        num_battles=len(outcomes) + num_missing,
+        num_battles=len(battles),
         winrate=float(outcomes.mean()) if len(outcomes) else float("nan"),
-        num_wins=int((outcomes == 1.0).sum()),
-        num_losses=int((outcomes == 0.0).sum()),
-        num_ties=int((outcomes == 0.5).sum()),
+        num_wins=int((prefs < 0.5).sum()),
+        num_losses=int((prefs > 0.5).sum()),
+        num_ties=int((prefs == 0.5).sum()),
         num_missing=num_missing,
     )
 
