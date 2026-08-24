@@ -1,6 +1,6 @@
 extends: _base.yaml
 task: arena-hard-v2.0-official
-description: Arena-Hard v2.0 with the official judging protocol (verdict labels, per-category prompts, both orders, weighted score).
+description: Arena-Hard v2.0 with the official judging and scoring protocol (style-controlled hard prompts and weighted creative-writing scores).
 
 dataset:
   sources:
