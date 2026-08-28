@@ -245,6 +245,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     prompt_groups = _build_judge_batches(
         cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
+    judge_prompt_variants = []
+    for group_prompt, _ in prompt_groups:
+        prompt_metadata = group_prompt.metadata()
+        if prompt_metadata not in judge_prompt_variants:
+            judge_prompt_variants.append(prompt_metadata)
 
     # The baseline fills the first judged slot unless the deterministic mask
     # switches the pair. Preferences are re-oriented to the canonical
@@ -365,6 +370,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
+            "judge_prompts": judge_prompt_variants,
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             **({"scoring": scoring_details} if scoring_details else {}),
@@ -380,9 +386,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     report.render()
     report.save(res_folder / f"results-{name}.json")
 
-    eval_instructions = instructions.head(n_instructions).tolist()
-    eval_completions_A = completions_A.head(n_instructions).tolist()
-    eval_completions_B = completions_B.head(n_instructions).tolist()
+    eval_instructions = instructions.loc[eval_instruction_index].tolist()
+    eval_completions_A = completions_A.loc[eval_instruction_index].tolist()
+    eval_completions_B = completions_B.loc[eval_instruction_index].tolist()
 
     write_run_metadata_safely(
         output_dir=res_folder,
@@ -398,6 +404,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         },
         judge_system_prompt=resolved_prompt.system_prompt,
         judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        judge_prompt_variants=judge_prompt_variants,
         started_at_utc=run_started_at,
     )
 

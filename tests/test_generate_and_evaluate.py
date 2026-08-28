@@ -364,6 +364,16 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
         "load_pairwise_task_data",
         lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
     )
+    captured_metadata = {}
+    write_metadata = generate_and_evaluate.write_run_metadata_safely
+
+    def capture_metadata(**kwargs):
+        captured_metadata.update(kwargs)
+        return write_metadata(**kwargs)
+
+    monkeypatch.setattr(
+        generate_and_evaluate, "write_run_metadata_safely", capture_metadata
+    )
 
     prefs = run_pairwise(
         _cfg(
@@ -392,6 +402,28 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
     assert results["per_category"]["hard_prompt"]["num_ties"] == 4
     assert results["per_category"]["creative_writing"]["num_ties"] == 2
     assert results["metadata"]["scoring"]["official_scope"] == "per_category"
+    prompt_metadata = {
+        prompt["judge_prompt_preset"]: prompt
+        for prompt in results["metadata"]["judge_prompts"]
+    }
+    assert set(prompt_metadata) == {"arena-hard", "arena-hard-creative"}
+    assert all(
+        prompt["judge_prompt_system_sha256"] and prompt["judge_prompt_user_sha256"]
+        for prompt in prompt_metadata.values()
+    )
+
+    payloads = captured_metadata["input_payloads"]
+    assert payloads["instruction_index"] == [0, 2, 1]
+    assert payloads["instructions"] == ["q0", "q2", "q1"]
+    assert [
+        prompt["judge_prompt_preset"]
+        for prompt in captured_metadata["judge_prompt_variants"]
+    ] == ["arena-hard", "arena-hard-creative"]
+
+    run_metadata = json.loads(next(tmp_path.glob("*/run-metadata.v1.json")).read_text())
+    assert {
+        prompt["judge_prompt_preset"] for prompt in run_metadata["judge_prompts"]
+    } == {"arena-hard", "arena-hard-creative"}
 
 
 def test_run_pairwise_only_loads_category_baseline_for_assigned_rows(
