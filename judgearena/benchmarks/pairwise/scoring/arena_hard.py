@@ -285,7 +285,10 @@ def score(battles: pd.DataFrame) -> ScoringResult:
             {
                 "aggregate_score_is_official": False,
                 "category_methods": {
-                    "hard_prompt": "style_controlled_bt",
+                    **{
+                        category: "style_controlled_bt"
+                        for category in sorted(STYLE_CONTROLLED_CATEGORIES)
+                    },
                     "creative_writing": "weighted_mean",
                 },
                 "style_control_features": list(STYLE_FEATURES),

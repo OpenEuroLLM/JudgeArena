@@ -41,18 +41,24 @@ def _summarize(battles: pd.DataFrame) -> PrefSummary:
 
 
 def _official_annotations(battles: pd.DataFrame) -> pd.DataFrame:
-    """Map canonical battles onto AlpacaEval's annotation schema."""
-    return pd.DataFrame(
+    """Map parsed canonical battles onto AlpacaEval's annotation schema."""
+    annotations = pd.DataFrame(
         {
             "index": battles["instruction_index"].astype(int),
             "generator_1": battles["baseline"],
             "generator_2": battles["model"],
             "output_1": battles["completion_baseline"],
             "output_2": battles["completion_model"],
-            "preference": (2 - battles["pref"]).fillna(0.0),
+            # AlpacaEval reserves 0 for its legacy draw encoding. Keep missing
+            # parses as NaN rather than turning them into ties.
+            "preference": 2 - battles["pref"],
             "annotator": "judgearena",
         }
     )
+    # AlpacaEval 0.6.6 drops NaN labels from its raw metric and GLM training,
+    # but still predicts the LC outcome for every input row. Remove missing
+    # rows here so they cannot affect either metric.
+    return annotations.dropna(subset=["preference"]).reset_index(drop=True)
 
 
 def score(battles: pd.DataFrame) -> ScoringResult:

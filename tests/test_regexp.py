@@ -125,13 +125,18 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
         ("My final verdict is tie: [[A=B]]", 0.5),
         ("Assistant A is significantly better: [[A>>B]]", 0.0),
         ("[[A>B]]", 0.25),
+        ("[[B<A]]", 0.25),
+        ("[[B<<A]]", 0.0),
         ("some explanation...\n[[B>A]]", 0.75),
         ("[[B>>A]]", 1.0),
+        ("[[B=A]]", 0.5),  # symmetric spelling accepted by upstream
+        ("[[A<B]]", 0.75),
+        ("[[A<<B]]", 1.0),
+        ("[A<<B]", 1.0),  # v2 single-bracket fallback
         ("[[A=B]] ... repeated [[A=B]]", 0.5),  # duplicates of one label are fine
         ("[[A>B]] but wait [[B>A]]", 0.75),  # last label wins, as upstream
         ("[[a>b]]", 0.25),  # matching is case-insensitive, as upstream
         ("no verdict here", None),
-        ("[[A<B]]", None),  # regex-matched but not a canonical label
     ],
 )
 def test_parse_arena_hard_verdict(judgment, expected):
