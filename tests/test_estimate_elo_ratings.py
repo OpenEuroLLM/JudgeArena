@@ -98,6 +98,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     languages = kwargs.pop("languages", None)
     swap_mode = kwargs.pop("swap_mode", "fixed")
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
+    prompt_preset = kwargs.pop("prompt_preset", None)
     calibrate_temperature = kwargs.pop("calibrate_temperature", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
@@ -108,6 +109,8 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     }
     if battle_thinking_token_budget is not None:
         judge["battle_thinking_token_budget"] = battle_thinking_token_budget
+    if prompt_preset is not None:
+        judge["prompt_preset"] = prompt_preset
     return RunConfig(
         task=task,
         model={"name": model},
@@ -526,3 +529,38 @@ def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
 
     # The default preset's registered parser instance, not a fresh fallback.
     assert captured["parse"] is JUDGE_PARSERS["score"]
+
+
+def test_run_elo_keeps_non_pairscore_soft_preferences(tmp_path, monkeypatch):
+    def fake_judge_and_parse_prefs(**kwargs):
+        annotations = [
+            JudgeAnnotation(
+                instruction=instruction,
+                completion_A=completion_a,
+                completion_B=completion_b,
+                judge_completion="M",
+                judge_input="prompt",
+            )
+            for instruction, completion_a, completion_b in zip(
+                kwargs["instructions"],
+                kwargs["completions_A"],
+                kwargs["completions_B"],
+                strict=True,
+            )
+        ]
+        return annotations, None, pd.Series([0.75] * len(annotations))
+
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "judge_and_parse_prefs",
+        fake_judge_and_parse_prefs,
+    )
+    result = run_elo_with_task(
+        _default_args(
+            result_folder=str(tmp_path),
+            prompt_preset="alpaca-eval",
+        )
+    )
+
+    assert result["elo_n_bootstraps"] > 0
+    assert result["model_name"] in result["mean_ratings"]
