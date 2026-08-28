@@ -205,3 +205,12 @@ def test_arena_hard_preset_resolves_verdict_parser():
     )
     assert "[[A>>B]]" in resolved.system_prompt
     assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
+    assert not resolved.system_prompt.endswith("\n")
+    assert not resolved.user_prompt_template.endswith("\n")
+
+    creative = resolve_judge_prompt(preset="arena-hard-creative")
+    assert creative.system_prompt.startswith(
+        "Please act as an impartial judge and evaluate the quality"
+    )
+    assert not creative.system_prompt.endswith("\n")
+    assert not creative.user_prompt_template.endswith("\n")
