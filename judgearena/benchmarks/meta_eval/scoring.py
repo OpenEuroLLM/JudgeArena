@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from judgearena.benchmarks.elo.rating import fit_bradley_terry
+from judgearena.benchmarks.elo.rating import fit_bradley_terry, winner_to_pref
 from judgearena.benchmarks.meta_eval.agreement import (
     agreement_view,
     compute_agreement_metrics,
@@ -187,6 +187,7 @@ def compute_elo_gap_summary(
     n_seeds: int,
     seed: int,
     exclude_ties: bool,
+    soft: bool = False,
 ) -> pd.DataFrame:
     """Measure ELO error by annotation budget.
 
@@ -220,11 +221,25 @@ def compute_elo_gap_summary(
                     sample = sample[sample["winner_llm"] != "tie"]
                 if sample.empty:
                     continue
-                model_llm = sample[["model_a", "model_b", "winner_llm"]].rename(
-                    columns={"winner_llm": "winner"}
-                )
-                hybrid = pd.concat([other_human, model_llm], ignore_index=True)
-                hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
+                if soft:
+                    other_human["pref"] = other_human["winner"].map(winner_to_pref)
+                    model_llm = sample[["model_a", "model_b", "pref_llm"]].rename(
+                        columns={"pref_llm": "pref"}
+                    )
+                    hybrid = pd.concat(
+                        [
+                            other_human[["model_a", "model_b", "pref"]],
+                            model_llm,
+                        ],
+                        ignore_index=True,
+                    )
+                    hybrid_ratings = fit_bradley_terry(hybrid, pref_col="pref")
+                else:
+                    model_llm = sample[["model_a", "model_b", "winner_llm"]].rename(
+                        columns={"winner_llm": "winner"}
+                    )
+                    hybrid = pd.concat([other_human, model_llm], ignore_index=True)
+                    hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
                 if model in hybrid_ratings and model in human_ratings:
                     gaps.append(abs(hybrid_ratings[model] - human_ratings[model]))
             if gaps:
@@ -294,11 +309,18 @@ def score_meta_eval(
         seed=seed + 1000,
         exclude_ties=True,
     )
+    elo_gap_soft = compute_elo_gap_summary(
+        **elo_gap_kwargs,
+        seed=seed,
+        exclude_ties=False,
+        soft=True,
+    )
     return {
         "agreement": agreement,
         "language_summary": language_summary,
         "elo_gap_all": elo_gap_all.to_dict(orient="records"),
         "elo_gap_exclude_ties": elo_gap_exclude_ties.to_dict(orient="records"),
+        "elo_gap_soft": elo_gap_soft.to_dict(orient="records"),
     }
 
 

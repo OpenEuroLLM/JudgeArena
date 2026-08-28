@@ -8,7 +8,6 @@ import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.evaluate import annotate_battles
-from judgearena.prompts.parsing import PairScore
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -102,13 +101,6 @@ def _judge_pass(
         if preference is None or pd.isna(preference):
             preference = 0.5
         winner = preference_to_winner(preference)
-        # Erlis's soft-ranking metric uses the PairScore probability, while
-        # verdict formats contribute categorical 0/0.5/1 preferences.
-        scoring_preference = (
-            float(preference)
-            if isinstance(parser, PairScore)
-            else {"model_a": 0.0, "tie": 0.5, "model_b": 1.0}[winner]
-        )
         rows.append(
             {
                 "question_id": battle["question_id"],
@@ -122,7 +114,7 @@ def _judge_pass(
                 "judge_input": serialize_judge_input(annotation.judge_input),
                 "judge_completion": completion,
                 "winner_llm": winner,
-                "pref_llm": scoring_preference,
+                "pref_llm": float(preference),
             }
         )
     return pd.DataFrame(rows)

@@ -75,6 +75,8 @@ class MetaEvalReport(Report):
     """Held-out Elo MAE vs annotation budget, keeping LLM-predicted ties."""
     elo_gap_exclude_ties: list[dict[str, float | int | str | bool]]
     """Held-out Elo MAE vs annotation budget, dropping LLM-predicted ties after sampling."""
+    elo_gap_soft: list[dict[str, float | int | str | bool]]
+    """Held-out Elo MAE vs annotation budget using continuous judge preferences."""
 
     def render(self) -> None:
         print(f"\n=== Meta-eval: {self.task} ===")
@@ -98,9 +100,13 @@ class MetaEvalReport(Report):
             f"κ {no_tie['kappa_formatted']}"
         )
         for split, metrics in self.language_summary.items():
+            print(f"  {split} (n={metrics['n']}): κ {metrics['kappa']}")
             print(
-                f"  {split} (n={metrics['n']}): κ {metrics['kappa']}  "
-                f"ρ {metrics['spearman']}  MAE {metrics['mae_elo']}"
+                f"    Hard ranking: ρ {metrics['spearman']}  MAE {metrics['mae_elo']}"
+            )
+            print(
+                f"    Soft ranking: ρ {metrics['spearman_soft']}  "
+                f"MAE {metrics['mae_soft_elo']}"
             )
 
 
@@ -182,6 +188,7 @@ def run_meta_eval(cfg: RunConfig, task: ResolvedTaskSpec | None = None) -> dict:
         language_summary=scoring["language_summary"],
         elo_gap_all=scoring["elo_gap_all"],
         elo_gap_exclude_ties=scoring["elo_gap_exclude_ties"],
+        elo_gap_soft=scoring["elo_gap_soft"],
     )
     results = report.to_dict()
     report.render()

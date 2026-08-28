@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from types import SimpleNamespace
 
 import pandas as pd
@@ -189,15 +190,16 @@ def test_prompt_presets_select_their_parsers():
         assert parser_name(resolved.parser) == expected_parser
 
 
-def test_arena_verdicts_are_categorical_for_meta_eval_ranking(monkeypatch):
-    def fake_arena_annotations(**kwargs):
+def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
+    def fake_alpaca_annotations(**kwargs):
         return [
             JudgeAnnotation(
                 instruction=instruction,
                 completion_A=completion_a,
                 completion_B=completion_b,
-                judge_completion="[[A>B]]",
+                judge_completion="M",
                 judge_input="prompt",
+                judge_top_logprobs={"m": math.log(0.25), "M": math.log(0.75)},
             )
             for instruction, completion_a, completion_b in zip(
                 kwargs["instructions"],
@@ -207,17 +209,17 @@ def test_arena_verdicts_are_categorical_for_meta_eval_ranking(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(annotate_module, "annotate_battles", fake_arena_annotations)
-    cfg = _cfg("unused", judge={"model": "Dummy/j", "prompt_preset": "arena-hard"})
+    monkeypatch.setattr(annotate_module, "annotate_battles", fake_alpaca_annotations)
+    cfg = _cfg("unused", judge={"model": "Dummy/j", "prompt_preset": "alpaca-eval"})
     annotations = annotate_module.annotate_sample(
         _battles().head(1),
         cfg,
         judge_chat_model=object(),
-        resolved_prompt=resolve_judge_prompt(preset="arena-hard"),
+        resolved_prompt=resolve_judge_prompt(preset="alpaca-eval"),
     )
 
-    assert annotations.loc[0, "winner_llm"] == "model_a"
-    assert annotations.loc[0, "pref_llm"] == 0.0
+    assert annotations.loc[0, "winner_llm"] == "model_b"
+    assert annotations.loc[0, "pref_llm"] == pytest.approx(0.75)
 
 
 def test_agreement_metrics_on_fixture():
@@ -272,6 +274,7 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     assert set(results["language_summary"]) == {"English", "Multilingual"}
     assert results["elo_gap_all"][0]["num_battles"] == 2
     assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
+    assert results["elo_gap_soft"][0]["num_battles"] == 2
     summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
     assert set(summary["split"]) == {"English", "Multilingual"}
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
@@ -341,6 +344,9 @@ def test_elo_gap_summary_runs():
     top, df_top = select_top_models(battles, top_models=3)
     sample = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
     sample["winner_llm"] = sample["winner"]
+    sample["pref_llm"] = sample["winner"].map(
+        {"model_a": 0.1, "model_b": 0.9, "tie": 0.5, "tie (bothbad)": 0.5}
+    )
     summary = compute_elo_gap_summary(
         df_top,
         sample,
@@ -351,3 +357,27 @@ def test_elo_gap_summary_runs():
         exclude_ties=False,
     )
     assert not summary.empty
+    soft = compute_elo_gap_summary(
+        df_top,
+        sample,
+        top,
+        n_battles_list=[2],
+        n_seeds=2,
+        seed=0,
+        exclude_ties=False,
+        soft=True,
+    )
+    assert not soft.empty
+    neutral = sample.copy()
+    neutral["pref_llm"] = 0.5
+    neutral_soft = compute_elo_gap_summary(
+        df_top,
+        neutral,
+        top,
+        n_battles_list=[2],
+        n_seeds=2,
+        seed=0,
+        exclude_ties=False,
+        soft=True,
+    )
+    assert soft.loc[0, "mean"] != pytest.approx(neutral_soft.loc[0, "mean"])
