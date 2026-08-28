@@ -66,6 +66,7 @@ def generate_contexts(
                     )
                 ],
                 use_tqdm=False,
+                stage="generation",
             )
 
             if len(output[0]) < 10:
