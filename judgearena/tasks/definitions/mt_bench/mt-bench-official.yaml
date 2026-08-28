@@ -1,9 +1,9 @@
 extends: _base.yaml
 task: mt-bench-official
 description: >-
-  MT-Bench with the pinned FastChat pairwise defaults: gpt-3.5-turbo
-  baseline answers, both answer orders, and the 2048-token budget used by
-  FastChat's default gpt-4 judge.
+  MT-Bench with the pinned FastChat defaults: 1024-token evaluated answers
+  with seed 0, gpt-3.5-turbo baseline answers, both answer orders, and the
+  2048-token budget used by FastChat's default gpt-4 judge.
 
 dataset:
   sources:
@@ -13,6 +13,9 @@ dataset:
         - data/mt_bench/model_answer/gpt-3.5-turbo.jsonl
 
 protocol:
+  generation:
+    default_max_out_tokens: 1024
+    default_seed: 0
   baseline:
     reference_id: gpt-3.5-turbo
     allow_runtime_override: false

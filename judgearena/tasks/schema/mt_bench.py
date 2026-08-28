@@ -14,6 +14,8 @@ from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec, ScoringSpec
 class MultiTurnGeneration(StrictFrozenModel):
     mode: Literal["multi_turn_chat"]
     category_temperatures: dict[str, float] = Field(default_factory=dict)
+    default_max_out_tokens: int | None = Field(default=None, gt=0)
+    default_seed: int | None = None
 
     @model_validator(mode="after")
     def _validate_temperatures(self) -> MultiTurnGeneration:
