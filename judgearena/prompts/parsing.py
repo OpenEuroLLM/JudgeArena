@@ -6,6 +6,8 @@ import abc
 import math
 import re
 
+import numpy as np
+
 from judgearena.utils import strip_thinking_tags
 
 
@@ -41,8 +43,13 @@ class JudgeParser(abc.ABC):
 ARENA_HARD_VERDICT_PREFERENCES: dict[str, float] = {
     "A>>B": 0.0,
     "A>B": 0.25,
+    "B<<A": 0.0,
+    "B<A": 0.25,
     "A=B": 0.5,
+    "B=A": 0.5,
+    "A<B": 0.75,
     "B>A": 0.75,
+    "A<<B": 1.0,
     "B>>A": 1.0,
 }
 

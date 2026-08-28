@@ -11,6 +11,9 @@ from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     _official_annotations,
     _summarize,
 )
+from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
+    score as score_alpaca_eval,
+)
 from judgearena.benchmarks.pairwise.scoring.arena_hard import _style_features
 
 
@@ -129,6 +132,12 @@ def test_arena_hard_v2_reports_official_scores_per_category():
     assert per_category["creative_writing"]["scoring_method"] == "weighted_mean"
     assert result.scoring_details["official_scope"] == "per_category"
     assert result.scoring_details["aggregate_score_is_official"] is False
+    assert result.scoring_details["category_methods"] == {
+        "coding": "style_controlled_bt",
+        "creative_writing": "weighted_mean",
+        "hard_prompt": "style_controlled_bt",
+        "math": "style_controlled_bt",
+    }
     assert "score_ci_low" not in result.metrics
     assert "score_ci_high" not in result.metrics
 
@@ -159,13 +168,39 @@ def test_alpaca_eval_summary_is_mean_preference_over_parsed_battles():
 def test_alpaca_eval_official_annotations_mapping():
     annotations = _official_annotations(_battles([0.25, None]))
 
-    assert annotations["preference"].tolist() == [1.75, 0.0]
-    assert annotations["index"].tolist() == [0, 1]
+    assert annotations["preference"].tolist() == [1.75]
+    assert annotations["index"].tolist() == [0]
     assert str(annotations["index"].dtype).startswith("int")
     assert annotations["generator_2"].unique().tolist() == ["model-under-test"]
     assert annotations["generator_1"].unique().tolist() == ["baseline-model"]
-    assert annotations["output_2"].tolist() == ["m", "mm"]
-    assert annotations["output_1"].tolist() == ["b", "bbb"]
+    assert annotations["output_2"].tolist() == ["m"]
+    assert annotations["output_1"].tolist() == ["b"]
+
+
+def test_alpaca_eval_scorer_excludes_missing_rows_from_upstream(monkeypatch):
+    metrics = pytest.importorskip("alpaca_eval.metrics")
+    captured = {}
+
+    def fake_get_length_controlled_winrate(annotations, **_kwargs):
+        captured["annotations"] = annotations.copy()
+        return {
+            "length_controlled_winrate": 75.0,
+            "lc_standard_error": 1.0,
+            "win_rate": 75.0,
+        }
+
+    monkeypatch.setattr(
+        metrics,
+        "get_length_controlled_winrate",
+        fake_get_length_controlled_winrate,
+    )
+
+    result = score_alpaca_eval(_battles([0.25, None]))
+
+    assert captured["annotations"]["index"].tolist() == [0]
+    assert captured["annotations"]["preference"].tolist() == [1.75]
+    assert result.summary.num_missing == 1
+    assert result.metrics["lc_winrate"] == 75.0
 
 
 def test_alpaca_eval_lc_winrate_matches_pinned_reference_value():
