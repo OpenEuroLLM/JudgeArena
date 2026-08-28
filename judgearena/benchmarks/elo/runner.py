@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -42,6 +43,41 @@ if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
+
+
+def _judge_cache_identity_hash(
+    *,
+    judge_model: str,
+    resolved_prompt,
+    swap_mode: str,
+    judge_model_kwargs: dict[str, object],
+    strip_thinking_before_judging: bool,
+    truncate_input_chars: int | None,
+    run_seed: int,
+) -> str:
+    """Hash every setting that can change cached judge annotations."""
+    parser = resolved_prompt.parser
+    parser_identity = None
+    if parser is not None:
+        parser_identity = {
+            "type": f"{type(parser).__module__}.{type(parser).__qualname__}",
+            "name": getattr(parser, "name", None),
+            "state": vars(parser),
+        }
+    identity = {
+        "judge_model": judge_model,
+        "prompt_preset": resolved_prompt.preset_name,
+        "system_prompt": resolved_prompt.system_prompt,
+        "user_prompt_template": resolved_prompt.user_prompt_template,
+        "parser": parser_identity,
+        "swap_mode": swap_mode,
+        "judge_model_kwargs": judge_model_kwargs,
+        "strip_thinking_before_judging": strip_thinking_before_judging,
+        "truncate_input_chars": truncate_input_chars,
+        "run_seed": run_seed,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 class EloReport(Report):
@@ -364,12 +400,16 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         )
         return frame
 
-    # Stripping reasoning traces changes the judged text but not the cached
-    # completions, so it must be part of the judge cache key. Only append when
-    # enabled so prior (non-stripped) runs keep their existing cache hashes.
-    judge_cache_suffix = f"judge_{cache_suffix}"
-    if cfg.judge.strip_thinking_before_judging:
-        judge_cache_suffix += "_stripthinking"
+    judge_identity_hash = _judge_cache_identity_hash(
+        judge_model=cfg.judge.model,
+        resolved_prompt=resolved_prompt,
+        swap_mode=cfg.judge.swap_mode,
+        judge_model_kwargs=judge_extra_kwargs,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        run_seed=cfg.run.seed,
+    )
+    judge_cache_suffix = f"judge_{cache_suffix}_{judge_identity_hash}"
     df_judge = cache_function_dataframe(
         run_judge,
         ignore_cache=cfg.run.ignore_cache,

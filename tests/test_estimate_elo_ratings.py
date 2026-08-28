@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -564,3 +565,56 @@ def test_run_elo_keeps_non_pairscore_soft_preferences(tmp_path, monkeypatch):
 
     assert result["elo_n_bootstraps"] > 0
     assert result["model_name"] in result["mean_ratings"]
+
+
+def test_judge_cache_identity_covers_resolved_protocol_settings():
+    def prompt(*, parser=None, system="system", user="{completion_A} {completion_B}"):
+        return SimpleNamespace(
+            preset_name="default",
+            parser=parser or estimate_elo_ratings.PairScore(temperature=0.3),
+            system_prompt=system,
+            user_prompt_template=user,
+        )
+
+    base = {
+        "judge_model": "OpenRouter/judge-a",
+        "resolved_prompt": prompt(),
+        "swap_mode": "fixed",
+        "judge_model_kwargs": {"temperature": 0.0, "top_logprobs": 5},
+        "strip_thinking_before_judging": False,
+        "truncate_input_chars": 4096,
+        "run_seed": 0,
+    }
+    variants = [
+        {**base, "judge_model": "OpenRouter/judge-b"},
+        {**base, "resolved_prompt": prompt(system="different system")},
+        {**base, "resolved_prompt": prompt(user="different {completion_A}")},
+        {
+            **base,
+            "resolved_prompt": prompt(
+                parser=estimate_elo_ratings.PairScore(temperature=0.5)
+            ),
+        },
+        {**base, "swap_mode": "both"},
+        {**base, "judge_model_kwargs": {"temperature": 0.2, "top_logprobs": 5}},
+        {**base, "judge_model_kwargs": {"temperature": 0.0, "top_logprobs": 10}},
+        {**base, "strip_thinking_before_judging": True},
+        {**base, "truncate_input_chars": 2048},
+        {**base, "run_seed": 1},
+    ]
+
+    base_hash = estimate_elo_ratings._judge_cache_identity_hash(**base)
+
+    assert all(
+        estimate_elo_ratings._judge_cache_identity_hash(**variant) != base_hash
+        for variant in variants
+    )
+    assert (
+        estimate_elo_ratings._judge_cache_identity_hash(
+            **{
+                **base,
+                "judge_model_kwargs": {"top_logprobs": 5, "temperature": 0.0},
+            }
+        )
+        == base_hash
+    )
