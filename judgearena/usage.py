@@ -25,7 +25,13 @@ class RequestUsage:
     def has_token_usage(self) -> bool:
         return any(
             value is not None
-            for value in (self.input_tokens, self.output_tokens, self.total_tokens)
+            for value in (
+                self.input_tokens,
+                self.output_tokens,
+                self.total_tokens,
+                self.reasoning_tokens,
+                self.cached_tokens,
+            )
         )
 
 
@@ -36,21 +42,29 @@ def _sum_optional(requests: tuple[RequestUsage, ...], field: str) -> int | None:
 
 
 def _summarize(requests: tuple[RequestUsage, ...]) -> dict[str, object]:
-    token_reported = sum(request.has_token_usage for request in requests)
+    token_fields = (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+    )
+    reported = {
+        field: sum(getattr(request, field) is not None for request in requests)
+        for field in token_fields
+    }
     cost_values = [
         request.cost_usd for request in requests if request.cost_usd is not None
     ]
-    cost_reported = len(cost_values)
     return {
         "requests": len(requests),
-        "input_tokens": _sum_optional(requests, "input_tokens"),
-        "output_tokens": _sum_optional(requests, "output_tokens"),
-        "total_tokens": _sum_optional(requests, "total_tokens"),
-        "reasoning_tokens": _sum_optional(requests, "reasoning_tokens"),
-        "cached_tokens": _sum_optional(requests, "cached_tokens"),
+        **{field: _sum_optional(requests, field) for field in token_fields},
         "cost_usd": sum(cost_values) if cost_values else None,
-        "requests_with_token_usage": token_reported,
-        "requests_with_cost": cost_reported,
+        "requests_with_any_token_usage": sum(
+            request.has_token_usage for request in requests
+        ),
+        **{f"requests_with_{field}": count for field, count in reported.items()},
+        "requests_with_cost": len(cost_values),
     }
 
 
@@ -62,6 +76,9 @@ class RunUsage:
 
     def summary(self) -> dict[str, object]:
         return _summarize(self.requests)
+
+    def format_summary(self) -> str:
+        return _format_summary(self.summary())
 
     def to_dict(self) -> dict[str, object]:
         by_stage = {
@@ -83,8 +100,8 @@ class RunUsage:
             )
         }
         return {
-            "scope": "model_requests_made_during_this_run",
-            "source": "provider_response",
+            "scope": "successful_model_responses_returned_by_completed_inference_calls",
+            "source": "provider_response_metadata_when_available",
             "total": self.summary(),
             "by_stage": by_stage,
             "by_model": by_model,
@@ -105,7 +122,7 @@ class RunUsage:
         for stage, summary in by_stage.items():
             assert isinstance(summary, dict)
             print(f"  {stage.capitalize()}: {_format_summary(summary)}")
-        print(f"  Total: {_format_summary(total)}")
+        print(f"  Total: {self.format_summary()}")
 
 
 def _format_summary(summary: dict[str, object]) -> str:
@@ -113,25 +130,34 @@ def _format_summary(summary: dict[str, object]) -> str:
     input_tokens = summary["input_tokens"]
     output_tokens = summary["output_tokens"]
     cost = summary["cost_usd"]
-    requests_with_tokens = int(summary["requests_with_token_usage"])
-    requests_with_cost = int(summary["requests_with_cost"])
+    input_reported = int(summary["requests_with_input_tokens"])
+    output_reported = int(summary["requests_with_output_tokens"])
+    cost_reported = int(summary["requests_with_cost"])
 
-    if input_tokens is None or output_tokens is None:
+    if input_tokens is None and output_tokens is None:
         tokens = "token usage unavailable"
     else:
-        tokens = f"{int(input_tokens):,} input / {int(output_tokens):,} output tokens"
-        if requests_with_tokens < requests:
-            tokens += " reported (partial)"
+        input_text = f"{int(input_tokens):,}" if input_tokens is not None else "unknown"
+        output_text = (
+            f"{int(output_tokens):,}" if output_tokens is not None else "unknown"
+        )
+        tokens = f"{input_text} input / {output_text} output tokens"
+        if input_reported < requests or output_reported < requests:
+            tokens += (
+                " reported (partial: "
+                f"input {input_reported}/{requests}, "
+                f"output {output_reported}/{requests})"
+            )
 
     if requests == 0:
         cost_text = "$0.000000"
-    elif requests_with_cost == 0:
+    elif cost_reported == 0:
         cost_text = "cost unavailable"
-    elif requests_with_cost < requests:
+    elif cost_reported < requests:
         cost_text = f"${float(cost):.6f} reported (partial)"
     else:
         cost_text = f"${float(cost):.6f}"
-    return f"{requests} request(s), {tokens}, {cost_text}"
+    return f"{requests} successful response(s), {tokens}, {cost_text}"
 
 
 class UsageTracker:
@@ -160,7 +186,7 @@ _CURRENT_TRACKER: ContextVar[UsageTracker | None] = ContextVar(
 
 @contextmanager
 def track_usage() -> Iterator[UsageTracker]:
-    """Collect model usage in the current benchmark execution context."""
+    """Collect usage; nested scopes intentionally share the outer run tracker."""
     current = _CURRENT_TRACKER.get()
     if current is not None:
         yield current

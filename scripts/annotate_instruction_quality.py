@@ -74,6 +74,7 @@ judge_completions = do_inference(
     chat_model=judge_chat_model,
     inputs=inputs,
     use_tqdm=False,
+    stage="judging",
 )
 
 print(judge_completions)
