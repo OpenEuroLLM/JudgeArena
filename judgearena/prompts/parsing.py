@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import abc
+import math
 import re
-
-import numpy as np
 
 from judgearena.utils import strip_thinking_tags
 
@@ -44,9 +43,12 @@ class PairScore(JudgeParser):
         self.temperature = temperature
 
     def preference_from_scores(self, score_a: float, score_b: float) -> float:
-        return 1 - np.exp(self.temperature * score_a) / (
-            np.exp(self.temperature * np.array([score_a, score_b])).sum()
-        )
+        """Return a bounded preference without overflowing on extreme scores."""
+        logit = self.temperature * (score_b - score_a)
+        if logit >= 0:
+            return 1.0 / (1.0 + math.exp(-logit))
+        exp_logit = math.exp(logit)
+        return exp_logit / (1.0 + exp_logit)
 
     def __call__(
         self,

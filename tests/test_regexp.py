@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
@@ -12,7 +16,7 @@ Score_a: 0
 Score_b: 1
 """
     score = PairScore()
-    assert score.parse_model_raw(s) == 0.5744425168116589
+    assert score.parse_model_raw(s) == pytest.approx(0.5744425168116589)
 
 
 def test_pair_score2():
@@ -28,7 +32,19 @@ score B: -5
 In this case, Model A provided a correct and relevant response, listing two countries that start with S. On the other hand, Model B's response was completely irrelevant to the question asked, indicating a lack of understanding or ability to address the topic at hand. Therefore, Model A is significantly better than Model B in this scenario.
 """
     score = PairScore()
-    assert score.parse_model_raw(s) == 0.010986942630593188
+    assert score.parse_model_raw(s) == pytest.approx(0.010986942630593188)
+
+
+@pytest.mark.parametrize(
+    ("score_a", "score_b", "expected"),
+    [(10_000, -10_000, 0.0), (-10_000, 10_000, 1.0), (10_000, 10_000, 0.5)],
+)
+def test_pair_score_is_bounded_for_extreme_scores(score_a, score_b, expected):
+    preference = PairScore().preference_from_scores(score_a, score_b)
+
+    assert math.isfinite(preference)
+    assert 0.0 <= preference <= 1.0
+    assert preference == expected
 
 
 def test_regexp():
@@ -37,7 +53,7 @@ def test_regexp():
     scorer = PairScore()
     pref = scorer.parse_model_raw(raw_text)
     assert pref is not None
-    assert pref == 0.5744425168116589
+    assert pref == pytest.approx(0.5744425168116589)
 
     print(pref)
 
@@ -67,7 +83,7 @@ def test_pair_score_ignores_scores_inside_thinking_tags():
     pref = scorer.parse_model_raw(raw_text)
 
     assert pref is not None
-    assert pref == 0.9525741268224333
+    assert pref == pytest.approx(0.9525741268224333)
 
 
 def test_pair_score_score_mode_ignores_bracketed_verdict_after_thinking():
