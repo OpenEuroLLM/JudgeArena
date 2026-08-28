@@ -1,7 +1,7 @@
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.models import do_inference, make_model
+from judgearena.models import batch_inference_once, do_inference, make_model
 from judgearena.utils import strip_thinking_tags, truncate
 
 
@@ -37,9 +37,7 @@ def generate_instructions(
     completions = do_inference(
         chat_model=chat_model,
         inputs=inputs,
-        # This path historically used one synchronous batch regardless of the
-        # progress setting; preserve that execution behavior here.
-        use_tqdm=False,
+        use_tqdm=use_tqdm,
         stage="generation",
     )
     df_outputs = pd.DataFrame(
@@ -238,10 +236,10 @@ def generate_base(
         for instruction in instructions
     ]
 
-    completions = do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
+    completions = batch_inference_once(
+        chat_model,
+        inputs,
+        max_tokens=max_tokens,
         stage="generation",
     )
 

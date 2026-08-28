@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import judgearena.models as models
+from judgearena.usage import track_usage
 
 
 def _install_fake_vllm(monkeypatch):
@@ -33,7 +34,12 @@ def _install_fake_vllm(monkeypatch):
                 "sampling_params": sampling_params,
                 "kwargs": kwargs,
             }
-            return [SimpleNamespace(outputs=[SimpleNamespace(text="ok")])]
+            return [
+                SimpleNamespace(
+                    prompt_token_ids=[1, 2, 3],
+                    outputs=[SimpleNamespace(text="ok", token_ids=[4, 5])],
+                )
+            ]
 
     monkeypatch.setitem(
         sys.modules,
@@ -137,6 +143,28 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
     assert captured["chat_call"]["kwargs"]["chat_template_kwargs"] == {
         "enable_thinking": False
     }
+
+
+def test_chat_vllm_reports_exact_local_token_counts(monkeypatch):
+    _captured, _fake_reasoning_config = _install_fake_vllm(monkeypatch)
+    chat_model = models.ChatVLLM(
+        model="Qwen/Qwen3.5-9B",
+        max_tokens=16,
+        gpu_memory_utilization=0.7,
+    )
+
+    with track_usage() as tracker:
+        assert models.do_inference(
+            chat_model,
+            ["hello"],
+            stage="generation",
+        ) == ["ok"]
+        usage = tracker.snapshot().requests[0]
+
+    assert usage.model == "Qwen/Qwen3.5-9B"
+    assert usage.input_tokens == 3
+    assert usage.output_tokens == 2
+    assert usage.total_tokens == 5
 
 
 def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():

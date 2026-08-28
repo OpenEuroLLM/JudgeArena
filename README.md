@@ -218,6 +218,10 @@ uv run judgearena \
 **Note:** Ensure you have the required LangChain dependencies installed for your chosen provider.
 If you use remote endpoint, you would have to set your credentials.
 
+### Usage reporting
+
+Every benchmark run prints a generation/judging usage summary and stores it in `run-metadata.v1.json`. Token and cost totals come from successful responses returned by completed inference calls. Provider retries or successful responses discarded by a failed call are not observable and are not included. Coverage counts in the metadata distinguish complete, partial, and unavailable fields. Hosted backends are reported when their response metadata exposes usage; local vLLM counts input and output token IDs directly. Cost remains unavailable when the provider does not return it.
+
 ### Chat Templates (vLLM)
 
 When using vLLM, JudgeArena automatically picks the right inference method based on the model:
