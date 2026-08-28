@@ -520,12 +520,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         else cfg.elo.soft_elo_temperature
     )
 
-    # The prefs cached in df_judge were parsed at the default T=0.3, and the
-    # judge cache key ignores temperature, so they cannot reflect
-    # --soft-elo-temperature (or a calibrated T*).  Re-parse from the stored
-    # judge completions with this run's score_parser so the soft-ELO bootstrap
-    # uses the requested temperature.
-    if cfg.elo.soft_elo:
+    # PairScore preferences can be re-parsed from cached judge text so soft ELO
+    # uses the requested temperature. Other parsers already returned their
+    # final continuous preference, such as AlpacaEval's token logprobs.
+    if cfg.elo.soft_elo and isinstance(resolved_prompt.parser, PairScore):
         new_prefs_ab = pd.Series(
             [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
         ).apply(lambda x: float("nan") if x is None else x)
