@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, build_run_config, dump_config, load_config
 
 
 def _base_generate() -> dict:
@@ -174,8 +174,6 @@ def test_generate_requires_model_path():
 
 
 def test_load_config_from_yaml(tmp_path):
-    from judgearena.config import load_config
-
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
         "task: alpaca-eval\n"
@@ -194,6 +192,39 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.model.max_out_tokens == 4096
     assert cfg.judge.prompt_preset == "default_with_explanation"
     assert cfg.generation.n_instructions == 10
+
+
+def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("Judge carefully.")
+    user_file.write_text(
+        "Instruction: {user_prompt}\nA: {completion_A}\nB: {completion_B}"
+    )
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={
+            "model": "Dummy/j",
+            "prompt": {
+                "system_file": system_file,
+                "user_file": user_file,
+                "parser": "score",
+            },
+        },
+    )
+    config_path = tmp_path / "resolved.yaml"
+
+    dump_config(cfg, config_path)
+    restored = load_config(config_path)
+    cli_restored = build_run_config(["--config_path", str(config_path)])
+
+    assert "!!python" not in config_path.read_text()
+    assert restored == cfg
+    assert cli_restored == cfg
+    assert restored.judge.prompt is not None
+    assert restored.judge.prompt.system_file == system_file
+    assert restored.judge.prompt.user_file == user_file
 
 
 def test_cli_yaml_equivalence_generate(tmp_path):

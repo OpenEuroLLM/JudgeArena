@@ -546,5 +546,5 @@ def load_config(path: str | Path) -> RunConfig:
 def dump_config(cfg: RunConfig, path: str | Path) -> None:
     """Write the resolved config as YAML (round-trippable via ``--config_path``)."""
     Path(path).write_text(
-        yaml.safe_dump(cfg.model_dump(), sort_keys=False), encoding="utf-8"
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
     )
