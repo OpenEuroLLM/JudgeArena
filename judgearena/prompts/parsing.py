@@ -194,12 +194,34 @@ class PairScore(JudgeParser):
 
 
 class MetaEvalPairScore(PairScore):
-    """PairScore parser using the temperature from the meta-eval methodology."""
+    """Meta-eval PairScore parser for complete integer scores in [0, 10]."""
 
     name = "meta-eval-score"
 
     def __init__(self) -> None:
         super().__init__(temperature=0.5)
+
+    @staticmethod
+    def parse_raw_scores(
+        judge_completion: str,
+    ) -> tuple[float | None, float | None]:
+        text = strip_thinking_tags(judge_completion).lower()
+
+        def parse_score(label: str) -> float | None:
+            match = re.search(
+                rf'(?m)^[ \t\r]*["\']?score_{label}["\']?'
+                rf"[ \t\r]*:[ \t\r]*([0-9]+)[ \t\r]*,?[ \t\r]*$",
+                text,
+            )
+            if match is None:
+                return None
+            digits = match.group(1)
+            if len(digits) > 2:
+                return None
+            score = int(digits)
+            return float(score) if 0 <= score <= 10 else None
+
+        return parse_score("a"), parse_score("b")
 
 
 class AlpacaEvalJSON(JudgeParser):

@@ -296,9 +296,9 @@ Language variants follow the ELO pattern (`meta-eval-lmarena-100k-en`, `meta-eva
 
 ## Judge meta-evaluation
 
-Meta-evaluation scores a judge against **human-labeled arena battles**. It does not generate completions and does not rate a model. Use `elo-*` for that.
+Meta-evaluation scores a judge against **human-labeled arena battles**. It does not generate completions and does not rate a model. Use `elo-*` for that. Arena dataset adapters normalize native winner labels to `model_a`, `model_b`, or `tie` before the evaluation protocol runs.
 
-The task keeps the most-battled models, samples battles among them, asks the judge to label the stored A/B order, and reports accuracy, Cohen's kappa, Spearman correlation of Bradley-Terry ratings, Elo MAE (with bootstrap SE), and held-out Elo gap vs annotation budget against the human vote. PairScore uses temperature `0.5` here; generate+judge keeps `0.3`.
+The task keeps the most-battled models, builds a deterministic sample of unique battles with a connected model-comparison graph, and asks the judge to label each battle. It reports accuracy, Cohen's kappa, Spearman correlation of Bradley-Terry ratings, Elo MAE (with bootstrap SE), and held-out Elo gap vs annotation budget against the human vote. Meta-eval PairScore requires complete integer scores from 0 to 10 and uses temperature `0.5`; generate+judge keeps its existing parser and temperature `0.3`.
 
 Prompt presets are selected with `--judge.prompt_preset` (the task default is `meta-eval-pair-score`):
 
@@ -325,7 +325,7 @@ judgearena \
 | `--judge.model` | *(required)* | Judge under evaluation |
 | `--judge.prompt_preset` | `meta-eval-pair-score` | Judge prompt and matching verdict parser |
 | `--meta_eval.top_models` | `20` | Keep the N models with the most battles |
-| `--meta_eval.battles_per_model` | `50` | Battles sampled per selected model |
+| `--meta_eval.battles_per_model` | `50` | Minimum unique sampled battles incident to each selected model |
 | `--meta_eval.languages` | all | Restrict to language codes, e.g. `'["en", "es"]'` |
 | `--meta_eval.n_bootstraps` | `20` | Bootstrap samples for agreement and ranking standard errors |
 | `--meta_eval.include_human_ties` | off | Keep human-tie battles in the ranking language splits |
@@ -334,9 +334,9 @@ judgearena \
 | `--judge.swap_mode` | `fixed` | `fixed`: one A-B pass; `both`: judge each battle in both orders |
 | `--model.name` | unset | Not used: both completions already exist in the arena |
 
-Results go under `[result_folder]/<task>-<prompt_preset>-<judge>-<swap_mode>/` as `sample.parquet`, `annotations.parquet`, `summary.csv`, `results.json`, `config.yaml`, and `run-metadata.v1.json`. `results.json` reports agreement on all battles and on the subset that drops human ties, English vs multilingual ranking splits, and held-out Elo MAE vs annotation budget (`elo_gap_all` and `elo_gap_exclude_ties`).
+Each invocation reserves a new `[result_folder]/<task>-<UTC timestamp>-<UUID>/` directory. `config.yaml` and `sample.parquet` are written before judge inference. Completed judge passes are checkpointed to `annotations.parquet` before aggregation or scoring. `battle-results.parquet` stores the physical-battle scoring view; final outputs include `summary.csv`, `results.json`, and `run-metadata.v1.json`.
 
-With `--judge.swap_mode both`, overall accuracy and kappa use both orderings (the reversed verdict is inverted back to the stored A/B identity). Ranking, language splits, and Elo-gap analyses keep one forward-order row per sampled battle. `annotations.parquet` stores one row per judge pass with an `orientation` column; `winner_llm` and `pref_llm` are always in the original model order.
+With `--judge.swap_mode both`, the reversed preference is first normalized to the stored model order, then the parsed passes are averaged into one result per physical battle. Agreement, ranking, language splits, and Elo-gap analyses all use that same battle-level view. A battle with one valid pass remains usable and is reported as `partial`; a battle with no valid pass remains missing and is excluded from metrics. `annotations.parquet` keeps the pass-level `orientation`, parser identity, parse status, normalized and presented preferences, raw judge response, and top-logprob JSON for audit.
 
 ## 📈 Estimating ELO Ratings
 

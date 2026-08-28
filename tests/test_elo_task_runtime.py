@@ -22,7 +22,7 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
     def fake_load_arena_dataframe(arena, *, dataset_sources):
         captured["arena"] = arena
         captured["sources"] = dataset_sources
-        return pd.DataFrame([{"question_id": "q1"}])
+        return pd.DataFrame([{"question_id": "q1", "winner": "tie"}])
 
     monkeypatch.setattr(
         arena_battles, "load_arena_dataframe", fake_load_arena_dataframe
@@ -34,6 +34,44 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
     assert captured["arena"] == "ComparIA"
     assert source.revision == "7a40bce496c1f2aa3be4001da85a49cb4743042b"
     assert battles["question_id"].tolist() == ["q1"]
+
+
+@pytest.mark.parametrize(
+    ("task_id", "native_winner"),
+    [
+        ("elo-lmarena-100k", "tie (bothbad)"),
+        ("elo-lmarena-140k", "both_bad"),
+    ],
+)
+def test_arena_adapter_canonicalizes_native_tie_labels(
+    monkeypatch, tmp_path, task_id, native_winner
+):
+    task = _elo_task(task_id)
+    monkeypatch.setattr(
+        arena_battles,
+        "load_arena_dataframe",
+        lambda _arena, *, dataset_sources: pd.DataFrame(
+            [{"question_id": "q1", "winner": native_winner}]
+        ),
+    )
+
+    battles = arena_battles.load_task_battles(task, tmp_path)
+
+    assert battles["winner"].tolist() == ["tie"]
+
+
+def test_arena_adapter_rejects_noncanonical_winner_labels(monkeypatch, tmp_path):
+    task = _elo_task("elo-comparia")
+    monkeypatch.setattr(
+        arena_battles,
+        "load_arena_dataframe",
+        lambda _arena, *, dataset_sources: pd.DataFrame(
+            [{"question_id": "q1", "winner": "tie (bothbad)"}]
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unsupported winner labels for ComparIA"):
+        arena_battles.load_task_battles(task, tmp_path)
 
 
 def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):

@@ -28,6 +28,9 @@ def main() -> None:
 
     # Validates packaged text resources expected at runtime.
     _assert_non_empty_text_resource("judgearena.prompts", "templates/prompt.txt")
+    _assert_non_empty_text_resource(
+        "judgearena.prompts", "templates/meta-eval-pair-score-prompt.txt"
+    )
     _assert_non_empty_text_resource("judgearena.prompts", "templates/system-prompt.txt")
     _assert_non_empty_text_resource("judgearena.criteria", "data/default.yaml")
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -10,30 +11,41 @@ import pytest
 import judgearena.benchmarks.meta_eval.annotate as annotate_module
 import judgearena.benchmarks.meta_eval.runner as runner_module
 import judgearena.evaluate as evaluate_module
+from judgearena.artifacts import (
+    atomic_write_path,
+    prepare_unique_run_directory,
+    scoped_run_file_logging,
+)
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
+    aggregate_battle_preferences,
     invert_winner,
     preference_to_winner,
     serialize_judge_input,
 )
 from judgearena.benchmarks.meta_eval.runner import (
     ANNOTATIONS_FILENAME,
+    BATTLE_RESULTS_FILENAME,
     SAMPLE_FILENAME,
     SUMMARY_FILENAME,
     run_meta_eval,
 )
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
+    comparison_components,
+    count_battles_per_model,
     sample_battles_per_model,
     select_top_models,
 )
 from judgearena.benchmarks.meta_eval.scoring import (
+    _fit_connected_preferences,
     compute_elo_gap_summary,
     summarize_language_splits,
 )
 from judgearena.benchmarks.registry import resolve_benchmark
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation
+from judgearena.log import get_logger
 from judgearena.prompts.parsing import JUDGE_PARSERS, parser_name
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
@@ -50,10 +62,11 @@ def _battles() -> pd.DataFrame:
     models = ["m1", "m2", "m3"]
     rows = [
         {
+            "battle_id": f"ComparIA:q{i}",
             "question_id": f"q{i}",
             "model_a": models[i % 3],
             "model_b": models[(i + 1) % 3],
-            "winner": "tie (bothbad)" if i % 5 == 0 else "model_a",
+            "winner": "tie" if i % 5 == 0 else "model_a",
             "lang": "fr" if i % 2 else "en",
             "conversation_a": _turns("a"),
             "conversation_b": _turns("b"),
@@ -62,6 +75,7 @@ def _battles() -> pd.DataFrame:
     ]
     rows.append(
         {
+            "battle_id": "ComparIA:q-rare",
             "question_id": "q-rare",
             "model_a": "rare",
             "model_b": "m1",
@@ -135,16 +149,96 @@ def test_sampling_is_deterministic_and_stays_inside_the_top_models():
     sample = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
     again = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
 
-    assert len(sample) == 15
+    assert sample["battle_id"].is_unique
+    assert all(count >= 5 for count in count_battles_per_model(sample).values())
+    assert len(comparison_components(sample, top)) == 1
     pd.testing.assert_frame_equal(sample, again)
+    shuffled = sample_battles_per_model(
+        df_top.sample(frac=1, random_state=42).reset_index(drop=True),
+        top,
+        battles_per_model=5,
+        seed=0,
+    )
+    assert shuffled["battle_id"].tolist() == sample["battle_id"].tolist()
 
 
 def test_sampling_rejects_a_disconnected_top_model_set():
     battles = pd.DataFrame(
-        [{"question_id": "q", "model_a": "a", "model_b": "b", "winner": "tie"}]
+        [
+            {"question_id": "q1", "model_a": "a", "model_b": "b", "winner": "tie"},
+            {"question_id": "q2", "model_a": "c", "model_b": "d", "winner": "tie"},
+        ]
     )
-    with pytest.raises(MetaEvalSamplingError, match="No battles remain"):
-        select_top_models(battles, top_models=1)
+    with pytest.raises(MetaEvalSamplingError, match="disconnected"):
+        select_top_models(battles, top_models=4)
+
+
+def test_sampling_requires_stable_battle_ids():
+    battles = _battles().drop(columns="battle_id")
+    top, df_top = select_top_models(battles, top_models=3)
+    with pytest.raises(MetaEvalSamplingError, match="Stable battle_id"):
+        sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
+
+
+def test_sampling_rejects_self_comparisons():
+    battles = pd.DataFrame(
+        [
+            {
+                "battle_id": "arena:self",
+                "question_id": "self",
+                "model_a": "a",
+                "model_b": "a",
+                "winner": "model_a",
+            },
+            {
+                "battle_id": "arena:ab",
+                "question_id": "ab",
+                "model_a": "a",
+                "model_b": "b",
+                "winner": "model_a",
+            },
+        ]
+    )
+    with pytest.raises(MetaEvalSamplingError, match="self-comparisons"):
+        select_top_models(battles, top_models=2)
+    with pytest.raises(MetaEvalSamplingError, match="self-comparisons"):
+        sample_battles_per_model(
+            battles,
+            ["a", "b"],
+            battles_per_model=2,
+            seed=0,
+        )
+    assert count_battles_per_model(battles) == {"a": 2, "b": 1}
+
+
+def test_sampling_rejects_insufficient_unique_quota():
+    battles = pd.DataFrame(
+        [
+            {
+                "battle_id": f"arena:q{i}",
+                "question_id": f"q{i}",
+                "model_a": "a",
+                "model_b": "b",
+                "winner": "model_a",
+            }
+            for i in range(2)
+        ]
+    )
+    top, df_top = select_top_models(battles, top_models=2)
+    with pytest.raises(MetaEvalSamplingError, match="Insufficient unique battles"):
+        sample_battles_per_model(df_top, top, battles_per_model=3, seed=0)
+
+
+def test_meta_eval_bt_fit_rejects_disconnected_parsed_graph():
+    disconnected = pd.DataFrame(
+        {
+            "model_a": ["a", "c"],
+            "model_b": ["b", "d"],
+            "pref": [0.2, 0.8],
+        }
+    )
+    with pytest.raises(MetaEvalSamplingError, match="disconnected"):
+        _fit_connected_preferences(disconnected, pref_col="pref")
 
 
 def test_pairscore_parses_winners_at_meta_eval_temperature():
@@ -152,6 +246,7 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
     assert preference_to_winner(parser("score_A: 10\nscore_B: 0")) == "model_a"
     assert preference_to_winner(parser("score_A: 0\nscore_B: 10")) == "model_b"
     assert preference_to_winner(parser("score_A: 5\nscore_B: 5")) == "tie"
+    assert parser('"score_A": 9,\n"score_B": 1') is not None
     completion = "score_A: 10\nscore_B: 0"
     preference = parser(completion)
     assert preference is not None
@@ -160,6 +255,25 @@ def test_pairscore_parses_winners_at_meta_eval_temperature():
     assert serialize_judge_input(SimpleNamespace(to_string=lambda: "p")) == "p"
     assert invert_winner("model_a") == "model_b"
     assert invert_winner("tie") == "tie"
+
+
+@pytest.mark.parametrize(
+    "completion",
+    [
+        "score_A: 8.9\nscore_B: 8.1",
+        "score_A: 9,5\nscore_B: 1",
+        "score_A: 9/10\nscore_B: 1",
+        "scores: banana 7\nscore_B: 3",
+        "score_A: 1e1\nscore_B: 8",
+        "score_A: -1\nscore_B: 8",
+        "score_A: 11\nscore_B: 8",
+        "score_A: 0009\nscore_B: 1",
+        "score_A: " + "0" * 4_300 + "9\nscore_B: 1",
+        "score_A: 8\nscore_B: 3.0",
+    ],
+)
+def test_meta_eval_pairscore_rejects_non_integer_or_out_of_range_scores(completion):
+    assert JUDGE_PARSERS["meta-eval-score"](completion) is None
 
 
 def test_prompt_presets_select_their_parsers():
@@ -189,6 +303,8 @@ def test_prompt_presets_select_their_parsers():
         assert resolved.system_prompt
         assert resolved.user_prompt_template
         assert parser_name(resolved.parser) == expected_parser
+        if expected_parser == "meta-eval-score":
+            assert "an integer between 0 and 10" in resolved.user_prompt_template
 
 
 @pytest.mark.parametrize(
@@ -305,6 +421,10 @@ def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
 
     assert annotations.loc[0, "winner_llm"] == "model_b"
     assert annotations.loc[0, "pref_llm"] == pytest.approx(0.75)
+    assert annotations.loc[0, "parse_ok"]
+    top_logprobs = json.loads(annotations.loc[0, "judge_top_logprobs_json"])
+    assert top_logprobs["M"] == pytest.approx(math.log(0.75))
+    assert top_logprobs["m"] == pytest.approx(math.log(0.25))
 
 
 def test_meta_eval_delegates_judging_parsing_and_swapping_to_shared_path(monkeypatch):
@@ -346,8 +466,49 @@ def test_meta_eval_delegates_judging_parsing_and_swapping_to_shared_path(monkeyp
     assert captured["parse"] is resolved.parser
     assert captured["strip_thinking_before_judging"] is True
     assert captured["truncate_input_chars"] == 123
-    assert annotations.loc[0, "winner_llm"] == "tie"
-    assert annotations.loc[0, "pref_llm"] == 0.5
+    assert not bool(annotations.loc[0, "parse_ok"])
+    assert annotations.loc[0, "winner_llm"] is None
+    assert pd.isna(annotations.loc[0, "pref_llm"])
+
+
+def test_physical_battle_aggregation_combines_both_orders_and_parse_statuses():
+    rows = []
+    for battle_id, preferences in {
+        "complete": [0.2, 0.4],
+        "partial": [0.7, float("nan")],
+        "missing": [float("nan"), float("nan")],
+    }.items():
+        for orientation, preference in zip(
+            ["forward", "swapped"], preferences, strict=True
+        ):
+            rows.append(
+                {
+                    "battle_id": battle_id,
+                    "question_id": battle_id,
+                    "model_a": "a",
+                    "model_b": "b",
+                    "winner": "model_a",
+                    "lang": "en",
+                    "orientation": orientation,
+                    "parse_ok": not pd.isna(preference),
+                    "pref_llm": preference,
+                }
+            )
+
+    aggregated = aggregate_battle_preferences(
+        pd.DataFrame(rows).sample(frac=1, random_state=7), swap_mode="both"
+    ).set_index("battle_id")
+
+    assert aggregated.loc["complete", "pref_llm"] == pytest.approx(0.3)
+    assert aggregated.loc["complete", "winner_llm"] == "model_a"
+    assert aggregated.loc["complete", "parse_status"] == "complete"
+    assert aggregated.loc["partial", "pref_llm"] == pytest.approx(0.7)
+    assert aggregated.loc["partial", "winner_llm"] == "model_b"
+    assert aggregated.loc["partial", "parse_status"] == "partial"
+    assert not bool(aggregated.loc["missing", "parse_ok"])
+    assert pd.isna(aggregated.loc["missing", "pref_llm"])
+    assert pd.isna(aggregated.loc["missing", "winner_llm"])
+    assert aggregated.loc["missing", "parse_status"] == "missing"
 
 
 def test_agreement_metrics_on_fixture():
@@ -375,7 +536,16 @@ def test_degenerate_agreement_reports_nan_kappa():
 
 def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+
+    def fake_build(_cfg):
+        run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / "config.yaml").is_file()
+        assert (run_dirs[0] / SAMPLE_FILENAME).is_file()
+        assert not (run_dirs[0] / ANNOTATIONS_FILENAME).exists()
+        return object()
+
+    monkeypatch.setattr(runner_module, "build_judge", fake_build)
     monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
     cfg = _cfg(
         tmp_path,
@@ -383,22 +553,30 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
             "top_models": 3,
             "battles_per_model": 5,
             "elo_gap_battles": [2],
-            "elo_gap_seeds": 1,
+            "elo_gap_seeds": 2,
         },
     )
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
-    res_dir = tmp_path / "meta-eval-comparia-meta-eval-pair-score-dummy-j-fixed"
+    res_dir = Path(results["result_path"]).parent
+    assert res_dir.parent == tmp_path
+    assert (res_dir / "config.yaml").is_file()
     sample = pd.read_parquet(res_dir / SAMPLE_FILENAME)
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
-    assert results["n_battles"] == results["n_annotations"] == len(sample) == 15
-    assert len(annotations) == 15
+    battle_results = pd.read_parquet(res_dir / BATTLE_RESULTS_FILENAME)
+    assert sample["battle_id"].is_unique
+    assert results["n_battles"] == results["n_annotations"] == len(sample)
+    assert len(annotations) == len(sample) == len(battle_results)
     assert set(annotations["orientation"]) == {"forward"}
     assert set(annotations["winner_llm"]) == {"model_a"}
-    assert annotations["judge_input"].tolist() == ["prompt"] * 15
-    assert results["agreement"]["all"]["n"] == 15
-    assert results["agreement"]["no_human_ties"]["n"] < 15
+    assert annotations["judge_input"].tolist() == ["prompt"] * len(sample)
+    assert annotations["parse_ok"].all()
+    assert results["n_parsed_annotations"] == len(sample)
+    assert results["n_scored_battles"] == len(sample)
+    assert results["battle_parse_status"] == {"complete": len(sample)}
+    assert results["agreement"]["all"]["n"] == len(sample)
+    assert results["agreement"]["no_human_ties"]["n"] < len(sample)
     assert set(results["language_summary"]) == {"English", "Multilingual"}
     assert results["elo_gap_all"][0]["num_battles"] == 2
     assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
@@ -415,18 +593,23 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     cfg = _cfg(
         tmp_path,
         judge={"model": "Dummy/j", "swap_mode": "both"},
-        meta_eval={"top_models": 3, "battles_per_model": 5},
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 2,
+        },
     )
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
-    annotations = pd.read_parquet(
-        tmp_path
-        / "meta-eval-comparia-meta-eval-pair-score-dummy-j-both"
-        / ANNOTATIONS_FILENAME
-    )
-    assert results["n_battles"] == 15
-    assert results["n_annotations"] == results["agreement"]["all"]["n"] == 30
+    res_dir = Path(results["result_path"]).parent
+    annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
+    battle_results = pd.read_parquet(res_dir / BATTLE_RESULTS_FILENAME)
+    assert results["n_annotations"] == 2 * results["n_battles"]
+    assert results["n_parsed_annotations"] == results["n_annotations"]
+    assert results["n_scored_battles"] == results["n_battles"]
+    assert results["agreement"]["all"]["n"] == results["n_battles"]
     assert set(annotations["orientation"]) == {"forward", "swapped"}
     forward = annotations[annotations["orientation"] == "forward"]
     swapped = annotations[annotations["orientation"] == "swapped"]
@@ -436,9 +619,262 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     assert (
         forward["presented_model_a"].tolist() == swapped["presented_model_b"].tolist()
     )
+    assert set(battle_results["winner_llm"]) == {"tie"}
+    assert set(battle_results["parse_status"]) == {"complete"}
     ranking_n = sum(split["n"] for split in results["language_summary"].values())
-    assert ranking_n == int((forward["winner"] != "tie").sum())
+    assert ranking_n == int((battle_results["winner"] != "tie").sum())
     assert ranking_n < results["n_annotations"]
+
+
+def test_runner_excludes_missing_parses_from_metrics(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
+    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+
+    def annotations_with_one_failure(**kwargs):
+        annotations = _fake_annotations(**kwargs)
+        annotations[0].judge_completion = "unparseable"
+        return annotations
+
+    monkeypatch.setattr(
+        evaluate_module, "annotate_battles", annotations_with_one_failure
+    )
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 2,
+        },
+    )
+
+    results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+    res_dir = Path(results["result_path"]).parent
+    annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
+    battle_results = pd.read_parquet(res_dir / BATTLE_RESULTS_FILENAME)
+
+    assert results["n_parsed_annotations"] == results["n_annotations"] - 1
+    assert results["n_scored_battles"] == results["n_battles"] - 1
+    assert results["agreement"]["all"]["n"] == results["n_scored_battles"]
+    assert results["battle_parse_status"]["missing"] == 1
+    assert (~annotations["parse_ok"]).sum() == 1
+    assert annotations.loc[~annotations["parse_ok"], "pref_llm"].isna().all()
+    assert (
+        battle_results.loc[battle_results["parse_status"] == "missing", "pref_llm"]
+        .isna()
+        .all()
+    )
+
+
+@pytest.mark.parametrize(
+    "meta_eval",
+    [
+        {"top_models": 1},
+        {"elo_gap_battles": []},
+        {"elo_gap_battles": [0]},
+        {"elo_gap_battles": [10, 10]},
+        {"elo_gap_battles": [20, 10]},
+        {"elo_gap_seeds": 1},
+        {"n_bootstraps": 1},
+        {"battles_per_model": 5, "elo_gap_battles": [6]},
+    ],
+)
+def test_meta_eval_settings_reject_invalid_values_before_runtime(meta_eval):
+    with pytest.raises(ValueError):
+        _cfg("unused", meta_eval=meta_eval)
+
+
+def test_runner_rejects_disconnected_pool_before_building_judge(tmp_path, monkeypatch):
+    disconnected = pd.DataFrame(
+        [
+            {
+                "question_id": f"q-{model_a}-{model_b}",
+                "model_a": model_a,
+                "model_b": model_b,
+                "winner": "model_a",
+                "lang": "en",
+                "conversation_a": _turns("a"),
+                "conversation_b": _turns("b"),
+            }
+            for model_a, model_b in [("a", "b"), ("c", "d")]
+        ]
+    )
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: disconnected)
+    monkeypatch.setattr(
+        runner_module,
+        "build_judge",
+        lambda _cfg: pytest.fail("judge must not be built"),
+    )
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 4,
+            "battles_per_model": 1,
+            "elo_gap_battles": [1],
+            "elo_gap_seeds": 2,
+        },
+    )
+
+    with pytest.raises(MetaEvalSamplingError, match="disconnected"):
+        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_runner_rejects_duplicate_source_battle_ids_before_building_judge(
+    tmp_path, monkeypatch
+):
+    duplicate_ids = _battles()
+    duplicate_ids.loc[1, "question_id"] = duplicate_ids.loc[0, "question_id"]
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: duplicate_ids)
+    monkeypatch.setattr(
+        runner_module,
+        "build_judge",
+        lambda _cfg: pytest.fail("judge must not be built"),
+    )
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 2,
+        },
+    )
+
+    with pytest.raises(MetaEvalSamplingError, match="duplicate physical battle IDs"):
+        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "error"),
+    [
+        ("winner", "bogus", "invalid human winners"),
+        ("winner", "tie (bothbad)", "invalid human winners"),
+        ("conversation_a", [], "empty or invalid conversation_a"),
+    ],
+)
+def test_runner_rejects_invalid_battles_before_building_judge(
+    tmp_path, monkeypatch, column, value, error
+):
+    invalid = _battles()
+    invalid[column] = [value for _ in range(len(invalid))]
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: invalid)
+    monkeypatch.setattr(
+        runner_module,
+        "build_judge",
+        lambda _cfg: pytest.fail("judge must not be built"),
+    )
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 2,
+        },
+    )
+
+    with pytest.raises((MetaEvalSamplingError, ValueError), match=error):
+        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_runner_checkpoints_annotations_before_scoring(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
+    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
+
+    def failing_scorer(*args, **kwargs):
+        run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
+        assert len(run_dirs) == 1
+        assert (run_dirs[0] / ANNOTATIONS_FILENAME).is_file()
+        assert (run_dirs[0] / BATTLE_RESULTS_FILENAME).is_file()
+        raise RuntimeError("scoring failed")
+
+    monkeypatch.setattr(
+        runner_module, "resolve_meta_eval_scorer", lambda _name: failing_scorer
+    )
+    cfg = _cfg(
+        tmp_path,
+        meta_eval={
+            "top_models": 3,
+            "battles_per_model": 5,
+            "elo_gap_battles": [2],
+            "elo_gap_seeds": 2,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="scoring failed"):
+        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
+    res_dir = next(path for path in tmp_path.iterdir() if path.is_dir())
+    assert (res_dir / "config.yaml").is_file()
+    assert (res_dir / SAMPLE_FILENAME).is_file()
+    assert (res_dir / ANNOTATIONS_FILENAME).is_file()
+    assert (res_dir / BATTLE_RESULTS_FILENAME).is_file()
+    assert not (res_dir / "results.json").exists()
+    assert not (res_dir / SUMMARY_FILENAME).exists()
+
+
+def test_unique_run_directories_never_reuse_an_invocation(tmp_path):
+    cfg = _cfg(tmp_path)
+    first = prepare_unique_run_directory(cfg, tmp_path, task=cfg.task)
+    first_config = (first / "config.yaml").read_bytes()
+    second = prepare_unique_run_directory(cfg, tmp_path, task=cfg.task)
+
+    assert first != second
+    assert (first / "config.yaml").read_bytes() == first_config
+    assert (second / "config.yaml").is_file()
+
+
+def test_scoped_run_log_does_not_leak_into_later_runs(tmp_path):
+    cfg = _cfg(
+        tmp_path,
+        run={"result_folder": str(tmp_path), "no_log_file": False},
+    )
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    root_logger = get_logger()
+    handlers_before = list(root_logger.handlers)
+
+    with scoped_run_file_logging(cfg, first_dir):
+        get_logger(__name__).warning("FIRST-RUN-ONLY")
+        with scoped_run_file_logging(cfg, second_dir):
+            get_logger(__name__).warning("SECOND-RUN-ONLY")
+        get_logger(__name__).warning("FIRST-RUN-AGAIN")
+
+    first_log = next(first_dir.glob("run-*.log")).read_text()
+    second_log = next(second_dir.glob("run-*.log")).read_text()
+    assert "FIRST-RUN-ONLY" in first_log
+    assert "FIRST-RUN-AGAIN" in first_log
+    assert "SECOND-RUN-ONLY" not in first_log
+    assert "SECOND-RUN-ONLY" in second_log
+    assert "FIRST-RUN-ONLY" not in second_log
+    assert root_logger.handlers == handlers_before
+
+    failed_dir = tmp_path / "failed"
+    failed_dir.mkdir()
+    with pytest.raises(RuntimeError, match="run failed"):
+        with scoped_run_file_logging(cfg, failed_dir):
+            get_logger(__name__).warning("FAILED-RUN-ONLY")
+            raise RuntimeError("run failed")
+    assert "FAILED-RUN-ONLY" in next(failed_dir.glob("run-*.log")).read_text()
+    assert root_logger.handlers == handlers_before
+
+
+def test_atomic_writer_does_not_publish_or_leave_temp_file_on_failure(tmp_path):
+    final_path = tmp_path / "annotations.parquet"
+
+    def failing_writer(path):
+        path.write_text("partial")
+        raise RuntimeError("write failed")
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        atomic_write_path(final_path, failing_writer)
+    assert not final_path.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_empty_language_split_reports_na():
@@ -473,7 +909,7 @@ def test_elo_gap_summary_runs():
     sample = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
     sample["winner_llm"] = sample["winner"]
     sample["pref_llm"] = sample["winner"].map(
-        {"model_a": 0.1, "model_b": 0.9, "tie": 0.5, "tie (bothbad)": 0.5}
+        {"model_a": 0.1, "model_b": 0.9, "tie": 0.5}
     )
     summary = compute_elo_gap_summary(
         df_top,

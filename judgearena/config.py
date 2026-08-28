@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     CliSettingsSource,
@@ -354,15 +354,16 @@ class MetaEvalArgs(BaseModel):
     """Arena supplying the human-labeled battles. Derived from the task
     definition; an explicit value must match it."""
 
-    top_models: int = Field(default=20, gt=0)
+    top_models: int = Field(default=20, ge=2)
     """Keep the N models with the most battles, then judge only battles fought
     between two of them."""
 
     battles_per_model: int = Field(default=50, gt=0)
-    """Battles sampled per selected model. A battle involving two selected
-    models can be drawn for either of them."""
+    """Minimum unique sampled battles incident to each selected model. One
+    battle counts toward both endpoint models; connectivity can raise a model
+    above this target."""
 
-    n_bootstraps: int = Field(default=20, gt=0)
+    n_bootstraps: int = Field(default=20, ge=2)
     """Bootstrap resamples used for agreement and ranking standard errors."""
 
     include_human_ties: bool = False
@@ -372,12 +373,33 @@ class MetaEvalArgs(BaseModel):
     elo_gap_battles: list[int] = Field(default_factory=lambda: [10, 20, 30, 40, 50])
     """Annotation budgets at which to measure held-out Elo error."""
 
-    elo_gap_seeds: int = Field(default=10, gt=0)
+    elo_gap_seeds: int = Field(default=10, ge=2)
     """Repeats of the held-out Elo-gap sampling at each budget."""
 
     languages: list[str] | None = None
     """Restrict battles to these language codes (e.g. ``["en", "fr"]``).
     Defaults to all languages of the task."""
+
+    @field_validator("elo_gap_battles")
+    @classmethod
+    def _validate_elo_gap_battles(cls, values: list[int]) -> list[int]:
+        if not values:
+            raise ValueError("meta_eval.elo_gap_battles must not be empty.")
+        if any(value <= 0 for value in values):
+            raise ValueError("meta_eval.elo_gap_battles values must be positive.")
+        if values != sorted(set(values)):
+            raise ValueError(
+                "meta_eval.elo_gap_battles must be unique and sorted ascending."
+            )
+        return values
+
+    @model_validator(mode="after")
+    def _validate_meta_eval_budgets(self):
+        if max(self.elo_gap_battles) > self.battles_per_model:
+            raise ValueError(
+                "meta_eval.elo_gap_battles cannot exceed meta_eval.battles_per_model."
+            )
+        return self
 
 
 class RunArgs(BaseModel):

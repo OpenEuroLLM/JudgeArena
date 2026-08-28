@@ -15,27 +15,47 @@ from judgearena.benchmarks.meta_eval.agreement import (
     compute_agreement_metrics,
     format_metric,
 )
+from judgearena.benchmarks.meta_eval.sampling import require_connected_pool
 
 LanguageSummary = dict[str, dict[str, str | int]]
 
 
 def ranking_annotations(df_ann: pd.DataFrame) -> pd.DataFrame:
-    """Keep one stored-order row per sampled battle.
+    """Return parsed physical battles shared by agreement and ranking metrics."""
+    if "battle_id" in df_ann and df_ann["battle_id"].duplicated().any():
+        raise ValueError("Meta-eval scoring requires one row per physical battle.")
+    parsed = df_ann.copy()
+    if "parse_ok" in parsed:
+        parsed = parsed[parsed["parse_ok"]]
+    return parsed[parsed["winner_llm"].notna() & parsed["pref_llm"].notna()].copy()
 
-    swap_mode=both writes a forward row and a swapped row; ranking fits must
-    not count the same battle twice.
-    """
-    if "orientation" in df_ann.columns:
-        return df_ann[df_ann["orientation"] == "forward"].copy()
-    return df_ann.copy()
+
+def _fit_connected_preferences(df: pd.DataFrame, *, pref_col: str) -> dict[str, float]:
+    battles = df[["model_a", "model_b", pref_col]].dropna().copy()
+    if battles.empty:
+        raise ValueError("Cannot fit Bradley-Terry ratings without parsed battles.")
+    if (battles["model_a"] == battles["model_b"]).any():
+        raise ValueError("Bradley-Terry fitting does not allow self-comparisons.")
+    models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
+    if len(models) < 2:
+        raise ValueError("Bradley-Terry fitting requires at least two models.")
+    require_connected_pool(battles, models, context="Bradley-Terry fit")
+    return fit_bradley_terry(battles, pref_col=pref_col)
 
 
 def _hard_bradley_terry(df: pd.DataFrame, winner_col: str) -> dict[str, float]:
     battles = df[["model_a", "model_b", winner_col]].copy()
     battles["pref"] = battles[winner_col].map(
-        {"model_a": 0.0, "model_b": 1.0, "tie": 0.5, "tie (bothbad)": 0.5}
+        {"model_a": 0.0, "model_b": 1.0, "tie": 0.5}
     )
-    return fit_bradley_terry(battles, pref_col="pref")
+    if battles["pref"].isna().any():
+        invalid = sorted(
+            set(battles.loc[battles["pref"].isna(), winner_col].astype(str))
+        )
+        raise ValueError(
+            f"Meta-eval scoring requires canonical winner labels; got {invalid}."
+        )
+    return _fit_connected_preferences(battles, pref_col="pref")
 
 
 def _bt_ratings(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
@@ -53,10 +73,13 @@ def _bt_ratings(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float
 
 
 def _bt_ratings_soft(df_sub: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
-    human = _hard_bradley_terry(df_sub[["model_a", "model_b", "winner"]], "winner")
-    llm = fit_bradley_terry(
-        df_sub[["model_a", "model_b", "pref_llm"]], pref_col="pref_llm"
-    )
+    try:
+        human = _hard_bradley_terry(df_sub[["model_a", "model_b", "winner"]], "winner")
+        llm = _fit_connected_preferences(
+            df_sub[["model_a", "model_b", "pref_llm"]], pref_col="pref_llm"
+        )
+    except ValueError:
+        return {}, {}
     return human, llm
 
 
@@ -221,25 +244,30 @@ def compute_elo_gap_summary(
                     sample = sample[sample["winner_llm"] != "tie"]
                 if sample.empty:
                     continue
-                if soft:
-                    other_human["pref"] = other_human["winner"].map(winner_to_pref)
-                    model_llm = sample[["model_a", "model_b", "pref_llm"]].rename(
-                        columns={"pref_llm": "pref"}
-                    )
-                    hybrid = pd.concat(
-                        [
-                            other_human[["model_a", "model_b", "pref"]],
-                            model_llm,
-                        ],
-                        ignore_index=True,
-                    )
-                    hybrid_ratings = fit_bradley_terry(hybrid, pref_col="pref")
-                else:
-                    model_llm = sample[["model_a", "model_b", "winner_llm"]].rename(
-                        columns={"winner_llm": "winner"}
-                    )
-                    hybrid = pd.concat([other_human, model_llm], ignore_index=True)
-                    hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
+                try:
+                    if soft:
+                        other_human["pref"] = other_human["winner"].map(winner_to_pref)
+                        model_llm = sample[["model_a", "model_b", "pref_llm"]].rename(
+                            columns={"pref_llm": "pref"}
+                        )
+                        hybrid = pd.concat(
+                            [
+                                other_human[["model_a", "model_b", "pref"]],
+                                model_llm,
+                            ],
+                            ignore_index=True,
+                        )
+                        hybrid_ratings = _fit_connected_preferences(
+                            hybrid, pref_col="pref"
+                        )
+                    else:
+                        model_llm = sample[["model_a", "model_b", "winner_llm"]].rename(
+                            columns={"winner_llm": "winner"}
+                        )
+                        hybrid = pd.concat([other_human, model_llm], ignore_index=True)
+                        hybrid_ratings = _hard_bradley_terry(hybrid, "winner")
+                except ValueError:
+                    continue
                 if model in hybrid_ratings and model in human_ratings:
                     gaps.append(abs(hybrid_ratings[model] - human_ratings[model]))
             if gaps:
@@ -275,9 +303,10 @@ def score_meta_eval(
     seed: int,
 ) -> dict[str, object]:
     """Compute the agreement, ranking, and held-out Elo metrics."""
+    ranking = ranking_annotations(annotations)
     metrics = compute_agreement_metrics(
-        annotations["winner"].tolist(),
-        annotations["winner_llm"].tolist(),
+        ranking["winner"].tolist(),
+        ranking["winner_llm"].tolist(),
         n_bootstraps=n_bootstraps,
         seed=seed,
     )
@@ -285,7 +314,6 @@ def score_meta_eval(
         "all": agreement_view(metrics, exclude_human_ties=False),
         "no_human_ties": agreement_view(metrics, exclude_human_ties=True),
     }
-    ranking = ranking_annotations(annotations)
     language_summary = summarize_language_splits(
         ranking,
         exclude_human_ties=not include_human_ties,

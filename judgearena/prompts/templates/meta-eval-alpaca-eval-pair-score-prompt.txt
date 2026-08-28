@@ -27,6 +27,6 @@ Evaluate and rank the models based on the quality and relevance of their outputs
 
 ## Your output, do not repeat the input above
 ```
-score_A: <a number between 0 and 10 to indicate the quality of model A's answer>
-score_B: <a number between 0 and 10 to indicate the quality of model B's answer>
+score_A: <an integer between 0 and 10 to indicate the quality of model A's answer>
+score_B: <an integer between 0 and 10 to indicate the quality of model B's answer>
 ```

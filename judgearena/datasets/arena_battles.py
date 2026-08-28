@@ -19,6 +19,27 @@ from judgearena.tasks.schema import (
 )
 
 ArenaProtocol = EloProtocol | MetaEvalProtocol
+CANONICAL_WINNERS = frozenset({"model_a", "model_b", "tie"})
+_WINNER_ALIASES_BY_ARENA = {
+    "LMArena-100k": {"tie (bothbad)": "tie"},
+    "LMArena-140k": {"both_bad": "tie"},
+    "LMArena": {"tie (bothbad)": "tie", "both_bad": "tie"},
+}
+
+
+def _canonicalize_winners(battles: pd.DataFrame, *, arena: str) -> pd.DataFrame:
+    """Map one arena's native verdicts to the shared battle-label contract."""
+    normalized = battles.copy()
+    normalized["winner"] = normalized["winner"].replace(
+        _WINNER_ALIASES_BY_ARENA.get(arena, {})
+    )
+    invalid_mask = normalized["winner"].isna() | ~normalized["winner"].isin(
+        CANONICAL_WINNERS
+    )
+    if invalid_mask.any():
+        invalid = sorted(set(normalized.loc[invalid_mask, "winner"].astype(str)))
+        raise ValueError(f"Unsupported winner labels for {arena}: {invalid}.")
+    return normalized
 
 
 def _task_sources(
@@ -56,4 +77,5 @@ def download_task_sources(task: ResolvedTaskSpec, _local_dir: Path) -> None:
 def load_task_battles(task: ResolvedTaskSpec, _local_dir: Path) -> pd.DataFrame:
     """Load and normalize the task's pinned human preference battles."""
     protocol, sources = _task_sources(task)
-    return load_arena_dataframe(protocol.arena, dataset_sources=sources)
+    battles = load_arena_dataframe(protocol.arena, dataset_sources=sources)
+    return _canonicalize_winners(battles, arena=protocol.arena)

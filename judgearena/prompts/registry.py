@@ -140,7 +140,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
         name=META_EVAL_PAIR_SCORE_PROMPT_PRESET,
         parser=JUDGE_PARSERS["meta-eval-score"],
         system_file="system-prompt.txt",
-        user_file="prompt.txt",
+        user_file="meta-eval-pair-score-prompt.txt",
     ),
     META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET: JudgePromptPreset(
         name=META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET,

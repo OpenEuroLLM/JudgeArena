@@ -123,9 +123,6 @@ def _load_arena_dataframe(
         if "question_id" not in df.columns:
             df["question_id"] = df["id"]
 
-        # 140k uses "both_bad" instead of "tie (bothbad)"
-        df["winner"] = df["winner"].replace("both_bad", "tie (bothbad)")
-
         df["benchmark"] = arena
 
     else:

@@ -1,0 +1,21 @@
+<|User Prompt|>
+{user_prompt}
+
+<|The Start of Assistant A's {completion_label}|>
+{completion_A}
+<|The End of Assistant A's {completion_label}|>
+
+<|The Start of Assistant B's {completion_label}|>
+{completion_B}
+<|The End of Assistant B's {completion_label}|>
+
+# Your output
+
+## Format description
+Your output should follow this format:
+```
+score_A: <an integer between 0 and 10 to indicate the quality of Assistant A's answer>
+score_B: <an integer between 0 and 10 to indicate the quality of Assistant B's answer>
+```
+
+## Your output, do not repeat the input above{explanation_suffix}
