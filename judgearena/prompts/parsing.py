@@ -227,23 +227,28 @@ class AlpacaEvalJSON(JudgeParser):
                 text = obj_match.group(0)
         try:
             data = json.loads(text)
-            model_a = next(
-                (
-                    entry
-                    for entry in data.get("ordered_models", [])
-                    if entry.get("model") == "m"
-                ),
-                None,
-            )
-            if model_a is None:
-                return None
-            if model_a["rank"] == 1:
-                return 0.0
-            if model_a["rank"] == 2:
-                return 1.0
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, TypeError):
             return None
-        return None
+        if not isinstance(data, dict):
+            return None
+        ordered_models = data.get("ordered_models")
+        if not isinstance(ordered_models, list) or len(ordered_models) != 2:
+            return None
+
+        ranks: dict[str, int] = {}
+        for entry in ordered_models:
+            if not isinstance(entry, dict):
+                return None
+            model = entry.get("model")
+            rank = entry.get("rank")
+            if not isinstance(model, str) or model not in {"m", "M"} or model in ranks:
+                return None
+            if type(rank) is not int or rank not in {1, 2}:
+                return None
+            ranks[model] = rank
+        if set(ranks) != {"m", "M"} or set(ranks.values()) != {1, 2}:
+            return None
+        return 0.0 if ranks["m"] == 1 else 1.0
 
 
 def parser_name(parse) -> str:

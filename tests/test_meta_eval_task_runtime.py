@@ -191,6 +191,90 @@ def test_prompt_presets_select_their_parsers():
         assert parser_name(resolved.parser) == expected_parser
 
 
+@pytest.mark.parametrize(
+    "completion",
+    [
+        "[]",
+        '{"ordered_models": ["m", "M"]}',
+        '{"ordered_models": [{"model": "m", "rank": 1}]}',
+        '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 1}]}',
+        '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "X", "rank": 2}]}',
+        '{"ordered_models": [{"model": [], "rank": 1}, {"model": "M", "rank": 2}]}',
+        '{"ordered_models": [{"model": {}, "rank": 1}, {"model": "M", "rank": 2}]}',
+        '{"ordered_models": [{"model": "m", "rank": true}, {"model": "M", "rank": 2}]}',
+        '{"ordered_models": [{"model": "m", "rank": 1}, '
+        '{"model": "M", "rank": 2}, {"model": "X", "rank": 3}]}',
+    ],
+)
+def test_alpaca_eval_json_parser_rejects_malformed_rankings(completion):
+    assert JUDGE_PARSERS["alpaca-eval-json"](completion) is None
+
+
+def test_alpaca_eval_json_parser_requires_complementary_complete_ranking():
+    parser = JUDGE_PARSERS["alpaca-eval-json"]
+
+    assert (
+        parser(
+            '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 2}]}'
+        )
+        == 0.0
+    )
+    assert (
+        parser(
+            '```json\n{"ordered_models": [{"model": "M", "rank": 1}, '
+            '{"model": "m", "rank": 2}]}\n```'
+        )
+        == 1.0
+    )
+
+
+@pytest.mark.parametrize(
+    "preset",
+    ["meta-eval-alpaca-eval-json", "meta-eval-alpaca-eval-pair-score"],
+)
+def test_meta_eval_alpaca_prompts_embed_valid_json(preset, monkeypatch):
+    captured_inputs = []
+
+    def fake_do_inference(**kwargs):
+        captured_inputs.extend(kwargs["inputs"])
+        return [
+            '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 2}]}'
+        ]
+
+    monkeypatch.setattr(evaluate_module, "do_inference", fake_do_inference)
+    instruction = 'Say "hi"\r\nnext \\ path {curly} café'
+    completion_a = 'A says "yes"\nC:\\tmp {a}'
+    completion_b = 'B says "no"\r\nD:\\tmp {b}'
+
+    evaluate_module.annotate_battles(
+        judge_chat_model=object(),
+        instructions=[instruction],
+        completions_A=[completion_a],
+        completions_B=[completion_b],
+        prompt_preset=preset,
+        truncate_input_chars=None,
+    )
+
+    rendered = captured_inputs[0].messages[-1].content
+    prompt_block = rendered.split("## Prompt\n\n", 1)[1].split(
+        "\n\n## Model Outputs", 1
+    )[0]
+    outputs_block = rendered.split("## Model Outputs\n\n", 1)[1]
+    outputs_block = outputs_block.split("\n\n## Task", 1)[0].split("\n\n", 1)[1]
+
+    assert json.loads(prompt_block) == {"instruction": instruction}
+    assert json.loads(outputs_block) == [
+        {
+            "model": "m" if preset.endswith("json") else "model A",
+            "output": completion_a,
+        },
+        {
+            "model": "M" if preset.endswith("json") else "model B",
+            "output": completion_b,
+        },
+    ]
+
+
 def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
     def fake_alpaca_annotations(**kwargs):
         return [

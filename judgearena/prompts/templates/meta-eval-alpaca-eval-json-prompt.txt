@@ -3,23 +3,23 @@ I require a leaderboard for various large language models. I'll provide you with
 ## Prompt
 
 {{
-    "instruction": "{user_prompt}",
+    "instruction": {user_prompt_json}
 }}
 
 ## Model Outputs
 
 Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
 
-{{
+[
     {{
         "model": "m",
-        "output": "{completion_A}"
+        "output": {completion_A_json}
     }},
     {{
         "model": "M",
-        "output": "{completion_B}"
+        "output": {completion_B_json}
     }}
-}}
+]
 
 ## Task
 

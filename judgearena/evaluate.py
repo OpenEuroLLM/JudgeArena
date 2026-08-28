@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 
 import numpy as np
@@ -208,18 +209,23 @@ def annotate_battles(
         completions_A = [strip_thinking_tags(c) for c in completions_A]
         completions_B = [strip_thinking_tags(c) for c in completions_B]
 
-    inputs = prompt_template.batch(
-        [
+    prompt_inputs = []
+    for user_prompt, completion_A, completion_B in zip(
+        instructions, completions_A, completions_B, strict=True
+    ):
+        completion_A = truncate(completion_A, max_len=truncate_input_chars)
+        completion_B = truncate(completion_B, max_len=truncate_input_chars)
+        prompt_inputs.append(
             {
                 "user_prompt": user_prompt,
-                "completion_A": truncate(completion_A, max_len=truncate_input_chars),
-                "completion_B": truncate(completion_B, max_len=truncate_input_chars),
+                "completion_A": completion_A,
+                "completion_B": completion_B,
+                "user_prompt_json": json.dumps(user_prompt, ensure_ascii=False),
+                "completion_A_json": json.dumps(completion_A, ensure_ascii=False),
+                "completion_B_json": json.dumps(completion_B, ensure_ascii=False),
             }
-            for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B, strict=True
-            )
-        ]
-    )
+        )
+    inputs = prompt_template.batch(prompt_inputs)
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     judge_results = do_inference(
