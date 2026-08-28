@@ -154,7 +154,12 @@ def download_mt_bench_model_answer(
 ) -> Path:
     """Download a cached MT-Bench model-answer file if missing."""
     resolved = task or _task()
-    root = local_dir or data_root / "mt-bench"
+    if local_dir is not None:
+        root = local_dir
+    elif task is not None:
+        root = _task_cache_dir(resolved, data_root / "tables")
+    else:
+        root = data_root / "mt-bench"
     answer_path = root / "data" / "mt_bench" / "model_answer" / f"{model_id}.jsonl"
     if answer_path.exists():
         return answer_path
