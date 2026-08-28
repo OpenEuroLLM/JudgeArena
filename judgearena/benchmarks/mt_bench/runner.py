@@ -85,6 +85,8 @@ def _generate_mt_bench_completions(
     cfg: RunConfig,
     protocol: MTBenchProtocol,
     questions_df: pd.DataFrame,
+    *,
+    task: ResolvedTaskSpec | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     cache_prefix = cfg.task
 
@@ -110,8 +112,11 @@ def _generate_mt_bench_completions(
         )
 
     def _load_or_generate(model_name: str, *, role: str) -> pd.DataFrame:
+        loader_kwargs = {"task": task} if task is not None else {}
         loaded_answers = load_mt_bench_model_answers(
-            model_name, n_instructions=cfg.generation.n_instructions
+            model_name,
+            n_instructions=cfg.generation.n_instructions,
+            **loader_kwargs,
         )
         if loaded_answers is not None:
             return _align_mt_bench_completions(
@@ -381,6 +386,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         cfg=cfg,
         protocol=protocol,
         questions_df=questions_df,
+        task=task,
     )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
     if resolved_prompt.delegated:

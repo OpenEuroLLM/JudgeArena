@@ -146,6 +146,7 @@ def test_resolve_plan_explicit_model_b_overrides_native():
     [
         ("alpaca-eval", "gpt4_1106_preview"),
         ("mt-bench", "gpt-4"),
+        ("mt-bench-official", "gpt-3.5-turbo"),
         ("m-arena-hard-v0.1-uk", "CohereLabs/aya-expanse-8b"),
         ("m-arena-hard-v2.0-EU", "google/gemini-2.5-flash"),
     ],

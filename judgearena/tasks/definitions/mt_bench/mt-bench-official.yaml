@@ -1,7 +1,24 @@
 extends: _base.yaml
 task: mt-bench-official
-description: MT-Bench with the official FastChat protocol, including judging both answer orders.
+description: >-
+  MT-Bench with the pinned FastChat pairwise defaults: gpt-3.5-turbo
+  baseline answers, both answer orders, and the 2048-token budget used by
+  FastChat's default gpt-4 judge.
+
+dataset:
+  sources:
+    benchmark:
+      allow_patterns:
+        - data/mt_bench/question.jsonl
+        - data/mt_bench/model_answer/gpt-3.5-turbo.jsonl
 
 protocol:
+  baseline:
+    reference_id: gpt-3.5-turbo
+    allow_runtime_override: false
   judge:
     default_swap_mode: both
+    allowed_swap_modes: [both]
+    # Pinned FastChat defaults to gpt-4 as judge, whose OpenAI path uses 2048.
+    # Its Anthropic path uses 1024, but JudgeArena has no Anthropic backend.
+    default_max_out_tokens: 2048
