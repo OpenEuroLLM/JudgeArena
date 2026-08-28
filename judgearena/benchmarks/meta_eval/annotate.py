@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
-from judgearena.evaluate import annotate_battles
+from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -55,17 +55,59 @@ def _battle_texts(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
     return instructions, completions_a, completions_b
 
 
-def _swap_batch(df: pd.DataFrame) -> pd.DataFrame:
-    swapped = df.copy()
-    swapped["conversation_a"] = df["conversation_b"]
-    swapped["conversation_b"] = df["conversation_a"]
-    swapped["model_a"] = df["model_b"]
-    swapped["model_b"] = df["model_a"]
-    return swapped
+def _annotation_frame(
+    original: pd.DataFrame,
+    annotations: list[JudgeAnnotation],
+    normalized_preferences: pd.Series,
+    *,
+    orientation: str,
+) -> pd.DataFrame:
+    """Attach shared judge outputs to the arena's stored A/B identity."""
+    rows = []
+    for annotation, preference, (_, battle) in zip(
+        annotations,
+        normalized_preferences,
+        original.iterrows(),
+        strict=True,
+    ):
+        # Preserve the meta-eval methodology's existing missing-parse policy.
+        if preference is None or pd.isna(preference):
+            preference = 0.5
+        swapped = orientation == "swapped"
+        rows.append(
+            {
+                "question_id": battle["question_id"],
+                "model_a": battle["model_a"],
+                "model_b": battle["model_b"],
+                "winner": battle["winner"],
+                "lang": battle["lang"],
+                "instruction": annotation.instruction,
+                "completion_a": (
+                    annotation.completion_B if swapped else annotation.completion_A
+                ),
+                "completion_b": (
+                    annotation.completion_A if swapped else annotation.completion_B
+                ),
+                "judge_input": serialize_judge_input(annotation.judge_input),
+                "judge_completion": annotation.judge_completion,
+                "winner_llm": preference_to_winner(preference),
+                "pref_llm": float(preference),
+                "orientation": orientation,
+                "presented_model_a": (
+                    battle["model_b"] if swapped else battle["model_a"]
+                ),
+                "presented_model_b": (
+                    battle["model_a"] if swapped else battle["model_b"]
+                ),
+                "presented_completion_a": annotation.completion_A,
+                "presented_completion_b": annotation.completion_B,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
-def _judge_pass(
-    df_batch: pd.DataFrame,
+def annotate_sample(
+    df_sample: pd.DataFrame,
     cfg: RunConfig,
     *,
     judge_chat_model,
@@ -76,102 +118,38 @@ def _judge_pass(
         raise ValueError(
             f"Prompt preset {resolved_prompt.preset_name!r} has no judge parser."
         )
-    instructions, completions_a, completions_b = _battle_texts(df_batch)
-    annotations = annotate_battles(
+
+    instructions, completions_a, completions_b = _battle_texts(df_sample)
+    annotations, reversed_annotations, preferences = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
         instructions=instructions,
         completions_A=completions_a,
         completions_B=completions_b,
+        swap_mode=cfg.judge.swap_mode,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=resolved_prompt.user_prompt_template,
         prompt_preset=resolved_prompt.preset_name,
+        parse=parser,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
         use_tqdm=cfg.run.use_tqdm,
-        collect_top_logprobs=parser.requires_top_logprobs,
     )
-    rows = []
-    for annotation, (_, battle) in zip(annotations, df_batch.iterrows(), strict=True):
-        completion = annotation.judge_completion
-        preference = parser(
-            completion,
-            top_logprobs=annotation.judge_top_logprobs,
-        )
-        # Erlis's methodology treats an unparseable verdict as a tie.
-        if preference is None or pd.isna(preference):
-            preference = 0.5
-        winner = preference_to_winner(preference)
-        rows.append(
-            {
-                "question_id": battle["question_id"],
-                "model_a": battle["model_a"],
-                "model_b": battle["model_b"],
-                "winner": battle["winner"],
-                "lang": battle["lang"],
-                "instruction": annotation.instruction,
-                "completion_a": annotation.completion_A,
-                "completion_b": annotation.completion_B,
-                "judge_input": serialize_judge_input(annotation.judge_input),
-                "judge_completion": completion,
-                "winner_llm": winner,
-                "pref_llm": float(preference),
-            }
-        )
-    return pd.DataFrame(rows)
 
-
-def _normalize_pass(
-    pass_frame: pd.DataFrame, original: pd.DataFrame, *, orientation: str
-) -> pd.DataFrame:
-    """Map a judged pass back onto the arena's stored A/B identity."""
-    normalized = pass_frame.copy()
-    normalized["orientation"] = orientation
-    normalized["presented_model_a"] = pass_frame["model_a"].tolist()
-    normalized["presented_model_b"] = pass_frame["model_b"].tolist()
-    normalized["presented_completion_a"] = pass_frame["completion_a"].tolist()
-    normalized["presented_completion_b"] = pass_frame["completion_b"].tolist()
-    normalized["model_a"] = original["model_a"].tolist()
-    normalized["model_b"] = original["model_b"].tolist()
-    normalized["winner"] = original["winner"].tolist()
-    if orientation == "swapped":
-        normalized["completion_a"] = pass_frame["completion_b"].tolist()
-        normalized["completion_b"] = pass_frame["completion_a"].tolist()
-        normalized["winner_llm"] = [
-            invert_winner(winner) for winner in pass_frame["winner_llm"]
-        ]
-        normalized["pref_llm"] = 1.0 - pass_frame["pref_llm"]
-    return normalized
-
-
-def annotate_sample(
-    df_sample: pd.DataFrame,
-    cfg: RunConfig,
-    *,
-    judge_chat_model,
-    resolved_prompt: ResolvedJudgePrompt,
-) -> pd.DataFrame:
+    n_battles = len(df_sample)
     parts = [
-        _normalize_pass(
-            _judge_pass(
-                df_sample,
-                cfg,
-                judge_chat_model=judge_chat_model,
-                resolved_prompt=resolved_prompt,
-            ),
+        _annotation_frame(
             df_sample,
+            annotations,
+            preferences.iloc[:n_battles],
             orientation="forward",
         )
     ]
-    if cfg.judge.swap_mode == "both":
+    if reversed_annotations is not None:
         parts.append(
-            _normalize_pass(
-                _judge_pass(
-                    _swap_batch(df_sample),
-                    cfg,
-                    judge_chat_model=judge_chat_model,
-                    resolved_prompt=resolved_prompt,
-                ),
+            _annotation_frame(
                 df_sample,
+                reversed_annotations,
+                preferences.iloc[n_battles:],
                 orientation="swapped",
             )
         )

@@ -9,6 +9,7 @@ import pytest
 
 import judgearena.benchmarks.meta_eval.annotate as annotate_module
 import judgearena.benchmarks.meta_eval.runner as runner_module
+import judgearena.evaluate as evaluate_module
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
     invert_winner,
@@ -209,7 +210,7 @@ def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
             )
         ]
 
-    monkeypatch.setattr(annotate_module, "annotate_battles", fake_alpaca_annotations)
+    monkeypatch.setattr(evaluate_module, "annotate_battles", fake_alpaca_annotations)
     cfg = _cfg("unused", judge={"model": "Dummy/j", "prompt_preset": "alpaca-eval"})
     annotations = annotate_module.annotate_sample(
         _battles().head(1),
@@ -220,6 +221,49 @@ def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
 
     assert annotations.loc[0, "winner_llm"] == "model_b"
     assert annotations.loc[0, "pref_llm"] == pytest.approx(0.75)
+
+
+def test_meta_eval_delegates_judging_parsing_and_swapping_to_shared_path(monkeypatch):
+    captured = {}
+
+    def fake_judge_and_parse_prefs(**kwargs):
+        captured.update(kwargs)
+        annotation = JudgeAnnotation(
+            instruction=kwargs["instructions"][0],
+            completion_A=kwargs["completions_A"][0],
+            completion_B=kwargs["completions_B"][0],
+            judge_completion="unparseable",
+            judge_input="prompt",
+        )
+        return [annotation], None, pd.Series([float("nan")])
+
+    monkeypatch.setattr(
+        annotate_module, "judge_and_parse_prefs", fake_judge_and_parse_prefs
+    )
+    cfg = _cfg(
+        "unused",
+        judge={
+            "model": "Dummy/j",
+            "prompt_preset": "arena-hard",
+            "strip_thinking_before_judging": True,
+        },
+        generation={"truncate_judge_input_chars": 123},
+    )
+    resolved = resolve_judge_prompt(preset="arena-hard")
+
+    annotations = annotate_module.annotate_sample(
+        _battles().head(1),
+        cfg,
+        judge_chat_model=object(),
+        resolved_prompt=resolved,
+    )
+
+    assert captured["swap_mode"] == "fixed"
+    assert captured["parse"] is resolved.parser
+    assert captured["strip_thinking_before_judging"] is True
+    assert captured["truncate_input_chars"] == 123
+    assert annotations.loc[0, "winner_llm"] == "tie"
+    assert annotations.loc[0, "pref_llm"] == 0.5
 
 
 def test_agreement_metrics_on_fixture():
@@ -248,7 +292,7 @@ def test_degenerate_agreement_reports_nan_kappa():
 def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
     monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(annotate_module, "annotate_battles", _fake_annotations)
+    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
     cfg = _cfg(
         tmp_path,
         meta_eval={
@@ -283,7 +327,7 @@ def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
 def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
     monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(annotate_module, "annotate_battles", _fake_annotations)
+    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
     cfg = _cfg(
         tmp_path,
         judge={"model": "Dummy/j", "swap_mode": "both"},
