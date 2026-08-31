@@ -351,8 +351,7 @@ class MetaEvalArgs(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     arena: str | None = None
-    """Arena supplying the human-labeled battles. Derived from the task
-    definition; an explicit value must match it."""
+    """Arena supplying the human-labeled battles. Defaults to the task definition."""
 
     top_models: int = Field(default=20, ge=2)
     """Keep the N models with the most battles, then judge only battles fought

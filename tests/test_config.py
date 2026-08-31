@@ -116,13 +116,20 @@ def test_elo_config_allows_runtime_scoring_overrides():
     assert cfg.elo.soft_elo_temperature == 0.7
 
 
-def test_meta_eval_config_derives_arena():
-    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
+def test_meta_eval_config_defaults_do_not_replace_explicit_arena():
+    default = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
+    override = RunConfig(
+        task="meta-eval-comparia",
+        judge={"model": "Dummy/j"},
+        meta_eval={"arena": "CustomArena"},
+    )
 
-    assert cfg.meta_eval is not None
-    assert cfg.meta_eval.arena == "ComparIA"
-    assert cfg.meta_eval.n_bootstraps == 20
-    assert cfg.elo is None
+    assert (default.meta_eval.arena, override.meta_eval.arena) == (
+        "ComparIA",
+        "CustomArena",
+    )
+    assert default.meta_eval.n_bootstraps == 20
+    assert default.elo is None
 
 
 def test_meta_eval_rejects_a_model_under_evaluation():
