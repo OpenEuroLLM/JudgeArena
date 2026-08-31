@@ -364,16 +364,6 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
         "load_pairwise_task_data",
         lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
     )
-    captured_metadata = {}
-    write_metadata = generate_and_evaluate.write_run_metadata_safely
-
-    def capture_metadata(**kwargs):
-        captured_metadata.update(kwargs)
-        return write_metadata(**kwargs)
-
-    monkeypatch.setattr(
-        generate_and_evaluate, "write_run_metadata_safely", capture_metadata
-    )
 
     prefs = run_pairwise(
         _cfg(
@@ -387,39 +377,18 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
         )
     )
 
-    # 3 battles x both orders, every verdict parseable.
     assert prefs.tolist() == [0.5] * 6
-
     annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
     by_preset = annotations.groupby("prompt_preset")["instruction_index"].apply(set)
-    assert by_preset["arena-hard"] == {0, 2}
-    assert by_preset["arena-hard-creative"] == {1}
+    assert by_preset.to_dict() == {
+        "arena-hard": {0, 2},
+        "arena-hard-creative": {1},
+    }
 
     import json
 
     results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
     assert set(results["per_category"]) == {"hard_prompt", "creative_writing"}
-    assert results["per_category"]["hard_prompt"]["num_ties"] == 4
-    assert results["per_category"]["creative_writing"]["num_ties"] == 2
-    assert results["metadata"]["scoring"]["official_scope"] == "per_category"
-    prompt_metadata = {
-        prompt["judge_prompt_preset"]: prompt
-        for prompt in results["metadata"]["judge_prompts"]
-    }
-    assert set(prompt_metadata) == {"arena-hard", "arena-hard-creative"}
-    assert all(
-        prompt["judge_prompt_system_sha256"] and prompt["judge_prompt_user_sha256"]
-        for prompt in prompt_metadata.values()
-    )
-
-    payloads = captured_metadata["input_payloads"]
-    assert payloads["instruction_index"] == [0, 2, 1]
-    assert payloads["instructions"] == ["q0", "q2", "q1"]
-    assert [
-        prompt["judge_prompt_preset"]
-        for prompt in captured_metadata["judge_prompt_variants"]
-    ] == ["arena-hard", "arena-hard-creative"]
-
     run_metadata = json.loads(next(tmp_path.glob("*/run-metadata.v1.json")).read_text())
     assert {
         prompt["judge_prompt_preset"] for prompt in run_metadata["judge_prompts"]

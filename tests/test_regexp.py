@@ -1,3 +1,4 @@
+import hashlib
 import math
 
 import pytest
@@ -194,23 +195,24 @@ def test_alpaca_eval_preset_resolves_token_parser():
     assert "{completion_A}" in resolved.user_prompt_template
 
 
-def test_arena_hard_preset_resolves_verdict_parser():
-    from judgearena.prompts.registry import resolve_judge_prompt
-
-    resolved = resolve_judge_prompt(preset="arena-hard")
+@pytest.mark.parametrize(
+    ("preset", "system_sha256"),
+    [
+        (
+            "arena-hard",
+            "03f68010febd7a6405102ef882b4dd5a9700c56b2e1ff286d3b38f5d3a929bbf",
+        ),
+        (
+            "arena-hard-creative",
+            "171489efbca7f19fb520e1b3c23783c76af7c723e770fe897a55f391684aa358",
+        ),
+    ],
+)
+def test_arena_hard_presets_match_upstream_bytes(preset, system_sha256):
+    resolved = resolve_judge_prompt(preset=preset)
 
     assert resolved.parser is parse_arena_hard_verdict
-    assert resolved.system_prompt.startswith(
-        "Please act as an impartial judge and evaluate the quality"
+    assert hashlib.sha256(resolved.system_prompt.encode()).hexdigest() == system_sha256
+    assert hashlib.sha256(resolved.user_prompt_template.encode()).hexdigest() == (
+        "82fc205856141b8751263b96f25b345b4f0be39c1548ba067f5ac0e3f224b5c9"
     )
-    assert "[[A>>B]]" in resolved.system_prompt
-    assert "<|The Start of Assistant A's Answer|>" in resolved.user_prompt_template
-    assert not resolved.system_prompt.endswith("\n")
-    assert not resolved.user_prompt_template.endswith("\n")
-
-    creative = resolve_judge_prompt(preset="arena-hard-creative")
-    assert creative.system_prompt.startswith(
-        "Please act as an impartial judge and evaluate the quality"
-    )
-    assert not creative.system_prompt.endswith("\n")
-    assert not creative.user_prompt_template.endswith("\n")
