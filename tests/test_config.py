@@ -35,79 +35,57 @@ def test_generate_config_constructs():
 def _registered_task(
     *,
     default_swap_mode: str = "both",
-    allowed_swap_modes: tuple[str, ...] = ("both",),
     default_temperature: float | None = 0.25,
     default_max_out_tokens: int | None = 4096,
     default_top_logprobs: int | None = 5,
-    allow_runtime_override: bool = True,
 ):
     return SimpleNamespace(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
                 judge=SimpleNamespace(
                     default_swap_mode=default_swap_mode,
-                    allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
                     default_max_out_tokens=default_max_out_tokens,
                     default_top_logprobs=default_top_logprobs,
                 ),
-                baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
         )
     )
 
 
-def test_registered_task_applies_judge_defaults(monkeypatch):
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, ("both", 0.25, 4096, 5)),
+        (
+            {
+                "swap_mode": "random",
+                "temperature": None,
+                "max_out_tokens": 512,
+                "top_logprobs": 2,
+            },
+            ("random", None, 512, 2),
+        ),
+    ],
+)
+def test_registered_task_defaults_do_not_replace_explicit_judge_config(
+    monkeypatch, overrides, expected
+):
     monkeypatch.setattr(
         config_module, "get_packaged_task", lambda _task: _registered_task()
     )
     data = _base_generate()
     data["task"] = "yaml-task"
+    data["judge"].update(overrides)
 
     cfg = RunConfig(**data)
 
-    assert cfg.judge.swap_mode == "both"
-    assert cfg.judge.temperature == 0.25
-    assert cfg.judge.max_out_tokens == 4096
-    assert cfg.judge.top_logprobs == 5
-
-
-def test_registered_task_keeps_explicit_judge_max_out_tokens(monkeypatch):
-    monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-    data["judge"]["max_out_tokens"] = 512
-
-    cfg = RunConfig(**data)
-
-    assert cfg.judge.max_out_tokens == 512
-
-
-def test_registered_task_rejects_unsupported_swap_mode(monkeypatch):
-    monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-    data["judge"]["swap_mode"] = "fixed"
-
-    with pytest.raises(ValidationError, match="not supported"):
-        RunConfig(**data)
-
-
-def test_registered_task_can_forbid_baseline_override(monkeypatch):
-    monkeypatch.setattr(
-        config_module,
-        "get_packaged_task",
-        lambda _task: _registered_task(allow_runtime_override=False),
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-
-    with pytest.raises(ValidationError, match="cannot override"):
-        RunConfig(**data)
+    assert (
+        cfg.judge.swap_mode,
+        cfg.judge.temperature,
+        cfg.judge.max_out_tokens,
+        cfg.judge.top_logprobs,
+    ) == expected
 
 
 def test_elo_config_derives_arena():
@@ -118,12 +96,11 @@ def test_elo_config_derives_arena():
     assert cfg.elo.soft_elo_temperature == 0.3
 
 
-def test_elo_config_rejects_arena_that_conflicts_with_task():
+def test_elo_config_keeps_explicit_arena_override():
     data = _base_elo()
     data["elo"] = {"arena": "LMArena-100k"}
 
-    with pytest.raises(ValidationError, match="does not match task"):
-        RunConfig(**data)
+    assert RunConfig(**data).elo.arena == "LMArena-100k"
 
 
 def test_elo_config_allows_runtime_scoring_overrides():

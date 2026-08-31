@@ -308,8 +308,7 @@ class EloArgs(BaseModel):
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     arena: str | None = None
-    """Arena whose battles supply opponents. Derived from the task definition;
-    an explicit value must match it."""
+    """Arena whose battles supply opponents. Defaults to the task definition."""
 
     baseline_model: str | None = None
     """Model anchored at 1000 ELO; ratings are reported relative to it."""
@@ -425,14 +424,8 @@ class RunConfig(BaseSettings):
         task_judge = protocol.judge
         if "swap_mode" not in self.judge.model_fields_set:
             self.judge.swap_mode = task_judge.default_swap_mode
-        if self.judge.swap_mode not in task_judge.allowed_swap_modes:
-            raise ValueError(
-                f"judge.swap_mode={self.judge.swap_mode!r} is not supported "
-                f"by task {self.task!r}; choose from "
-                f"{list(task_judge.allowed_swap_modes)}."
-            )
         if (
-            self.judge.temperature is None
+            "temperature" not in self.judge.model_fields_set
             and task_judge.default_temperature is not None
         ):
             self.judge.temperature = task_judge.default_temperature
@@ -447,26 +440,12 @@ class RunConfig(BaseSettings):
         ):
             self.judge.top_logprobs = task_judge.default_top_logprobs
 
-        baseline = protocol.baseline
-        if (
-            self.model.baseline is not None
-            and getattr(baseline, "allow_runtime_override", True) is False
-        ):
-            raise ValueError(
-                f"model.baseline cannot override the baseline defined by "
-                f"task {self.task!r}."
-            )
-
         is_elo = isinstance(protocol, EloProtocol)
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if self.elo.arena is not None and self.elo.arena != protocol.arena:
-                raise ValueError(
-                    f"elo.arena={self.elo.arena!r} does not match task "
-                    f"{self.task!r} ({protocol.arena!r})."
-                )
-            self.elo.arena = protocol.arena
+            if "arena" not in self.elo.model_fields_set:
+                self.elo.arena = protocol.arena
             if "soft_elo" not in self.elo.model_fields_set:
                 self.elo.soft_elo = protocol.scoring.default_soft
             if "soft_elo_temperature" not in self.elo.model_fields_set:

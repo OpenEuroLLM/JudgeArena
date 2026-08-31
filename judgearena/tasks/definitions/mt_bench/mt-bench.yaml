@@ -41,11 +41,9 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: gpt-4
-    allow_runtime_override: true
   judge:
     default_prompt_preset: fastchat-pairwise
     default_swap_mode: fixed
-    allowed_swap_modes: [fixed, both]
     turns_mode: both
     fastchat_prompt_preset: default
     fastchat_temperature: 0.0

@@ -23,11 +23,9 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: gpt4_1106_preview
-    allow_runtime_override: true
   judge:
     default_prompt_preset: default
     default_swap_mode: fixed
-    allowed_swap_modes: [fixed, both]
   scoring:
     adapter: pairwise_win_rate
 

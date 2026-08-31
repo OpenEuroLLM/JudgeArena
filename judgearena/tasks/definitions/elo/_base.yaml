@@ -18,7 +18,6 @@ protocol:
   judge:
     default_prompt_preset: default
     default_swap_mode: fixed
-    allowed_swap_modes: [fixed, both]
   scoring:
     adapter: bradley_terry
     default_soft: true

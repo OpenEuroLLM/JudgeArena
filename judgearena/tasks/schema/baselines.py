@@ -18,14 +18,12 @@ class RuntimeRequiredBaseline(StrictFrozenModel):
 class TaskDefaultBaseline(StrictFrozenModel):
     strategy: Literal["task_default"]
     reference_id: str = Field(min_length=1)
-    allow_runtime_override: bool = True
 
 
 class CategoryDefaultsBaseline(StrictFrozenModel):
     strategy: Literal["category_defaults"]
     category_field: str = Field(min_length=1)
     references: dict[str, str] = Field(min_length=1)
-    allow_runtime_override: bool = True
 
 
 class OfficialOutputsBaseline(StrictFrozenModel):

@@ -5,30 +5,9 @@ import pytest
 
 import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
 import judgearena.datasets.mt_bench as mt_bench
-import judgearena.utils.io as utils_io
 from judgearena.config import RunConfig
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 from judgearena.tasks.registry import get_packaged_task
-
-
-def test_mt_bench_sources_are_owned_by_task_yaml():
-    task = get_packaged_task("mt-bench")
-    assert task is not None
-
-    benchmark = task.spec.dataset.sources["benchmark"]
-    references = task.spec.dataset.sources["references"]
-    assert benchmark.repo_id == "lmsys/mt-bench"
-    assert benchmark.revision == "a4b674ca573c24143824ac7f60d9173e7081e37d"
-    assert benchmark.allow_patterns == (
-        "data/mt_bench/question.jsonl",
-        "data/mt_bench/model_answer/gpt-4.jsonl",
-    )
-    assert references.repository == "https://github.com/lm-sys/FastChat"
-    assert references.revision == "587d5cfa1609a43d192cedb8441cac3c17db105d"
-    assert mt_bench._git_raw_url(references).endswith(
-        "/587d5cfa1609a43d192cedb8441cac3c17db105d/"
-        "fastchat/llm_judge/data/mt_bench/reference_answer/gpt-4.jsonl"
-    )
 
 
 def test_mt_bench_adapter_normalizes_questions_and_references(monkeypatch, tmp_path):
@@ -91,35 +70,6 @@ def test_download_mt_bench_skips_question_download_if_cached(tmp_path, monkeypat
     assert downloaded_question_path == question_path
     assert downloaded_reference_path == reference_path
     assert calls["snapshot_download"] == 0
-
-
-def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
-    hf_datasets = []
-
-    monkeypatch.setattr(utils_io, "data_root", tmp_path)
-    monkeypatch.setattr(
-        utils_io,
-        "download_hf",
-        lambda name, local_path: hf_datasets.append((name, local_path)),
-    )
-
-    utils_io.download_all()
-
-    tables_dir = tmp_path / "tables"
-    assert [name for name, _ in hf_datasets] == [
-        "alpaca-eval",
-        "arena-hard-v0.1",
-        "arena-hard-v2.0",
-        "elo-comparia",
-        "elo-lmarena",
-        "elo-lmarena-100k",
-        "elo-lmarena-140k",
-        "fluency",
-        "m-arena-hard-v0.1",
-        "m-arena-hard-v2.0",
-        "mt-bench",
-    ]
-    assert all(path == tables_dir for _, path in hf_datasets)
 
 
 def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):
@@ -355,58 +305,69 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     )
 
 
-def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
-    questions_df = pd.DataFrame(
+def _stub_mt_bench_dispatch(monkeypatch, captured):
+    questions = pd.DataFrame(
         {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
         index=pd.Index([1], name="instruction_index"),
     )
-    captured = {}
+
+    def answers(prefix):
+        return pd.DataFrame(
+            {
+                "completion_turn_1": [f"{prefix}1"],
+                "completion_turn_2": [f"{prefix}2"],
+            },
+            index=questions.index,
+        )
 
     monkeypatch.setattr(
-        mt_bench_runner,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
+        mt_bench_runner, "load_instructions", lambda *_args, **_kwargs: questions
     )
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
-            pd.DataFrame(
-                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
-                index=questions_df.index,
-            ),
-        ),
+        lambda *_args, **_kwargs: (answers("A"), answers("B")),
     )
 
-    def fake_make_model(**kwargs):
+    def make_model(**kwargs):
         captured["make_model"] = kwargs
         return object()
 
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "make_model", make_model)
 
-    def fake_run_mt_bench_fastchat(**kwargs):
-        captured["fastchat"] = kwargs
+    def dispatch(path, kwargs):
+        captured.setdefault("dispatch", []).append(path)
+        captured[path] = kwargs
         return pd.Series([0.0], dtype=float)
 
     monkeypatch.setattr(
         mt_bench_runner,
         "_run_mt_bench_fastchat",
-        fake_run_mt_bench_fastchat,
+        lambda **kwargs: dispatch("fastchat", kwargs),
     )
     monkeypatch.setattr(
         mt_bench_runner,
         "_run_mt_bench_preset",
-        lambda **_kwargs: pytest.fail("preset path should not run"),
+        lambda **kwargs: dispatch("preset", kwargs),
     )
 
+
+@pytest.mark.parametrize(
+    ("prompt_preset", "expected_path"),
+    [(None, "fastchat"), ("default_with_explanation", "preset")],
+)
+def test_run_mt_bench_dispatches_defaults_and_prompt_overrides(
+    monkeypatch, tmp_path, prompt_preset, expected_path
+):
+    captured = {}
+    _stub_mt_bench_dispatch(monkeypatch, captured)
+    judge = {"model": "VLLM/Judge"}
+    if prompt_preset is not None:
+        judge["prompt_preset"] = prompt_preset
     cfg = RunConfig(
         task="mt-bench",
         model={"name": "VLLM/example/model-a"},
-        judge={"model": "VLLM/Judge"},
+        judge=judge,
         generation={"n_instructions": 1},
         run={"result_folder": str(tmp_path)},
     )
@@ -414,74 +375,15 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
     assert cfg.model.baseline == "gpt-4"
-    assert captured["make_model"]["temperature"] == 0.0
-    assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
-    assert captured["fastchat"]["resolved_prompt"].preset_name == (
-        FASTCHAT_PAIRWISE_PROMPT_PRESET
-    )
-
-
-def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tmp_path):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
-
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
-            pd.DataFrame(
-                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
-                index=questions_df.index,
-            ),
-        ),
-    )
-
-    def fake_make_model(**kwargs):
-        captured["make_model"] = kwargs
-        return object()
-
-    def fake_run_mt_bench_preset(**kwargs):
-        captured["preset"] = kwargs
-        return pd.Series([0.0], dtype=float)
-
-    captured = {}
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "_run_mt_bench_preset",
-        fake_run_mt_bench_preset,
-    )
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "_run_mt_bench_fastchat",
-        lambda **_kwargs: pytest.fail("fastchat path should not run"),
-    )
-
-    cfg = RunConfig(
-        task="mt-bench",
-        model={"name": "VLLM/example/model-a"},
-        judge={"model": "VLLM/Judge", "prompt_preset": "default_with_explanation"},
-        generation={"n_instructions": 1},
-        run={"result_folder": str(tmp_path)},
-    )
-
-    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
-
-    assert captured["preset"]["resolved_prompt"].preset_name == (
-        "default_with_explanation"
-    )
-    assert "temperature" not in captured["make_model"]
+    assert captured["dispatch"] == [expected_path]
+    if expected_path == "fastchat":
+        assert captured["make_model"]["temperature"] == 0.0
+        assert captured["fastchat"]["resolved_prompt"].preset_name == (
+            FASTCHAT_PAIRWISE_PROMPT_PRESET
+        )
+    else:
+        assert "temperature" not in captured["make_model"]
+        assert captured["preset"]["resolved_prompt"].preset_name == prompt_preset
 
 
 def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):

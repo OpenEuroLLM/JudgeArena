@@ -14,4 +14,3 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: gpt-4-0314
-    allow_runtime_override: true

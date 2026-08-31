@@ -37,12 +37,10 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
             "baseline": {
                 "strategy": "task_default",
                 "reference_id": "reference-output",
-                "allow_runtime_override": True,
             },
             "judge": {
                 "default_prompt_preset": "default",
                 "default_swap_mode": "fixed",
-                "allowed_swap_modes": ["fixed", "both"],
             },
             "scoring": {"adapter": "pairwise_win_rate"},
         },
