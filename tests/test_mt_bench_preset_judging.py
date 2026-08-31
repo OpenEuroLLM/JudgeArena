@@ -156,14 +156,16 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     ]
 
 
-def test_select_preset_prompt_forwards_named_parser(tmp_path):
+def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
+    sentinel = object()
+    monkeypatch.setitem(JUDGE_PARSERS, "sentinel", sentinel)
     system_file = tmp_path / "system.txt"
     user_file = tmp_path / "user.txt"
-    system_file.write_text("Custom system", encoding="utf-8")
+    system_file.write_text("system")
     user_file.write_text(
-        "Q: {user_prompt} A: {completion_A} B: {completion_B}\n# Your output\nscores"
+        "{user_prompt} {completion_A} {completion_B}\n# Your output\nscores"
     )
 
     prompt = _select_preset_prompt(
@@ -172,7 +174,7 @@ def test_select_preset_prompt_forwards_named_parser(tmp_path):
         reference_categories=REFERENCE_CATEGORIES,
         system_file=str(system_file),
         user_file=str(user_file),
-        parser="score",
+        parser="sentinel",
     )
 
-    assert prompt.parse is JUDGE_PARSERS["score"]
+    assert prompt.parse is sentinel

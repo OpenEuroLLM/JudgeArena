@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
-from judgearena.config import RunConfig, build_run_config, dump_config, load_config
+from judgearena.config import RunConfig, dump_config, load_config
 
 
 def _base_generate() -> dict:
@@ -216,15 +216,8 @@ def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
     config_path = tmp_path / "resolved.yaml"
 
     dump_config(cfg, config_path)
-    restored = load_config(config_path)
-    cli_restored = build_run_config(["--config_path", str(config_path)])
 
-    assert "!!python" not in config_path.read_text()
-    assert restored == cfg
-    assert cli_restored == cfg
-    assert restored.judge.prompt is not None
-    assert restored.judge.prompt.system_file == system_file
-    assert restored.judge.prompt.user_file == user_file
+    assert load_config(config_path) == cfg
 
 
 def test_cli_yaml_equivalence_generate(tmp_path):

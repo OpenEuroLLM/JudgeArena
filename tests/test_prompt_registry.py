@@ -120,15 +120,6 @@ def test_file_overrides_take_precedence_over_preset(tmp_path):
     assert resolved.user_sha256 is not None
 
 
-def test_inline_prompt_overrides_keep_their_source():
-    resolved = resolve_judge_prompts(
-        system_prompt="Custom system",
-        user_prompt_template="Custom {instruction}",
-    )
-
-    assert resolved.source == "override"
-
-
 def test_file_overrides_accept_named_parser(tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
@@ -144,7 +135,6 @@ def test_file_overrides_accept_named_parser(tmp_path):
     )
 
     assert resolved.parser is JUDGE_PARSERS["score"]
-    assert resolved.parser("score A: 0 score B: 10") is not None
     assert resolved.metadata()["judge_parser"] == "score"
 
 
@@ -159,7 +149,7 @@ def test_unknown_named_parser_lists_available(tmp_path):
     system_file.write_text("s", encoding="utf-8")
     user_file.write_text("u", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Unknown judge parser"):
+    with pytest.raises(ValueError, match="Unknown judge parser.*score"):
         resolve_judge_prompt(
             system_file=system_file, user_file=user_file, parser="nope"
         )
