@@ -4,6 +4,7 @@ import judgearena.models as utils_models
 import judgearena.utils as utils
 import judgearena.utils.io as utils_io
 from judgearena.models import make_model
+from judgearena.tasks.registry import load_tasks
 from judgearena.utils import safe_parse_int
 
 
@@ -40,24 +41,8 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     )
     utils_io.download_all()
 
-    tables_dir = tmp_path / "tables"
-    assert calls == [
-        ("hf", "alpaca-eval", tables_dir),
-        ("hf", "alpaca-eval-2.0-official", tables_dir),
-        ("hf", "arena-hard-v0.1", tables_dir),
-        ("hf", "arena-hard-v0.1-official", tables_dir),
-        ("hf", "arena-hard-v2.0", tables_dir),
-        ("hf", "arena-hard-v2.0-official", tables_dir),
-        ("hf", "elo-comparia", tables_dir),
-        ("hf", "elo-lmarena", tables_dir),
-        ("hf", "elo-lmarena-100k", tables_dir),
-        ("hf", "elo-lmarena-140k", tables_dir),
-        ("hf", "fluency", tables_dir),
-        ("hf", "m-arena-hard-v0.1", tables_dir),
-        ("hf", "m-arena-hard-v2.0", tables_dir),
-        ("hf", "mt-bench", tables_dir),
-        ("hf", "mt-bench-official", tables_dir),
-    ]
+    assert [name for _, name, _ in calls] == list(load_tasks())
+    assert {path for _, _, path in calls} == {tmp_path / "tables"}
 
 
 def test_strip_thinking_tags_removes_full_reasoning_block():

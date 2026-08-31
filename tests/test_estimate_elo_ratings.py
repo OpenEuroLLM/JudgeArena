@@ -551,11 +551,19 @@ def test_run_elo_keeps_non_pairscore_soft_preferences(tmp_path, monkeypatch):
         ]
         return annotations, None, pd.Series([0.75] * len(annotations))
 
+    captured_prefs = []
+    original_converter = estimate_elo_ratings.prefs_to_battle_results
+
+    def capture_prefs(prefs, *args, **kwargs):
+        captured_prefs.extend(prefs)
+        return original_converter(prefs, *args, **kwargs)
+
     monkeypatch.setattr(
         estimate_elo_ratings,
         "judge_and_parse_prefs",
         fake_judge_and_parse_prefs,
     )
+    monkeypatch.setattr(estimate_elo_ratings, "prefs_to_battle_results", capture_prefs)
     result = run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path),
@@ -563,6 +571,7 @@ def test_run_elo_keeps_non_pairscore_soft_preferences(tmp_path, monkeypatch):
         )
     )
 
+    assert captured_prefs and set(captured_prefs) == {0.75}
     assert result["elo_n_bootstraps"] > 0
     assert result["model_name"] in result["mean_ratings"]
 
