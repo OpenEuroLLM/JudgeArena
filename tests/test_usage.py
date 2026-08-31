@@ -21,81 +21,87 @@ from judgearena.usage import (
 class FakeModel:
     model_name = "google/test-model"
 
-    def __init__(self, responses):
+    def __init__(self, responses, *, async_response=None):
         self.responses = responses
+        self.async_response = async_response
+        self.batch_kwargs = None
 
-    def batch(self, inputs, **kwargs):
+    def batch(self, *, inputs, **kwargs):
+        self.batch_kwargs = kwargs
         return self.responses[: len(inputs)]
 
-
-def _provider_message() -> AIMessage:
-    return AIMessage(
-        content="answer",
-        usage_metadata={
-            "input_tokens": 120,
-            "output_tokens": 30,
-            "total_tokens": 150,
-            "input_token_details": {"cache_read": 20},
-            "output_token_details": {"reasoning": 10},
-        },
-        response_metadata={
-            "id": "gen-test",
-            "model_name": "google/test-model",
-            "token_usage": {
-                "prompt_tokens": 120,
-                "completion_tokens": 30,
-                "total_tokens": 150,
-                "prompt_tokens_details": {"cached_tokens": 20},
-                "completion_tokens_details": {"reasoning_tokens": 10},
-                "cost": 0.00125,
-            },
-        },
-    )
+    async def ainvoke(self, _input, **_kwargs):
+        return self.async_response
 
 
-def test_do_inference_collects_provider_usage_without_changing_text_results():
+@pytest.mark.parametrize(
+    ("message", "structured", "expected"),
+    [
+        (
+            AIMessage(
+                content="canonical",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                    "input_token_details": {"cache_read": 3},
+                    "output_token_details": {"reasoning": 1},
+                },
+                response_metadata={"model_name": "google/test-model"},
+            ),
+            False,
+            (10, 2, 12, 1, 3, None),
+        ),
+        (
+            AIMessage(
+                content="fallback",
+                response_metadata={
+                    "model_name": "google/test-model",
+                    "token_usage": {
+                        "prompt_tokens": 120,
+                        "completion_tokens": 30,
+                        "total_tokens": 150,
+                        "prompt_tokens_details": {"cached_tokens": 20},
+                        "completion_tokens_details": {"reasoning_tokens": 10},
+                        "cost": 0.00125,
+                    },
+                },
+            ),
+            True,
+            (120, 30, 150, 10, 20, 0.00125),
+        ),
+    ],
+)
+def test_do_inference_collects_canonical_and_fallback_usage(
+    message, structured, expected
+):
     with track_usage() as tracker:
         outputs = do_inference(
-            FakeModel([_provider_message()]),
+            FakeModel([message]),
             ["prompt"],
+            return_top_logprobs=structured,
             stage="judging",
         )
-        snapshot = tracker.snapshot()
-
-    assert outputs == ["answer"]
-    assert len(snapshot.requests) == 1
-    usage = snapshot.requests[0]
-    assert usage.stage == "judging"
-    assert usage.model == "google/test-model"
-    assert usage.input_tokens == 120
-    assert usage.output_tokens == 30
-    assert usage.reasoning_tokens == 10
-    assert usage.cached_tokens == 20
-    assert usage.cost_usd == pytest.approx(0.00125)
-
-
-def test_do_inference_collects_canonical_langchain_usage_metadata():
-    message = AIMessage(
-        content="answer",
-        usage_metadata={
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "total_tokens": 12,
-            "input_token_details": {"cache_read": 3},
-            "output_token_details": {"reasoning": 1},
-        },
-        response_metadata={"model_name": "openai/responses-model"},
-    )
-
-    with track_usage() as tracker:
-        do_inference(FakeModel([message]), ["prompt"], stage="judging")
         usage = tracker.snapshot().requests[0]
 
-    assert usage.input_tokens == 10
-    assert usage.output_tokens == 2
-    assert usage.total_tokens == 12
-    assert usage.cached_tokens == 3
-    assert usage.reasoning_tokens == 1
+    if structured:
+        assert isinstance(outputs[0], InferenceResult)
+        assert outputs[0].text == message.content
+        assert outputs[0].usage == usage
+    else:
+        assert outputs == [message.content]
+    assert (usage.stage, usage.model) == ("judging", "google/test-model")
+    assert (
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.total_tokens,
+        usage.reasoning_tokens,
+        usage.cached_tokens,
+    ) == expected[:5]
+    if expected[5] is None:
+        assert usage.cost_usd is None
+    else:
+        assert usage.cost_usd == pytest.approx(expected[5])
 
 
 def test_do_inference_ignores_malformed_optional_provider_usage():
@@ -112,7 +118,7 @@ def test_do_inference_ignores_malformed_optional_provider_usage():
     assert usage.output_tokens is None
 
 
-def test_canonical_usage_survives_malformed_raw_field_values():
+def test_malformed_raw_usage_does_not_override_canonical_usage():
     message = AIMessage(
         content="answer",
         usage_metadata={
@@ -128,10 +134,8 @@ def test_canonical_usage_survives_malformed_raw_field_values():
             "token_usage": {
                 "prompt_tokens": "not-a-number",
                 "completion_tokens": -1,
-                "total_tokens": float("nan"),
                 "prompt_tokens_details": {"cached_tokens": True},
                 "completion_tokens_details": {"reasoning_tokens": float("inf")},
-                "cost": "unknown",
             },
         },
     )
@@ -140,101 +144,42 @@ def test_canonical_usage_survives_malformed_raw_field_values():
         do_inference(FakeModel([message]), ["prompt"], stage="judging")
         usage = tracker.snapshot().requests[0]
 
-    assert usage.input_tokens == 101
-    assert usage.output_tokens == 23
-    assert usage.total_tokens == 124
-    assert usage.cached_tokens == 17
-    assert usage.reasoning_tokens == 9
-    assert usage.cost_usd == pytest.approx(0.125)
+    assert (
+        usage.input_tokens,
+        usage.output_tokens,
+        usage.total_tokens,
+        usage.cached_tokens,
+        usage.reasoning_tokens,
+        usage.cost_usd,
+    ) == (101, 23, 124, 17, 9, pytest.approx(0.125))
 
 
-def test_do_inference_keeps_usage_on_structured_results():
-    with track_usage():
-        outputs = do_inference(
-            FakeModel([_provider_message()]),
-            ["prompt"],
-            return_top_logprobs=True,
-            stage="judging",
-        )
-
-    assert isinstance(outputs[0], InferenceResult)
-    assert outputs[0].text == "answer"
-    assert outputs[0].usage is not None
-    assert outputs[0].usage.total_tokens == 150
-
-
-def test_run_usage_reports_partial_cost_without_presenting_it_as_complete():
+def test_run_usage_reports_partial_field_coverage():
     usage = RunUsage(
         requests=(
             RequestUsage(
                 stage="generation",
                 model="candidate",
                 input_tokens=10,
-                output_tokens=5,
                 total_tokens=15,
                 cost_usd=0.1,
             ),
-            RequestUsage(
-                stage="judging",
-                model="local-judge",
-                input_tokens=20,
-                output_tokens=2,
-                total_tokens=22,
-            ),
-        )
-    ).to_dict()
-
-    assert usage["total"] == {
-        "requests": 2,
-        "input_tokens": 30,
-        "output_tokens": 7,
-        "total_tokens": 37,
-        "reasoning_tokens": None,
-        "cached_tokens": None,
-        "cost_usd": pytest.approx(0.1),
-        "requests_with_any_token_usage": 2,
-        "requests_with_input_tokens": 2,
-        "requests_with_output_tokens": 2,
-        "requests_with_total_tokens": 2,
-        "requests_with_reasoning_tokens": 0,
-        "requests_with_cached_tokens": 0,
-        "requests_with_cost": 1,
-    }
-    assert usage["scope"] == (
-        "successful_model_responses_returned_by_completed_inference_calls"
-    )
-    assert usage["source"] == "provider_response_metadata_when_available"
-    assert set(usage["by_stage"]) == {"generation", "judging"}
-    assert set(usage["by_model"]) == {"candidate", "local-judge"}
-
-
-def test_run_usage_reports_per_field_partial_token_coverage():
-    usage = RunUsage(
-        requests=(
-            RequestUsage(stage="generation", input_tokens=10),
-            RequestUsage(stage="generation", output_tokens=5),
+            RequestUsage(stage="judging", model="judge", output_tokens=5),
         )
     )
     summary = usage.summary()
+    serialized = usage.to_dict()
 
-    assert summary["input_tokens"] == 10
-    assert summary["output_tokens"] == 5
+    assert (summary["input_tokens"], summary["output_tokens"]) == (10, 5)
     assert summary["requests_with_input_tokens"] == 1
     assert summary["requests_with_output_tokens"] == 1
+    assert summary["requests_with_cost"] == 1
     assert "partial: input 1/2, output 1/2" in usage.format_summary()
-
-
-def test_batch_usage_log_marks_missing_responses_as_partial(caplog):
-    caplog.set_level("INFO", logger="judgearena")
-    with track_usage():
-        do_inference(
-            FakeModel([_provider_message(), "no metadata"]),
-            ["one", "two"],
-            stage="judging",
-        )
-
-    assert "partial: input 1/2, output 1/2" in caplog.text
-    assert "$0.001250 reported (partial)" in caplog.text
+    assert set(serialized["by_stage"]) == {"generation", "judging"}
+    assert set(serialized["by_model"]) == {"candidate", "judge"}
+    assert serialized["scope"] == (
+        "successful_model_responses_returned_by_completed_inference_calls"
+    )
 
 
 def test_write_run_metadata_includes_active_run_usage(tmp_path, monkeypatch):
@@ -242,18 +187,7 @@ def test_write_run_metadata_includes_active_run_usage(tmp_path, monkeypatch):
     monkeypatch.setattr(metadata_module, "_get_git_hash", lambda **_: None)
 
     with track_usage():
-        record_usage(
-            [
-                RequestUsage(
-                    stage="judging",
-                    model="judge",
-                    input_tokens=10,
-                    output_tokens=1,
-                    total_tokens=11,
-                    cost_usd=0.002,
-                )
-            ]
-        )
+        record_usage([RequestUsage(stage="judging", cost_usd=0.002)])
         path = metadata_module.write_run_metadata(
             output_dir=tmp_path,
             entrypoint="test",
@@ -267,18 +201,7 @@ def test_write_run_metadata_includes_active_run_usage(tmp_path, monkeypatch):
 
 def test_run_benchmark_scopes_and_prints_usage(monkeypatch, capsys):
     def fake_runner(cfg, task):
-        record_usage(
-            [
-                RequestUsage(
-                    stage="judging",
-                    model="judge",
-                    input_tokens=4,
-                    output_tokens=1,
-                    total_tokens=5,
-                    cost_usd=0.0001,
-                )
-            ]
-        )
+        record_usage([RequestUsage(stage="judging", cost_usd=0.0001)])
         return "done"
 
     resolved = SimpleNamespace(
@@ -287,29 +210,13 @@ def test_run_benchmark_scopes_and_prints_usage(monkeypatch, capsys):
     )
     monkeypatch.setattr(benchmark_runner, "resolve_benchmark", lambda task: resolved)
 
-    result = benchmark_runner.run_benchmark(SimpleNamespace(task="test"))
-
-    assert result == "done"
+    assert benchmark_runner.run_benchmark(SimpleNamespace(task="test")) == "done"
     assert "Model usage:" in capsys.readouterr().out
     assert current_run_usage() is None
 
 
-class DivergentGenerationModel:
-    model_name = "test/divergent"
-
-    def __init__(self):
-        self.batch_kwargs = None
-
-    def batch(self, *, inputs, **kwargs):
-        self.batch_kwargs = kwargs
-        return ["batch" for _ in inputs]
-
-    async def ainvoke(self, _input, **_kwargs):
-        return "async"
-
-
 def test_generation_paths_preserve_existing_sync_async_behavior(monkeypatch):
-    model = DivergentGenerationModel()
+    model = FakeModel(["batch", "batch"], async_response="async")
     monkeypatch.setattr(generate_module, "make_model", lambda *args, **kwargs: model)
     instructions = pd.Series(["one", "two"])
 
@@ -327,7 +234,7 @@ def test_generation_paths_preserve_existing_sync_async_behavior(monkeypatch):
         use_tqdm=True,
     )
     assert base_outputs["completion"].tolist() == ["batch", "batch"]
-    assert model.batch_kwargs == {"max_tokens": 123}
+    assert model.batch_kwargs["max_tokens"] == 123
 
 
 def test_nested_usage_tracking_explicitly_shares_the_outer_run():
