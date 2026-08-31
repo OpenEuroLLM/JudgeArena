@@ -10,6 +10,37 @@ from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 from judgearena.tasks.registry import get_packaged_task
 
 
+@pytest.mark.parametrize(
+    ("model", "judge", "expected"),
+    [
+        ({}, {}, (1024, 0, "Dummy/judge", "both", 2048)),
+        (
+            {"baseline": "custom-baseline", "max_out_tokens": 512, "seed": 42},
+            {"model": "custom-judge", "swap_mode": "random", "max_out_tokens": 256},
+            (512, 42, "custom-judge", "random", 256),
+        ),
+    ],
+)
+def test_mt_bench_official_applies_defaults_and_allows_overrides(
+    model, judge, expected
+):
+    cfg = RunConfig(
+        task="mt-bench-official",
+        model={"name": "Dummy/model", **model},
+        judge={"model": "Dummy/judge", **judge},
+    )
+
+    assert (
+        cfg.model.max_out_tokens,
+        cfg.model.seed,
+        cfg.judge.model,
+        cfg.judge.swap_mode,
+        cfg.judge.max_out_tokens,
+    ) == expected
+    if "baseline" in model:
+        assert cfg.model.baseline == model["baseline"]
+
+
 def test_mt_bench_adapter_normalizes_questions_and_references(monkeypatch, tmp_path):
     task = get_packaged_task("mt-bench")
     assert task is not None
@@ -94,6 +125,79 @@ def test_load_mt_bench_model_answers_reads_cached_baseline_file(tmp_path):
             "completion_turn_2": "B2",
         },
     ]
+
+
+def test_task_aware_model_answers_use_the_declared_task_cache(tmp_path, monkeypatch):
+    task = get_packaged_task("mt-bench-official")
+    assert task is not None
+    monkeypatch.setattr(mt_bench, "data_root", tmp_path)
+    answer_path = (
+        tmp_path
+        / "tables"
+        / "_sources"
+        / "mt-bench-official"
+        / "data"
+        / "mt_bench"
+        / "model_answer"
+        / "gpt-3.5-turbo.jsonl"
+    )
+    answer_path.parent.mkdir(parents=True)
+    answer_path.write_text('{"question_id": 1, "choices": [{"turns": ["A1", "A2"]}]}\n')
+    monkeypatch.setattr(
+        mt_bench,
+        "snapshot_download",
+        lambda **_kwargs: pytest.fail("cached official answer triggered a download"),
+    )
+
+    answers = mt_bench.load_mt_bench_model_answers(
+        "gpt-3.5-turbo",
+        task=task,
+    )
+
+    assert answers is not None
+    assert answers.to_dict(orient="records") == [
+        {
+            "instruction_index": 1,
+            "completion_turn_1": "A1",
+            "completion_turn_2": "A2",
+        }
+    ]
+
+
+def test_generation_loads_answers_from_the_resolved_task(monkeypatch):
+    task = get_packaged_task("mt-bench-official")
+    assert task is not None
+    questions = pd.DataFrame(
+        {"turn_1": ["Q1"], "turn_2": ["Q2"]},
+        index=pd.Index([1], name="instruction_index"),
+    )
+    cfg = RunConfig(
+        task="mt-bench-official",
+        model={"name": "candidate", "baseline": "gpt-3.5-turbo"},
+        judge={"model": "Dummy/judge"},
+    )
+    seen_tasks = []
+
+    def fake_load(model, n_instructions=None, *, task=None):
+        seen_tasks.append(task)
+        return pd.DataFrame(
+            {
+                "instruction_index": [1],
+                "completion_turn_1": [f"{model}-A1"],
+                "completion_turn_2": [f"{model}-A2"],
+            }
+        )
+
+    monkeypatch.setattr(mt_bench_runner, "load_mt_bench_model_answers", fake_load)
+
+    mt_bench_runner._generate_mt_bench_completions(
+        cfg=cfg,
+        protocol=task.spec.protocol,
+        questions_df=questions,
+        task=task,
+    )
+
+    assert seen_tasks == [task, task]
 
 
 def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
@@ -249,7 +353,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -353,11 +457,20 @@ def _stub_mt_bench_dispatch(monkeypatch, captured):
 
 
 @pytest.mark.parametrize(
+    ("task_name", "expected_baseline"),
+    [("mt-bench", "gpt-4"), ("mt-bench-official", "gpt-3.5-turbo")],
+)
+@pytest.mark.parametrize(
     ("prompt_preset", "expected_path"),
     [(None, "fastchat"), ("default_with_explanation", "preset")],
 )
 def test_run_mt_bench_dispatches_defaults_and_prompt_overrides(
-    monkeypatch, tmp_path, prompt_preset, expected_path
+    monkeypatch,
+    tmp_path,
+    task_name,
+    expected_baseline,
+    prompt_preset,
+    expected_path,
 ):
     captured = {}
     _stub_mt_bench_dispatch(monkeypatch, captured)
@@ -365,16 +478,16 @@ def test_run_mt_bench_dispatches_defaults_and_prompt_overrides(
     if prompt_preset is not None:
         judge["prompt_preset"] = prompt_preset
     cfg = RunConfig(
-        task="mt-bench",
+        task=task_name,
         model={"name": "VLLM/example/model-a"},
         judge=judge,
         generation={"n_instructions": 1},
         run={"result_folder": str(tmp_path)},
     )
 
-    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
+    mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task(task_name))
 
-    assert cfg.model.baseline == "gpt-4"
+    assert cfg.model.baseline == expected_baseline
     assert captured["dispatch"] == [expected_path]
     if expected_path == "fastchat":
         assert captured["make_model"]["temperature"] == 0.0
@@ -461,7 +574,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,

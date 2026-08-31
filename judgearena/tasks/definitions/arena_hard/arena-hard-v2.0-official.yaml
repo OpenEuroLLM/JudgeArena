@@ -21,7 +21,6 @@ protocol:
       coding: o3-mini-2025-01-31
       math: o3-mini-2025-01-31
       creative_writing: gemini-2.0-flash-001
-    allow_runtime_override: true
   judge:
     default_prompt_preset: arena-hard
     category_prompts:
