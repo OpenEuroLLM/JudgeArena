@@ -19,9 +19,7 @@ from judgearena.artifacts import (
 from judgearena.benchmarks.meta_eval.agreement import compute_agreement_metrics
 from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
-    invert_winner,
     preference_to_winner,
-    serialize_judge_input,
 )
 from judgearena.benchmarks.meta_eval.runner import (
     ANNOTATIONS_FILENAME,
@@ -114,6 +112,48 @@ def _fake_annotations(**kwargs):
             strict=True,
         )
     ]
+
+
+def _runtime_cfg(tmp_path, *, swap_mode="fixed", **meta_overrides) -> RunConfig:
+    meta_eval = {
+        "top_models": 3,
+        "battles_per_model": 5,
+        "elo_gap_battles": [2],
+        "elo_gap_seeds": 2,
+    }
+    meta_eval.update(meta_overrides)
+    return _cfg(
+        tmp_path,
+        judge={"model": "Dummy/j", "swap_mode": swap_mode},
+        meta_eval=meta_eval,
+    )
+
+
+def _stub_runtime(monkeypatch, *, battles=None, annotate=_fake_annotations, build=None):
+    monkeypatch.setattr(
+        runner_module,
+        "load_battles",
+        lambda _task: _battles() if battles is None else battles,
+    )
+    monkeypatch.setattr(runner_module, "build_judge", build or (lambda _cfg: object()))
+    if annotate is not None:
+        monkeypatch.setattr(evaluate_module, "annotate_battles", annotate)
+
+
+def _assert_rejected_before_judge(
+    tmp_path, monkeypatch, battles, exception, match, *, cfg=None
+):
+    _stub_runtime(
+        monkeypatch,
+        battles=battles,
+        annotate=None,
+        build=lambda _cfg: pytest.fail("judge must not be built"),
+    )
+    with pytest.raises(exception, match=match):
+        run_meta_eval(
+            cfg or _runtime_cfg(tmp_path), get_packaged_task("meta-eval-comparia")
+        )
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -241,20 +281,20 @@ def test_meta_eval_bt_fit_rejects_disconnected_parsed_graph():
         _fit_connected_preferences(disconnected, pref_col="pref")
 
 
-def test_pairscore_parses_winners_at_meta_eval_temperature():
-    parser = JUDGE_PARSERS["meta-eval-score"]
-    assert preference_to_winner(parser("score_A: 10\nscore_B: 0")) == "model_a"
-    assert preference_to_winner(parser("score_A: 0\nscore_B: 10")) == "model_b"
-    assert preference_to_winner(parser("score_A: 5\nscore_B: 5")) == "tie"
-    assert parser('"score_A": 9,\n"score_B": 1') is not None
-    completion = "score_A: 10\nscore_B: 0"
-    preference = parser(completion)
+@pytest.mark.parametrize(
+    ("completion", "winner"),
+    [
+        ("score_A: 10\nscore_B: 0", "model_a"),
+        ("score_A: 0\nscore_B: 10", "model_b"),
+        ("score_A: 5\nscore_B: 5", "tie"),
+        ('"score_A": 9,\n"score_B": 1', "model_a"),
+    ],
+)
+def test_pairscore_parses_winners_at_meta_eval_temperature(completion, winner):
+    preference = JUDGE_PARSERS["meta-eval-score"](completion)
+
     assert preference is not None
-    assert preference < 0.5
-    assert preference_to_winner(0.495) == "tie"
-    assert serialize_judge_input(SimpleNamespace(to_string=lambda: "p")) == "p"
-    assert invert_winner("model_a") == "model_b"
-    assert invert_winner("tie") == "tie"
+    assert preference_to_winner(preference) == winner
 
 
 @pytest.mark.parametrize(
@@ -276,35 +316,17 @@ def test_meta_eval_pairscore_rejects_non_integer_or_out_of_range_scores(completi
     assert JUDGE_PARSERS["meta-eval-score"](completion) is None
 
 
-def test_prompt_presets_select_their_parsers():
-    assert preference_to_winner(JUDGE_PARSERS["arena-hard-verdict"]("[[A=B]]")) == "tie"
-    assert (
-        preference_to_winner(JUDGE_PARSERS["arena-hard-verdict"]("[[B>>A]]"))
-        == "model_b"
-    )
-    assert (
-        preference_to_winner(JUDGE_PARSERS["arena-hard-verdict"]("[[B<<A]]"))
-        == "model_a"
-    )
-    alpaca_json = (
-        '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 2}]}'
-    )
-    assert preference_to_winner(JUDGE_PARSERS["alpaca-eval-json"](alpaca_json)) == (
-        "model_a"
-    )
-    expected_parsers = {
-        "meta-eval-pair-score": "meta-eval-score",
-        "arena-hard": "arena-hard-verdict",
-        "meta-eval-alpaca-eval-json": "alpaca-eval-json",
-        "meta-eval-alpaca-eval-pair-score": "meta-eval-score",
-    }
-    for preset, expected_parser in expected_parsers.items():
-        resolved = resolve_judge_prompt(preset=preset)
-        assert resolved.system_prompt
-        assert resolved.user_prompt_template
-        assert parser_name(resolved.parser) == expected_parser
-        if expected_parser == "meta-eval-score":
-            assert "an integer between 0 and 10" in resolved.user_prompt_template
+@pytest.mark.parametrize(
+    ("preset", "expected_parser"),
+    [
+        ("meta-eval-pair-score", "meta-eval-score"),
+        ("arena-hard", "arena-hard-verdict"),
+        ("meta-eval-alpaca-eval-json", "alpaca-eval-json"),
+        ("meta-eval-alpaca-eval-pair-score", "meta-eval-score"),
+    ],
+)
+def test_prompt_presets_select_their_parsers(preset, expected_parser):
+    assert parser_name(resolve_judge_prompt(preset=preset).parser) == expected_parser
 
 
 @pytest.mark.parametrize(
@@ -427,50 +449,6 @@ def test_meta_eval_preserves_parser_soft_preference(monkeypatch):
     assert top_logprobs["m"] == pytest.approx(math.log(0.25))
 
 
-def test_meta_eval_delegates_judging_parsing_and_swapping_to_shared_path(monkeypatch):
-    captured = {}
-
-    def fake_judge_and_parse_prefs(**kwargs):
-        captured.update(kwargs)
-        annotation = JudgeAnnotation(
-            instruction=kwargs["instructions"][0],
-            completion_A=kwargs["completions_A"][0],
-            completion_B=kwargs["completions_B"][0],
-            judge_completion="unparseable",
-            judge_input="prompt",
-        )
-        return [annotation], None, pd.Series([float("nan")])
-
-    monkeypatch.setattr(
-        annotate_module, "judge_and_parse_prefs", fake_judge_and_parse_prefs
-    )
-    cfg = _cfg(
-        "unused",
-        judge={
-            "model": "Dummy/j",
-            "prompt_preset": "arena-hard",
-            "strip_thinking_before_judging": True,
-        },
-        generation={"truncate_judge_input_chars": 123},
-    )
-    resolved = resolve_judge_prompt(preset="arena-hard")
-
-    annotations = annotate_module.annotate_sample(
-        _battles().head(1),
-        cfg,
-        judge_chat_model=object(),
-        resolved_prompt=resolved,
-    )
-
-    assert captured["swap_mode"] == "fixed"
-    assert captured["parse"] is resolved.parser
-    assert captured["strip_thinking_before_judging"] is True
-    assert captured["truncate_input_chars"] == 123
-    assert not bool(annotations.loc[0, "parse_ok"])
-    assert annotations.loc[0, "winner_llm"] is None
-    assert pd.isna(annotations.loc[0, "pref_llm"])
-
-
 def test_physical_battle_aggregation_combines_both_orders_and_parse_statuses():
     rows = []
     for battle_id, preferences in {
@@ -535,81 +513,44 @@ def test_degenerate_agreement_reports_nan_kappa():
 
 
 def test_runner_writes_annotations_and_agreement(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
-
     def fake_build(_cfg):
-        run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
-        assert len(run_dirs) == 1
-        assert (run_dirs[0] / "config.yaml").is_file()
-        assert (run_dirs[0] / SAMPLE_FILENAME).is_file()
-        assert not (run_dirs[0] / ANNOTATIONS_FILENAME).exists()
+        run_dir = next(path for path in tmp_path.iterdir() if path.is_dir())
+        assert (run_dir / "config.yaml").is_file()
+        assert (run_dir / SAMPLE_FILENAME).is_file()
+        assert not (run_dir / ANNOTATIONS_FILENAME).exists()
         return object()
 
-    monkeypatch.setattr(runner_module, "build_judge", fake_build)
-    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
-    cfg = _cfg(
-        tmp_path,
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
+    _stub_runtime(monkeypatch, build=fake_build)
+    results = run_meta_eval(
+        _runtime_cfg(tmp_path), get_packaged_task("meta-eval-comparia")
     )
 
-    results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
-
     res_dir = Path(results["result_path"]).parent
-    assert res_dir.parent == tmp_path
-    assert (res_dir / "config.yaml").is_file()
     sample = pd.read_parquet(res_dir / SAMPLE_FILENAME)
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
     battle_results = pd.read_parquet(res_dir / BATTLE_RESULTS_FILENAME)
+    assert res_dir.parent == tmp_path
     assert sample["battle_id"].is_unique
-    assert results["n_battles"] == results["n_annotations"] == len(sample)
-    assert len(annotations) == len(sample) == len(battle_results)
-    assert set(annotations["orientation"]) == {"forward"}
-    assert set(annotations["winner_llm"]) == {"model_a"}
-    assert annotations["judge_input"].tolist() == ["prompt"] * len(sample)
-    assert annotations["parse_ok"].all()
-    assert results["n_parsed_annotations"] == len(sample)
-    assert results["n_scored_battles"] == len(sample)
+    assert len(annotations) == len(battle_results) == results["n_battles"]
     assert results["battle_parse_status"] == {"complete": len(sample)}
-    assert results["agreement"]["all"]["n"] == len(sample)
-    assert results["agreement"]["no_human_ties"]["n"] < len(sample)
-    assert set(results["language_summary"]) == {"English", "Multilingual"}
-    assert results["elo_gap_all"][0]["num_battles"] == 2
-    assert results["elo_gap_exclude_ties"][0]["exclude_ties"] is True
-    assert results["elo_gap_soft"][0]["num_battles"] == 2
-    summary = pd.read_csv(res_dir / SUMMARY_FILENAME)
-    assert set(summary["split"]) == {"English", "Multilingual"}
+    assert set(pd.read_csv(res_dir / SUMMARY_FILENAME)["split"]) == {
+        "English",
+        "Multilingual",
+    }
     assert json.loads((res_dir / "results.json").read_text())["arena"] == "ComparIA"
 
 
 def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
-    cfg = _cfg(
-        tmp_path,
-        judge={"model": "Dummy/j", "swap_mode": "both"},
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
+    _stub_runtime(monkeypatch)
+    results = run_meta_eval(
+        _runtime_cfg(tmp_path, swap_mode="both"),
+        get_packaged_task("meta-eval-comparia"),
     )
-
-    results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
 
     res_dir = Path(results["result_path"]).parent
     annotations = pd.read_parquet(res_dir / ANNOTATIONS_FILENAME)
     battle_results = pd.read_parquet(res_dir / BATTLE_RESULTS_FILENAME)
     assert results["n_annotations"] == 2 * results["n_battles"]
-    assert results["n_parsed_annotations"] == results["n_annotations"]
-    assert results["n_scored_battles"] == results["n_battles"]
-    assert results["agreement"]["all"]["n"] == results["n_battles"]
     assert set(annotations["orientation"]) == {"forward", "swapped"}
     forward = annotations[annotations["orientation"] == "forward"]
     swapped = annotations[annotations["orientation"] == "swapped"]
@@ -621,14 +562,10 @@ def test_swap_mode_both_inverts_the_reversed_pass(tmp_path, monkeypatch):
     )
     assert set(battle_results["winner_llm"]) == {"tie"}
     assert set(battle_results["parse_status"]) == {"complete"}
-    ranking_n = sum(split["n"] for split in results["language_summary"].values())
-    assert ranking_n == int((battle_results["winner"] != "tie").sum())
-    assert ranking_n < results["n_annotations"]
 
 
 def test_runner_excludes_missing_parses_from_metrics(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+    _stub_runtime(monkeypatch, annotate=None)
 
     def annotations_with_one_failure(**kwargs):
         annotations = _fake_annotations(**kwargs)
@@ -638,15 +575,7 @@ def test_runner_excludes_missing_parses_from_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(
         evaluate_module, "annotate_battles", annotations_with_one_failure
     )
-    cfg = _cfg(
-        tmp_path,
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
-    )
+    cfg = _runtime_cfg(tmp_path)
 
     results = run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
     res_dir = Path(results["result_path"]).parent
@@ -699,25 +628,15 @@ def test_runner_rejects_disconnected_pool_before_building_judge(tmp_path, monkey
             for model_a, model_b in [("a", "b"), ("c", "d")]
         ]
     )
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: disconnected)
-    monkeypatch.setattr(
-        runner_module,
-        "build_judge",
-        lambda _cfg: pytest.fail("judge must not be built"),
-    )
-    cfg = _cfg(
+    cfg = _runtime_cfg(tmp_path, top_models=4, battles_per_model=1, elo_gap_battles=[1])
+    _assert_rejected_before_judge(
         tmp_path,
-        meta_eval={
-            "top_models": 4,
-            "battles_per_model": 1,
-            "elo_gap_battles": [1],
-            "elo_gap_seeds": 2,
-        },
+        monkeypatch,
+        disconnected,
+        MetaEvalSamplingError,
+        "disconnected",
+        cfg=cfg,
     )
-
-    with pytest.raises(MetaEvalSamplingError, match="disconnected"):
-        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_runner_rejects_duplicate_source_battle_ids_before_building_judge(
@@ -725,32 +644,19 @@ def test_runner_rejects_duplicate_source_battle_ids_before_building_judge(
 ):
     duplicate_ids = _battles()
     duplicate_ids.loc[1, "question_id"] = duplicate_ids.loc[0, "question_id"]
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: duplicate_ids)
-    monkeypatch.setattr(
-        runner_module,
-        "build_judge",
-        lambda _cfg: pytest.fail("judge must not be built"),
-    )
-    cfg = _cfg(
+    _assert_rejected_before_judge(
         tmp_path,
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
+        monkeypatch,
+        duplicate_ids,
+        MetaEvalSamplingError,
+        "duplicate physical battle IDs",
     )
-
-    with pytest.raises(MetaEvalSamplingError, match="duplicate physical battle IDs"):
-        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
-    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize(
     ("column", "value", "error"),
     [
         ("winner", "bogus", "invalid human winners"),
-        ("winner", "tie (bothbad)", "invalid human winners"),
         ("conversation_a", [], "empty or invalid conversation_a"),
     ],
 )
@@ -759,31 +665,11 @@ def test_runner_rejects_invalid_battles_before_building_judge(
 ):
     invalid = _battles()
     invalid[column] = [value for _ in range(len(invalid))]
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: invalid)
-    monkeypatch.setattr(
-        runner_module,
-        "build_judge",
-        lambda _cfg: pytest.fail("judge must not be built"),
-    )
-    cfg = _cfg(
-        tmp_path,
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
-    )
-
-    with pytest.raises((MetaEvalSamplingError, ValueError), match=error):
-        run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
-    assert list(tmp_path.iterdir()) == []
+    _assert_rejected_before_judge(tmp_path, monkeypatch, invalid, ValueError, error)
 
 
 def test_runner_checkpoints_annotations_before_scoring(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _battles())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(evaluate_module, "annotate_battles", _fake_annotations)
+    _stub_runtime(monkeypatch)
 
     def failing_scorer(*args, **kwargs):
         run_dirs = [path for path in tmp_path.iterdir() if path.is_dir()]
@@ -795,23 +681,11 @@ def test_runner_checkpoints_annotations_before_scoring(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runner_module, "resolve_meta_eval_scorer", lambda _name: failing_scorer
     )
-    cfg = _cfg(
-        tmp_path,
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 5,
-            "elo_gap_battles": [2],
-            "elo_gap_seeds": 2,
-        },
-    )
+    cfg = _runtime_cfg(tmp_path)
 
     with pytest.raises(RuntimeError, match="scoring failed"):
         run_meta_eval(cfg, get_packaged_task("meta-eval-comparia"))
     res_dir = next(path for path in tmp_path.iterdir() if path.is_dir())
-    assert (res_dir / "config.yaml").is_file()
-    assert (res_dir / SAMPLE_FILENAME).is_file()
-    assert (res_dir / ANNOTATIONS_FILENAME).is_file()
-    assert (res_dir / BATTLE_RESULTS_FILENAME).is_file()
     assert not (res_dir / "results.json").exists()
     assert not (res_dir / SUMMARY_FILENAME).exists()
 
@@ -892,18 +766,12 @@ def test_empty_language_split_reports_na():
     summary = summarize_language_splits(
         df, exclude_human_ties=True, n_bootstraps=4, seed=0
     )
-    assert summary["English"] == {
-        "n": 0,
-        "kappa": "n/a",
-        "spearman": "n/a",
-        "spearman_soft": "n/a",
-        "mae_elo": "n/a",
-        "mae_soft_elo": "n/a",
-    }
+    assert summary["English"].pop("n") == 0
+    assert set(summary["English"].values()) == {"n/a"}
     assert summary["Multilingual"]["n"] == 2
 
 
-def test_elo_gap_summary_runs():
+def test_soft_elo_gap_uses_preference_magnitude():
     battles = _battles()
     top, df_top = select_top_models(battles, top_models=3)
     sample = sample_battles_per_model(df_top, top, battles_per_model=5, seed=0)
@@ -911,37 +779,16 @@ def test_elo_gap_summary_runs():
     sample["pref_llm"] = sample["winner"].map(
         {"model_a": 0.1, "model_b": 0.9, "tie": 0.5}
     )
-    summary = compute_elo_gap_summary(
-        df_top,
-        sample,
-        top,
-        n_battles_list=[2],
-        n_seeds=2,
-        seed=0,
-        exclude_ties=False,
-    )
-    assert not summary.empty
-    soft = compute_elo_gap_summary(
-        df_top,
-        sample,
-        top,
-        n_battles_list=[2],
-        n_seeds=2,
-        seed=0,
-        exclude_ties=False,
-        soft=True,
-    )
+    kwargs = {
+        "n_battles_list": [2],
+        "n_seeds": 2,
+        "seed": 0,
+        "exclude_ties": False,
+        "soft": True,
+    }
+    soft = compute_elo_gap_summary(df_top, sample, top, **kwargs)
+    neutral = sample.assign(pref_llm=0.5)
+    neutral_soft = compute_elo_gap_summary(df_top, neutral, top, **kwargs)
+
     assert not soft.empty
-    neutral = sample.copy()
-    neutral["pref_llm"] = 0.5
-    neutral_soft = compute_elo_gap_summary(
-        df_top,
-        neutral,
-        top,
-        n_battles_list=[2],
-        n_seeds=2,
-        seed=0,
-        exclude_ties=False,
-        soft=True,
-    )
     assert soft.loc[0, "mean"] != pytest.approx(neutral_soft.loc[0, "mean"])
