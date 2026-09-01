@@ -180,7 +180,7 @@ class ModelArgs(BaseModel):
 class JudgePromptSpec(BaseModel):
     """A custom judge prompt: two template files plus the parser for its output."""
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     system_file: Path
     """Path to the judge system prompt file."""
@@ -196,7 +196,9 @@ class JudgePromptSpec(BaseModel):
 class JudgeArgs(BaseModel):
     """The judge model and how it scores each battle."""
 
-    model_config = ConfigDict(protected_namespaces=(), use_attribute_docstrings=True)
+    model_config = ConfigDict(
+        protected_namespaces=(), use_attribute_docstrings=True, extra="forbid"
+    )
 
     model: str
     """LLM used as the judge, in ``{backend}/{model path}`` format (e.g.

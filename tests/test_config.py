@@ -32,6 +32,20 @@ def test_generate_config_constructs():
     assert cfg.elo is None
 
 
+def test_removed_judge_prompt_fields_fail_loudly():
+    data = _base_generate()
+    data["judge"].update(
+        {
+            "provide_explanation": True,
+            "system_prompt_file": "system.txt",
+            "user_prompt_file": "user.txt",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RunConfig(**data)
+
+
 def _registered_task(
     *,
     default_swap_mode: str = "both",
