@@ -52,7 +52,7 @@ def test_pairwise_win_rate_scorer_owns_metric_semantics():
 
 
 def test_arena_hard_score_weights_decisive_battles_three_to_one():
-    result = PAIRWISE_SCORERS["arena_hard_score"].score(
+    result = PAIRWISE_SCORERS["arena_hard_v01_score"].score(
         _battles([0.0, 0.25, 0.75, None])
     )
     summary = result.summary
@@ -63,23 +63,37 @@ def test_arena_hard_score_weights_decisive_battles_three_to_one():
     assert summary.winrate == pytest.approx(0.8)
 
 
-def test_arena_hard_score_bootstrap_ci_is_ordered_and_deterministic():
-    scorer = PAIRWISE_SCORERS["arena_hard_score"]
-    battles = _battles([0.0, 0.25, 0.5, 0.75, 1.0] * 4)
+def test_arena_hard_v01_matches_upstream_overall_bootstrap_fixture():
+    scorer = PAIRWISE_SCORERS["arena_hard_v01_score"]
+    battles = _battles(
+        [0.0, 0.5, 0.75] * 10,
+        category="arena-hard-v0.1",
+    )
 
     first = scorer.score(battles)
     second = scorer.score(battles)
 
-    assert first.metrics == second.metrics
-    assert 0.0 <= first.metrics["score_ci_low"] <= first.metrics["score_ci_high"] <= 1.0
-    assert first.scoring_details["decisive_weight"] == 3
-    assert first.scoring_details["bootstrap_rounds"] == 100
-    assert first.scoring_details["confidence_level"] == 0.9
-    assert first.scoring_details["confidence_quantiles"] == [0.05, 0.95]
+    assert first.summary.winrate == pytest.approx(0.7)
+    assert (
+        first.metrics
+        == second.metrics
+        == {
+            "score_ci_low": pytest.approx(0.6),
+            "score_ci_high": pytest.approx(0.8),
+        }
+    )
+    assert first.grouped_results == {}
+    assert first.scoring_details == {
+        "decisive_weight": 3,
+        "bootstrap_rounds": 100,
+        "confidence_level": 0.95,
+        "confidence_quantiles": [0.025, 0.975],
+        "official_scope": "overall",
+    }
 
 
 def test_arena_hard_score_empty_prefs_yield_no_ci():
-    result = PAIRWISE_SCORERS["arena_hard_score"].score(_battles([None, None]))
+    result = PAIRWISE_SCORERS["arena_hard_v01_score"].score(_battles([None, None]))
 
     assert result.metrics["score_ci_low"] is None
     assert result.metrics["score_ci_high"] is None
@@ -92,7 +106,7 @@ def test_arena_hard_score_drops_both_orders_when_one_is_unparseable():
         orientation=["direct", "direct", "reversed", "reversed"],
     )
 
-    summary = PAIRWISE_SCORERS["arena_hard_score"].score(battles).summary
+    summary = PAIRWISE_SCORERS["arena_hard_v01_score"].score(battles).summary
 
     assert summary.num_wins == 1
     assert summary.num_losses == 1
@@ -115,7 +129,7 @@ def test_arena_hard_v2_reports_official_scores_per_category():
         ],
     )
 
-    result = PAIRWISE_SCORERS["arena_hard_score"].score(battles)
+    result = PAIRWISE_SCORERS["arena_hard_v20_score"].score(battles)
     per_category = result.grouped_results["category"]
 
     assert per_category["hard_prompt"]["winrate"] == pytest.approx(1.0)

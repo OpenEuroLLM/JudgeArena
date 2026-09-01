@@ -18,6 +18,9 @@ BOOTSTRAP_ROUNDS = 100
 CI_LOWER_QUANTILE = 0.05
 CI_UPPER_QUANTILE = 0.95
 CONFIDENCE_LEVEL = 0.90
+V01_CI_LOWER_QUANTILE = 0.025
+V01_CI_UPPER_QUANTILE = 0.975
+V01_CONFIDENCE_LEVEL = 0.95
 STYLE_CONTROLLED_CATEGORIES = frozenset({"hard_prompt", "coding", "math"})
 STYLE_FEATURES = ("length", "headers", "lists", "bold")
 _CODE_BLOCK = re.compile(r"```([^`]*)```")
@@ -117,17 +120,25 @@ def _summarize_battles(battles: pd.DataFrame) -> PrefSummary:
     )
 
 
-def _confidence_interval(battles: pd.DataFrame) -> tuple[float | None, float | None]:
+def _confidence_interval(
+    battles: pd.DataFrame,
+    *,
+    lower_quantile: float = CI_LOWER_QUANTILE,
+    upper_quantile: float = CI_UPPER_QUANTILE,
+    seed: int = 0,
+) -> tuple[float | None, float | None]:
     valid, _ = _official_battles(battles)
     outcomes = _outcomes(valid["pref"])
     if not len(outcomes):
         return None, None
-    rng = np.random.default_rng(0)
-    samples = rng.integers(0, len(outcomes), size=(BOOTSTRAP_ROUNDS, len(outcomes)))
+    # RandomState reproduces upstream v0.1's np.random.seed(...), followed by
+    # repeated DataFrame.sample(..., replace=True), without mutating global RNG.
+    rng = np.random.RandomState(seed)
+    samples = rng.randint(0, len(outcomes), size=(BOOTSTRAP_ROUNDS, len(outcomes)))
     scores = outcomes[samples].mean(axis=1)
     return (
-        float(np.percentile(scores, CI_LOWER_QUANTILE * 100)),
-        float(np.percentile(scores, CI_UPPER_QUANTILE * 100)),
+        float(np.percentile(scores, lower_quantile * 100)),
+        float(np.percentile(scores, upper_quantile * 100)),
     )
 
 
@@ -267,41 +278,49 @@ def _summarize_by_category(battles: pd.DataFrame) -> dict[str, dict[str, object]
     return summaries
 
 
-def score(battles: pd.DataFrame) -> ScoringResult:
-    """Return official aggregate, grouped results, and scoring details."""
-    has_categories = "category" in battles and battles["category"].notna().any()
-    metrics: dict[str, float | None] = {}
-    grouped_results: dict[str, object] = {}
-    scoring_details: dict[str, object] = {
-        "decisive_weight": DECISIVE_WEIGHT,
-        "bootstrap_rounds": BOOTSTRAP_ROUNDS,
-        "confidence_level": CONFIDENCE_LEVEL,
-        "confidence_quantiles": [CI_LOWER_QUANTILE, CI_UPPER_QUANTILE],
-        "official_scope": "per_category" if has_categories else "overall",
-    }
-    if has_categories:
-        grouped_results["category"] = _summarize_by_category(battles)
-        scoring_details.update(
-            {
-                "aggregate_score_is_official": False,
-                "category_methods": {
-                    **{
-                        category: "style_controlled_bt"
-                        for category in sorted(STYLE_CONTROLLED_CATEGORIES)
-                    },
-                    "creative_writing": "weighted_mean",
-                },
-                "style_control_features": list(STYLE_FEATURES),
-            }
-        )
-    else:
-        metrics["score_ci_low"], metrics["score_ci_high"] = _confidence_interval(
-            battles
-        )
-
+def score_v01(battles: pd.DataFrame) -> ScoringResult:
+    """Return the upstream v0.1 overall score and 95% bootstrap interval."""
+    ci_low, ci_high = _confidence_interval(
+        battles,
+        lower_quantile=V01_CI_LOWER_QUANTILE,
+        upper_quantile=V01_CI_UPPER_QUANTILE,
+        seed=42,
+    )
     return ScoringResult(
         summary=_summarize_battles(battles),
-        metrics=metrics,
-        grouped_results=grouped_results,
-        scoring_details=scoring_details,
+        metrics={"score_ci_low": ci_low, "score_ci_high": ci_high},
+        scoring_details={
+            "decisive_weight": DECISIVE_WEIGHT,
+            "bootstrap_rounds": BOOTSTRAP_ROUNDS,
+            "confidence_level": V01_CONFIDENCE_LEVEL,
+            "confidence_quantiles": [
+                V01_CI_LOWER_QUANTILE,
+                V01_CI_UPPER_QUANTILE,
+            ],
+            "official_scope": "overall",
+        },
+    )
+
+
+def score_v20(battles: pd.DataFrame) -> ScoringResult:
+    """Return v2 category-scoped scores and scoring details."""
+    return ScoringResult(
+        summary=_summarize_battles(battles),
+        grouped_results={"category": _summarize_by_category(battles)},
+        scoring_details={
+            "decisive_weight": DECISIVE_WEIGHT,
+            "bootstrap_rounds": BOOTSTRAP_ROUNDS,
+            "confidence_level": CONFIDENCE_LEVEL,
+            "confidence_quantiles": [CI_LOWER_QUANTILE, CI_UPPER_QUANTILE],
+            "official_scope": "per_category",
+            "aggregate_score_is_official": False,
+            "category_methods": {
+                **{
+                    category: "style_controlled_bt"
+                    for category in sorted(STYLE_CONTROLLED_CATEGORIES)
+                },
+                "creative_writing": "weighted_mean",
+            },
+            "style_control_features": list(STYLE_FEATURES),
+        },
     )

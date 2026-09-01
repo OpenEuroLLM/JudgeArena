@@ -18,7 +18,8 @@ def _score_win_rate(battles: pd.DataFrame) -> ScoringResult:
 
 PAIRWISE_SCORERS: dict[str, PairwiseScorer] = {
     "pairwise_win_rate": PairwiseScorer(score=_score_win_rate),
-    "arena_hard_score": PairwiseScorer(score=arena_hard.score),
+    "arena_hard_v01_score": PairwiseScorer(score=arena_hard.score_v01),
+    "arena_hard_v20_score": PairwiseScorer(score=arena_hard.score_v20),
     "alpaca_eval_lc_winrate": PairwiseScorer(
         score=alpaca_eval.score,
         check_requirements=alpaca_eval.check_requirements,

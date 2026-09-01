@@ -31,4 +31,4 @@ protocol:
     # judge; 32k for gemini-2.5) because judges explain before the verdict.
     default_max_out_tokens: 16000
   scoring:
-    adapter: arena_hard_score
+    adapter: arena_hard_v20_score

@@ -22,4 +22,4 @@ protocol:
     # verdict, so it needs the official 4096-token budget to reach the label.
     default_max_out_tokens: 4096
   scoring:
-    adapter: arena_hard_score
+    adapter: arena_hard_v01_score
