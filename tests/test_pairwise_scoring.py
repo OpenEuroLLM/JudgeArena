@@ -116,10 +116,24 @@ def test_arena_hard_score_drops_both_orders_when_one_is_unparseable():
     assert summary.winrate == pytest.approx(0.5)
 
 
-def test_arena_hard_v2_reports_official_scores_per_category():
+def test_arena_hard_v2_reports_joint_official_scores_per_category(monkeypatch):
+    from judgearena.benchmarks.pairwise.scoring import arena_hard
+
+    monkeypatch.setattr(arena_hard, "BOOTSTRAP_ROUNDS", 3)
+    hard_id = "0001b527ced3428d"
     battles = _battles(
         [0.0, 1.0, 0.0, 1.0],
-        instruction_index=["hard", "creative", "hard", "creative"],
+        instruction_index=[hard_id, "creative", hard_id, "creative"],
+        baseline=[
+            "o3-mini-2025-01-31",
+            "gemini-2.0-flash-001",
+            "o3-mini-2025-01-31",
+            "gemini-2.0-flash-001",
+        ],
+        judge="gpt-4.1",
+        judge_prompt_preset="arena-hard",
+        judge_temperature=0.0,
+        judge_max_out_tokens=16000,
         orientation=["direct", "direct", "reversed", "reversed"],
         category=[
             "hard_prompt",
@@ -131,13 +145,14 @@ def test_arena_hard_v2_reports_official_scores_per_category():
 
     result = PAIRWISE_SCORERS["arena_hard_v20_score"].score(battles)
     per_category = result.grouped_results["category"]
+    hard_prompt = per_category["hard_prompt"]
 
-    assert per_category["hard_prompt"]["winrate"] == pytest.approx(1.0)
-    assert per_category["hard_prompt"]["raw_winrate"] == 1.0
-    assert per_category["hard_prompt"]["baseline_model"] == "baseline-model"
-    assert per_category["hard_prompt"]["score_ci_low"] == pytest.approx(1.0)
-    assert per_category["hard_prompt"]["score_ci_high"] == pytest.approx(1.0)
-    assert per_category["hard_prompt"]["scoring_method"] == "style_controlled_bt"
+    assert hard_prompt["raw_winrate"] == 1.0
+    assert hard_prompt["baseline_model"] == "o3-mini-2025-01-31"
+    assert 0.0 <= hard_prompt["score_ci_low"] <= hard_prompt["winrate"]
+    assert hard_prompt["winrate"] <= hard_prompt["score_ci_high"] <= 1.0
+    assert hard_prompt["scoring_method"] == "joint_style_controlled_bt"
+    assert hard_prompt["official_population_complete"] is False
     assert per_category["creative_writing"]["winrate"] == 0.0
     assert per_category["creative_writing"]["score_ci_low"] == 0.0
     assert per_category["creative_writing"]["score_ci_high"] == 0.0
@@ -145,13 +160,68 @@ def test_arena_hard_v2_reports_official_scores_per_category():
     assert result.scoring_details["official_scope"] == "per_category"
     assert result.scoring_details["aggregate_score_is_official"] is False
     assert result.scoring_details["category_methods"] == {
-        "coding": "style_controlled_bt",
         "creative_writing": "weighted_mean",
-        "hard_prompt": "style_controlled_bt",
-        "math": "style_controlled_bt",
+        "hard_prompt": "joint_style_controlled_bt",
     }
     assert "score_ci_low" not in result.metrics
     assert "score_ci_high" not in result.metrics
+
+
+def test_arena_hard_v2_reproduces_published_full_population_score():
+    from judgearena.benchmarks.pairwise.scoring import arena_hard
+
+    population = arena_hard._load_style_calibration()
+    live = population.loc[
+        (population["judge"] == "gpt-4.1") & (population["model"] == "deepseek-r1")
+    ].copy()
+    live["judge_prompt_preset"] = "arena-hard"
+    live["judge_temperature"] = 0.0
+    live["judge_max_out_tokens"] = 16000
+
+    calibration, complete = arena_hard._select_calibration(live)
+    result = arena_hard.score_v20(live)
+    hard_prompt = result.grouped_results["category"]["hard_prompt"]
+
+    assert complete is True
+    assert "deepseek-r1" not in {
+        arena_hard._fit_model_id(model) for model in calibration["model"]
+    }
+    assert hard_prompt["winrate"] == pytest.approx(0.48, abs=0.01)
+    assert hard_prompt["score_ci_low"] < 0.48 < hard_prompt["score_ci_high"]
+
+
+def test_arena_hard_v2_rejects_unmatched_calibration_protocol():
+    battles = _battles(
+        [0.5, 0.5],
+        instruction_index=["0001b527ced3428d"] * 2,
+        baseline="o3-mini-2025-01-31",
+        judge="gpt-4.1",
+        judge_prompt_preset="custom-prompt",
+        judge_temperature=0.0,
+        judge_max_out_tokens=16000,
+        orientation=["direct", "reversed"],
+        category="hard_prompt",
+    )
+
+    with pytest.raises(ValueError, match="requires judge_prompt_preset='arena-hard'"):
+        PAIRWISE_SCORERS["arena_hard_v20_score"].score(battles)
+
+
+def test_arena_hard_v2_rejects_unsupported_judge_calibration():
+    battles = _battles(
+        [0.5, 0.5],
+        instruction_index=["0001b527ced3428d"] * 2,
+        baseline="o3-mini-2025-01-31",
+        judge="other-judge",
+        judge_prompt_preset="arena-hard",
+        judge_temperature=0.0,
+        judge_max_out_tokens=16000,
+        orientation=["direct", "reversed"],
+        category="hard_prompt",
+    )
+
+    with pytest.raises(ValueError, match="no calibration"):
+        PAIRWISE_SCORERS["arena_hard_v20_score"].score(battles)
 
 
 def test_arena_hard_style_features_match_upstream_extraction():

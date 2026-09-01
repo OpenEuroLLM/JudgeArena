@@ -13,6 +13,7 @@ from judgearena.benchmarks.pairwise.baselines import (
     resolve_baseline_plan,
 )
 from judgearena.benchmarks.pairwise.runner import run_pairwise
+from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
 from judgearena.config import RunConfig
 from judgearena.datasets.pairwise import PairwiseTaskData
@@ -349,9 +350,87 @@ def test_run_writes_roundtrippable_config(tmp_path):
     assert reloaded.model.name == "Dummy/no answer"
 
 
+@pytest.mark.parametrize("swap_mode", ["fixed", "random"])
+def test_arena_hard_v2_rejects_nonofficial_protocol_before_loading_data(
+    monkeypatch, tmp_path, swap_mode
+):
+    def fail_if_loaded(*_args, **_kwargs):
+        raise AssertionError("task data was loaded before calibration validation")
+
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        fail_if_loaded,
+    )
+
+    with pytest.raises(ValueError, match="requires judge_swap_mode='both'"):
+        run_pairwise(
+            _cfg(
+                task="arena-hard-v2.0-official",
+                model_A="Dummy/a",
+                judge_model="OpenAI/gpt-4.1",
+                result_folder=str(tmp_path),
+                swap_mode=swap_mode,
+            )
+        )
+
+
+def test_arena_hard_v2_rejects_judge_input_truncation_before_loading_data(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda *_args, **_kwargs: pytest.fail("task data loaded before validation"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="requires generation.truncate_judge_input_chars=None",
+    ):
+        run_pairwise(
+            _cfg(
+                task="arena-hard-v2.0-official",
+                model_A="Dummy/a",
+                judge_model="OpenAI/gpt-4.1",
+                result_folder=str(tmp_path),
+                swap_mode="both",
+                truncate_judge_input_chars=100,
+            )
+        )
+
+
 def test_run_pairwise_judges_categories_with_their_declared_prompts(
     monkeypatch, tmp_path
 ):
+    scored_battles = []
+
+    def score_and_capture(battles):
+        scored_battles.append(battles.copy())
+        raw = PAIRWISE_SCORERS["pairwise_win_rate"].score(battles)
+        return SimpleNamespace(
+            summary=raw.summary,
+            metrics={},
+            scoring_details={},
+            grouped_results={
+                "category": {
+                    category: PAIRWISE_SCORERS["pairwise_win_rate"]
+                    .score(category_battles)
+                    .summary.to_dict()
+                    for category, category_battles in battles.groupby("category")
+                }
+            },
+        )
+
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "resolve_pairwise_scorer",
+        lambda _name: SimpleNamespace(
+            score=score_and_capture,
+            check_requirements=None,
+            check_runtime=None,
+        ),
+    )
     instructions = pd.DataFrame(
         {
             "instruction": ["q0", "q1", "q2"],
@@ -378,6 +457,15 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
     )
 
     assert prefs.tolist() == [0.5] * 6
+    scored = scored_battles[0]
+    assert set(
+        scored.loc[scored["category"] == "hard_prompt", "judge_prompt_preset"]
+    ) == {"arena-hard"}
+    assert set(
+        scored.loc[scored["category"] == "creative_writing", "judge_prompt_preset"]
+    ) == {"arena-hard-creative"}
+    assert set(scored["judge_temperature"]) == {0.0}
+    assert set(scored["judge_max_out_tokens"]) == {16000}
     annotations = pd.read_csv(next(tmp_path.glob("*/*annotations*.csv")))
     by_preset = annotations.groupby("prompt_preset")["instruction_index"].apply(set)
     assert by_preset.to_dict() == {
@@ -398,6 +486,11 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
 def test_run_pairwise_only_loads_category_baseline_for_assigned_rows(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "resolve_pairwise_scorer",
+        lambda _name: PAIRWISE_SCORERS["pairwise_win_rate"],
+    )
     instructions = pd.DataFrame(
         {
             "instruction": ["hard", "creative"],

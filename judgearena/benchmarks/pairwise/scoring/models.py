@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from judgearena.utils.eval import PrefSummary
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 
 @dataclass(frozen=True)
@@ -29,3 +34,4 @@ class PairwiseScorer:
 
     score: Callable[[pd.DataFrame], ScoringResult]
     check_requirements: Callable[[], None] | None = None
+    check_runtime: Callable[[RunConfig, ResolvedTaskSpec], None] | None = None

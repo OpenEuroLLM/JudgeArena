@@ -56,6 +56,7 @@ exclude = ["slurmpilot_scripts*"]
 "judgearena.criteria" = ["data/*.yaml"]
 "judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt"]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
+"judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 
 [dependency-groups]
 dev = [

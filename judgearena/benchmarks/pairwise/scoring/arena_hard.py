@@ -4,26 +4,137 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from importlib import resources
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
 from scipy.special import expit
+from sklearn.linear_model import LogisticRegression
 
 from judgearena.benchmarks.pairwise.scoring.models import ScoringResult
 from judgearena.utils.eval import PrefSummary
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 DECISIVE_WEIGHT = 3
 BOOTSTRAP_ROUNDS = 100
 CI_LOWER_QUANTILE = 0.05
 CI_UPPER_QUANTILE = 0.95
 CONFIDENCE_LEVEL = 0.90
+V20_BOOTSTRAP_SEED = 0
 V01_CI_LOWER_QUANTILE = 0.025
 V01_CI_UPPER_QUANTILE = 0.975
 V01_CONFIDENCE_LEVEL = 0.95
-STYLE_CONTROLLED_CATEGORIES = frozenset({"hard_prompt", "coding", "math"})
+STYLE_CONTROLLED_CATEGORIES = frozenset({"hard_prompt"})
 STYLE_FEATURES = ("length", "headers", "lists", "bold")
+MODEL_STYLE_COLUMNS = tuple(f"model_style_{index}" for index in range(4))
+BASELINE_STYLE_COLUMNS = tuple(f"baseline_style_{index}" for index in range(4))
+_OFFICIAL_JUDGE_CONFIG = {
+    "gpt-4.1": {
+        "prompt_preset": "arena-hard",
+        "temperature": 0.0,
+        "max_out_tokens": 16000,
+    },
+    "gemini-2.5": {
+        "prompt_preset": "arena-hard",
+        "temperature": 1.0,
+        "max_out_tokens": 32000,
+    },
+}
 _CODE_BLOCK = re.compile(r"```([^`]*)```")
+
+
+@lru_cache(maxsize=1)
+def _load_style_calibration() -> pd.DataFrame:
+    """Load the compact joint population derived from pinned upstream data."""
+    resource = resources.files(__package__).joinpath(
+        "arena_hard_v20_calibration.csv.gz"
+    )
+    with resource.open("rb") as calibration_file:
+        return pd.read_csv(calibration_file, compression="gzip")
+
+
+def _fit_model_id(model: object) -> str:
+    """Match upstream's path removal while preserving model-id case."""
+    return str(model).rsplit("/", 1)[-1]
+
+
+def _calibration_judge(judge: object) -> str:
+    requested = _fit_model_id(judge).lower()
+    supported = {name.lower(): name for name in _OFFICIAL_JUDGE_CONFIG}
+    if requested not in supported:
+        raise ValueError(
+            "Official Arena-Hard v2 style-controlled scoring has no calibration "
+            f"for judge {judge!r}; available judges: {sorted(supported.values())}."
+        )
+    return supported[requested]
+
+
+def _validate_calibration_protocol(
+    *,
+    judge: object,
+    prompt_preset: object,
+    temperature: object,
+    max_out_tokens: object,
+    swap_mode: object,
+) -> str:
+    judge_id = _calibration_judge(judge)
+    protocol = _OFFICIAL_JUDGE_CONFIG[judge_id]
+    actual = {
+        "judge_prompt_preset": prompt_preset,
+        "judge_temperature": temperature,
+        "judge_max_out_tokens": max_out_tokens,
+        "judge_swap_mode": swap_mode,
+    }
+    expected = {
+        "judge_prompt_preset": protocol["prompt_preset"],
+        "judge_temperature": protocol["temperature"],
+        "judge_max_out_tokens": protocol["max_out_tokens"],
+        "judge_swap_mode": "both",
+    }
+    for field, expected_value in expected.items():
+        if actual[field] != expected_value:
+            raise ValueError(
+                f"Arena-Hard v2 calibration for judge {judge_id!r} requires "
+                f"{field}={expected_value!r}; found {actual[field]!r}."
+            )
+    return judge_id
+
+
+def check_v20_runtime(cfg: RunConfig, resolved_task: ResolvedTaskSpec) -> None:
+    """Reject incompatible official calibration before any paid inference."""
+    from judgearena.prompts.registry import resolve_run_judge_prompt
+
+    judge = cfg.judge
+    prompt = resolve_run_judge_prompt(resolved_task.task, judge)
+    required_defaults = {
+        "generation.truncate_judge_input_chars": (
+            cfg.generation.truncate_judge_input_chars,
+            None,
+        ),
+        "judge.strip_thinking_before_judging": (
+            judge.strip_thinking_before_judging,
+            False,
+        ),
+        "judge.top_p": (judge.top_p, None),
+        "judge.top_k": (judge.top_k, None),
+    }
+    for field, (actual, expected) in required_defaults.items():
+        if actual != expected:
+            raise ValueError(
+                f"Arena-Hard v2 official calibration requires {field}="
+                f"{expected!r}; found {actual!r}."
+            )
+    _validate_calibration_protocol(
+        judge=judge.model,
+        prompt_preset=prompt.preset_name,
+        temperature=judge.temperature,
+        max_out_tokens=judge.max_out_tokens,
+        swap_mode=judge.swap_mode,
+    )
 
 
 @lru_cache(maxsize=4096)
@@ -142,26 +253,97 @@ def _confidence_interval(
     )
 
 
-def _style_design(battles: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Build upstream's model and normalized style-control features."""
-    weighted = _weighted_battles(battles)
-    baseline = weighted["baseline"].iloc[0]
-    models = sorted(set(weighted["model"]) | {baseline})
+def _add_live_style_features(battles: pd.DataFrame) -> pd.DataFrame:
+    """Compute the four Arena-Hard style features for live completions."""
+    frame = battles.copy()
+    for columns, completion_column in (
+        (MODEL_STYLE_COLUMNS, "completion_model"),
+        (BASELINE_STYLE_COLUMNS, "completion_baseline"),
+    ):
+        if set(columns).issubset(frame) and frame[list(columns)].notna().all().all():
+            continue
+        if completion_column not in frame or frame[completion_column].isna().any():
+            raise ValueError(f"Arena-Hard v2 battles require {completion_column!r}.")
+        frame[list(columns)] = np.vstack(frame[completion_column].map(_style_features))
+    return frame
+
+
+def _single_value(frame: pd.DataFrame, column: str) -> object:
+    if column not in frame:
+        raise ValueError(f"Arena-Hard v2 battles require {column!r}.")
+    values = frame[column].dropna().unique().tolist()
+    if len(values) != 1:
+        raise ValueError(f"Arena-Hard v2 requires one {column}; found {values}.")
+    return values[0]
+
+
+def _select_calibration(battles: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
+    """Select the judge population and replace any copy of the live candidate."""
+    judge = _single_value(battles, "judge")
+    candidate = _single_value(battles, "model")
+    judge_id = _validate_calibration_protocol(
+        judge=judge,
+        prompt_preset=_single_value(battles, "judge_prompt_preset"),
+        temperature=_single_value(battles, "judge_temperature"),
+        max_out_tokens=_single_value(battles, "judge_max_out_tokens"),
+        swap_mode="both" if "reversed" in set(battles["orientation"]) else "fixed",
+    )
+
+    calibration = _load_style_calibration()
+    categories = set(battles["category"].dropna())
+    population = calibration.loc[
+        (calibration["judge"] == judge_id) & calibration["category"].isin(categories)
+    ]
+    selected = population.loc[
+        population["model"].map(_fit_model_id) != _fit_model_id(candidate)
+    ].copy()
+    if selected.empty:
+        raise ValueError(
+            f"Arena-Hard v2 has no calibration models for judge {judge_id!r}."
+        )
+
+    expected_ids = set(population["instruction_index"])
+    live_ids = set(battles["instruction_index"])
+    unknown_ids = sorted(live_ids - expected_ids)
+    if unknown_ids:
+        raise ValueError(
+            f"Arena-Hard v2 battles contain unknown instruction IDs: {unknown_ids[:5]}."
+        )
+    return selected, live_ids == expected_ids
+
+
+def _build_joint_style_design(
+    battles: pd.DataFrame,
+    calibration_battles: pd.DataFrame,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Build upstream's joint model and normalized style-control features."""
+    live_weighted = _add_live_style_features(_weighted_battles(battles))
+    calibration_weighted = _weighted_battles(calibration_battles)
+    weighted = pd.concat(
+        [calibration_weighted, live_weighted], ignore_index=True, sort=False
+    )
+
+    baselines = weighted["baseline"].dropna().unique().tolist()
+    if len(baselines) != 1:
+        raise ValueError(
+            "Arena-Hard style-controlled categories require one shared baseline; "
+            f"found {baselines}."
+        )
+    baseline = _fit_model_id(baselines[0])
+    fit_models = weighted["model"].map(_fit_model_id)
+    fit_baselines = weighted["baseline"].map(_fit_model_id)
+    models = sorted(set(fit_models) | {baseline})
     model_index = {model: index for index, model in enumerate(models)}
 
-    model_features = np.zeros((len(weighted), len(models)), dtype="float64")
+    model_features = np.zeros((len(weighted), len(models)), dtype="float32")
     for row, (model, row_baseline) in enumerate(
-        zip(weighted["model"], weighted["baseline"], strict=True)
+        zip(fit_models, fit_baselines, strict=True)
     ):
         model_features[row, model_index[model]] = 1.0
         model_features[row, model_index[row_baseline]] -= 1.0
 
-    candidate_style = np.vstack(
-        [_style_features(text) for text in weighted["completion_model"]]
-    )
-    baseline_style = np.vstack(
-        [_style_features(text) for text in weighted["completion_baseline"]]
-    )
+    candidate_style = weighted.loc[:, MODEL_STYLE_COLUMNS].to_numpy(dtype="float32")
+    baseline_style = weighted.loc[:, BASELINE_STYLE_COLUMNS].to_numpy(dtype="float32")
     style_difference = np.zeros_like(candidate_style)
     style_difference[:, 0] = (candidate_style[:, 0] - baseline_style[:, 0]) / (
         candidate_style[:, 0] + baseline_style[:, 0]
@@ -174,52 +356,47 @@ def _style_design(battles: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[s
 
     centered = style_difference - style_difference.mean(axis=0)
     scale = style_difference.std(axis=0, ddof=1)
-    normalized_style = np.divide(
-        centered,
-        scale,
-        out=np.zeros_like(centered),
-        where=np.isfinite(scale) & (scale != 0),
-    )
+    if not np.isfinite(style_difference).all() or not np.isfinite(scale).all():
+        raise ValueError("Arena-Hard joint style features must be finite.")
+    if (scale == 0).any():
+        raise ValueError("Arena-Hard joint style features must have nonzero variance.")
+    normalized_style = centered / scale
     return (
         np.column_stack((model_features, normalized_style)),
-        weighted["outcome"].to_numpy(dtype="float64"),
+        weighted["outcome"].to_numpy(dtype="float32"),
         models,
     )
 
 
-def _fit_bt(features: np.ndarray, outcomes: np.ndarray) -> np.ndarray:
-    """Fit the unregularized Bradley--Terry logistic model used upstream."""
-
-    def objective(coefficients: np.ndarray) -> tuple[float, np.ndarray]:
-        logits = features @ coefficients
-        loss = np.logaddexp(0, logits).sum() - outcomes @ logits
-        gradient = features.T @ (expit(logits) - outcomes)
-        return float(loss), gradient
-
-    fitted = minimize(
-        objective,
-        np.full(features.shape[1], 0.5),
-        jac=True,
-        method="L-BFGS-B",
-        options={"maxiter": 50, "ftol": 1e-9, "gtol": 1e-9},
-    )
-    if not np.isfinite(fitted.x).all():
-        raise ValueError("Arena-Hard style-controlled BT fit did not converge.")
-    return fitted.x
+def _logistic_coefficients(features: np.ndarray, outcomes: np.ndarray) -> np.ndarray:
+    """Return joint Bradley-Terry and style coefficients from scikit-learn."""
+    # Sample weights express a tie as half a loss and half a win.
+    design = np.repeat(features, 2, axis=0)
+    labels = np.tile([0.0, 1.0], len(outcomes))
+    weights = np.column_stack((1.0 - outcomes, outcomes)).ravel()
+    model = LogisticRegression(
+        fit_intercept=False,
+        C=np.inf,
+        solver="lbfgs",
+        tol=1e-9,
+        max_iter=1000,
+    ).fit(design, labels, sample_weight=weights)
+    return model.coef_[0].astype("float32")
 
 
-def _style_controlled_scores(
+def _bootstrap_style_scores(
     battles: pd.DataFrame,
+    calibration_battles: pd.DataFrame,
 ) -> dict[str, tuple[float, float, float]]:
     """Return median and 5th/95th percentile scores for each candidate model."""
-    features, outcomes, models = _style_design(battles)
-    baseline = battles["baseline"].iloc[0]
+    features, outcomes, models = _build_joint_style_design(battles, calibration_battles)
+    baseline = _fit_model_id(battles["baseline"].iloc[0])
     baseline_index = models.index(baseline)
-    rng = np.random.default_rng(0)
+    rng = np.random.RandomState(V20_BOOTSTRAP_SEED)
     coefficients = np.vstack(
         [
-            _fit_bt(features[indices], outcomes[indices])
-            for indices in rng.integers(
+            _logistic_coefficients(features[indices], outcomes[indices])
+            for indices in rng.randint(
                 0, len(features), size=(BOOTSTRAP_ROUNDS, len(features))
             )
         ]
@@ -239,38 +416,34 @@ def _style_controlled_scores(
 
 
 def _summarize_by_category(battles: pd.DataFrame) -> dict[str, dict[str, object]]:
-    """Return Arena-Hard v2.0's official category-scoped results."""
+    """Return Arena-Hard v2.0's category-scoped results."""
     summaries: dict[str, dict[str, object]] = {}
     for category, category_battles in battles.groupby("category", sort=False):
-        baselines = category_battles["baseline"].dropna().unique().tolist()
-        if len(baselines) != 1:
-            raise ValueError(
-                f"Arena-Hard category {category!r} must use exactly one baseline; "
-                f"found {baselines}."
-            )
+        baseline = _single_value(category_battles, "baseline")
         summary = _summarize_battles(category_battles).to_dict()
         scoring_method = "weighted_mean"
+
         if category in STYLE_CONTROLLED_CATEGORIES:
-            models = category_battles["model"].dropna().unique().tolist()
-            if len(models) != 1:
-                raise ValueError(
-                    f"Arena-Hard run scoring expects one candidate model; found {models}."
-                )
+            model = _single_value(category_battles, "model")
             summary["raw_winrate"] = summary["winrate"]
-            scoring_method = "style_controlled_bt"
+            scoring_method = "joint_style_controlled_bt"
             valid, _ = _official_battles(category_battles)
             if valid.empty:
                 ci_low = ci_high = None
             else:
-                score, ci_low, ci_high = _style_controlled_scores(category_battles)[
-                    models[0]
-                ]
+                calibration, complete = _select_calibration(category_battles)
+                score, ci_low, ci_high = _bootstrap_style_scores(
+                    category_battles,
+                    calibration,
+                )[_fit_model_id(model)]
                 summary["winrate"] = score
+                summary["official_population_complete"] = complete
         else:
             ci_low, ci_high = _confidence_interval(category_battles)
+
         summaries[str(category)] = {
             **summary,
-            "baseline_model": baselines[0],
+            "baseline_model": baseline,
             "score_ci_low": ci_low,
             "score_ci_high": ci_high,
             "scoring_method": scoring_method,
@@ -303,22 +476,20 @@ def score_v01(battles: pd.DataFrame) -> ScoringResult:
 
 
 def score_v20(battles: pd.DataFrame) -> ScoringResult:
-    """Return v2 category-scoped scores and scoring details."""
+    """Return Arena-Hard v2 category-scoped scores."""
     return ScoringResult(
         summary=_summarize_battles(battles),
         grouped_results={"category": _summarize_by_category(battles)},
         scoring_details={
             "decisive_weight": DECISIVE_WEIGHT,
             "bootstrap_rounds": BOOTSTRAP_ROUNDS,
+            "bootstrap_seed": V20_BOOTSTRAP_SEED,
             "confidence_level": CONFIDENCE_LEVEL,
             "confidence_quantiles": [CI_LOWER_QUANTILE, CI_UPPER_QUANTILE],
             "official_scope": "per_category",
             "aggregate_score_is_official": False,
             "category_methods": {
-                **{
-                    category: "style_controlled_bt"
-                    for category in sorted(STYLE_CONTROLLED_CATEGORIES)
-                },
+                "hard_prompt": "joint_style_controlled_bt",
                 "creative_writing": "weighted_mean",
             },
             "style_control_features": list(STYLE_FEATURES),

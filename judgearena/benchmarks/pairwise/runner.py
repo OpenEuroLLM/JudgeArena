@@ -105,6 +105,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     scorer = resolve_pairwise_scorer(resolved_task.spec.protocol.scoring.adapter)
     if scorer.check_requirements is not None:
         scorer.check_requirements()
+    if scorer.check_runtime is not None:
+        scorer.check_runtime(cfg, resolved_task)
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
@@ -295,6 +297,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     eval_instruction_index = [
         index for _, group_index in prompt_groups for index in group_index
     ]
+    eval_prompt_presets = [
+        group_prompt.preset_name
+        for group_prompt, group_index in prompt_groups
+        for _ in group_index
+    ]
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
@@ -334,6 +341,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         "instruction_index": list(eval_instruction_index) * repeats,
         "model": cfg.model.name,
         "baseline": baseline_per_eval.tolist() * repeats,
+        "judge": cfg.judge.model,
+        "judge_prompt_preset": eval_prompt_presets * repeats,
+        "judge_temperature": cfg.judge.temperature,
+        "judge_max_out_tokens": cfg.judge.max_out_tokens,
         "completion_model": completions_A.loc[eval_instruction_index].tolist()
         * repeats,
         "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
