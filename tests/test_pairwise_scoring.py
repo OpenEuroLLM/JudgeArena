@@ -284,6 +284,46 @@ def test_alpaca_eval_scorer_excludes_missing_rows_from_upstream(monkeypatch):
     assert result.metrics["lc_winrate"] == 75.0
 
 
+def test_alpaca_eval_scorer_propagates_upstream_failure(monkeypatch):
+    metrics = pytest.importorskip("alpaca_eval.metrics")
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("GLM fit failed")
+
+    monkeypatch.setattr(metrics, "get_length_controlled_winrate", fail)
+
+    with pytest.raises(RuntimeError, match="GLM fit failed"):
+        score_alpaca_eval(_battles([0.25]))
+
+
+@pytest.mark.parametrize(
+    ("metric", "value"),
+    [
+        ("length_controlled_winrate", None),
+        ("lc_standard_error", float("nan")),
+        ("win_rate", float("inf")),
+    ],
+)
+def test_alpaca_eval_scorer_rejects_invalid_official_metrics(
+    monkeypatch, metric, value
+):
+    metrics = pytest.importorskip("alpaca_eval.metrics")
+    upstream = {
+        "length_controlled_winrate": 50.0,
+        "lc_standard_error": 1.0,
+        "win_rate": 50.0,
+    }
+    upstream[metric] = value
+    monkeypatch.setattr(
+        metrics,
+        "get_length_controlled_winrate",
+        lambda *_args, **_kwargs: upstream,
+    )
+
+    with pytest.raises(ValueError, match="did not return a finite"):
+        score_alpaca_eval(_battles([0.25]))
+
+
 def test_alpaca_eval_lc_winrate_matches_pinned_reference_value():
     pytest.importorskip("alpaca_eval")
     import numpy as np

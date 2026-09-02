@@ -85,13 +85,24 @@ def mock_external_data_and_cache(monkeypatch):
     )
 
 
-def _mock_judge_response(monkeypatch, message) -> None:
+def _mock_alpaca_judge(monkeypatch, message) -> None:
+    import alpaca_eval.metrics
+
     class FakeJudge:
         def batch(self, inputs, **_kwargs):
             return [message] * len(inputs)
 
     monkeypatch.setattr(
         benchmark_execution, "make_model", lambda **_kwargs: FakeJudge()
+    )
+    monkeypatch.setattr(
+        alpaca_eval.metrics,
+        "get_length_controlled_winrate",
+        lambda *_args, **_kwargs: {
+            "length_controlled_winrate": 50.0,
+            "lc_standard_error": 1.0,
+            "win_rate": 50.0,
+        },
     )
 
 
@@ -568,7 +579,7 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
         },
     )
 
-    _mock_judge_response(monkeypatch, message)
+    _mock_alpaca_judge(monkeypatch, message)
 
     prefs = run_pairwise(
         _cfg(
@@ -591,7 +602,7 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
 def test_run_pairwise_rejects_missing_required_judge_logprobs(
     monkeypatch, tmp_path, top_logprobs
 ):
-    _mock_judge_response(
+    _mock_alpaca_judge(
         monkeypatch,
         InferenceResult(text="M", first_token_top_logprobs=top_logprobs),
     )
@@ -613,7 +624,7 @@ def test_run_pairwise_rejects_missing_required_judge_logprobs(
 def test_run_pairwise_random_swap_reorients_prefs(monkeypatch, tmp_path):
     """swap_mode='random' flips judged positions per instruction and re-orients."""
     message = InferenceResult(text="m", first_token_top_logprobs={"m": 0.0})
-    _mock_judge_response(monkeypatch, message)
+    _mock_alpaca_judge(monkeypatch, message)
 
     prefs = run_pairwise(
         _cfg(

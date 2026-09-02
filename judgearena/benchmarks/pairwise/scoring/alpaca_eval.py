@@ -72,34 +72,22 @@ def score(battles: pd.DataFrame) -> ScoringResult:
             "order, so the LC winrate below is off-spec."
         )
 
-    scoring_metrics: dict[str, float | None] = {
-        "lc_winrate": None,
-        "lc_standard_error": None,
-        "raw_winrate": None,
-    }
-    try:
-        upstream_metrics = get_length_controlled_winrate(
-            _official_annotations(battles),
-            save_weights_dir=None,
-            is_add_glm_preference_inplace=False,
-        )
-    except Exception as exc:
-        # Tiny subsets can break the GLM fit. Keep the raw summary and persist
-        # the annotations so smoke runs remain useful.
-        logger.warning("Length-controlled winrate computation failed: %s", exc)
-        return ScoringResult(summary=_summarize(battles), metrics=scoring_metrics)
+    upstream_metrics = get_length_controlled_winrate(
+        _official_annotations(battles),
+        save_weights_dir=None,
+        is_add_glm_preference_inplace=False,
+    )
 
+    scoring_metrics: dict[str, float] = {}
     for ours, theirs in (
         ("lc_winrate", "length_controlled_winrate"),
         ("lc_standard_error", "lc_standard_error"),
         ("raw_winrate", "win_rate"),
     ):
         value = upstream_metrics.get(theirs)
-        if value is not None and math.isfinite(float(value)):
-            scoring_metrics[ours] = float(value)
-    if scoring_metrics["lc_winrate"] is None:
-        logger.warning(
-            "Length-controlled winrate is unavailable for this run (too few "
-            "battles for a stable fit?)."
-        )
+        if value is None or not math.isfinite(float(value)):
+            raise ValueError(
+                f"Official AlpacaEval scoring did not return a finite {theirs!r}."
+            )
+        scoring_metrics[ours] = float(value)
     return ScoringResult(summary=_summarize(battles), metrics=scoring_metrics)
