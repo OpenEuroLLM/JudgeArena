@@ -3,8 +3,7 @@ task: alpaca-eval-2.0-official
 task_version: 1
 description: >-
   AlpacaEval 2.0 with the official dataset, GPT-4-Turbo baseline outputs,
-  annotator prompt, randomized pair order, and logprob-weighted preferences
-  (discrete single-token fallback when the judge backend returns no logprobs).
+  annotator prompt, randomized pair order, and logprob-weighted preferences.
   Reports the official length-controlled winrate via the upstream alpaca_eval
   package (optional 'alpaca-eval' extra).
 tags: [pairwise, instruction-following, alpaca-eval]

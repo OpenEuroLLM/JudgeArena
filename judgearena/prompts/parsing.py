@@ -24,8 +24,7 @@ class JudgeParser(abc.ABC):
     """Registry key and run-metadata identifier."""
 
     requires_top_logprobs: bool = False
-    """Whether judging should collect first-token top logprobs for this
-    parser (the backend must also be asked for them via judge.top_logprobs)."""
+    """Whether this parser requires first-token top logprobs."""
 
     @abc.abstractmethod
     def __call__(
@@ -88,12 +87,9 @@ class ArenaHardVerdict(JudgeParser):
 
 
 class AlpacaEvalToken(JudgeParser):
-    """Parse the official AlpacaEval verdict, weighted by logprobs when given.
+    """Parse the official logprob-weighted AlpacaEval verdict.
 
-    The annotator prompt labels the evaluated model "m" and the baseline "M".
-    With top logprobs the preference is the official logprob weighting over
-    the two tokens; without them it falls back to the sampled token (case is
-    the whole signal, so matching is case-sensitive).
+    The annotator prompt labels the first answer "m" and the second answer "M".
     """
 
     name = "alpaca-eval-token"
@@ -106,14 +102,11 @@ class AlpacaEvalToken(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None:
-        if top_logprobs is not None:
-            return weighted_token_preference(top_logprobs, self._TOKENS)
-        token = strip_thinking_tags(judge_completion).strip()
-        if token == "m":
-            return 0.0
-        if token == "M":
-            return 1.0
-        return None
+        if not top_logprobs:
+            raise ValueError(
+                "The official AlpacaEval parser requires first-token top logprobs."
+            )
+        return weighted_token_preference(top_logprobs, self._TOKENS)
 
 
 def weighted_token_preference(

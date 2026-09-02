@@ -145,21 +145,6 @@ def test_parse_arena_hard_verdict(judgment, expected):
 
 
 @pytest.mark.parametrize(
-    "judgment, expected",
-    [
-        ("m", 0.0),
-        ("M", 1.0),
-        (" m\n", 0.0),  # whitespace-only padding is tolerated
-        ("mM", None),
-        ("model m", None),
-        ("", None),
-    ],
-)
-def test_parse_alpaca_eval_token(judgment, expected):
-    assert parse_alpaca_eval_token(judgment) == expected
-
-
-@pytest.mark.parametrize(
     "top_logprobs, expected",
     [
         ({"m": math.log(0.25), "M": math.log(0.75)}, 0.75),
@@ -177,12 +162,13 @@ def test_weighted_token_preference(top_logprobs, expected):
         assert result == pytest.approx(expected)
 
 
-def test_alpaca_eval_token_weights_by_logprobs_when_present():
+def test_alpaca_eval_token_requires_and_weights_logprobs():
     assert parse_alpaca_eval_token(
         "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}
     ) == pytest.approx(0.75)
-    # Without logprobs the sampled token decides.
-    assert parse_alpaca_eval_token("M") == 1.0
+    for top_logprobs in (None, {}):
+        with pytest.raises(ValueError, match="requires first-token top logprobs"):
+            parse_alpaca_eval_token("M", top_logprobs=top_logprobs)
 
 
 def test_alpaca_eval_preset_resolves_token_parser():

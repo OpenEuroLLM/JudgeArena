@@ -116,6 +116,22 @@ def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
     assert model.temperature == 0.5
 
 
+def test_empty_first_token_top_logprobs_are_missing():
+    from langchain_core.messages import AIMessage
+
+    response = AIMessage(
+        content="M",
+        response_metadata={"logprobs": {"content": [{"top_logprobs": []}]}},
+    )
+
+    assert utils_models._first_token_top_logprobs(response) is None
+
+
+def test_make_model_rejects_unsupported_top_logprobs_backend():
+    with pytest.raises(ValueError, match="LlamaCpp backend does not support"):
+        make_model("LlamaCpp/model.gguf", top_logprobs=5)
+
+
 def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):
     monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 3)
     monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)

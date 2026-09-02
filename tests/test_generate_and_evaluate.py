@@ -17,6 +17,7 @@ from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
 from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
 from judgearena.config import RunConfig
 from judgearena.datasets.pairwise import PairwiseTaskData
+from judgearena.models import InferenceResult
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -81,6 +82,16 @@ def mock_external_data_and_cache(monkeypatch):
 
     monkeypatch.setattr(
         generate_and_evaluate, "cache_function_dataframe", _run_without_cache
+    )
+
+
+def _mock_judge_response(monkeypatch, message) -> None:
+    class FakeJudge:
+        def batch(self, inputs, **_kwargs):
+            return [message] * len(inputs)
+
+    monkeypatch.setattr(
+        benchmark_execution, "make_model", lambda **_kwargs: FakeJudge()
     )
 
 
@@ -557,14 +568,7 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
         },
     )
 
-    def fake_make_model(**kwargs):
-        class FakeJudge:
-            def batch(self, inputs, **_kwargs):
-                return [message] * len(inputs)
-
-        return FakeJudge()
-
-    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+    _mock_judge_response(monkeypatch, message)
 
     prefs = run_pairwise(
         _cfg(
@@ -583,14 +587,34 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
     assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
 
 
-def test_run_pairwise_random_swap_reorients_prefs(tmp_path):
-    """swap_mode='random' flips judged positions per instruction and re-orients.
+@pytest.mark.parametrize("top_logprobs", [None, {}])
+def test_run_pairwise_rejects_missing_required_judge_logprobs(
+    monkeypatch, tmp_path, top_logprobs
+):
+    _mock_judge_response(
+        monkeypatch,
+        InferenceResult(text="M", first_token_top_logprobs=top_logprobs),
+    )
 
-    The AlpacaEval-scheme mask for 'Synthetic instruction 0..3' is
-    [True, True, False, False]. Unswitched rows present the baseline in slot
-    A, so the judge's constant 'm' (slot A wins) re-orients to a baseline win
-    there and to a model win on switched rows.
-    """
+    with pytest.raises(ValueError, match="required by parser 'alpaca-eval-token'"):
+        run_pairwise(
+            _cfg(
+                task="alpaca-eval-2.0-official",
+                model_A="Dummy/a",
+                model_B="Dummy/b",
+                judge_model="OpenRouter/fake-judge",
+                n_instructions=4,
+                swap_mode="random",
+                result_folder=str(tmp_path),
+            )
+        )
+
+
+def test_run_pairwise_random_swap_reorients_prefs(monkeypatch, tmp_path):
+    """swap_mode='random' flips judged positions per instruction and re-orients."""
+    message = InferenceResult(text="m", first_token_top_logprobs={"m": 0.0})
+    _mock_judge_response(monkeypatch, message)
+
     prefs = run_pairwise(
         _cfg(
             task="alpaca-eval-2.0-official",
