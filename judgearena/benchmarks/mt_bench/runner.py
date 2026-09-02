@@ -19,7 +19,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.pairwise.scoring import calculate_metrics
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -33,7 +33,7 @@ from judgearena.utils import (
     cache_function_dataframe,
     generation_cache_token,
 )
-from judgearena.utils.eval import BattleReport, _compute_grouped_stats
+from judgearena.utils.eval import BattleReport
 
 logger = get_logger(__name__)
 
@@ -204,18 +204,15 @@ def _finalize_mt_bench_run(
     started_at_utc: datetime,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
-    scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
-    # MT-Bench battles carry per-turn prefs only; the win-rate scorer reads
-    # just the pref column of the canonical battles frame.
-    stats = scorer(pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
+    battles = pd.DataFrame(combined_metadata)
+    battles["pref"] = pd.Series(prefs, dtype="float64").to_numpy()
+    metric_results = calculate_metrics(battles, protocol.scoring.metrics)
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=cfg.model.baseline,
         judge_model=cfg.judge.model,
-        summary=stats,
-        per_category=_compute_grouped_stats(prefs, combined_metadata, "category"),
-        per_turn=_compute_grouped_stats(prefs, combined_metadata, "turn"),
+        metrics=metric_results,
         preferences=prefs.tolist(),
         metadata={
             **resolved_prompt.metadata(),

@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,6 +19,7 @@ from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_a
 from judgearena.config import RunConfig
 from judgearena.datasets.pairwise import PairwiseTaskData
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
 
 def _cfg(
@@ -343,6 +346,50 @@ def test_run_writes_roundtrippable_config(tmp_path):
     )
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
+    result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert result["metrics"]["pairwise_win_rate"]["num_battles"] == 2
+    assert "winrate" not in result
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval"
     assert reloaded.model.name == "Dummy/no answer"
+
+
+def test_pairwise_rejects_missing_metric_group_before_generation(monkeypatch, tmp_path):
+    resolved = get_packaged_task("alpaca-eval")
+    protocol = resolved.spec.protocol.model_copy(
+        update={
+            "scoring": ScoringSpec(
+                metrics=(
+                    MetricSpec(
+                        metric="pairwise_win_rate",
+                        group_by=("missing_group",),
+                    ),
+                )
+            )
+        }
+    )
+    task = replace(
+        resolved,
+        spec=resolved.spec.model_copy(update={"protocol": protocol}),
+    )
+    instructions = pd.DataFrame(
+        {"instruction": ["test"]},
+        index=pd.Index([0], name="instruction_index"),
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda *_args, **_kwargs: PairwiseTaskData(instructions),
+    )
+
+    with pytest.raises(ValueError, match="missing_group"):
+        run_pairwise(
+            _cfg(
+                task="alpaca-eval",
+                model_A="Dummy/a",
+                model_B="Dummy/b",
+                judge_model="Dummy/score A: 0 score B: 10",
+                result_folder=str(tmp_path),
+            ),
+            task,
+        )
