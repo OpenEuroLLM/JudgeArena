@@ -76,7 +76,7 @@ class RatingEntry:
 class Leaderboard:
     """Per-model ratings (mean + bootstrap CI) plus the run metadata that produced them.
 
-    Named distinctly from :class:`judgearena.benchmarks.elo.runner.EloReport`,
+    Named distinctly from :class:`judgearena.reports.EloReport`,
     which is the console/``results-*.json`` run report; this is the narrower
     ``elo_ratings.json`` leaderboard artifact with per-model CIs.
     """

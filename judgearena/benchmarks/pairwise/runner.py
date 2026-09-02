@@ -13,15 +13,15 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import calculate_metrics
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
+from judgearena.reports import BattleReport
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, generation_cache_token
-from judgearena.utils.eval import BattleReport
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -344,6 +344,12 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         * repeats,
         "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
         * repeats,
+        "model_a": cfg.model.name,
+        "model_b": baseline_per_eval.tolist() * repeats,
+        "completion_a": completions_A.loc[eval_instruction_index].tolist() * repeats,
+        "completion_b": completions_B.loc[eval_instruction_index].tolist() * repeats,
+        "evaluation_model": cfg.model.name,
+        "source": "llm-judge",
         "pref": pd.Series(prefs, dtype="float64").to_numpy(),
         "orientation": (
             ["direct"] * len(eval_instruction_index)
@@ -362,9 +368,19 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
                 instructions_df.loc[eval_instruction_index, column].tolist() * repeats
             )
     battles = pd.DataFrame(battle_data)
-    metric_results = calculate_metrics(
-        battles, resolved_task.spec.protocol.scoring.metrics
+    battles["pref_hard"] = battles["pref"].map(
+        lambda pref: (
+            float("nan")
+            if pd.isna(pref)
+            else 0.0
+            if pref < 0.5
+            else 1.0
+            if pref > 0.5
+            else 0.5
+        )
     )
+    metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
+    metric_results = calculate_metrics(battles, metrics)
 
     report = BattleReport(
         task=cfg.task,

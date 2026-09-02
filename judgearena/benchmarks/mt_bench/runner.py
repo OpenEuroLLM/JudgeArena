@@ -19,7 +19,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.pairwise.scoring import calculate_metrics
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -28,12 +28,12 @@ from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
 from judgearena.models import is_thinking_model, make_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
+from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBenchProtocol
 from judgearena.utils import (
     cache_function_dataframe,
     generation_cache_token,
 )
-from judgearena.utils.eval import BattleReport
 
 logger = get_logger(__name__)
 
@@ -206,7 +206,8 @@ def _finalize_mt_bench_run(
 ) -> pd.Series:
     battles = pd.DataFrame(combined_metadata)
     battles["pref"] = pd.Series(prefs, dtype="float64").to_numpy()
-    metric_results = calculate_metrics(battles, protocol.scoring.metrics)
+    metrics = build_metrics(protocol.scoring.metrics)
+    metric_results = calculate_metrics(battles, metrics)
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,

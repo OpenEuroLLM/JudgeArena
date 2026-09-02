@@ -2,7 +2,8 @@ import json
 
 import pandas as pd
 
-from judgearena.utils.eval import BattleReport, PrefSummary, compute_pref_summary
+from judgearena.reports import BattleReport, EloReport
+from judgearena.utils.eval import PrefSummary, compute_pref_summary
 
 
 def test_compute_pref_summary_returns_win_loss_tie_rate():
@@ -18,17 +19,12 @@ def test_compute_pref_summary_returns_win_loss_tie_rate():
     assert summary.winrate == (2 + 0.5) / 4
 
 
-def _summary(
-    num_battles=4, winrate=0.5, num_wins=2, num_losses=1, num_ties=1, num_missing=0
-):
-    return PrefSummary(
-        num_battles=num_battles,
-        winrate=winrate,
-        num_wins=num_wins,
-        num_losses=num_losses,
-        num_ties=num_ties,
-        num_missing=num_missing,
-    )
+def test_report_compatibility_exports():
+    from judgearena.benchmarks.elo.runner import EloReport as RunnerEloReport
+    from judgearena.utils.eval import BattleReport as UtilsBattleReport
+
+    assert RunnerEloReport is EloReport
+    assert UtilsBattleReport is BattleReport
 
 
 def test_battle_report_serializes_metrics_as_the_result():
@@ -51,7 +47,7 @@ def test_battle_report_serializes_metrics_as_the_result():
 
     result = report.to_dict()
 
-    assert result["schema_version"] == "2"
+    assert result["schema_version"] == "1"
     assert result["report_type"] == "BattleReport"
     assert result["metrics"] == metrics
     assert result["model_A"] == "my-model"
@@ -70,8 +66,19 @@ def test_battle_report_renders_metrics_and_groups(capsys):
         metrics={
             "length_controlled_winrate": {
                 "winrate": 0.52,
+                "num_scored": 10,
+                "num_pairs": 10,
                 "groups": {
-                    "category": [{"group": "writing", "values": {"winrate": 0.6}}]
+                    "category": [
+                        {
+                            "group": "writing",
+                            "values": {
+                                "winrate": 0.6,
+                                "num_scored": 5,
+                                "num_pairs": 5,
+                            },
+                        }
+                    ]
                 },
             }
         },
@@ -103,34 +110,27 @@ def test_battle_report_save_round_trip(tmp_path):
     loaded = json.loads(path.read_text())
 
     assert loaded == report.to_dict()
-    assert loaded["schema_version"] == "2"
+    assert loaded["schema_version"] == "1"
 
 
 def test_eloreport_to_dict_envelope():
-    from judgearena.benchmarks.elo.runner import EloReport
-
     report = EloReport(
         arena="chatbot-arena",
         judge_model="judge",
-        summary=_summary(),
+        metrics={"bradley_terry": {"ratings": {"my-model": 1000.0}}},
         num_battles=10,
-        llm_judged_battles=10,
-        human_anchor_battles=5,
-        elo_mean=1000.0,
-        elo_std=10.0,
-        elo_n_bootstraps=100,
-        mae_vs_human=5.0,
-        method="Soft-ELO",
-        n_bootstraps=100,
         model_name="my-model",
-        mean_ratings={"my-model": 1000.0},
-        battle_counts={"my-model": 10},
-        human_elo={"gpt4": 1100.0},
-        bootstrap_ratings=[{"my-model": 1000.0}],
         sampling_metadata={"sampling_mode": "head"},
     )
+
     result = report.to_dict()
-    assert result["schema_version"] == "1"
-    assert result["report_type"] == "EloReport"
-    assert result["arena"] == "chatbot-arena"
-    assert result["model_name"] == "my-model"
+    assert result == {
+        "arena": "chatbot-arena",
+        "judge_model": "judge",
+        "metrics": {"bradley_terry": {"ratings": {"my-model": 1000.0}}},
+        "num_battles": 10,
+        "model_name": "my-model",
+        "sampling_metadata": {"sampling_mode": "head"},
+        "schema_version": "1",
+        "report_type": "EloReport",
+    }

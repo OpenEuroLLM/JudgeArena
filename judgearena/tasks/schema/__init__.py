@@ -15,16 +15,15 @@ from judgearena.tasks.schema.baselines import (
 )
 from judgearena.tasks.schema.dataset import DatasetFields, DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol, EloScoringSpec
+from judgearena.tasks.schema.metrics import MetricSpec, ScoringSpec
 from judgearena.tasks.schema.mt_bench import (
     MTBenchJudgeSpec,
     MTBenchProtocol,
     MultiTurnGeneration,
 )
 from judgearena.tasks.schema.pairwise import (
-    MetricSpec,
     PairwiseJudgeSpec,
     PairwiseProtocol,
-    ScoringSpec,
     SingleTurnGeneration,
     SwapMode,
 )
