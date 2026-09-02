@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -17,11 +18,11 @@ BOOTSTRAP_SEED = 0
 CONFIDENCE_LEVEL = 0.95
 
 
-def _preferences(battles: pd.DataFrame) -> pd.Series:
-    if "pref" not in battles:
-        raise ValueError("Pairwise metrics require a 'pref' column.")
+def _preferences(battles: pd.DataFrame, column: str = "pref") -> pd.Series:
+    if column not in battles:
+        raise ValueError(f"Pairwise metrics require a {column!r} column.")
     try:
-        preferences = pd.Series(battles["pref"], dtype="float64")
+        preferences = pd.Series(battles[column], dtype="float64")
     except (TypeError, ValueError) as exc:
         raise ValueError("Pairwise preferences must be numeric.") from exc
     parsed = preferences.dropna()
@@ -33,17 +34,64 @@ def _preferences(battles: pd.DataFrame) -> pd.Series:
     return preferences
 
 
-def pairwise_win_rate(battles: pd.DataFrame) -> dict[str, float | int]:
-    """Return candidate win/loss/tie statistics for canonical preferences."""
-    preferences = _preferences(battles)
-    result = compute_pref_summary(preferences).to_dict()
-    parsed = preferences.dropna()
-    result["winrate"] = float((1 - parsed).mean()) if len(parsed) else float("nan")
-    return result
+def _pairwise_view(battles: pd.DataFrame) -> pd.DataFrame:
+    """Normalize rows carrying an evaluation model to the focal/opponent view."""
+    if "evaluation_model" not in battles:
+        return battles
+    frame = battles.loc[battles["evaluation_model"].notna()].copy()
+    required = {"model_a", "model_b", "pref"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"Evaluation battles are missing columns: {missing}.")
+    focal_is_a = frame["model_a"] == frame["evaluation_model"]
+    focal_is_b = frame["model_b"] == frame["evaluation_model"]
+    if not (focal_is_a ^ focal_is_b).all():
+        raise ValueError(
+            "Each evaluation battle must contain its evaluation model exactly once."
+        )
+    frame["model"] = frame["evaluation_model"]
+    frame["baseline"] = frame["model_b"].where(focal_is_a, frame["model_a"])
+    frame["pref"] = frame["pref"].where(focal_is_a, 1 - frame["pref"])
+    if {"completion_a", "completion_b"} <= set(frame.columns):
+        frame["completion_model"] = frame["completion_a"].where(
+            focal_is_a, frame["completion_b"]
+        )
+        frame["completion_baseline"] = frame["completion_b"].where(
+            focal_is_a, frame["completion_a"]
+        )
+    return frame
+
+
+def _format_winrate(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "unavailable"
+    return f"{float(value):.2%}"
+
+
+@dataclass(frozen=True, kw_only=True)
+class PairwiseWinRateMetric:
+    """Configured candidate win-rate calculation."""
+
+    def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
+        frame = _pairwise_view(battles)
+        preferences = _preferences(frame)
+        result = compute_pref_summary(preferences).to_dict()
+        parsed = preferences.dropna()
+        result["winrate"] = float((1 - parsed).mean()) if len(parsed) else float("nan")
+        return result
+
+    @staticmethod
+    def render(result: dict[str, object]) -> str:
+        return (
+            f"pairwise_win_rate: {_format_winrate(result['winrate'])} "
+            f"({result['num_wins']} wins, {result['num_losses']} losses, "
+            f"{result['num_ties']} ties, {result['num_missing']} missing)"
+        )
 
 
 def collapse_pairwise_battles(battles: pd.DataFrame) -> pd.DataFrame:
     """Collapse answer-order judgments into one row per physical battle."""
+    frame = _pairwise_view(battles).copy()
     required = {
         "instruction_index",
         "model",
@@ -53,11 +101,10 @@ def collapse_pairwise_battles(battles: pd.DataFrame) -> pd.DataFrame:
         "pref",
         "orientation",
     }
-    missing = sorted(required - set(battles.columns))
+    missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"Length control requires battle columns: {missing}.")
 
-    frame = battles.copy()
     frame["pref"] = _preferences(frame)
     if frame.empty:
         frame["n_judgments"] = pd.Series(dtype="int64")
@@ -170,55 +217,71 @@ def _bootstrap_interval(
     return [float(low), float(high)]
 
 
-def length_controlled_winrate(battles: pd.DataFrame) -> dict[str, object]:
-    """Estimate candidate win rate at equal Unicode-character length."""
-    collapsed = collapse_pairwise_battles(battles)
-    result: dict[str, object] = {
-        "num_pairs": len(collapsed),
-        "num_scored": int(
-            (
-                collapsed["pref"].notna()
-                & (collapsed["n_parsed"] == collapsed["n_judgments"])
-            ).sum()
-        ),
-    }
-    if collapsed.empty:
-        return {**result, "winrate": None, "reason": "not_enough_complete_pairs"}
-    if collapsed["model"].nunique(dropna=False) != 1:
-        return {**result, "winrate": None, "reason": "multiple_candidate_models"}
-    if collapsed["baseline"].nunique(dropna=False) != 1:
-        return {**result, "winrate": None, "reason": "multiple_baseline_models"}
+@dataclass(frozen=True, kw_only=True)
+class LengthControlledWinrateMetric:
+    """Configured equal-length candidate win-rate calculation."""
 
-    complete = collapsed.loc[
-        collapsed["pref"].notna() & (collapsed["n_parsed"] == collapsed["n_judgments"])
-    ]
-    if len(complete) < 3:
-        return {**result, "winrate": None, "reason": "not_enough_complete_pairs"}
-
-    length_difference = np.array(
-        [
-            len(candidate) - len(baseline)
-            for candidate, baseline in zip(
-                complete["completion_model"],
-                complete["completion_baseline"],
-                strict=True,
-            )
-        ],
-        dtype="float64",
-    )
-    outcomes = 1 - complete["pref"].to_numpy(dtype="float64")
-    result["equal_length_extrapolation"] = not (
-        length_difference.min() <= 0 <= length_difference.max()
-    )
-    try:
-        intercept, _ = _fit_length_model(length_difference, outcomes)
-    except (ValueError, ConvergenceWarning) as exc:
-        return {**result, "winrate": None, "reason": str(exc)}
-
-    result.update(
-        {
-            "winrate": _sigmoid(intercept),
-            "confidence_interval": _bootstrap_interval(length_difference, outcomes),
+    def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
+        collapsed = collapse_pairwise_battles(battles)
+        result: dict[str, object] = {
+            "num_pairs": len(collapsed),
+            "num_scored": int(
+                (
+                    collapsed["pref"].notna()
+                    & (collapsed["n_parsed"] == collapsed["n_judgments"])
+                ).sum()
+            ),
         }
-    )
-    return result
+        if collapsed.empty:
+            return {**result, "winrate": None}
+        if collapsed["model"].nunique(dropna=False) != 1:
+            raise ValueError("Length control requires exactly one evaluation model.")
+        if collapsed["baseline"].nunique(dropna=False) != 1:
+            raise ValueError("Length control requires exactly one baseline model.")
+
+        complete = collapsed.loc[
+            collapsed["pref"].notna()
+            & (collapsed["n_parsed"] == collapsed["n_judgments"])
+        ]
+        if len(complete) < 3:
+            return {**result, "winrate": None}
+
+        length_difference = np.array(
+            [
+                len(candidate) - len(baseline)
+                for candidate, baseline in zip(
+                    complete["completion_model"],
+                    complete["completion_baseline"],
+                    strict=True,
+                )
+            ],
+            dtype="float64",
+        )
+        outcomes = 1 - complete["pref"].to_numpy(dtype="float64")
+        result["equal_length_extrapolation"] = not (
+            length_difference.min() <= 0 <= length_difference.max()
+        )
+        try:
+            intercept, _ = _fit_length_model(length_difference, outcomes)
+        except (ValueError, ConvergenceWarning):
+            return {**result, "winrate": None}
+
+        result.update(
+            {
+                "winrate": _sigmoid(intercept),
+                "confidence_interval": _bootstrap_interval(length_difference, outcomes),
+            }
+        )
+        return result
+
+    @staticmethod
+    def render(result: dict[str, object]) -> str:
+        line = (
+            "length_controlled_winrate: "
+            f"{_format_winrate(result['winrate'])} "
+            f"({result['num_scored']}/{result['num_pairs']} scored pairs)"
+        )
+        interval = result.get("confidence_interval")
+        if interval is not None:
+            line += f" [{interval[0]:.2%}, {interval[1]:.2%}]"
+        return line

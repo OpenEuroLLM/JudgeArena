@@ -16,8 +16,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from judgearena.benchmarks.elo.scoring import ELO_SCORERS
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_METRICS
+from judgearena.benchmarks.scoring import available_metrics, build_metric
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
@@ -256,9 +255,7 @@ class AdapterCatalog:
     )
     battle_datasets: frozenset[str] = frozenset({"arena_battles"})
     prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    pairwise_metrics: frozenset[str] = frozenset(PAIRWISE_METRICS)
-    mt_bench_metrics: frozenset[str] = frozenset({"pairwise_win_rate"})
-    elo_scorers: frozenset[str] = frozenset(ELO_SCORERS)
+    metrics: frozenset[str] = frozenset(available_metrics())
 
 
 def load_tasks(
@@ -311,30 +308,26 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),
     }
-    if is_elo:
-        references["scorer"] = (
-            spec.protocol.scoring.adapter,
-            adapters.elo_scorers,
-        )
-    else:
-        metric_names = (
-            adapters.mt_bench_metrics
-            if isinstance(spec.protocol, MTBenchProtocol)
-            else adapters.pairwise_metrics
-        )
-        for request in spec.protocol.scoring.metrics:
-            if request.metric not in metric_names:
+    metric_names = adapters.metrics
+    for request in spec.protocol.scoring.metrics:
+        if request.metric not in metric_names:
+            raise TaskDefinitionError(
+                f"{resolved.provenance.source_path}: unknown metric {request.metric!r}"
+            )
+        try:
+            build_metric(request.metric, request.parameters)
+        except ValueError as exc:
+            raise TaskDefinitionError(
+                f"{resolved.provenance.source_path}: invalid metric "
+                f"{request.metric!r}: {exc}"
+            ) from exc
+        if isinstance(spec.protocol, MTBenchProtocol):
+            unsupported = sorted(set(request.group_by) - {"category", "turn"})
+            if unsupported:
                 raise TaskDefinitionError(
-                    f"{resolved.provenance.source_path}: unknown metric "
-                    f"{request.metric!r}"
+                    f"{resolved.provenance.source_path}: MT-Bench cannot group "
+                    f"metrics by {unsupported}"
                 )
-            if isinstance(spec.protocol, MTBenchProtocol):
-                unsupported = sorted(set(request.group_by) - {"category", "turn"})
-                if unsupported:
-                    raise TaskDefinitionError(
-                        f"{resolved.provenance.source_path}: MT-Bench cannot group "
-                        f"metrics by {unsupported}"
-                    )
     judge = spec.protocol.judge
     references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
     for kind, (adapter_id, available) in references.items():

@@ -13,20 +13,19 @@ from judgearena.artifacts import (
     safe_filename,
     write_run_metadata_safely,
 )
-from judgearena.battles import Leaderboard, summarize_bootstrap, write_battles
+from judgearena.battles import Leaderboard, RatingEntry, write_battles
+from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     prefs_to_battle_results,
     sampling_cache_token,
     select_seeded_random_arena_battles,
-    winner_to_pref,
 )
-from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.benchmarks.execution import build_generation_kwargs
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_battles
 from judgearena.evaluate import (
     PairScore,
-    calibrate_temperature,
     combine_swapped_prefs,
     judge_and_parse_prefs,
     resolve_run_judge_prompt,
@@ -34,107 +33,14 @@ from judgearena.evaluate import (
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
+from judgearena.reports import EloReport
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
-from judgearena.utils import cache_function_dataframe, compute_pref_summary
-from judgearena.utils.eval import PrefSummary, Report
+from judgearena.utils import cache_function_dataframe
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
-
-
-class EloReport(Report):
-    """Bradley-Terry / Soft-ELO ratings for one focal model against an arena.
-
-    This is the console/``results-*.json`` run report. The narrower per-model
-    leaderboard with bootstrap CIs is persisted separately as
-    ``elo_ratings.json`` via :class:`judgearena.battles.Leaderboard`.
-    """
-
-    arena: str
-    """Arena/benchmark the focal model is rated against."""
-    judge_model: str
-    """LLM judge that scored the battles."""
-    summary: PrefSummary
-    """Win/loss/tie stats for the focal model's LLM-judged battles."""
-    num_battles: int
-    """Total battles (LLM-judged + human-anchor)."""
-    llm_judged_battles: int
-    """Battles the LLM judged for the focal model."""
-    human_anchor_battles: int
-    """Human-annotated battles anchoring the other arena models."""
-    elo_mean: float
-    """Focal model's mean ELO across bootstrap samples."""
-    elo_std: float
-    """Std of the focal model's ELO across bootstrap samples."""
-    elo_n_bootstraps: int
-    """Bootstrap samples that rated the focal model (≤ n_bootstraps); the n behind elo_mean/elo_std."""
-    mae_vs_human: float
-    """Mean absolute error of estimated vs human ELO over overlapping models."""
-    method: str
-    """Rating method label (e.g. "Soft-ELO")."""
-    n_bootstraps: int
-    """Total bootstrap iterations run."""
-    model_name: str
-    """Focal model under evaluation."""
-    mean_ratings: dict[str, float]
-    """Per-model mean ELO across bootstraps."""
-    battle_counts: dict[str, int]
-    """Per-model battle count."""
-    human_elo: dict[str, float]
-    """Per-model human-derived ELO (anchors)."""
-    bootstrap_ratings: list[dict[str, float]]
-    """One model→ELO dict per bootstrap sample."""
-    sampling_metadata: dict[str, object]
-    """Instruction-sampling parameters for the run."""
-
-    def render(self) -> None:
-        s = self.summary
-        print(f"\n=== Results for {self.model_name} ===")
-        print(
-            f"Battles: {self.llm_judged_battles} | Wins: {s.num_wins} | "
-            f"Losses: {s.num_losses} | Ties: {s.num_ties}"
-        )
-        print(f"Win rate: {s.winrate:.2%}")
-
-        print(
-            f"\n=== {self.method} Ratings (Bradley-Terry, "
-            f"{self.n_bootstraps} bootstraps) ==="
-        )
-        print(
-            f"Estimating {self.method} Ratings with {self.llm_judged_battles} "
-            f"LLM-judges for model {self.model_name} and {self.human_anchor_battles} "
-            "human annotations for other models. Number of battles is indicated in "
-            "parenthesis and confidence intervals are reported by computing ELO on "
-            f"{self.n_bootstraps} samples of instructions."
-        )
-
-        if not self.mean_ratings:
-            print("  Not enough data to compute ELO ratings.")
-            return
-
-        # Percentile CIs (not mean ± std): matches the bounds persisted in
-        # elo_ratings.json so the console and the saved leaderboard never disagree.
-        for e in summarize_bootstrap(
-            self.bootstrap_ratings, self.battle_counts, self.model_name
-        ):
-            suffix = " <-----" if e.model == self.model_name else ""
-            print(
-                f"  {e.model}  ({e.n_battles}){suffix}: "
-                f"{e.rating:.1f} [{e.ci_low:.1f}, {e.ci_high:.1f}]"
-            )
-
-        overlap = [
-            m for m in self.mean_ratings if m in self.human_elo and m != self.model_name
-        ]
-        if overlap:
-            print(
-                f"\n  MAE vs Human-ELO ({len(overlap)} arena models): "
-                f"{self.mae_vs_human:.1f}"
-            )
-        else:
-            print("\n  No overlapping arena models to compute MAE.")
 
 
 def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
@@ -145,7 +51,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     if cfg.elo is None:
         raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
     arena = protocol.arena
-    scorer = ELO_SCORERS[protocol.scoring.adapter]
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
 
@@ -395,123 +300,25 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
 
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
-    # Map preferences back to model-name-level battle results.
     model_name = cfg.model.name
-    df_llm_judge = prefs_to_battle_results(
-        prefs,
-        our_model_is_position_a,
-        opponent_models,
-        model_name,
-        judge_model=cfg.judge.model,
-        question_ids=question_ids,
-    )
-
-    # Normalize prefs so pref < 0.5 always means our model wins, then summarise
-    prefs_normalized = pd.Series(
-        [
-            p if (p is None or is_pos_a) else (1 - p)
-            for p, is_pos_a in zip(prefs, our_model_is_position_a, strict=True)
-        ]
-    )
-    summary = compute_pref_summary(prefs_normalized)
-
     # Anchor the llm-judge battles against the human arena battles. These are
     # rebuilt from the (revision-pinned) arena, not persisted per run.
     df_arena = arena_anchor_battles(df_arena_all)
 
-    df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
-
-    # Compute human-only BT ratings as ground-truth reference
-    human_elo = scorer.fit(
-        df_arena, pref_col="pref_hard", baseline_model=cfg.elo.baseline_model
+    calibrated_temperature = calibrate_pairscore_temperature(
+        df_arena,
+        df_arena_all,
+        enabled=cfg.elo.calibrate_temperature,
+        soft_elo=cfg.elo.soft_elo,
+        sample_size=cfg.elo.calibration_size,
+        rng=rng,
+        judge_model=cfg.judge.model,
+        judge_model_kwargs=judge_extra_kwargs,
+        swap_mode=cfg.judge.swap_mode,
+        prompt=resolved_prompt,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        default_temperature=cfg.elo.soft_elo_temperature,
     )
-
-    # --- Temperature calibration (optional) ---
-    # Run the judge on a random subset of human arena battles that already
-    # have ground-truth winner labels so we can fit T* via MLE.
-    calibrated_temperature: float | None = None
-    if cfg.elo.calibrate_temperature:
-        if not cfg.elo.soft_elo:
-            logger.warning(
-                "--calibrate-temperature has no effect with --no-soft-elo; skipping."
-            )
-        else:
-            logger.info("Calibrating PairScore temperature against human annotations.")
-            # Sample calibration battles from the already-loaded arena battles.
-            # Use the same judge to score them so scores and labels are comparable.
-            _cal_n = (
-                min(cfg.elo.calibration_size, len(df_arena))
-                if cfg.elo.calibration_size is not None
-                else len(df_arena)
-            )
-            # Keep the original df_arena_all index so we can look up the full
-            # conversation rows below; reset_index would point at non-existent
-            # 0..N labels in df_arena_all.
-            cal_battles = df_arena.sample(
-                n=_cal_n, random_state=int(rng.integers(0, 2**31))
-            )
-
-            cal_instructions = [
-                _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][0])
-                for i in cal_battles.index
-            ]
-            cal_completions_a = [
-                _extract_instruction_text(df_arena_all.loc[i, "conversation_a"][1])
-                for i in cal_battles.index
-            ]
-            cal_completions_b = [
-                _extract_instruction_text(df_arena_all.loc[i, "conversation_b"][1])
-                for i in cal_battles.index
-            ]
-
-            judge_chat_model_cal = make_model(
-                model=cfg.judge.model,
-                **judge_extra_kwargs,
-            )
-            cal_annotations, _, cal_prefs = judge_and_parse_prefs(
-                judge_chat_model=judge_chat_model_cal,
-                instructions=cal_instructions,
-                completions_A=cal_completions_a,
-                completions_B=cal_completions_b,
-                swap_mode=cfg.judge.swap_mode,
-                system_prompt=resolved_prompt.system_prompt,
-                user_prompt_template=resolved_prompt.user_prompt_template,
-                prompt_preset=resolved_prompt.preset_name,
-                parse=resolved_prompt.parser,
-                truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-            )
-
-            # Build (delta_s, y) pairs from calibration battles.
-            # delta_s = score_A - score_B, extracted exactly as the main run does.
-            delta_s_cal = []
-            y_cal = []
-            for ann, human_winner in zip(
-                cal_annotations, cal_battles["winner"].tolist(), strict=True
-            ):
-                sa, sb = PairScore.parse_raw_scores(ann.judge_completion)
-                if sa is None or sb is None:
-                    continue
-                human_pref = winner_to_pref(human_winner)
-                if human_pref is None or human_pref == 0.5:
-                    continue  # skip ties and missing
-                delta_s_cal.append(sa - sb)
-                y_cal.append(1.0 - human_pref)  # pref=0 → A wins → y=1
-
-            if len(delta_s_cal) < 10:
-                logger.warning(
-                    "Only %d valid calibration pairs (need ≥10); keeping default temperature.",
-                    len(delta_s_cal),
-                )
-            else:
-                calibrated_temperature = calibrate_temperature(
-                    np.array(delta_s_cal), np.array(y_cal)
-                )
-                logger.info(
-                    "Calibration pairs: %d  T* = %.4f  (default was %s)",
-                    len(delta_s_cal),
-                    calibrated_temperature,
-                    cfg.elo.soft_elo_temperature,
-                )
 
     # Build the score parser used for the main evaluation run.
     score_parser = PairScore(
@@ -540,83 +347,65 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         else:
             prefs = new_prefs_ab.tolist()
 
-        # Rebuild battle results with the re-parsed prefs.
-        df_llm_judge = prefs_to_battle_results(
-            prefs,
-            our_model_is_position_a,
-            opponent_models,
-            model_name,
-            judge_model=cfg.judge.model,
-            question_ids=question_ids,
-        )
-        df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+    # Map the final canonical preferences to model-name-level battle results.
+    df_llm_judge = prefs_to_battle_results(
+        prefs,
+        our_model_is_position_a,
+        opponent_models,
+        model_name,
+        judge_model=cfg.judge.model,
+        question_ids=question_ids,
+    )
 
-    n_bootstraps = cfg.elo.n_bootstraps
-    use_soft = cfg.elo.soft_elo
-
-    n_llm = len(df_llm_judge)
-    n_human = len(df_arena)
-    method_label = "Soft-ELO" if use_soft else "ELO"
-
-    # Count battles per model across the combined results
-    battle_counts: dict[str, int] = {}
-    for _, row in df_results.iterrows():
-        battle_counts[row["model_a"]] = battle_counts.get(row["model_a"], 0) + 1
-        battle_counts[row["model_b"]] = battle_counts.get(row["model_b"], 0) + 1
-
-    pref_col = "pref" if use_soft else "pref_hard"
-    bootstrap_ratings: list[dict[str, float]] = []
-    for _ in range(n_bootstraps):
-        df_sample = df_results.sample(
-            n=len(df_results), replace=True, random_state=int(rng.integers(0, 2**31))
-        )
-        ratings = scorer.fit(
-            df_sample, pref_col=pref_col, baseline_model=cfg.elo.baseline_model
-        )
-        bootstrap_ratings.append(ratings)
-
-    # One percentile-CI summary, reused for the console report, the MAE
-    # calculation below, and the persisted elo_ratings.json leaderboard so
-    # none of the three can disagree.
-    entries: list = []
-    mean_ratings: dict[str, float] = {}
-    mae = np.nan
-    if bootstrap_ratings:
-        entries = summarize_bootstrap(bootstrap_ratings, battle_counts, model_name)
-        mean_ratings = {e.model: e.rating for e in entries}
-        overlap = [m for m in mean_ratings if m in human_elo and m != model_name]
-        if overlap:
-            abs_errors = [abs(mean_ratings[m] - human_elo[m]) for m in overlap]
-            mae = np.mean(abs_errors)
-
-    model_rating_values = [
-        rating[model_name] for rating in bootstrap_ratings if model_name in rating
+    # Mark and enrich the rows created for the model under evaluation. Human
+    # anchors keep these columns null. Focal metrics can therefore consume the
+    # same combined battle table as Bradley-Terry without knowing this runner.
+    repeats = max(1, len(df_llm_judge) // max(1, len(our_completions)))
+    row_our_completions = (list(our_completions) * repeats)[: len(df_llm_judge)]
+    row_opponent_completions = (list(opponent_completions) * repeats)[
+        : len(df_llm_judge)
     ]
-    elo_mean = (
-        float(np.mean(model_rating_values)) if model_rating_values else float("nan")
+    focal_is_a = pd.Series(our_model_is_position_a, dtype="bool")
+    df_llm_judge["evaluation_model"] = model_name
+    df_llm_judge["completion_a"] = pd.Series(row_our_completions).where(
+        focal_is_a, row_opponent_completions
     )
-    elo_std = (
-        float(np.std(model_rating_values)) if model_rating_values else float("nan")
+    df_llm_judge["completion_b"] = pd.Series(row_opponent_completions).where(
+        focal_is_a, row_our_completions
     )
+    df_llm_judge["instruction_index"] = question_ids
+    if cfg.judge.swap_mode == "both":
+        half = len(df_llm_judge) // 2
+        df_llm_judge["orientation"] = ["direct"] * half + ["reversed"] * half
+    else:
+        df_llm_judge["orientation"] = "single"
+
+    df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
+
+    metrics = build_metrics(
+        protocol.scoring.metrics,
+        parameter_overrides_by_metric={
+            "bradley_terry": {
+                "n_bootstraps": cfg.elo.n_bootstraps,
+                "baseline_model": cfg.elo.baseline_model,
+                "soft": cfg.elo.soft_elo,
+            },
+        },
+    )
+    metric_results = calculate_metrics(
+        df_results,
+        metrics,
+        runtime_by_metric={"bradley_terry": {"rng": rng}},
+    )
+    rating_result = metric_results["bradley_terry"]
+    entries = [RatingEntry(**entry) for entry in rating_result["rating_entries"]]
 
     report = EloReport(
         arena=arena,
         judge_model=cfg.judge.model,
-        summary=summary,
+        metrics=metric_results,
         num_battles=n,
-        llm_judged_battles=n_llm,
-        human_anchor_battles=n_human,
-        elo_mean=elo_mean,
-        elo_std=elo_std,
-        elo_n_bootstraps=len(model_rating_values),
-        mae_vs_human=mae,
-        method=method_label,
-        n_bootstraps=n_bootstraps,
         model_name=model_name,
-        mean_ratings=mean_ratings,
-        battle_counts=battle_counts,
-        human_elo=human_elo,
-        bootstrap_ratings=bootstrap_ratings,
         sampling_metadata=sampling_metadata,
     )
     results = report.to_dict()
@@ -652,15 +441,15 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         res_dir / "battles.parquet",
         df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
     )
-    if bootstrap_ratings:
-        pd.DataFrame(bootstrap_ratings).to_csv(
+    if rating_result["bootstrap_ratings"]:
+        pd.DataFrame(rating_result["bootstrap_ratings"]).to_csv(
             res_dir / "bootstrap_ratings.csv", index=False
         )
         Leaderboard(
             arena=arena,
             model=model_name,
             judge_model=cfg.judge.model,
-            n_bootstraps=n_bootstraps,
+            n_bootstraps=rating_result["n_bootstraps"],
             seed=cfg.run.seed,
             ratings=entries,
         ).write(res_dir / "elo_ratings.json")
