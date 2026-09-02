@@ -60,7 +60,9 @@ protocol:
   judge:
     default_prompt_preset: default
   scoring:
-    adapter: pairwise_win_rate
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: length_controlled_winrate
 ```
 
 Reuse a private `_base.yaml` with `extends: _base.yaml` when several versions
@@ -83,9 +85,25 @@ runner code.
 Keep task YAML boring: declarative facts belong in YAML, while downloading,
 format conversion, and scoring algorithms belong in Python.
 
-The judge prompt preset owns the expected output format and its parser. The
-scoring adapter owns the calculation, primary metric, and metric direction;
-task YAML only selects those components by ID.
+The judge prompt preset owns the expected output format and its parser. Scoring
+metrics are ordinary functions over canonical battle columns. Task YAML selects
+which metrics to calculate and may request grouped results:
+
+```yaml
+scoring:
+  metrics:
+    - metric: pairwise_win_rate
+    - metric: length_controlled_winrate
+      group_by: [category]
+```
+
+A metric returns a dictionary containing its reported values and any useful
+calculation details. Win rates use fractions in ``[0, 1]``. Requested
+``group_by`` columns add breakdowns under that metric's ``groups`` key. Metric
+results are the single source of values in pairwise reports. The pairwise runner
+passes canonical preferences, model and baseline completions, answer-order
+information, judge information, and normalized dataset columns. A metric must
+not inspect a task name or runner.
 
 If an upstream dataset has a new format, implement a dataset adapter under
 `judgearena/datasets/` and register it in the dataset registry. Task validation

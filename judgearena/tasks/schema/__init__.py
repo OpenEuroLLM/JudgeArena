@@ -21,6 +21,7 @@ from judgearena.tasks.schema.mt_bench import (
     MultiTurnGeneration,
 )
 from judgearena.tasks.schema.pairwise import (
+    MetricSpec,
     PairwiseJudgeSpec,
     PairwiseProtocol,
     ScoringSpec,
@@ -58,6 +59,7 @@ __all__ = [
     "HuggingFaceSpaceSource",
     "MTBenchJudgeSpec",
     "MTBenchProtocol",
+    "MetricSpec",
     "MultiTurnGeneration",
     "NoBaseline",
     "OfficialOutputsBaseline",

@@ -49,7 +49,9 @@ protocol:
     fastchat_temperature: 0.0
     reference_categories: [math, reasoning, coding, arena-hard-200]
   scoring:
-    adapter: pairwise_win_rate
+    metrics:
+      - metric: pairwise_win_rate
+        group_by: [category, turn]
 
 metadata:
   reference_implementation: https://github.com/lm-sys/FastChat/tree/master/fastchat/llm_judge
