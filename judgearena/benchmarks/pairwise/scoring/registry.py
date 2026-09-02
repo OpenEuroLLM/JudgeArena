@@ -23,10 +23,7 @@ PAIRWISE_SCORERS: dict[str, PairwiseScorer] = {
         score=arena_hard.score_v20,
         check_runtime=arena_hard.check_v20_runtime,
     ),
-    "alpaca_eval_lc_winrate": PairwiseScorer(
-        score=alpaca_eval.score,
-        check_requirements=alpaca_eval.check_requirements,
-    ),
+    "alpaca_eval_lc_winrate": PairwiseScorer(score=alpaca_eval.score),
 }
 
 

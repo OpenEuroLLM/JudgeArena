@@ -7,6 +7,7 @@ from judgearena.benchmarks.pairwise.scoring import (
     PAIRWISE_SCORERS,
     resolve_pairwise_scorer,
 )
+from judgearena.benchmarks.pairwise.scoring import alpaca_eval as alpaca_eval_scoring
 from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     _official_annotations,
     _summarize,
@@ -259,11 +260,39 @@ def test_alpaca_eval_official_annotations_mapping():
     assert annotations["output_1"].tolist() == ["b"]
 
 
-def test_alpaca_eval_scorer_excludes_missing_rows_from_upstream(monkeypatch):
-    metrics = pytest.importorskip("alpaca_eval.metrics")
+def test_alpaca_eval_local_scorer_rejects_invalid_preferences():
+    annotations = _official_annotations(_battles([0.5, 2.0]))
+
+    with pytest.raises(ValueError, match=r"finite values in \[0, 1\]"):
+        alpaca_eval_scoring._length_controlled_metrics(annotations)
+
+
+def test_alpaca_eval_local_scorer_rejects_undefined_singleton_standard_error():
+    battles = _battles(
+        [0.5],
+        model="same-model",
+        baseline="same-model",
+    )
+
+    with pytest.raises(ValueError, match="finite 'lc_standard_error'"):
+        score_alpaca_eval(battles)
+
+
+def test_alpaca_eval_local_scorer_rejects_constant_length_difference():
+    battles = _battles(
+        [0.25, 0.75],
+        completion_model=["xx", "xxx"],
+        completion_baseline=["x", "xx"],
+    )
+
+    with pytest.raises(ValueError, match="nonzero variance"):
+        score_alpaca_eval(battles)
+
+
+def test_alpaca_eval_scorer_excludes_missing_rows(monkeypatch):
     captured = {}
 
-    def fake_get_length_controlled_winrate(annotations, **_kwargs):
+    def fake_length_controlled_metrics(annotations, **_kwargs):
         captured["annotations"] = annotations.copy()
         return {
             "length_controlled_winrate": 75.0,
@@ -272,9 +301,9 @@ def test_alpaca_eval_scorer_excludes_missing_rows_from_upstream(monkeypatch):
         }
 
     monkeypatch.setattr(
-        metrics,
-        "get_length_controlled_winrate",
-        fake_get_length_controlled_winrate,
+        alpaca_eval_scoring,
+        "_length_controlled_metrics",
+        fake_length_controlled_metrics,
     )
 
     result = score_alpaca_eval(_battles([0.25, None]))
@@ -284,13 +313,11 @@ def test_alpaca_eval_scorer_excludes_missing_rows_from_upstream(monkeypatch):
     assert result.metrics["lc_winrate"] == 75.0
 
 
-def test_alpaca_eval_scorer_propagates_upstream_failure(monkeypatch):
-    metrics = pytest.importorskip("alpaca_eval.metrics")
-
+def test_alpaca_eval_scorer_propagates_fit_failure(monkeypatch):
     def fail(*_args, **_kwargs):
         raise RuntimeError("GLM fit failed")
 
-    monkeypatch.setattr(metrics, "get_length_controlled_winrate", fail)
+    monkeypatch.setattr(alpaca_eval_scoring, "_length_controlled_metrics", fail)
 
     with pytest.raises(RuntimeError, match="GLM fit failed"):
         score_alpaca_eval(_battles([0.25]))
@@ -307,17 +334,16 @@ def test_alpaca_eval_scorer_propagates_upstream_failure(monkeypatch):
 def test_alpaca_eval_scorer_rejects_invalid_official_metrics(
     monkeypatch, metric, value
 ):
-    metrics = pytest.importorskip("alpaca_eval.metrics")
-    upstream = {
+    calculated = {
         "length_controlled_winrate": 50.0,
         "lc_standard_error": 1.0,
         "win_rate": 50.0,
     }
-    upstream[metric] = value
+    calculated[metric] = value
     monkeypatch.setattr(
-        metrics,
-        "get_length_controlled_winrate",
-        lambda *_args, **_kwargs: upstream,
+        alpaca_eval_scoring,
+        "_length_controlled_metrics",
+        lambda *_args, **_kwargs: calculated,
     )
 
     with pytest.raises(ValueError, match="did not return a finite"):
@@ -325,7 +351,6 @@ def test_alpaca_eval_scorer_rejects_invalid_official_metrics(
 
 
 def test_alpaca_eval_lc_winrate_matches_pinned_reference_value():
-    pytest.importorskip("alpaca_eval")
     import numpy as np
 
     scorer = PAIRWISE_SCORERS["alpaca_eval_lc_winrate"]
@@ -339,5 +364,6 @@ def test_alpaca_eval_lc_winrate_matches_pinned_reference_value():
 
     result = scorer.score(battles)
 
-    assert result.metrics["lc_winrate"] == pytest.approx(48.29068772368286, abs=0.5)
-    assert result.metrics["raw_winrate"] == pytest.approx(48.20877535856965, abs=1e-6)
+    assert result.metrics["lc_winrate"] == pytest.approx(48.29068772368286)
+    assert result.metrics["lc_standard_error"] == pytest.approx(0.19811122623953162)
+    assert result.metrics["raw_winrate"] == pytest.approx(48.20877535856965)

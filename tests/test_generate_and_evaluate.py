@@ -86,7 +86,7 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 def _mock_alpaca_judge(monkeypatch, message) -> None:
-    import alpaca_eval.metrics
+    from judgearena.benchmarks.pairwise.scoring import alpaca_eval
 
     class FakeJudge:
         def batch(self, inputs, **_kwargs):
@@ -96,8 +96,8 @@ def _mock_alpaca_judge(monkeypatch, message) -> None:
         benchmark_execution, "make_model", lambda **_kwargs: FakeJudge()
     )
     monkeypatch.setattr(
-        alpaca_eval.metrics,
-        "get_length_controlled_winrate",
+        alpaca_eval,
+        "_length_controlled_metrics",
         lambda *_args, **_kwargs: {
             "length_controlled_winrate": 50.0,
             "lc_standard_error": 1.0,
@@ -449,7 +449,6 @@ def test_run_pairwise_judges_categories_with_their_declared_prompts(
         "resolve_pairwise_scorer",
         lambda _name: SimpleNamespace(
             score=score_and_capture,
-            check_requirements=None,
             check_runtime=None,
         ),
     )

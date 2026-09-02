@@ -33,5 +33,4 @@ class PairwiseScorer:
     """Pairwise scoring implementation and its optional pre-run check."""
 
     score: Callable[[pd.DataFrame], ScoringResult]
-    check_requirements: Callable[[], None] | None = None
     check_runtime: Callable[[RunConfig, ResolvedTaskSpec], None] | None = None
