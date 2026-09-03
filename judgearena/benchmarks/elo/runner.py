@@ -332,7 +332,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # --soft-elo-temperature (or a calibrated T*).  Re-parse from the stored
     # judge completions with this run's score_parser so the soft-ELO bootstrap
     # uses the requested temperature.
-    if cfg.elo.soft_elo:
+    if cfg.elo.soft_elo and isinstance(resolved_prompt.parser, PairScore):
         new_prefs_ab = pd.Series(
             [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
         ).apply(lambda x: float("nan") if x is None else x)

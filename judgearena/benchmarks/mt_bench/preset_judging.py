@@ -224,6 +224,13 @@ def judge_mt_bench_with_preset(
                     "question_id": item.question_id,
                     "category": item.category,
                     "turn": item.turn,
+                    "orientation": (
+                        "single"
+                        if swap_mode == "fixed"
+                        else "reversed"
+                        if swapped
+                        else "direct"
+                    ),
                 }
             )
             preferences.append(normalized_preference)

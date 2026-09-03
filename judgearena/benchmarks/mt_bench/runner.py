@@ -188,6 +188,44 @@ def _save_mt_bench_results(
     )
 
 
+def _build_mt_bench_battles(
+    *,
+    cfg: RunConfig,
+    prefs: pd.Series,
+    combined_metadata: list[dict[str, object]],
+    completions_a: pd.DataFrame,
+    completions_b: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the canonical metric table for judged MT-Bench turns."""
+    rows: list[dict[str, object]] = []
+    for metadata, pref in zip(combined_metadata, prefs, strict=True):
+        question_id = metadata["question_id"]
+        turn = int(metadata["turn"])
+        completion_column = f"completion_turn_{turn}"
+        rows.append(
+            {
+                **metadata,
+                "instruction_index": f"{question_id}:turn-{turn}",
+                "model": cfg.model.name,
+                "baseline": cfg.model.baseline,
+                "completion_model": completions_a.loc[question_id, completion_column],
+                "completion_baseline": completions_b.loc[
+                    question_id, completion_column
+                ],
+                "model_a": cfg.model.name,
+                "model_b": cfg.model.baseline,
+                "completion_a": completions_a.loc[question_id, completion_column],
+                "completion_b": completions_b.loc[question_id, completion_column],
+                "evaluation_model": cfg.model.name,
+                "source": "llm-judge",
+                "orientation": metadata.get("orientation", "single"),
+                "judge": cfg.judge.model,
+                "pref": pref,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _finalize_mt_bench_run(
     *,
     cfg: RunConfig,
@@ -204,8 +242,13 @@ def _finalize_mt_bench_run(
     started_at_utc: datetime,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
-    battles = pd.DataFrame(combined_metadata)
-    battles["pref"] = pd.Series(prefs, dtype="float64").to_numpy()
+    battles = _build_mt_bench_battles(
+        cfg=cfg,
+        prefs=pd.Series(prefs, dtype="float64"),
+        combined_metadata=combined_metadata,
+        completions_a=completions_a,
+        completions_b=completions_b,
+    )
     metrics = build_metrics(protocol.scoring.metrics)
     metric_results = calculate_metrics(battles, metrics)
     report = BattleReport(

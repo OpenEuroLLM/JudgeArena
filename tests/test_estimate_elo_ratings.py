@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -623,3 +624,55 @@ def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
 
     # The default preset's registered parser instance, not a fresh fallback.
     assert captured["parse"] is JUDGE_PARSERS["score"]
+
+
+def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(
+    tmp_path, monkeypatch
+):
+    soft_parser = object()
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "resolve_run_judge_prompt",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            parser=soft_parser,
+            preset_name="soft-parser",
+            system_prompt="system",
+            user_prompt_template="{instruction} {completion_A} {completion_B}",
+        ),
+    )
+
+    def fake_judge_and_parse_prefs(**kwargs):
+        annotations = [
+            JudgeAnnotation(
+                instruction=instruction,
+                completion_A=completion_a,
+                completion_B=completion_b,
+                judge_completion="not a PairScore response",
+                judge_input="prompt",
+            )
+            for instruction, completion_a, completion_b in zip(
+                kwargs["instructions"],
+                kwargs["completions_A"],
+                kwargs["completions_B"],
+                strict=True,
+            )
+        ]
+        return annotations, None, pd.Series([0.75] * len(annotations))
+
+    captured_prefs = []
+    convert = estimate_elo_ratings.prefs_to_battle_results
+
+    def capture_prefs(prefs, *args, **kwargs):
+        captured_prefs.extend(prefs)
+        return convert(prefs, *args, **kwargs)
+
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "judge_and_parse_prefs",
+        fake_judge_and_parse_prefs,
+    )
+    monkeypatch.setattr(estimate_elo_ratings, "prefs_to_battle_results", capture_prefs)
+
+    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
+
+    assert captured_prefs and set(captured_prefs) == {0.75}
