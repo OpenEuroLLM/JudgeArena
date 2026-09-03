@@ -10,6 +10,31 @@ from huggingface_hub import snapshot_download
 from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
 
+def _table_path(task: ResolvedTaskSpec, directory: str, suffix: str) -> Path:
+    """Return an exact task-declared table path, falling back to its task ID."""
+    paths = {
+        Path(pattern)
+        for source in task.spec.dataset.sources.values()
+        if isinstance(source, HuggingFaceDatasetSource)
+        for pattern in source.allow_patterns
+        if pattern.startswith(f"{directory}/")
+        and not any(character in pattern for character in "*?[")
+    }
+    if len(paths) > 1:
+        raise ValueError(
+            f"Task {task.task!r} declares multiple {directory!r} table paths."
+        )
+    return next(iter(paths), Path(directory) / f"{task.task}{suffix}")
+
+
+def _instruction_path(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
+    return local_tables_path / _table_path(task, "instructions", ".csv")
+
+
+def _model_output_path(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
+    return local_tables_path / _table_path(task, "model_outputs", ".csv.zip")
+
+
 def download_task_sources(task: ResolvedTaskSpec, local_dir: Path) -> None:
     """Download every Hugging Face source declared by a table-backed task."""
     if task.spec.dataset.adapter != "judgearena_tables":
@@ -34,29 +59,43 @@ def download_task_sources(task: ResolvedTaskSpec, local_dir: Path) -> None:
         )
 
 
+def _read_instruction_table(
+    task: ResolvedTaskSpec, local_tables_path: Path
+) -> pd.DataFrame:
+    path = _instruction_path(task, local_tables_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Instruction table not found at {path}")
+    frame = pd.read_csv(path)
+    fields = task.spec.dataset.fields
+    required = {fields.id, fields.instruction}
+    if fields.category is not None:
+        required.add(fields.category)
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(
+            f"Task {task.task!r} is missing declared dataset fields: {missing}."
+        )
+    if frame[fields.id].duplicated().any():
+        raise ValueError(f"Task {task.task!r} contains duplicate instruction IDs.")
+    return frame
+
+
 def load_task_instructions(
     task: ResolvedTaskSpec, local_tables_path: Path
 ) -> pd.DataFrame:
     """Load a task's table and map its declared fields to runner names."""
     download_task_sources(task, local_tables_path)
-    path = local_tables_path / "instructions" / f"{task.task}.csv"
-    if not path.exists():
-        raise FileNotFoundError(f"Instruction table not found at {path}")
-    df = pd.read_csv(path)
-
+    frame = _read_instruction_table(task, local_tables_path)
     fields = task.spec.dataset.fields
+    if fields.id_strategy == "position":
+        frame[fields.id] = range(len(frame))
     field_mapping = {
         fields.id: "instruction_index",
         fields.instruction: "instruction",
     }
     if fields.category is not None:
         field_mapping[fields.category] = "category"
-    missing = sorted(set(field_mapping) - set(df.columns))
-    if missing:
-        raise ValueError(
-            f"Task {task.task!r} is missing declared dataset fields: {missing}."
-        )
-    return df.rename(columns=field_mapping)
+    return frame.rename(columns=field_mapping)
 
 
 def load_task_model_outputs(
@@ -64,7 +103,26 @@ def load_task_model_outputs(
 ) -> pd.DataFrame | None:
     """Load optional pre-generated model outputs for a table-backed task."""
     download_task_sources(task, local_tables_path)
-    path = local_tables_path / "model_outputs" / f"{task.task}.csv.zip"
+    path = _model_output_path(task, local_tables_path)
     if not path.exists():
         return None
-    return pd.read_csv(path)
+    outputs = pd.read_csv(path)
+    if task.spec.dataset.fields.id_strategy != "position":
+        return outputs
+
+    instructions = _read_instruction_table(task, local_tables_path)
+    source_id = task.spec.dataset.fields.id
+    id_map = pd.Series(
+        range(len(instructions)),
+        index=instructions[source_id].astype(str),
+        dtype=int,
+    )
+    mapped = outputs["instruction_index"].astype(str).map(id_map)
+    if mapped.isna().any():
+        unknown = outputs.loc[mapped.isna(), "instruction_index"].unique()[:5]
+        raise ValueError(
+            f"Task {task.task!r} model outputs contain unknown instruction IDs: "
+            f"{unknown.tolist()}."
+        )
+    outputs["instruction_index"] = mapped.astype(int)
+    return outputs

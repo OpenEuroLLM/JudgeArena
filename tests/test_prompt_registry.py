@@ -23,8 +23,12 @@ class FakeCliArgs:
 
 
 def test_default_presets_are_owned_by_task_yaml():
-    assert default_preset_for_task("alpaca-eval") == "default"
-    assert default_preset_for_task("arena-hard-v2.0") == "default"
+    assert default_preset_for_task("alpaca-eval") == "alpaca-eval"
+    assert default_preset_for_task("alpaca-eval-ja") == "default"
+    assert default_preset_for_task("arena-hard-v0.1") == "arena-hard"
+    assert default_preset_for_task("arena-hard-v0.1-ja") == "default"
+    assert default_preset_for_task("arena-hard-v2.0") == "arena-hard"
+    assert default_preset_for_task("arena-hard-v2.0-ja") == "default"
 
 
 def test_default_preset_for_fluency_prefix():
@@ -120,22 +124,31 @@ def test_file_overrides_take_precedence_over_preset(tmp_path):
     assert resolved.user_sha256 is not None
 
 
+def test_inline_prompt_overrides_keep_their_source():
+    resolved = resolve_judge_prompts(
+        system_prompt="Custom system",
+        user_prompt_template="Custom {instruction}",
+    )
+
+    assert resolved.source == "override"
+
+
 def test_file_overrides_accept_named_parser(tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
     system_file = tmp_path / "system.txt"
     user_file = tmp_path / "user.txt"
-    system_file.write_text("Judge with scores", encoding="utf-8")
+    system_file.write_text("Judge with verdict labels", encoding="utf-8")
     user_file.write_text("Q: {user_prompt} A: {completion_A} B: {completion_B}")
 
     resolved = resolve_judge_prompt(
         system_file=system_file,
         user_file=user_file,
-        parser="score",
+        parser="arena-hard-verdict",
     )
 
-    assert resolved.parser is JUDGE_PARSERS["score"]
-    assert resolved.metadata()["judge_parser"] == "score"
+    assert resolved.parser is JUDGE_PARSERS["arena-hard-verdict"]
+    assert resolved.metadata()["judge_parser"] == "arena-hard-verdict"
 
 
 def test_named_parser_without_prompt_files_is_rejected():
@@ -162,7 +175,7 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
         FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
     )
 
-    assert resolved_default.preset_name == "default"
+    assert resolved_default.preset_name == "alpaca-eval"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 

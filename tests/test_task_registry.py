@@ -8,8 +8,26 @@ import pytest
 import yaml
 
 from judgearena import cli as cli_module
+from judgearena.benchmarks.registry import benchmark_runner_names
+from judgearena.datasets.registry import (
+    battle_dataset_names,
+    instruction_dataset_names,
+)
 from judgearena.tasks.cli import run_task_command
-from judgearena.tasks.registry import TaskDefinitionError, load_tasks, resolve_task
+from judgearena.tasks.registry import (
+    AdapterCatalog,
+    TaskDefinitionError,
+    load_tasks,
+    resolve_task,
+)
+
+
+def test_adapter_catalog_uses_owning_registries():
+    catalog = AdapterCatalog()
+
+    assert catalog.runners == benchmark_runner_names()
+    assert catalog.instruction_datasets == instruction_dataset_names()
+    assert catalog.battle_datasets == battle_dataset_names()
 
 
 def _task_definition(task: str = "test-task") -> dict[str, object]:
@@ -75,20 +93,15 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert m_arena_eu is not None
     mt_bench = tasks["mt-bench"]
 
-    assert list(tasks) == [
-        "alpaca-eval",
-        "arena-hard-v0.1",
-        "arena-hard-v2.0",
-        "elo-comparia",
-        "elo-lmarena",
-        "elo-lmarena-100k",
-        "elo-lmarena-140k",
-        "fluency",
-        "m-arena-hard-v0.1",
-        "m-arena-hard-v2.0",
-        "mt-bench",
-    ]
-    assert alpaca.spec.dataset.sources["examples"].revision == (
+    assert {
+        "alpaca-eval-ja",
+        "arena-hard-v0.1-ja",
+        "arena-hard-v2.0-ja",
+    } <= set(tasks)
+    assert alpaca.spec.task_version == 2
+    assert arena_v01.spec.task_version == 2
+    assert arena_v20.spec.task_version == 2
+    assert alpaca.spec.dataset.sources["tables"].revision == (
         "004c4a992956eeefffd36b63ade470f32fd0a582"
     )
     assert alpaca.spec.protocol.baseline.reference_id == "gpt4_1106_preview"
@@ -143,8 +156,12 @@ def test_packaged_registry_discovers_versioned_tasks():
     )
     assert mt_bench.spec.protocol.runner == "mt_bench"
     assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
-    assert mt_bench.spec.protocol.baseline.reference_id == "gpt-4"
+    assert mt_bench.spec.protocol.baseline.reference_id == "gpt-3.5-turbo"
+    assert mt_bench.spec.protocol.generation.default_max_out_tokens == 1024
+    assert mt_bench.spec.protocol.generation.default_seed == 0
     assert mt_bench.spec.protocol.judge.default_prompt_preset == "fastchat-pairwise"
+    assert mt_bench.spec.protocol.judge.default_swap_mode == "both"
+    assert mt_bench.spec.protocol.judge.default_max_out_tokens == 2048
     assert mt_bench.spec.protocol.judge.reference_categories == (
         "math",
         "reasoning",
@@ -154,7 +171,86 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.dataset.sources["benchmark"].revision == (
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
-    assert alpaca.spec.protocol.scoring.metrics[0].metric == "pairwise_win_rate"
+    assert alpaca.spec.protocol.scoring.metrics[0].metric == (
+        "alpaca_eval_length_controlled"
+    )
+
+
+def test_official_pairwise_tasks_declare_their_protocol_contracts():
+    tasks = load_tasks()
+    alpaca = resolve_task(tasks, "alpaca-eval").spec.protocol
+    arena_v01 = resolve_task(tasks, "arena-hard-v0.1").spec.protocol
+    arena_v20 = resolve_task(tasks, "arena-hard-v2.0").spec.protocol
+
+    assert (
+        alpaca.baseline.reference_id,
+        alpaca.judge.default_prompt_preset,
+        alpaca.judge.default_swap_mode,
+        alpaca.judge.default_temperature,
+        alpaca.judge.default_max_out_tokens,
+        alpaca.judge.default_top_logprobs,
+        [(metric.metric, metric.group_by) for metric in alpaca.scoring.metrics],
+    ) == (
+        "gpt4_1106_preview",
+        "alpaca-eval",
+        "random",
+        1.0,
+        1,
+        5,
+        [("alpaca_eval_length_controlled", ())],
+    )
+    assert dict(alpaca.scoring.metrics[0].parameters) == {
+        "calibration_repo_id": "tatsu-lab/alpaca_eval",
+        "calibration_filename": "df_gamed.csv",
+        "calibration_revision": "2edc6fad8be6b14ea7230aabfd08188da6b8b814",
+        "gamed_weight": 0.1,
+    }
+    alpaca_ja = resolve_task(tasks, "alpaca-eval-ja").spec.protocol
+    assert (
+        alpaca_ja.judge.default_prompt_preset,
+        alpaca_ja.judge.default_swap_mode,
+        [metric.metric for metric in alpaca_ja.scoring.metrics],
+    ) == (
+        "default",
+        "fixed",
+        ["pairwise_win_rate", "length_controlled_winrate"],
+    )
+    assert (
+        arena_v01.baseline.reference_id,
+        arena_v01.judge.default_prompt_preset,
+        arena_v01.judge.default_swap_mode,
+        arena_v01.judge.default_temperature,
+        arena_v01.judge.default_max_out_tokens,
+        [metric.metric for metric in arena_v01.scoring.metrics],
+    ) == ("gpt-4-0314", "arena-hard", "both", 0.0, 4096, ["arena_hard_v01"])
+    for canonical_name, ja_name in (
+        ("arena-hard-v0.1", "arena-hard-v0.1-ja"),
+        ("arena-hard-v2.0", "arena-hard-v2.0-ja"),
+    ):
+        canonical = resolve_task(tasks, canonical_name).spec
+        ja = resolve_task(tasks, ja_name).spec
+        assert ja.dataset == canonical.dataset
+        assert ja.protocol.baseline == canonical.protocol.baseline
+        assert ja.protocol.judge.default_prompt_preset == "default"
+        assert ja.protocol.judge.default_swap_mode == "fixed"
+        assert [metric.metric for metric in ja.protocol.scoring.metrics] == [
+            "pairwise_win_rate"
+        ]
+    assert arena_v20.baseline.references == {
+        "hard_prompt": "o3-mini-2025-01-31",
+        "coding": "o3-mini-2025-01-31",
+        "math": "o3-mini-2025-01-31",
+        "creative_writing": "gemini-2.0-flash-001",
+    }
+    assert arena_v20.judge.category_prompts == {
+        "creative_writing": "arena-hard-creative"
+    }
+    assert (
+        arena_v20.judge.default_swap_mode,
+        arena_v20.judge.default_temperature,
+        arena_v20.judge.default_max_out_tokens,
+        [(metric.metric, metric.group_by) for metric in arena_v20.scoring.metrics],
+    ) == ("both", 0.0, 16000, [("arena_hard_v20", ("category",))])
 
 
 def test_find_returns_none_for_unregistered_task():
@@ -561,7 +657,7 @@ def test_scoring_metrics_reject_duplicate_names():
         TaskSpec.model_validate(definition)
 
 
-def test_mt_bench_accepts_any_registered_metric(tmp_path):
+def test_mt_bench_has_no_pipeline_specific_metric_whitelist(tmp_path):
     definition = _task_definition("mt-test")
     definition["protocol"] = {
         "runner": "mt_bench",

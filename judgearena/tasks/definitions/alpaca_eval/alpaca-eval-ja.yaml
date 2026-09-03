@@ -1,0 +1,14 @@
+extends: _base.yaml
+task: alpaca-eval-ja
+description: >-
+  JudgeArena's generic pairwise judging and scoring protocol on the AlpacaEval
+  instruction and archived model-output tables.
+
+protocol:
+  judge:
+    default_prompt_preset: default
+    default_swap_mode: fixed
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: length_controlled_winrate
