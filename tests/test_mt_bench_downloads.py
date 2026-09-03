@@ -525,6 +525,13 @@ def test_mt_bench_finalization_uses_shared_grouped_metric(monkeypatch, tmp_path)
     monkeypatch.setattr(
         mt_bench_runner, "_save_mt_bench_results", lambda **_kwargs: None
     )
+    calculate_metrics = mt_bench_runner.calculate_metrics
+
+    def capture_battles(battles, metrics):
+        captured["battles"] = battles.copy()
+        return calculate_metrics(battles, metrics)
+
+    monkeypatch.setattr(mt_bench_runner, "calculate_metrics", capture_battles)
     cfg = SimpleNamespace(
         task="mt-bench",
         model=SimpleNamespace(name="candidate", baseline="reference"),
@@ -539,12 +546,17 @@ def test_mt_bench_finalization_uses_shared_grouped_metric(monkeypatch, tmp_path)
         system_prompt=None,
         user_prompt_template="{instruction}",
     )
-    questions = pd.DataFrame({"turn_1": ["q1", "q2"], "turn_2": ["q1b", "q2b"]})
+    index = pd.Index([1, 2], name="question_id")
+    questions = pd.DataFrame(
+        {"turn_1": ["q1", "q2"], "turn_2": ["q1b", "q2b"]}, index=index
+    )
     completions_a = pd.DataFrame(
-        {"completion_turn_1": ["a1", "a2"], "completion_turn_2": ["a1b", "a2b"]}
+        {"completion_turn_1": ["a1", "a2"], "completion_turn_2": ["a1b", "a2b"]},
+        index=index,
     )
     completions_b = pd.DataFrame(
-        {"completion_turn_1": ["b1", "b2"], "completion_turn_2": ["b1b", "b2b"]}
+        {"completion_turn_1": ["b1", "b2"], "completion_turn_2": ["b1b", "b2b"]},
+        index=index,
     )
     preferences = pd.Series([0.0, 1.0, 0.0, 0.5])
     metadata = [
@@ -577,3 +589,18 @@ def test_mt_bench_finalization_uses_shared_grouped_metric(monkeypatch, tmp_path)
         "writing",
     ]
     assert [item["group"] for item in metric["groups"]["turn"]] == [1, 2]
+    assert {
+        "instruction_index",
+        "model",
+        "baseline",
+        "completion_model",
+        "completion_baseline",
+        "orientation",
+        "pref",
+    } <= set(captured["battles"])
+    assert captured["battles"]["instruction_index"].tolist() == [
+        "1:turn-1",
+        "1:turn-2",
+        "2:turn-1",
+        "2:turn-2",
+    ]

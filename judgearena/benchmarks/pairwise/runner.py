@@ -120,6 +120,13 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         "judge_prompt_preset",
         "judge_temperature",
         "judge_max_out_tokens",
+        "model_a",
+        "model_b",
+        "completion_a",
+        "completion_b",
+        "evaluation_model",
+        "source",
+        "pref_hard",
         *instructions_df.columns,
     }
     missing_groups = sorted(

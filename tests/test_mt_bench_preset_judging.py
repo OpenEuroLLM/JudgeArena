@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -7,6 +9,10 @@ from judgearena.benchmarks.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
     _select_preset_prompt,
     judge_mt_bench_with_preset,
+)
+from judgearena.benchmarks.mt_bench.runner import _build_mt_bench_battles
+from judgearena.benchmarks.pairwise.scoring.metrics import (
+    LengthControlledWinrateMetric,
 )
 from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 
@@ -155,9 +161,66 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     assert annotations[1]["swapped"] is True
     assert "B1" in annotations[1]["user_prompt"]
     assert metadata == [
-        {"question_id": 1, "category": "writing", "turn": 1},
-        {"question_id": 1, "category": "writing", "turn": 1},
+        {
+            "question_id": 1,
+            "category": "writing",
+            "turn": 1,
+            "orientation": "direct",
+        },
+        {
+            "question_id": 1,
+            "category": "writing",
+            "turn": 1,
+            "orientation": "reversed",
+        },
     ]
+    battles = _build_mt_bench_battles(
+        cfg=SimpleNamespace(
+            model=SimpleNamespace(name="model-a", baseline="model-b"),
+            judge=SimpleNamespace(model="judge"),
+        ),
+        prefs=prefs,
+        combined_metadata=metadata,
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+    )
+    metric = LengthControlledWinrateMetric().calculate(battles)
+    assert metric == {"num_pairs": 1, "num_scored": 1, "winrate": None}
+
+
+def test_fixed_preset_judgment_builds_one_single_orientation_battle():
+    prefs, _, metadata = judge_mt_bench_with_preset(
+        judge_chat_model=SequenceJudge(["score_A: 10\nscore_B: 0"]),
+        judge_model="judge",
+        questions=_questions_df(category="writing"),
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+        model_a="model-a",
+        model_b="model-b",
+        turns_mode="single",
+        swap_mode="fixed",
+        truncate_input_chars=None,
+        use_tqdm=False,
+        reference_categories=REFERENCE_CATEGORIES,
+        prompt_preset="default",
+    )
+
+    assert metadata[0]["orientation"] == "single"
+    battles = _build_mt_bench_battles(
+        cfg=SimpleNamespace(
+            model=SimpleNamespace(name="model-a", baseline="model-b"),
+            judge=SimpleNamespace(model="judge"),
+        ),
+        prefs=prefs,
+        combined_metadata=metadata,
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+    )
+    assert LengthControlledWinrateMetric().calculate(battles) == {
+        "num_pairs": 1,
+        "num_scored": 1,
+        "winrate": None,
+    }
 
 
 def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):
