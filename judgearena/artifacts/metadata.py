@@ -259,6 +259,7 @@ def write_run_metadata(
     input_payloads: dict[str, Any] | None = None,
     judge_system_prompt: str | None = None,
     judge_user_prompt_template: str | None = None,
+    judge_prompt_variants: list[dict[str, Any]] | None = None,
     started_at_utc: datetime | None = None,
     metadata_filename: str = METADATA_FILENAME,
 ) -> Path:
@@ -315,6 +316,9 @@ def write_run_metadata(
     judge_user_prompt_template_hash = _hash_string_sha256(judge_user_prompt_template)
     if judge_user_prompt_template_hash:
         metadata["judge_user_prompt_template_sha256"] = judge_user_prompt_template_hash
+
+    if judge_prompt_variants:
+        metadata["judge_prompts"] = to_jsonable(judge_prompt_variants)
 
     metadata["artifacts"] = _collect_artifacts(
         output_path, metadata_filename=metadata_filename

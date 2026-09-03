@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
@@ -12,12 +11,6 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
 
-def is_m_arena_hard_dataset(dataset: str) -> bool:
-    """Return whether ``dataset`` resolves to an m-ArenaHard task."""
-    task = get_packaged_task(dataset)
-    return task is not None and task.spec.dataset.adapter == "m_arena_hard"
-
-
 def split_m_arena_hard_dataset(dataset: str) -> tuple[str, str | None] | None:
     """Return the YAML definition ID and optional selected language view."""
     task = get_packaged_task(dataset)
@@ -25,17 +18,6 @@ def split_m_arena_hard_dataset(dataset: str) -> tuple[str, str | None] | None:
         return None
     selection = task.selection.name if task.selection is not None else None
     return task.definition_task, selection
-
-
-def m_arena_hard_native_baseline(
-    dataset: str,
-) -> str | Mapping[str, str] | None:
-    """Return the task-defined baseline for an m-ArenaHard invocation."""
-    if not is_m_arena_hard_dataset(dataset):
-        return None
-    from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-
-    return native_pairwise_baseline(dataset)
 
 
 def _source(task: ResolvedTaskSpec, name: str = "examples") -> HuggingFaceDatasetSource:
