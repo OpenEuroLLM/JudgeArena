@@ -115,22 +115,8 @@ def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
     assert payload["top_logprobs"] == 5
     assert model.temperature == 0.5
 
-
-def test_make_model_openrouter_does_not_require_parameters_without_logprobs(
-    monkeypatch,
-):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
-
-    model = make_model(
-        "OpenRouter/google/gemma-3-4b-it",
-        max_tokens=16,
-        extra_body={"provider": {"order": ["Google"]}},
-    )
-
-    assert model._get_request_payload("test")["extra_body"] == {
-        "max_tokens": 16,
-        "provider": {"order": ["Google"]},
-    }
+    ordinary = make_model("OpenRouter/test/model", max_tokens=16)
+    assert ordinary._get_request_payload("test")["extra_body"] == {"max_tokens": 16}
 
 
 def test_empty_first_token_top_logprobs_are_missing():

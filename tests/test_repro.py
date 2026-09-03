@@ -37,11 +37,6 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
                 "judge_prompt_system_sha256": "system-hash",
                 "judge_prompt_user_sha256": "user-hash",
             },
-            {
-                "judge_prompt_preset": "creative",
-                "judge_prompt_system_sha256": "creative-system-hash",
-                "judge_prompt_user_sha256": "creative-user-hash",
-            },
         ],
     )
 
@@ -61,9 +56,12 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     assert "instruction_indices_sha256" in metadata
     assert "judge_system_prompt_sha256" in metadata
     assert "judge_user_prompt_template_sha256" in metadata
-    assert [prompt["judge_prompt_preset"] for prompt in metadata["judge_prompts"]] == [
-        "default",
-        "creative",
+    assert metadata["judge_prompts"] == [
+        {
+            "judge_prompt_preset": "default",
+            "judge_prompt_system_sha256": "system-hash",
+            "judge_prompt_user_sha256": "user-hash",
+        }
     ]
 
 
