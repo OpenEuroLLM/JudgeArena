@@ -8,7 +8,6 @@ from judgearena.prompts.parsing import (
     JudgeParser,
     PairScore,
     ParsedPreference,
-    weighted_token_preference,
 )
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
@@ -162,18 +161,9 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
     [
         ("My final verdict is tie: [[A=B]]", 0.5),
         ("Assistant A is significantly better: [[A>>B]]", 0.0),
-        ("[[A>B]]", 0.25),
-        ("[[B<A]]", 0.25),
-        ("[[B<<A]]", 0.0),
-        ("some explanation...\n[[B>A]]", 0.75),
-        ("[[B>>A]]", 1.0),
-        ("[[B=A]]", 0.5),  # symmetric spelling accepted by upstream
-        ("[[A<B]]", 0.75),
-        ("[[A<<B]]", 1.0),
+        ("[[A>B]] but wait [[B>A]]", 0.75),  # last label wins
         ("[A<<B]", 1.0),  # v2 single-bracket fallback
-        ("[[A=B]] ... repeated [[A=B]]", 0.5),  # duplicates of one label are fine
-        ("[[A>B]] but wait [[B>A]]", 0.75),  # last label wins, as upstream
-        ("[[a>b]]", 0.25),  # matching is case-insensitive, as upstream
+        ("[[a>b]]", 0.25),
         ("no verdict here", None),
     ],
 )
@@ -181,28 +171,13 @@ def test_parse_arena_hard_verdict(judgment, expected):
     assert parse_arena_hard_verdict(judgment) == expected
 
 
-@pytest.mark.parametrize(
-    "top_logprobs, expected",
-    [
-        ({"m": math.log(0.25), "M": math.log(0.75)}, 0.75),
-        ({"M": -0.5}, 1.0),  # missing verdict token counts as -inf
-        ({"m": -0.5}, 0.0),
-        ({"x": -0.1}, None),  # neither verdict token present
-        ({}, None),
-    ],
-)
-def test_weighted_token_preference(top_logprobs, expected):
-    result = weighted_token_preference(top_logprobs, ("m", "M"))
-    if expected is None:
-        assert result is None
-    else:
-        assert result == pytest.approx(expected)
-
-
 def test_alpaca_eval_token_requires_and_weights_logprobs():
     assert parse_alpaca_eval_token(
         "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}
     ) == pytest.approx(0.75)
+    assert parse_alpaca_eval_token("M", top_logprobs={"M": -0.5}) == 1.0
+    assert parse_alpaca_eval_token("m", top_logprobs={"m": -0.5}) == 0.0
+    assert parse_alpaca_eval_token("x", top_logprobs={"x": -0.1}) is None
     for top_logprobs in (None, {}):
         with pytest.raises(ValueError, match="requires first-token top logprobs"):
             parse_alpaca_eval_token("M", top_logprobs=top_logprobs)

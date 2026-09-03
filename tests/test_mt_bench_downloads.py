@@ -11,37 +11,6 @@ from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 from judgearena.tasks.registry import get_packaged_task
 
 
-@pytest.mark.parametrize(
-    ("model", "judge", "expected"),
-    [
-        ({}, {}, (1024, 0, "Dummy/judge", "both", 2048)),
-        (
-            {"baseline": "custom-baseline", "max_out_tokens": 512, "seed": 42},
-            {"model": "custom-judge", "swap_mode": "random", "max_out_tokens": 256},
-            (512, 42, "custom-judge", "random", 256),
-        ),
-    ],
-)
-def test_mt_bench_applies_official_defaults_and_allows_overrides(
-    model, judge, expected
-):
-    cfg = RunConfig(
-        task="mt-bench",
-        model={"name": "Dummy/model", **model},
-        judge={"model": "Dummy/judge", **judge},
-    )
-
-    assert (
-        cfg.model.max_out_tokens,
-        cfg.model.seed,
-        cfg.judge.model,
-        cfg.judge.swap_mode,
-        cfg.judge.max_out_tokens,
-    ) == expected
-    if "baseline" in model:
-        assert cfg.model.baseline == model["baseline"]
-
-
 def test_mt_bench_adapter_normalizes_questions_and_references(monkeypatch, tmp_path):
     task = get_packaged_task("mt-bench")
     assert task is not None

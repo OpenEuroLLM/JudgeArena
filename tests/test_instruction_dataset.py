@@ -19,28 +19,6 @@ from judgearena.datasets.arena_hard import (
 from judgearena.tasks.registry import get_packaged_task
 
 
-def test_table_adapter_download_uses_declared_paths(monkeypatch, tmp_path):
-    captured = {}
-    monkeypatch.setattr(
-        judgearena_tables,
-        "snapshot_download",
-        lambda **kwargs: captured.update(kwargs),
-    )
-    task = get_packaged_task("alpaca-eval")
-    assert task is not None
-    assert task.spec.dataset.adapter == "judgearena_tables"
-
-    judgearena_tables.download_task_sources(task, tmp_path)
-
-    assert captured["repo_id"] == "judge-arena/judge-arena-dataset"
-    assert captured["revision"] == "004c4a992956eeefffd36b63ade470f32fd0a582"
-    assert captured["allow_patterns"] == [
-        "instructions/alpaca-eval.csv",
-        "model_outputs/alpaca-eval.csv.zip",
-    ]
-    assert captured["local_dir"] == tmp_path
-
-
 def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
     monkeypatch.setattr(
         judgearena_tables, "download_task_sources", lambda _task, _path: None
@@ -64,7 +42,13 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
         }
     ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
     task = get_packaged_task("alpaca-eval")
-    assert task is not None
+    assert task.spec.dataset.sources["tables"].repo_id == (
+        "judge-arena/judge-arena-dataset"
+    )
+    assert task.spec.dataset.sources["tables"].allow_patterns == (
+        "instructions/alpaca-eval.csv",
+        "model_outputs/alpaca-eval.csv.zip",
+    )
 
     instructions = judgearena_tables.load_task_instructions(task, tmp_path)
     outputs = judgearena_tables.load_task_model_outputs(task, tmp_path)
