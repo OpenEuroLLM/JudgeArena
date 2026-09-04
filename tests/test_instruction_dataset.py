@@ -14,70 +14,79 @@ from judgearena.datasets.arena_hard import (
     _build_instructions,
     _build_model_outputs,
     _extract_assistant_output,
-    arena_hard_native_baseline,
     normalize_official_arena_hard,
 )
 from judgearena.tasks.registry import get_packaged_task
 
 
-def test_alpaca_eval_table_download_uses_yaml_source(monkeypatch, tmp_path):
-    captured = {}
-    monkeypatch.setattr(
-        judgearena_tables,
-        "snapshot_download",
-        lambda **kwargs: captured.update(kwargs),
-    )
-    task = get_packaged_task("alpaca-eval")
-    assert task is not None
-
-    judgearena_tables.download_task_sources(task, tmp_path)
-
-    assert captured["repo_id"] == "judge-arena/judge-arena-dataset"
-    assert captured["revision"] == "004c4a992956eeefffd36b63ade470f32fd0a582"
-    assert captured["allow_patterns"] == ["*alpaca-eval*"]
-
-
-def test_alpaca_eval_table_loader_uses_yaml_fields(monkeypatch, tmp_path):
+def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
     monkeypatch.setattr(
         judgearena_tables, "download_task_sources", lambda _task, _path: None
     )
     instructions_dir = tmp_path / "instructions"
+    outputs_dir = tmp_path / "model_outputs"
     instructions_dir.mkdir()
+    outputs_dir.mkdir()
     pd.DataFrame(
         {
-            "instruction_index": [1, 2],
+            "instruction_index": ["slug-z", "slug-a"],
             "instruction": ["First", "Second"],
+            "domain": ["helpful_base", "koala"],
         }
     ).to_csv(instructions_dir / "alpaca-eval.csv", index=False)
+    pd.DataFrame(
+        {
+            "instruction_index": ["slug-z", "slug-a", "slug-z"],
+            "model": ["gpt4_1106_preview", "gpt4_1106_preview", "archived-model"],
+            "output": ["base-0", "base-1", "archived-0"],
+        }
+    ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
     task = get_packaged_task("alpaca-eval")
-    assert task is not None
+    assert task.spec.dataset.sources["tables"].repo_id == (
+        "judge-arena/judge-arena-dataset"
+    )
+    assert task.spec.dataset.sources["tables"].allow_patterns == (
+        "instructions/alpaca-eval.csv",
+        "model_outputs/alpaca-eval.csv.zip",
+    )
 
-    loaded = judgearena_tables.load_task_instructions(task, tmp_path)
+    instructions = judgearena_tables.load_task_instructions(task, tmp_path)
+    outputs = judgearena_tables.load_task_model_outputs(task, tmp_path)
 
-    assert loaded["instruction_index"].tolist() == [1, 2]
-    assert loaded["instruction"].tolist() == ["First", "Second"]
+    assert instructions.to_dict(orient="records") == [
+        {
+            "instruction_index": 0,
+            "instruction": "First",
+            "category": "helpful_base",
+        },
+        {"instruction_index": 1, "instruction": "Second", "category": "koala"},
+    ]
+    assert outputs.to_dict(orient="records") == [
+        {"instruction_index": 0, "model": "gpt4_1106_preview", "output": "base-0"},
+        {"instruction_index": 1, "model": "gpt4_1106_preview", "output": "base-1"},
+        {"instruction_index": 0, "model": "archived-model", "output": "archived-0"},
+    ]
 
 
-def test_arena_hard_native_baseline_v01_is_flat_string():
-    assert arena_hard_native_baseline("arena-hard-v0.1") == "gpt-4-0314"
-
-
-def test_arena_hard_native_baseline_v20_is_per_category_mapping():
-    native = arena_hard_native_baseline("arena-hard-v2.0")
-    assert isinstance(native, dict)
-    assert native["hard_prompt"] == "o3-mini-2025-01-31"
-    assert native["coding"] == "o3-mini-2025-01-31"
-    assert native["math"] == "o3-mini-2025-01-31"
-    assert native["creative_writing"] == "gemini-2.0-flash-001"
-
-
-def test_arena_hard_source_is_owned_by_task_yaml():
-    task = get_packaged_task("arena-hard-v2.0")
-    assert task is not None
+@pytest.mark.parametrize(
+    ("task_id", "config", "question_file"),
+    [
+        ("arena-hard-v0.1", "arena-hard-v0.1", "question.jsonl"),
+        ("arena-hard-v2.0", "arena-hard-v2.0", "question.jsonl"),
+    ],
+)
+def test_official_arena_hard_sources_are_owned_by_task_yaml(
+    task_id, config, question_file
+):
+    task = get_packaged_task(task_id)
     source = task.spec.dataset.sources["examples"]
+
+    assert task.spec.dataset.adapter == "arena_hard"
     assert source.repo_id == "lmarena-ai/arena-hard-auto"
     assert source.revision == "15f3746e21432264ce9b453999bde4f3c946d2e6"
-    assert source.config == "arena-hard-v2.0"
+    assert source.config == config
+    assert any(pattern.endswith(question_file) for pattern in source.allow_patterns)
+    assert any("model_answer/*.jsonl" in pattern for pattern in source.allow_patterns)
 
 
 def test_m_arena_hard_sources_and_baselines_are_owned_by_task_yaml():
@@ -149,18 +158,6 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
 
     assert loaded is not None
     pd.testing.assert_frame_equal(loaded, expected)
-
-
-def test_mt_bench_native_baseline_is_flat_string():
-    from judgearena.datasets.mt_bench import (
-        is_mt_bench_dataset,
-        mt_bench_native_baseline,
-    )
-
-    assert is_mt_bench_dataset("mt-bench") is True
-    assert is_mt_bench_dataset("alpaca-eval") is False
-    assert mt_bench_native_baseline("mt-bench") == "gpt-4"
-    assert mt_bench_native_baseline("alpaca-eval") is None
 
 
 def test_normalize_official_arena_hard_v01_drops_no_category():
@@ -420,6 +417,35 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]
     assert loaded.index.tolist() == [0, 1]
+
+
+def test_pairwise_task_data_only_requires_selected_output_rows():
+    task_data = pairwise_data.PairwiseTaskData(
+        instructions=pd.DataFrame(
+            {"instruction": ["q0", "q1"]},
+            index=pd.Index(["q0", "q1"], name="instruction_index"),
+        ),
+        model_outputs=pd.DataFrame(
+            {
+                "instruction_index": ["q1"],
+                "model": ["category-baseline"],
+                "output": ["answer"],
+            }
+        ),
+    )
+
+    loaded = task_data.model_completion(
+        "category-baseline",
+        instruction_ids=pd.Index(["q1"], name="instruction_index"),
+    )
+
+    assert loaded is not None
+    assert loaded.to_dict() == {"q1": "answer"}
+    with pytest.raises(KeyError):
+        task_data.model_completion(
+            "category-baseline",
+            instruction_ids=pd.Index(["q0"], name="instruction_index"),
+        )
 
 
 def test_fluency_variants_cover_all_supported_languages():

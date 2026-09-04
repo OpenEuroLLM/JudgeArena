@@ -31,6 +31,13 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
         },
         judge_system_prompt="system prompt",
         judge_user_prompt_template="user prompt",
+        judge_prompt_variants=[
+            {
+                "judge_prompt_preset": "default",
+                "judge_prompt_system_sha256": "system-hash",
+                "judge_prompt_user_sha256": "user-hash",
+            },
+        ],
     )
 
     metadata = json.loads(metadata_path.read_text())
@@ -49,6 +56,13 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     assert "instruction_indices_sha256" in metadata
     assert "judge_system_prompt_sha256" in metadata
     assert "judge_user_prompt_template_sha256" in metadata
+    assert metadata["judge_prompts"] == [
+        {
+            "judge_prompt_preset": "default",
+            "judge_prompt_system_sha256": "system-hash",
+            "judge_prompt_user_sha256": "user-hash",
+        }
+    ]
 
 
 def test_write_run_metadata_hashes_instruction_indices_as_set(tmp_path, monkeypatch):
@@ -109,6 +123,9 @@ def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypat
 
     task_definition = json.loads(metadata_path.read_text())["task_definition"]
     assert task_definition["schema_version"] == 1
-    assert task_definition["task_version"] == 1
+    assert task_definition["task_version"] == 2
     assert len(task_definition["resolved_sha256"]) == 64
-    assert task_definition["resources"][0]["path"] == ("alpaca_eval/alpaca-eval.yaml")
+    assert [resource["path"] for resource in task_definition["resources"]] == [
+        "alpaca_eval/_base.yaml",
+        "alpaca_eval/alpaca-eval.yaml",
+    ]

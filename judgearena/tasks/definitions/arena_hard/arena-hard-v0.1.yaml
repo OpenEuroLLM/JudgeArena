@@ -1,6 +1,7 @@
 extends: _base.yaml
 task: arena-hard-v0.1
-description: Pairwise evaluation on Arena-Hard v0.1.
+task_version: 2
+description: Arena-Hard v0.1 with the official judging protocol (verdict labels, both orders, weighted score).
 
 dataset:
   sources:
@@ -14,3 +15,13 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: gpt-4-0314
+  judge:
+    default_prompt_preset: arena-hard
+    default_swap_mode: both
+    default_temperature: 0
+    # The official prompt has the judge answer the question itself before the
+    # verdict, so it needs the official 4096-token budget to reach the label.
+    default_max_out_tokens: 4096
+  scoring:
+    metrics:
+      - metric: arena_hard_v01

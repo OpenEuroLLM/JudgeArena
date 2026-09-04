@@ -1,0 +1,30 @@
+schema_version: 1
+task_version: 1
+tags: [pairwise, instruction-following, alpaca-eval]
+
+dataset:
+  adapter: judgearena_tables
+  sources:
+    tables:
+      type: huggingface_dataset
+      repo_id: judge-arena/judge-arena-dataset
+      revision: "004c4a992956eeefffd36b63ade470f32fd0a582"
+      allow_patterns:
+        - instructions/alpaca-eval.csv
+        - model_outputs/alpaca-eval.csv.zip
+  fields:
+    id: instruction_index
+    instruction: instruction
+    category: domain
+    id_strategy: position
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  baseline:
+    strategy: task_default
+    reference_id: gpt4_1106_preview
+
+metadata:
+  reference_implementation: https://github.com/tatsu-lab/alpaca_eval

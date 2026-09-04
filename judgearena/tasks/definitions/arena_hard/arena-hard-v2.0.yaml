@@ -1,6 +1,7 @@
 extends: _base.yaml
 task: arena-hard-v2.0
-description: Pairwise evaluation on Arena-Hard v2.0.
+task_version: 2
+description: Arena-Hard v2.0 with the official judging and scoring protocol (style-controlled hard prompts and weighted creative-writing scores).
 
 dataset:
   sources:
@@ -21,3 +22,16 @@ protocol:
       coding: o3-mini-2025-01-31
       math: o3-mini-2025-01-31
       creative_writing: gemini-2.0-flash-001
+  judge:
+    default_prompt_preset: arena-hard
+    category_prompts:
+      creative_writing: arena-hard-creative
+    default_swap_mode: both
+    default_temperature: 0
+    # Official v2.0 judge budgets are large (16k for the recommended gpt-4.1
+    # judge; 32k for gemini-2.5) because judges explain before the verdict.
+    default_max_out_tokens: 16000
+  scoring:
+    metrics:
+      - metric: arena_hard_v20
+        group_by: [category]

@@ -47,7 +47,11 @@ def _build_judge_batches(
     )
     if (
         not category_prompts
-        or cfg.judge.prompt_preset is not None
+        or (
+            cfg.judge.prompt_preset is not None
+            and cfg.judge.prompt_preset
+            != resolved_task.spec.protocol.judge.default_prompt_preset
+        )
         or resolved_prompt.source != "preset"
         or "category" not in instructions_df.columns
     ):
@@ -200,10 +204,18 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     def _align_completion_series(df: pd.DataFrame) -> pd.Series:
         return df.set_index("instruction_index").loc[instructions.index, "completion"]
 
-    def _load_or_generate_completions(model_spec: str, *, role: str) -> pd.Series:
-        preloaded = task_data.model_completion(model_spec)
+    def _load_or_generate_completions(
+        model_spec: str,
+        *,
+        role: str,
+        instruction_ids: pd.Index | None = None,
+    ) -> pd.Series:
+        preloaded = task_data.model_completion(
+            model_spec,
+            instruction_ids=instruction_ids,
+        )
         if preloaded is not None:
-            return preloaded.loc[instructions.index]
+            return preloaded
         # Fold the resolved generation kwargs into the cache key so that changing
         # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
         # the cached completions instead of silently reusing a stale run.
@@ -217,7 +229,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
                 f"{sampling_token}"
             ),
         )
-        return _align_completion_series(generated)
+        completions = _align_completion_series(generated)
+        return (
+            completions if instruction_ids is None else completions.loc[instruction_ids]
+        )
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
@@ -228,7 +243,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
     else:
         per_baseline_completions = {
-            model: _load_or_generate_completions(model, role="B")
+            model: _load_or_generate_completions(
+                model,
+                role="B",
+                instruction_ids=baseline_per_index.index[baseline_per_index == model],
+            )
             for model in baseline_plan.unique_models
         }
         completions_B = pd.Series(
@@ -258,6 +277,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     prompt_groups = _build_judge_batches(
         cfg, resolved_task, instructions_df, eval_index, resolved_prompt
     )
+    judge_prompt_variants = []
+    for group_prompt, _ in prompt_groups:
+        prompt_metadata = group_prompt.metadata()
+        if prompt_metadata not in judge_prompt_variants:
+            judge_prompt_variants.append(prompt_metadata)
 
     # The baseline fills the first judged slot unless the deterministic mask
     # switches the pair. Preferences are re-oriented to the canonical
@@ -404,6 +428,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
+            "judge_prompts": judge_prompt_variants,
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
         },
@@ -418,9 +443,9 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     report.render()
     report.save(res_folder / f"results-{name}.json")
 
-    eval_instructions = instructions.head(n_instructions).tolist()
-    eval_completions_A = completions_A.head(n_instructions).tolist()
-    eval_completions_B = completions_B.head(n_instructions).tolist()
+    eval_instructions = instructions.loc[eval_instruction_index].tolist()
+    eval_completions_A = completions_A.loc[eval_instruction_index].tolist()
+    eval_completions_B = completions_B.loc[eval_instruction_index].tolist()
 
     write_run_metadata_safely(
         output_dir=res_folder,
@@ -436,6 +461,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         },
         judge_system_prompt=resolved_prompt.system_prompt,
         judge_user_prompt_template=resolved_prompt.user_prompt_template,
+        judge_prompt_variants=judge_prompt_variants,
         started_at_utc=run_started_at,
     )
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -25,22 +24,6 @@ def _task(task_id: str = "mt-bench") -> ResolvedTaskSpec:
     if task is None or task.spec.dataset.adapter != "mt_bench":
         raise ValueError(f"Unsupported MT-Bench task: {task_id!r}.")
     return task
-
-
-def is_mt_bench_dataset(dataset: str) -> bool:
-    task = get_packaged_task(dataset)
-    return task is not None and task.spec.dataset.adapter == "mt_bench"
-
-
-def mt_bench_native_baseline(
-    dataset: str,
-) -> str | Mapping[str, str] | None:
-    """Return the task-defined MT-Bench baseline."""
-    if not is_mt_bench_dataset(dataset):
-        return None
-    from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-
-    return native_pairwise_baseline(dataset)
 
 
 def _space_source(task: ResolvedTaskSpec) -> HuggingFaceSpaceSource:
