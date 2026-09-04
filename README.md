@@ -303,7 +303,7 @@ Meta-evaluation uses existing human-labeled arena battles. It does not generate 
 
 The task definitions configure three metrics:
 
-- `meta_eval_agreement` reports coverage, attempted accuracy, complete-only accuracy, and complete-only Cohen's kappa. It reports bootstrap standard errors for both accuracies and kappa. Missing or partial judgments count as incorrect in attempted accuracy.
+- `meta_eval_agreement` reports coverage, attempted accuracy, complete-only accuracy, and complete-only Cohen's kappa. It reports bootstrap standard errors for both accuracies and kappa. Incomplete judgments count as incorrect in attempted accuracy.
 - `meta_eval_ranking` compares human, hard-judge, and soft-judge Bradley-Terry ratings using Spearman correlation and Elo MAE. Bootstrap draws resample battles within matchup strata.
 - `meta_eval_elo_gap` measures the mean focal-model rating gap at budgets of attempted incident battles per focal model. These values are not run-wide annotation counts.
 
@@ -315,15 +315,14 @@ judgearena \
   --judge.model OpenRouter/deepseek/deepseek-v3.2 \
   --meta_eval.languages '["en", "es"]' \
   --meta_eval.top_models 20 \
-  --meta_eval.battles_per_model 50 \
-  --meta_eval.n_bootstraps 20
+  --meta_eval.battles_per_model 50
 ```
 
-Runtime sampling defaults to 20 models and 50 sampled incident battles per model. The task definitions use 1,000 agreement and ranking bootstrap draws, Elo-gap budgets `[10, 20, 30, 40, 50]`, and 10 Elo-gap sampling replicates. Runtime flags under `--meta_eval` can override these values. The largest Elo-gap budget cannot exceed `--meta_eval.battles_per_model`.
+Runtime sampling defaults to 20 models and 50 sampled incident battles per model. The task YAML owns metric parameters: the packaged tasks use 1,000 agreement and ranking bootstrap draws, Elo-gap budgets `[10, 20, 30, 40, 50]`, and 10 Elo-gap sampling replicates. The largest Elo-gap budget cannot exceed `--meta_eval.battles_per_model`.
 
-Do not set `--model.name` or `--model.baseline`; meta-evaluation rejects both fields because the arena responses already exist. `judge.swap_mode=random` is also unsupported. With `both`, the runner normalizes each scalar preference to the stored model order, and a battle is complete only if both passes parse. Ranking and Elo-gap use complete battles. Attempted agreement retains partial and missing battles and treats them as incorrect.
+Do not set `--model.name` or `--model.baseline`; meta-evaluation rejects both fields because the arena responses already exist. `judge.swap_mode=random` is also unsupported. With `both`, a physical battle gets a preference only if both passes parse. If only one pass parses, its evidence remains in `annotations.parquet`, while the battle preference is null. Ranking and Elo-gap use only battles with a non-null judge preference. Attempted agreement retains all sampled battles and treats a null preference as incorrect.
 
-A successful run writes `config.yaml`, `sample.parquet`, `annotations.parquet`, `battles.parquet`, and `results.json` to a timestamped directory. `annotations.parquet` contains one row per judge pass. `battles.parquet` contains one row per battle in the selected top-model pool, including unsampled rows, numeric human references, and judge parse state. `run-metadata.v1.json` is written on a best-effort basis.
+A successful run writes `config.yaml`, `sample.parquet`, `annotations.parquet`, `battles.parquet`, and `results.json` to a timestamped directory. `annotations.parquet` contains one lean evidence row per judge pass. `battles.parquet` contains the full selected top-model pool, including unsampled rows, with numeric human references and a nullable complete judge preference. `run-metadata.v1.json` is written on a best-effort basis.
 
 ## 📈 Estimating ELO Ratings
 

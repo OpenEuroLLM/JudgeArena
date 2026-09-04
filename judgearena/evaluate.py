@@ -209,12 +209,7 @@ def annotate_battles(
 
 
 def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
-    """Combine swap_mode='both' prefs into one P(B wins) series: [pref_AB, 1 - pref_BA].
-
-    ``prefs_ab`` are P(B wins) from the AB ordering; ``prefs_ba`` are P(B wins)
-    from the swapped BA ordering, so ``1 - prefs_ba`` re-orients them to the AB
-    frame before stacking.
-    """
+    """Stack direct preferences before reversed preferences reoriented to A/B."""
     return pd.concat(
         [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
     ).reset_index(drop=True)
@@ -239,8 +234,8 @@ def judge_and_parse_prefs(
     Returns:
         annotations: original-order JudgeAnnotations
         annotations_reversed: reversed-order JudgeAnnotations (None if swap_mode != "both")
-        prefs: pd.Series of floats (0=A wins, 0.5=tie, 1=B wins, None=unparseable),
-               already combined for swap_mode="both"
+        prefs: canonical A/B preferences. With swap_mode="both", the direct
+               block is followed by the reoriented reversed block.
     """
     if parse is None:
         parse = PairScore()

@@ -20,9 +20,7 @@ _REQUIRED_COLUMNS = {
     "reference_pref",
     "pref",
     "sampled",
-    "parse_status",
 }
-_PARSE_STATUSES = {"complete", "partial", "missing"}
 _METRIC_NAMES = ("spearman", "elo_mae")
 
 
@@ -44,57 +42,36 @@ def _validate_battles(battles: pd.DataFrame) -> None:
         raise ValueError(f"Meta-evaluation battles are missing columns: {missing}.")
     if battles["battle_id"].isna().any() or battles["battle_id"].duplicated().any():
         raise ValueError("Meta-evaluation battle_id values must be present and unique.")
-    if battles[["model_a", "model_b"]].isna().any().any():
-        raise ValueError("Meta-evaluation model names must not be missing.")
-    if not all(
-        isinstance(model, str)
-        for model in pd.concat([battles["model_a"], battles["model_b"]])
-    ):
-        raise ValueError("Meta-evaluation model names must be strings.")
+    models = pd.concat([battles["model_a"], battles["model_b"]])
+    if models.isna().any() or not all(isinstance(model, str) for model in models):
+        raise ValueError("Meta-evaluation model names must be non-null strings.")
     if (battles["model_a"] == battles["model_b"]).any():
         raise ValueError("Meta-evaluation battles do not allow self-comparisons.")
     if battles["sampled"].isna().any() or not all(
         isinstance(value, (bool, np.bool_)) for value in battles["sampled"]
     ):
         raise ValueError("Meta-evaluation sampled values must be booleans.")
-
-    sampled = battles["sampled"]
-    sampled_status = battles.loc[sampled, "parse_status"]
-    invalid_statuses = set(sampled_status.dropna()) - _PARSE_STATUSES
-    if sampled_status.isna().any() or invalid_statuses:
-        raise ValueError(
-            "Sampled meta-evaluation parse_status values must be complete, partial, "
-            f"or missing; got {sorted(map(str, invalid_statuses))}."
-        )
-
-    for column, allow_missing in (("reference_pref", False), ("pref", True)):
-        invalid = []
-        for value in battles[column]:
-            if pd.isna(value):
-                if not allow_missing:
-                    invalid.append(value)
-                continue
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, Real)
-                or not math.isfinite(float(value))
-                or not 0.0 <= float(value) <= 1.0
-            ):
-                invalid.append(value)
-        if invalid:
-            raise ValueError(
-                f"Meta-evaluation {column} values must be numeric preferences in "
-                "[0, 1]."
-            )
-
-    if not battles["reference_pref"].isin((0.0, 0.5, 1.0)).all():
+    if not all(
+        not isinstance(value, bool)
+        and isinstance(value, Real)
+        and float(value) in (0.0, 0.5, 1.0)
+        for value in battles["reference_pref"]
+    ):
         raise ValueError("Meta-evaluation reference_pref values must be 0, 0.5, or 1.")
-    complete = sampled & battles["parse_status"].eq("complete")
-    if battles.loc[complete, "pref"].isna().any():
-        raise ValueError("Complete sampled battles must have a judge preference.")
-    missing = sampled & battles["parse_status"].eq("missing")
-    if battles.loc[missing, "pref"].notna().any():
-        raise ValueError("Missing sampled battles cannot have a judge preference.")
+    if not all(
+        pd.isna(value)
+        or (
+            not isinstance(value, bool)
+            and isinstance(value, Real)
+            and math.isfinite(float(value))
+            and 0.0 <= float(value) <= 1.0
+        )
+        for value in battles["pref"]
+    ):
+        raise ValueError(
+            "Meta-evaluation non-null pref values must be finite numeric preferences "
+            "in [0, 1]."
+        )
 
 
 def _reference_labels(values: pd.Series) -> np.ndarray:
@@ -144,22 +121,22 @@ def _agreement_point(
     rows: pd.DataFrame, tie_tolerance: float
 ) -> dict[str, float | int]:
     n_attempted = len(rows)
-    complete = rows["parse_status"].eq("complete")
-    parsed = rows.loc[complete]
-    n_complete = len(parsed)
+    complete = rows["pref"].notna()
+    complete_rows = rows.loc[complete]
+    n_complete = len(complete_rows)
     if n_complete:
-        parsed_reference = _reference_labels(parsed["reference_pref"])
-        parsed_judge = _hard_preferences(parsed["pref"], tie_tolerance)
-        parsed_correct = parsed_reference == parsed_judge
-        accuracy_parsed = float(np.mean(parsed_correct))
-        kappa = _cohen_kappa(parsed_reference, parsed_judge)
+        complete_reference = _reference_labels(complete_rows["reference_pref"])
+        complete_judge = _hard_preferences(complete_rows["pref"], tie_tolerance)
+        complete_correct = complete_reference == complete_judge
+        accuracy_complete = float(np.mean(complete_correct))
+        kappa = _cohen_kappa(complete_reference, complete_judge)
     else:
-        parsed_correct = np.array([], dtype=bool)
-        accuracy_parsed = kappa = float("nan")
+        complete_correct = np.array([], dtype=bool)
+        accuracy_complete = kappa = float("nan")
 
     if n_attempted:
         correct = np.zeros(n_attempted, dtype=bool)
-        correct[complete.to_numpy()] = parsed_correct
+        correct[complete.to_numpy()] = complete_correct
         accuracy_attempted = float(np.mean(correct))
         coverage = n_complete / n_attempted
     else:
@@ -169,7 +146,7 @@ def _agreement_point(
         "n_complete": n_complete,
         "coverage": coverage,
         "accuracy_attempted": accuracy_attempted,
-        "accuracy_parsed": accuracy_parsed,
+        "accuracy_complete": accuracy_complete,
         "cohen_kappa": kappa,
     }
 
@@ -188,7 +165,7 @@ def _agreement_view(
     )
     point = _agreement_point(rows, tie_tolerance)
     attempted_samples: list[float] = []
-    parsed_samples: list[float] = []
+    complete_samples: list[float] = []
     kappa_samples: list[float] = []
     if len(rows):
         for _ in range(n_bootstraps):
@@ -197,17 +174,17 @@ def _agreement_view(
             sample = rows.iloc[indices]
             values = _agreement_point(sample, tie_tolerance)
             attempted_samples.append(float(values["accuracy_attempted"]))
-            parsed_accuracy = float(values["accuracy_parsed"])
-            if math.isfinite(parsed_accuracy):
-                parsed_samples.append(parsed_accuracy)
+            complete_accuracy = float(values["accuracy_complete"])
+            if math.isfinite(complete_accuracy):
+                complete_samples.append(complete_accuracy)
             kappa = float(values["cohen_kappa"])
             if math.isfinite(kappa):
                 kappa_samples.append(kappa)
     return {
         **point,
         "accuracy_attempted_se": _sample_std(attempted_samples),
-        "accuracy_parsed_se": _sample_std(parsed_samples),
-        "accuracy_parsed_bootstraps_valid": len(parsed_samples),
+        "accuracy_complete_se": _sample_std(complete_samples),
+        "accuracy_complete_bootstraps_valid": len(complete_samples),
         "cohen_kappa_se": _sample_std(kappa_samples),
         "n_bootstraps_requested": n_bootstraps,
         "n_kappa_bootstraps_valid": len(kappa_samples),
@@ -230,7 +207,7 @@ class MetaEvalAgreementMetric:
         *,
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
-        """Calculate attempted and parsed-complete agreement views."""
+        """Calculate attempted and complete agreement views."""
         _validate_battles(battles)
         if self.n_bootstraps and rng is None:
             raise ValueError("Bootstrapped meta-evaluation agreement requires an RNG.")
@@ -261,7 +238,7 @@ class MetaEvalAgreementMetric:
                 view["accuracy_attempted"], view["accuracy_attempted_se"]
             )
             complete = _format_estimate(
-                view["accuracy_parsed"], view["accuracy_parsed_se"]
+                view["accuracy_complete"], view["accuracy_complete_se"]
             )
             kappa = _format_estimate(view["cohen_kappa"], view["cohen_kappa_se"])
             lines.append(
@@ -322,13 +299,10 @@ def _fit_rating_bundle(
     fitting["human"] = rows["reference_pref"].to_numpy(dtype=float)
     fitting["hard"] = _hard_preferences(rows["pref"], tie_tolerance) / 2.0
     fitting["soft"] = rows["pref"].to_numpy(dtype=float)
-    try:
-        vectors = {
-            name: _centered_vector(fit_bradley_terry(fitting, pref_col=name), models)
-            for name in ("human", "hard", "soft")
-        }
-    except (TypeError, ValueError):
-        return None
+    vectors = {
+        name: _centered_vector(fit_bradley_terry(fitting, pref_col=name), models)
+        for name in ("human", "hard", "soft")
+    }
     if any(vector is None for vector in vectors.values()):
         return None
     human = vectors["human"]
@@ -381,7 +355,7 @@ class MetaEvalRankingMetric:
         if self.n_bootstraps and rng is None:
             raise ValueError("Bootstrapped meta-evaluation ranking requires an RNG.")
         models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
-        complete = battles["sampled"] & battles["parse_status"].eq("complete")
+        complete = battles["sampled"] & battles["pref"].notna()
         rows = battles.loc[complete].copy()
         if not self.include_human_ties:
             human_tie = rows["reference_pref"].eq(0.5)
@@ -471,11 +445,7 @@ def _elo_gap_priority(
 def _elo_gap_vector(rows: pd.DataFrame, models: list[str]) -> np.ndarray | None:
     if comparison_components(rows, models) != [frozenset(models)]:
         return None
-    try:
-        ratings = fit_bradley_terry(rows, pref_col="pref")
-    except (TypeError, ValueError):
-        return None
-    return _centered_vector(ratings, models)
+    return _centered_vector(fit_bradley_terry(rows, pref_col="pref"), models)
 
 
 def _elo_gap_rows(
@@ -503,7 +473,7 @@ def _elo_gap_rows(
 
     for battle_count in battle_counts:
         replicate_gaps = {variant: [] for variant in _ELO_GAP_VARIANTS}
-        parsed_counts: list[int] = []
+        complete_counts: list[int] = []
         used_counts = {variant: [] for variant in _ELO_GAP_VARIANTS}
 
         for replicate in range(n_seeds):
@@ -511,15 +481,15 @@ def _elo_gap_rows(
             for focal_index, focal_model in enumerate(models):
                 selected_ids = schedules[replicate, focal_model][:battle_count]
                 selected = by_id.loc[selected_ids]
-                parsed = selected.loc[selected["parse_status"].eq("complete")].copy()
-                hard_prefs = _hard_preferences(parsed["pref"], tie_tolerance) / 2.0
-                parsed_counts.append(len(parsed))
+                complete = selected.loc[selected["pref"].notna()].copy()
+                hard_prefs = _hard_preferences(complete["pref"], tie_tolerance) / 2.0
+                complete_counts.append(len(complete))
                 human = human_by_model[focal_model]
 
                 for variant in _ELO_GAP_VARIANTS:
-                    judge = parsed[["model_a", "model_b"]].copy()
+                    judge = complete[["model_a", "model_b"]].copy()
                     judge["pref"] = (
-                        parsed["pref"].to_numpy(dtype=float)
+                        complete["pref"].to_numpy(dtype=float)
                         if variant == "soft"
                         else hard_prefs
                     )
@@ -554,8 +524,8 @@ def _elo_gap_rows(
                     "n_seeds_valid": len(valid),
                     "n_seeds_failed": n_seeds - len(valid),
                     "n_models": len(models),
-                    "mean_parsed_per_model": float(np.mean(parsed_counts))
-                    if parsed_counts
+                    "mean_complete_per_model": float(np.mean(complete_counts))
+                    if complete_counts
                     else float("nan"),
                     "mean_used_per_model": float(np.mean(used_counts[variant]))
                     if used_counts[variant]
@@ -658,7 +628,7 @@ class MetaEvalEloGapMetric:
                     f"mean_gap={gap} (sampling SE; "
                     f"valid seeds {row['n_seeds_valid']}/"
                     f"{values['n_seeds_requested']}, "
-                    f"parsed/model={row['mean_parsed_per_model']:.1f}, "
+                    f"complete/model={row['mean_complete_per_model']:.1f}, "
                     f"used/model={row['mean_used_per_model']:.1f})"
                 )
         return "\n".join(lines)

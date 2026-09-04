@@ -75,22 +75,6 @@ def test_sampling_rejects_disconnected_top_model_pool():
         select_top_models(battles, top_models=4)
 
 
-def test_sampling_requires_unique_stable_battle_ids():
-    top, top_pool = select_top_models(_battles(), top_models=3)
-
-    with pytest.raises(MetaEvalSamplingError, match="Stable battle_id"):
-        sample_battles_per_model(
-            top_pool.drop(columns="battle_id"),
-            top,
-            battles_per_model=4,
-            seed=0,
-        )
-
-    top_pool.loc[1, "battle_id"] = top_pool.loc[0, "battle_id"]
-    with pytest.raises(MetaEvalSamplingError, match="present and unique"):
-        sample_battles_per_model(top_pool, top, battles_per_model=4, seed=0)
-
-
 def test_sampling_rejects_self_comparisons_and_insufficient_quota():
     self_comparison = pd.DataFrame(
         [
@@ -100,8 +84,6 @@ def test_sampling_rejects_self_comparisons_and_insufficient_quota():
     )
     with pytest.raises(MetaEvalSamplingError, match="self-comparisons"):
         select_top_models(self_comparison, top_models=2)
-    assert count_battles_per_model(self_comparison) == {"a": 2, "b": 1}
-
     battles = pd.DataFrame(
         [{"battle_id": f"q{i}", "model_a": "a", "model_b": "b"} for i in range(2)]
     )

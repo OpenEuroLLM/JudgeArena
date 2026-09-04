@@ -22,7 +22,7 @@ def _arena() -> pd.DataFrame:
         ("a", "b", "model_b", "fr"),
         ("b", "c", "tie (bothbad)", "en"),
         ("a", "c", "model_a", "fr"),
-    ]
+    ] * 20
     rows = []
     for index, (model_a, model_b, winner, language) in enumerate(pairs):
         prompt = f"prompt {index}"
@@ -46,17 +46,11 @@ def _arena() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _config(tmp_path: Path, *, battle_counts: list[int] | None = None) -> RunConfig:
+def _config(tmp_path: Path, *, battles_per_model: int = 50) -> RunConfig:
     return RunConfig(
         task="meta-eval-comparia",
         judge={"model": "Dummy/judge", "swap_mode": "fixed"},
-        meta_eval={
-            "top_models": 3,
-            "battles_per_model": 1,
-            "n_bootstraps": 0,
-            "elo_gap_battles": battle_counts or [1],
-            "elo_gap_seeds": 1,
-        },
+        meta_eval={"top_models": 3, "battles_per_model": battles_per_model},
         run={"result_folder": str(tmp_path), "no_log_file": True, "seed": 7},
     )
 
@@ -67,14 +61,14 @@ def _fake_annotations(sample: pd.DataFrame) -> pd.DataFrame:
         rows.append(
             {
                 "battle_id": battle.battle_id,
-                "question_id": battle.question_id,
-                "model_a": battle.model_a,
-                "model_b": battle.model_b,
-                "winner": battle.winner,
-                "lang": battle.lang,
-                "parse_ok": True,
-                "pref": 0.25,
                 "orientation": "single",
+                "pref": 0.25,
+                "judge_input": "input",
+                "judge_completion": "output",
+                "judge_top_logprobs_json": None,
+                "parsed_label": None,
+                "parsed_scores_json": None,
+                "parsed_details_json": None,
             }
         )
     return pd.DataFrame(rows)
@@ -110,15 +104,18 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
     assert len(metric_battles) == len(_arena())
     assert metric_battles["battle_id"].is_unique
     assert set(metric_battles["reference_pref"]) == {0.0, 0.5, 1.0}
-    assert set(metric_battles["language_group"]) == {"English", "Multilingual"}
-    assert metric_battles[["language_group", "battle_id"]].equals(
-        metric_battles[["language_group", "battle_id"]].sort_values(
-            ["language_group", "battle_id"], kind="stable", ignore_index=True
-        )
-    )
+    assert list(metric_battles.columns) == [
+        "battle_id",
+        "model_a",
+        "model_b",
+        "reference_pref",
+        "sampled",
+        "pref",
+    ]
+    assert metric_battles["battle_id"].is_monotonic_increasing
     assert metric_battles["sampled"].any()
     assert (~metric_battles["sampled"]).any()
-    assert metric_battles.loc[~metric_battles["sampled"], "parse_status"].isna().all()
+    assert metric_battles.loc[~metric_battles["sampled"], "pref"].isna().all()
     assert set(captured["runtime"]) == {
         "meta_eval_agreement",
         "meta_eval_ranking",
@@ -142,7 +139,9 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
     }.issubset({path.name for path in result_path.parent.iterdir()})
     saved_battles = pd.read_parquet(result_path.parent / "battles.parquet")
     assert len(saved_battles) == len(metric_battles)
-    assert {"reference_pref", "sampled", "parse_status"}.issubset(saved_battles)
+    assert list(saved_battles.columns) == list(metric_battles.columns)
+    metadata = json.loads((result_path.parent / "run-metadata.v1.json").read_text())
+    assert set(metadata["dataset_statistics"]) == {"battle_id_count"}
     saved = json.loads(result_path.read_text())
     assert saved["metrics"] == result["metrics"]
     assert "agreement" not in saved
@@ -158,7 +157,7 @@ def test_meta_eval_elo_gap_budget_is_checked_before_data_loading(tmp_path, monke
     )
 
     with pytest.raises(ValueError, match="exceeds meta_eval.battles_per_model"):
-        runner_module.run_meta_eval(_config(tmp_path, battle_counts=[2]), task)
+        runner_module.run_meta_eval(_config(tmp_path, battles_per_model=49), task)
 
 
 def test_meta_eval_rejects_unknown_human_winner_before_judge_build(

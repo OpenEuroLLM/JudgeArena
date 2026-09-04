@@ -17,7 +17,7 @@ from judgearena.benchmarks.meta_eval.scoring import (
 from judgearena.benchmarks.scoring import available_metrics, build_metric
 
 
-def _rows(specs: list[tuple[str, str, str, float, float, str]]) -> pd.DataFrame:
+def _rows(specs: list[tuple[str, str, str, float, float]]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
@@ -27,9 +27,8 @@ def _rows(specs: list[tuple[str, str, str, float, float, str]]) -> pd.DataFrame:
                 "reference_pref": reference,
                 "pref": judge,
                 "sampled": True,
-                "parse_status": status,
             }
-            for battle_id, model_a, model_b, reference, judge, status in specs
+            for battle_id, model_a, model_b, reference, judge in specs
         ]
     )
 
@@ -51,7 +50,6 @@ def _ranking_battles() -> pd.DataFrame:
                     "reference_pref": reference_pref,
                     "pref": pref,
                     "sampled": True,
-                    "parse_status": "complete",
                 }
             )
     return pd.DataFrame(rows)
@@ -80,11 +78,11 @@ def test_meta_eval_metrics_are_registered_as_configured_metrics():
 def test_agreement_reports_attempted_missing_and_numeric_kappa_semantics():
     battles = _rows(
         [
-            ("1", "a", "b", 0.0, 0.0, "complete"),
-            ("2", "b", "c", 1.0, 0.0, "complete"),
-            ("3", "a", "c", 0.5, 0.5, "complete"),
-            ("4", "a", "b", 0.0, np.nan, "missing"),
-            ("5", "b", "c", 1.0, 1.0, "partial"),
+            ("1", "a", "b", 0.0, 0.0),
+            ("2", "b", "c", 1.0, 0.0),
+            ("3", "a", "c", 0.5, 0.5),
+            ("4", "a", "b", 0.0, np.nan),
+            ("5", "b", "c", 1.0, np.nan),
         ]
     )
 
@@ -95,7 +93,6 @@ def test_agreement_reports_attempted_missing_and_numeric_kappa_semantics():
         "reference_pref": 0.0,
         "pref": np.nan,
         "sampled": False,
-        "parse_status": None,
     }
     result = MetaEvalAgreementMetric(n_bootstraps=0).calculate(battles)
 
@@ -104,11 +101,11 @@ def test_agreement_reports_attempted_missing_and_numeric_kappa_semantics():
         "n_complete": 3,
         "coverage": pytest.approx(0.6),
         "accuracy_attempted": pytest.approx(0.4),
-        "accuracy_parsed": pytest.approx(2 / 3),
+        "accuracy_complete": pytest.approx(2 / 3),
         "cohen_kappa": pytest.approx(0.5),
         "accuracy_attempted_se": pytest.approx(float("nan"), nan_ok=True),
-        "accuracy_parsed_se": pytest.approx(float("nan"), nan_ok=True),
-        "accuracy_parsed_bootstraps_valid": 0,
+        "accuracy_complete_se": pytest.approx(float("nan"), nan_ok=True),
+        "accuracy_complete_bootstraps_valid": 0,
         "cohen_kappa_se": pytest.approx(float("nan"), nan_ok=True),
         "n_bootstraps_requested": 0,
         "n_kappa_bootstraps_valid": 0,
@@ -118,16 +115,16 @@ def test_agreement_reports_attempted_missing_and_numeric_kappa_semantics():
     assert no_ties["n_complete"] == 2
     assert no_ties["coverage"] == pytest.approx(0.5)
     assert no_ties["accuracy_attempted"] == pytest.approx(0.25)
-    assert no_ties["accuracy_parsed"] == pytest.approx(0.5)
+    assert no_ties["accuracy_complete"] == pytest.approx(0.5)
     assert no_ties["cohen_kappa"] == pytest.approx(0.0)
 
 
 def test_agreement_bootstrap_is_row_order_invariant_and_reports_finite_draws():
     battles = _rows(
         [
-            ("1", "a", "b", 0.0, 0.0, "complete"),
-            ("2", "b", "c", 1.0, 0.0, "complete"),
-            ("3", "a", "c", 0.0, np.nan, "missing"),
+            ("1", "a", "b", 0.0, 0.0),
+            ("2", "b", "c", 1.0, 0.0),
+            ("3", "a", "c", 0.0, np.nan),
         ]
     )
     metric = MetaEvalAgreementMetric(n_bootstraps=8)
@@ -137,27 +134,27 @@ def test_agreement_bootstrap_is_row_order_invariant_and_reports_finite_draws():
     ]
 
     expected_rng = np.random.default_rng(7)
-    parsed_accuracies = []
+    complete_accuracies = []
     outcomes = np.array([1.0, 0.0, np.nan])
     for _ in range(8):
         sampled = outcomes[expected_rng.integers(0, 3, size=3)]
-        parsed = sampled[np.isfinite(sampled)]
-        if len(parsed):
-            parsed_accuracies.append(float(parsed.mean()))
+        complete = sampled[np.isfinite(sampled)]
+        if len(complete):
+            complete_accuracies.append(float(complete.mean()))
 
     assert result == pytest.approx(reordered, nan_ok=True)
-    assert result["accuracy_parsed_bootstraps_valid"] == len(parsed_accuracies)
-    assert result["accuracy_parsed_se"] == pytest.approx(
-        np.std(parsed_accuracies, ddof=1)
+    assert result["accuracy_complete_bootstraps_valid"] == len(complete_accuracies)
+    assert result["accuracy_complete_se"] == pytest.approx(
+        np.std(complete_accuracies, ddof=1)
     )
 
 
 def test_no_human_ties_drops_only_reference_ties_and_keeps_judge_ties():
     battles = _rows(
         [
-            ("1", "a", "b", 0.5, 0.0, "complete"),
-            ("2", "b", "c", 1.0, 0.5, "complete"),
-            ("3", "a", "c", 0.0, 0.0, "complete"),
+            ("1", "a", "b", 0.5, 0.0),
+            ("2", "b", "c", 1.0, 0.5),
+            ("3", "a", "c", 0.0, 0.0),
         ]
     )
 
@@ -167,29 +164,27 @@ def test_no_human_ties_drops_only_reference_ties_and_keeps_judge_ties():
     assert view["accuracy_attempted"] == pytest.approx(0.5)
 
 
-def test_ranking_reuses_three_point_fits_and_refits_each_bootstrap(monkeypatch):
-    calls = 0
-    original = scoring_module.fit_bradley_terry
-
-    def counted_fit(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(scoring_module, "fit_bradley_terry", counted_fit)
+def test_ranking_preserves_distinct_hard_and_soft_results():
     point = MetaEvalRankingMetric(n_bootstraps=0).calculate(_ranking_battles())
-    assert calls == 3
+
     assert math.isfinite(point["hard"]["spearman"])
     assert math.isfinite(point["soft"]["elo_mae"])
     assert point["hard"]["elo_mae"] != pytest.approx(point["soft"]["elo_mae"])
 
-    calls = 0
-    result = MetaEvalRankingMetric(n_bootstraps=3).calculate(
+    bootstrapped = MetaEvalRankingMetric(n_bootstraps=3).calculate(
         _ranking_battles(), rng=np.random.default_rng(4)
     )
-    assert calls == 12
-    assert result["n_bootstraps_requested"] == 3
-    assert 0 <= result["n_bootstraps_valid"] <= 3
+    assert bootstrapped["n_bootstraps_requested"] == 3
+    assert 0 <= bootstrapped["n_bootstraps_valid"] <= 3
+
+
+def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
+    def fail_fit(*args, **kwargs):
+        raise ValueError("unexpected fit failure")
+
+    monkeypatch.setattr(scoring_module, "fit_bradley_terry", fail_fit)
+    with pytest.raises(ValueError, match="unexpected fit failure"):
+        MetaEvalRankingMetric(n_bootstraps=0).calculate(_ranking_battles())
 
 
 def test_ranking_is_invariant_to_row_order_and_global_ab_swap():
@@ -239,10 +234,10 @@ def test_ranking_human_ties_are_configurable_and_model_set_stays_fixed():
 def test_ranking_returns_numeric_unavailable_for_insufficient_graphs():
     disconnected = _rows(
         [
-            ("1", "a", "b", 0.0, 0.0, "complete"),
-            ("2", "a", "b", 1.0, 1.0, "complete"),
-            ("3", "c", "d", 0.0, 0.0, "complete"),
-            ("4", "c", "d", 1.0, 1.0, "complete"),
+            ("1", "a", "b", 0.0, 0.0),
+            ("2", "a", "b", 1.0, 1.0),
+            ("3", "c", "d", 0.0, 0.0),
+            ("4", "c", "d", 1.0, 1.0),
         ]
     )
     too_few = disconnected.iloc[:2]
@@ -259,9 +254,11 @@ def test_ranking_returns_numeric_unavailable_for_insufficient_graphs():
     [
         ("pref", 1.1, "numeric preferences"),
         ("reference_pref", 0.25, "must be 0, 0.5, or 1"),
+        ("model_a", None, "non-null strings"),
+        ("model_b", "a", "self-comparisons"),
     ],
 )
-def test_malformed_preferences_raise_instead_of_becoming_unavailable(
+def test_malformed_battles_raise_instead_of_becoming_unavailable(
     column, value, message
 ):
     battles = _ranking_battles()
@@ -276,8 +273,8 @@ def _elo_gap_battles() -> pd.DataFrame:
     for model_a, model_b in (("a", "b"), ("a", "c"), ("b", "c")):
         specs.extend(
             [
-                (f"{model_a}{model_b}-0", model_a, model_b, 0.0, 0.0, "complete"),
-                (f"{model_a}{model_b}-1", model_a, model_b, 1.0, 1.0, "complete"),
+                (f"{model_a}{model_b}-0", model_a, model_b, 0.0, 0.0),
+                (f"{model_a}{model_b}-1", model_a, model_b, 1.0, 1.0),
             ]
         )
     return _rows(specs)
@@ -297,6 +294,17 @@ def _elo_gap_battles() -> pd.DataFrame:
 def test_elo_gap_configuration_rejects_invalid_parameters(parameters):
     with pytest.raises(ValueError, match="Invalid parameters"):
         build_metric("meta_eval_elo_gap", parameters)
+
+
+def test_elo_gap_surfaces_unexpected_fit_errors(monkeypatch):
+    def fail_fit(*args, **kwargs):
+        raise TypeError("unexpected Elo fit failure")
+
+    monkeypatch.setattr(scoring_module, "fit_bradley_terry", fail_fit)
+    with pytest.raises(TypeError, match="unexpected Elo fit failure"):
+        MetaEvalEloGapMetric(battle_counts=(1,), n_seeds=1).calculate(
+            _elo_gap_battles(), rng=np.random.default_rng(11)
+        )
 
 
 def test_elo_gap_bundles_shared_variants_and_is_row_order_invariant():
@@ -323,20 +331,17 @@ def test_elo_gap_bundles_shared_variants_and_is_row_order_invariant():
 
 def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes():
     battles = _elo_gap_battles()
-    battles.loc[battles["battle_id"].eq("ab-0"), ["pref", "parse_status"]] = [
-        np.nan,
-        "missing",
-    ]
+    battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
     result = MetaEvalEloGapMetric(battle_counts=(1, 2, 4), n_seeds=4).calculate(
         battles, rng=np.random.default_rng(7)
     )
 
     for variant in ("hard", "soft", "hard_no_judge_ties"):
         rows = result[variant]
-        parsed = [row["mean_parsed_per_model"] for row in rows]
-        assert parsed == sorted(parsed)
+        complete = [row["mean_complete_per_model"] for row in rows]
+        assert complete == sorted(complete)
         assert rows[-1]["attempted_battles_per_model"] == 4
-        assert rows[-1]["mean_parsed_per_model"] == pytest.approx(10 / 3)
+        assert rows[-1]["mean_complete_per_model"] == pytest.approx(10 / 3)
         assert rows[-1]["mean_used_per_model"] == pytest.approx(10 / 3)
 
 
@@ -344,7 +349,6 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
     battles = _elo_gap_battles()
     focal_a = battles["model_a"].eq("a") | battles["model_b"].eq("a")
     battles.loc[focal_a, "pref"] = np.nan
-    battles.loc[focal_a, "parse_status"] = "missing"
     result = MetaEvalEloGapMetric(battle_counts=(4,), n_seeds=2).calculate(
         battles, rng=np.random.default_rng(3)
     )
@@ -357,32 +361,10 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
         assert math.isnan(row["mean_gap"])
 
 
-def test_elo_gap_fits_the_full_human_reference_once(monkeypatch):
-    battles = _elo_gap_battles()
-    full_pool_fits = 0
-    original = scoring_module.fit_bradley_terry
-
-    def counted_fit(rows, *args, **kwargs):
-        nonlocal full_pool_fits
-        if len(rows) == len(battles):
-            full_pool_fits += 1
-        return original(rows, *args, **kwargs)
-
-    monkeypatch.setattr(scoring_module, "fit_bradley_terry", counted_fit)
-    MetaEvalEloGapMetric(battle_counts=(1,), n_seeds=1).calculate(
-        battles, rng=np.random.default_rng(5)
-    )
-
-    assert full_pool_fits == 1
-
-
 def test_elo_gap_rejects_attempted_battle_shortfalls():
     battles = _elo_gap_battles()
     battles.loc[battles["battle_id"].eq("ab-0"), "sampled"] = False
-    battles.loc[battles["battle_id"].eq("ab-0"), ["pref", "parse_status"]] = [
-        np.nan,
-        None,
-    ]
+    battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
 
     with pytest.raises(ValueError, match="Every model needs at least 4"):
         MetaEvalEloGapMetric(battle_counts=(4,), n_seeds=1).calculate(

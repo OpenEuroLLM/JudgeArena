@@ -20,7 +20,6 @@ from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
     annotate_sample,
-    validate_battle_conversations,
 )
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
@@ -35,7 +34,7 @@ from judgearena.reports import MetaEvalReport
 from judgearena.tasks.schema import MetaEvalProtocol, ResolvedTaskSpec
 
 if TYPE_CHECKING:
-    from judgearena.config import MetaEvalArgs, RunConfig
+    from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
 
@@ -109,64 +108,10 @@ def _prepare_arena_battles(
     return battles.reset_index(drop=True)
 
 
-def _metric_overrides(meta_eval: MetaEvalArgs) -> dict[str, dict[str, object]]:
-    overrides: dict[str, dict[str, object]] = {}
-    if meta_eval.n_bootstraps is not None:
-        for name in ("meta_eval_agreement", "meta_eval_ranking"):
-            overrides.setdefault(name, {})["n_bootstraps"] = meta_eval.n_bootstraps
-    if meta_eval.include_human_ties is not None:
-        overrides.setdefault("meta_eval_ranking", {})["include_human_ties"] = (
-            meta_eval.include_human_ties
-        )
-    if meta_eval.elo_gap_battles is not None:
-        overrides.setdefault("meta_eval_elo_gap", {})["battle_counts"] = (
-            meta_eval.elo_gap_battles
-        )
-    if meta_eval.elo_gap_seeds is not None:
-        overrides.setdefault("meta_eval_elo_gap", {})["n_seeds"] = (
-            meta_eval.elo_gap_seeds
-        )
-    return overrides
-
-
 def _metric_rng(seed: int, metric_name: str) -> np.random.Generator:
     payload = f"{seed}\0{metric_name}".encode()
     metric_seed = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
     return np.random.default_rng(metric_seed)
-
-
-def _build_metric_battles(
-    top_pool: pd.DataFrame,
-    sample: pd.DataFrame,
-    judged_battles: pd.DataFrame,
-) -> pd.DataFrame:
-    """Attach sampled judge outcomes to the complete top-model human pool."""
-    metric_battles = top_pool.loc[
-        :, ("battle_id", "question_id", "model_a", "model_b", "reference_pref", "lang")
-    ].copy()
-    sampled_ids = set(sample["battle_id"])
-    metric_battles["sampled"] = metric_battles["battle_id"].isin(sampled_ids)
-    metric_battles["language_group"] = np.where(
-        metric_battles["lang"].eq("en"), "English", "Multilingual"
-    )
-    judge_columns = (
-        "battle_id",
-        "pref",
-        "pref_hard",
-        "parse_ok",
-        "n_passes_expected",
-        "n_passes_parsed",
-        "parse_status",
-    )
-    metric_battles = metric_battles.merge(
-        judged_battles.loc[:, judge_columns],
-        on="battle_id",
-        how="left",
-        validate="one_to_one",
-    )
-    return metric_battles.sort_values(
-        ["language_group", "battle_id"], kind="stable"
-    ).reset_index(drop=True)
 
 
 def run_meta_eval(
@@ -183,10 +128,7 @@ def run_meta_eval(
     languages = resolve_task_languages(
         task, cfg.meta_eval.languages, setting="meta_eval.languages"
     )
-    metrics = build_metrics(
-        protocol.scoring.metrics,
-        parameter_overrides_by_metric=_metric_overrides(cfg.meta_eval),
-    )
+    metrics = build_metrics(protocol.scoring.metrics)
     for request, metric in metrics:
         if request.metric == "meta_eval_elo_gap":
             maximum = max(metric.battle_counts)
@@ -210,7 +152,6 @@ def run_meta_eval(
         battles_per_model=cfg.meta_eval.battles_per_model,
         seed=cfg.run.seed,
     )
-    validate_battle_conversations(sample)
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
@@ -221,7 +162,6 @@ def run_meta_eval(
         raise ValueError(
             f"Prompt preset {resolved_prompt.preset_name!r} has no judge parser."
         )
-
     logger.info(
         "Sampled %d battles among the top %d models.", len(sample), len(top_models)
     )
@@ -245,7 +185,15 @@ def run_meta_eval(
     judged_battles = aggregate_battle_preferences(
         annotations, swap_mode=cfg.judge.swap_mode
     )
-    metric_battles = _build_metric_battles(top_pool, sample, judged_battles)
+    metric_battles = top_pool.loc[
+        :, ("battle_id", "model_a", "model_b", "reference_pref")
+    ].copy()
+    metric_battles["sampled"] = metric_battles["battle_id"].isin(
+        judged_battles["battle_id"]
+    )
+    metric_battles = metric_battles.merge(
+        judged_battles, on="battle_id", how="left"
+    ).sort_values("battle_id", kind="stable", ignore_index=True)
     metric_battles.to_parquet(result_dir / "battles.parquet", index=False)
     runtime_by_metric = {
         request.metric: {"rng": _metric_rng(cfg.run.seed, request.metric)}
@@ -261,22 +209,8 @@ def run_meta_eval(
         prompt_preset=resolved_prompt.preset_name,
         languages=languages,
         top_models=top_models,
-        n_battles=len(sample),
-        n_annotations=len(annotations),
-        n_parsed_annotations=int(annotations["parse_ok"].sum()),
-        n_scored_battles=int(judged_battles["parse_status"].eq("complete").sum()),
-        battle_parse_status={
-            str(key): int(value)
-            for key, value in judged_battles["parse_status"].value_counts().items()
-        },
+        n_sampled_battles=len(sample),
         swap_mode=cfg.judge.swap_mode,
-        battles_per_language={
-            str(key): int(value) for key, value in sample["lang"].value_counts().items()
-        },
-        human_winner_counts={
-            str(key): int(value)
-            for key, value in sample["winner"].value_counts().items()
-        },
         metrics=metric_results,
     )
     results = report.to_dict()
@@ -287,10 +221,7 @@ def run_meta_eval(
         entrypoint="judgearena.benchmarks.meta_eval.runner.run_meta_eval",
         run=cfg.model_dump(),
         results=results,
-        input_payloads={
-            "battle_id": sample["battle_id"].astype(str).tolist(),
-            "question_id": sample["question_id"].astype(str).tolist(),
-        },
+        input_payloads={"battle_id": sample["battle_id"].astype(str).tolist()},
         judge_system_prompt=resolved_prompt.system_prompt,
         judge_user_prompt_template=resolved_prompt.user_prompt_template,
         started_at_utc=run_started_at,

@@ -382,29 +382,22 @@ def test_meta_eval_config_uses_sampling_defaults_and_task_metric_defaults():
     assert cfg.meta_eval.top_models == 20
     assert cfg.meta_eval.battles_per_model == 50
     assert cfg.meta_eval.languages is None
-    assert cfg.meta_eval.n_bootstraps is None
-    assert cfg.meta_eval.include_human_ties is None
-    assert cfg.meta_eval.elo_gap_battles is None
-    assert cfg.meta_eval.elo_gap_seeds is None
 
 
-def test_meta_eval_config_accepts_explicit_valid_overrides():
+def test_meta_eval_config_accepts_explicit_sampling_settings():
     data = _base_meta_eval()
     data["meta_eval"] = {
         "top_models": 4,
         "battles_per_model": 12,
         "languages": ["fr", "en"],
-        "n_bootstraps": 5,
-        "include_human_ties": True,
-        "elo_gap_battles": [2, 6, 12],
-        "elo_gap_seeds": 3,
     }
 
     cfg = RunConfig(**data)
 
     assert cfg.meta_eval is not None
-    assert cfg.meta_eval.elo_gap_battles == [2, 6, 12]
-    assert cfg.meta_eval.include_human_ties is True
+    assert cfg.meta_eval.top_models == 4
+    assert cfg.meta_eval.battles_per_model == 12
+    assert cfg.meta_eval.languages == ["fr", "en"]
 
 
 @pytest.mark.parametrize(
@@ -415,10 +408,7 @@ def test_meta_eval_config_accepts_explicit_valid_overrides():
         ({"elo": {}}, "elo config"),
         ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
         ({"meta_eval": {"top_models": 2}}, "greater than or equal to 3"),
-        ({"meta_eval": {"languages": []}}, "languages"),
-        ({"meta_eval": {"languages": ["en", "en"]}}, "duplicates"),
-        ({"meta_eval": {"elo_gap_battles": [10, 5]}}, "ordered ascending"),
-        ({"meta_eval": {"elo_gap_battles": []}}, "positive integers"),
+        ({"meta_eval": {"n_bootstraps": 7}}, "Extra inputs are not permitted"),
     ],
 )
 def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):
