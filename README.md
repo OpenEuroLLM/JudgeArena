@@ -240,7 +240,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; tasks using the ELO protocol estimate a single model's rating against human-annotated arena opponents.
+Generate+judge tasks produce pairwise preferences between two models. Elo tasks estimate a single model's rating against human-annotated arena opponents. Meta-evaluation tasks score a judge against human arena votes.
 
 ### Generate + judge (pairwise)
 
@@ -286,6 +286,44 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 | `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
 | `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
 | `elo-comparia`      | Battles sampled from the ComparIA arena                            |
+
+### Judge meta-evaluation
+
+| Task                     | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `meta-eval-lmarena-100k` | Score a judge against LMSYS Chatbot Arena 100k votes |
+| `meta-eval-lmarena-140k` | Score a judge against LMSYS Chatbot Arena 140k votes |
+| `meta-eval-comparia`     | Score a judge against ComparIA human votes           |
+
+Language suffixes are supported, for example `meta-eval-lmarena-100k-en` and `meta-eval-comparia-fr`.
+
+## Meta-evaluating a judge
+
+Meta-evaluation uses existing human-labeled arena battles. It does not generate completions or rate a candidate model. The runner selects the most-battled models, builds a deterministic connected sample, and asks the configured judge to compare the stored responses.
+
+The task definitions configure three metrics:
+
+- `meta_eval_agreement` reports coverage, attempted accuracy, complete-only accuracy, and complete-only Cohen's kappa. It reports bootstrap standard errors for both accuracies and kappa. Missing or partial judgments count as incorrect in attempted accuracy.
+- `meta_eval_ranking` compares human, hard-judge, and soft-judge Bradley-Terry ratings using Spearman correlation and Elo MAE. Bootstrap draws resample battles within matchup strata.
+- `meta_eval_elo_gap` measures the mean focal-model rating gap at budgets of attempted incident battles per focal model. These values are not run-wide annotation counts.
+
+The default prompt is `meta-eval-pair-score`. It requires integer scores from 0 to 10 for both responses and converts them to a continuous preference with temperature `0.5`.
+
+```bash
+judgearena \
+  --task meta-eval-lmarena-140k \
+  --judge.model OpenRouter/deepseek/deepseek-v3.2 \
+  --meta_eval.languages '["en", "es"]' \
+  --meta_eval.top_models 20 \
+  --meta_eval.battles_per_model 50 \
+  --meta_eval.n_bootstraps 20
+```
+
+Runtime sampling defaults to 20 models and 50 sampled incident battles per model. The task definitions use 1,000 agreement and ranking bootstrap draws, Elo-gap budgets `[10, 20, 30, 40, 50]`, and 10 Elo-gap sampling replicates. Runtime flags under `--meta_eval` can override these values. The largest Elo-gap budget cannot exceed `--meta_eval.battles_per_model`.
+
+Do not set `--model.name` or `--model.baseline`; meta-evaluation rejects both fields because the arena responses already exist. `judge.swap_mode=random` is also unsupported. With `both`, the runner normalizes each scalar preference to the stored model order, and a battle is complete only if both passes parse. Ranking and Elo-gap use complete battles. Attempted agreement retains partial and missing battles and treats them as incorrect.
+
+A successful run writes `config.yaml`, `sample.parquet`, `annotations.parquet`, `battles.parquet`, and `results.json` to a timestamped directory. `annotations.parquet` contains one row per judge pass. `battles.parquet` contains one row per battle in the selected top-model pool, including unsampled rows, numeric human references, and judge parse state. `run-metadata.v1.json` is written on a best-effort basis.
 
 ## 📈 Estimating ELO Ratings
 
