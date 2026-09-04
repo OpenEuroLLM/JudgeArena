@@ -147,7 +147,11 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
     assert prefs.iloc[0] < 0.5
     assert annotations[0]["model_A"] == "model-a"
+    assert annotations[0]["parsed"]["scores"] == {"A": 10.0, "B": 0.0}
+    assert annotations[0]["preference"] < 0.5
     assert annotations[1]["model_A"] == "model-b"
+    assert annotations[1]["parsed"]["scores"] == {"A": 0.0, "B": 10.0}
+    assert annotations[1]["preference"] > 0.5
     assert annotations[1]["swapped"] is True
     assert "B1" in annotations[1]["user_prompt"]
     assert metadata == [

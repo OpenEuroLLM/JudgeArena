@@ -5,18 +5,32 @@ from __future__ import annotations
 import abc
 import math
 import re
+from dataclasses import dataclass, field
 
 from judgearena.utils import strip_thinking_tags
 
 
-class JudgeParser(abc.ABC):
-    """Parses what the judge returned into the universal preference.
+@dataclass(slots=True)
+class ParsedPreference:
+    """A canonical preference plus parser-specific evidence.
 
-    ``__call__`` receives the completion text plus, for parsers that declare
-    ``requires_top_logprobs``, the first generated token's top logprobs — and
-    returns the preference every pipeline consumes (0 = A wins, 0.5 = tie,
-    1 = B wins, None = unparseable).
+    ``preference`` is oriented to the judge input slots: 0 means A wins,
+    0.5 means tie, and 1 means B wins. Parsers return ``None`` when the judge
+    output cannot be parsed.
     """
+
+    preference: float
+    label: str | None = None
+    scores: dict[str, float] = field(default_factory=dict)
+    details: dict[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.preference) or not 0 <= self.preference <= 1:
+            raise ValueError("preference must be finite and between 0 and 1")
+
+
+class JudgeParser(abc.ABC):
+    """Parses judge output into a canonical preference and supporting evidence."""
 
     name: str
     """Registry key and run-metadata identifier."""
@@ -32,6 +46,23 @@ class JudgeParser(abc.ABC):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None: ...
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        """Wrap a scalar parser result for the structured parser interface."""
+        preference = self(
+            judge_completion,
+            top_logprobs=top_logprobs,
+        )
+        return (
+            None
+            if preference is None
+            else ParsedPreference(preference=float(preference))
+        )
 
 
 class PairScore(JudgeParser):
@@ -56,13 +87,29 @@ class PairScore(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None:
-        return self.parse_model_raw(judge_completion)
+        result = self.parse_result(
+            judge_completion,
+            top_logprobs=top_logprobs,
+        )
+        return None if result is None else result.preference
 
-    def parse_model_raw(self, judge_completion: str) -> float | None:
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
-        return float(self.preference_from_scores(score_a, score_b))
+        return ParsedPreference(
+            preference=float(self.preference_from_scores(score_a, score_b)),
+            scores={"A": score_a, "B": score_b},
+        )
+
+    def parse_model_raw(self, judge_completion: str) -> float | None:
+        """Return only the canonical preference for existing callers."""
+        return self(judge_completion)
 
     @staticmethod
     def parse_raw_scores(

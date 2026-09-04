@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 from judgearena.prompts.parsing import (  # noqa: E402
     JudgeParser,
     PairScore,
+    ParsedPreference,
     resolve_judge_parser,
 )
 
@@ -148,6 +149,7 @@ class JudgeAnnotation:
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
     # first-token top logprobs, only collected for logprob-weighted presets
     judge_top_logprobs: dict[str, float] | None = None
+    parsed: ParsedPreference | None = None
 
 
 def annotate_battles(
@@ -345,10 +347,15 @@ def judge_and_parse_prefs(
                     label,
                 )
         results = [
-            parse(a.judge_completion, top_logprobs=a.judge_top_logprobs)
-            for a in ann_list
+            parse.parse_result(
+                annotation.judge_completion,
+                top_logprobs=annotation.judge_top_logprobs,
+            )
+            for annotation in ann_list
         ]
-        n_failed = sum(1 for r in results if r is None)
+        for annotation, result in zip(ann_list, results, strict=True):
+            annotation.parsed = result
+        n_failed = sum(1 for result in results if result is None)
         if n_failed:
             logger.warning(
                 "%d/%d judge outputs could not be parsed (%s) — those battles are dropped from stats.",
@@ -356,7 +363,9 @@ def judge_and_parse_prefs(
                 len(results),
                 label,
             )
-        return pd.Series(results)
+        return pd.Series(
+            [None if result is None else result.preference for result in results]
+        )
 
     prefs = _parse_and_warn(annotations, "direct")
 

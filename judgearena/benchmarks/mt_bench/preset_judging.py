@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import pandas as pd
@@ -200,9 +200,13 @@ def judge_mt_bench_with_preset(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
             prompt: MTBenchPresetPrompt = item.prompt
-            parsed_preference = prompt.parse(raw_judgment)
+            parsed = prompt.parse.parse_result(raw_judgment)
+            slot_preference = _normalize_preference(
+                None if parsed is None else parsed.preference,
+                swapped=False,
+            )
             normalized_preference = _normalize_preference(
-                parsed_preference,
+                slot_preference,
                 swapped=swapped,
             )
             annotations.append(
@@ -220,7 +224,8 @@ def judge_mt_bench_with_preset(
                     "user_prompt_template": prompt.user_prompt_template,
                     "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
                     "judge_completion": raw_judgment,
-                    "preference": normalized_preference,
+                    "preference": slot_preference,
+                    "parsed": None if parsed is None else asdict(parsed),
                     "swapped": swapped,
                 }
             )

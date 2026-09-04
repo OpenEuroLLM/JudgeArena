@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import JudgeParser, PairScore, ParsedPreference
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
@@ -45,6 +45,41 @@ def test_pair_score_is_bounded_for_extreme_scores(score_a, score_b, expected):
     assert math.isfinite(preference)
     assert 0.0 <= preference <= 1.0
     assert preference == expected
+
+
+def test_pair_score_returns_structured_preference():
+    raw_text = "Score of Assistant A: 6\nScore of Assistant B: 8"
+
+    parser = PairScore()
+    parsed = parser.parse_result(raw_text)
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.6456563062257954)
+    assert parsed.scores == {"A": 6.0, "B": 8.0}
+    assert parsed.label is None
+    assert parsed.details == {}
+    assert parser(raw_text) == parsed.preference
+
+
+class LegacyScalarParser(JudgeParser):
+    name = "legacy"
+
+    def __call__(self, judge_completion, *, top_logprobs=None):
+        return 0.75
+
+
+def test_legacy_scalar_parser_gets_a_structured_result():
+    parsed = LegacyScalarParser().parse_result("ignored")
+
+    assert parsed is not None
+    assert parsed.preference == 0.75
+    assert parsed.scores == {}
+
+
+@pytest.mark.parametrize("preference", [-0.1, 1.1, math.inf, math.nan])
+def test_parsed_preference_rejects_invalid_values(preference):
+    with pytest.raises(ValueError, match="finite and between 0 and 1"):
+        ParsedPreference(preference=preference)
 
 
 def test_regexp():

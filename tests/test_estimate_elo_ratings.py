@@ -404,6 +404,21 @@ def test_run_elo_thinking_budget_absent_for_nonthinking_model(monkeypatch, tmp_p
     assert "thinking_token_budget" not in captured["gen_kwargs"]
 
 
+def test_judge_and_parse_prefs_retains_structured_result():
+    judge = make_model("Dummy/Score_A: 6\nScore_B: 8")
+
+    annotations, _, prefs = judge_and_parse_prefs(
+        judge_chat_model=judge,
+        instructions=["Q"],
+        completions_A=["A"],
+        completions_B=["B"],
+    )
+
+    assert prefs.tolist() == pytest.approx([0.6456563062257954])
+    assert annotations[0].parsed is not None
+    assert annotations[0].parsed.scores == {"A": 6.0, "B": 8.0}
+
+
 def test_judge_and_parse_prefs_none_prefs_swap_mode_both():
     """swap_mode='both' must not raise when judge output is unparseable (None prefs).
 

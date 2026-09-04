@@ -1,5 +1,6 @@
 """Prompt templates and registry bundled with JudgeArena."""
 
+from judgearena.prompts.parsing import ParsedPreference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     DEFAULT_WITH_EXPLANATION_PRESET,
@@ -22,6 +23,7 @@ __all__ = [
     "FLUENCY_JUDGE_PROMPT_PRESET",
     "JUDGE_PROMPT_PRESETS",
     "PRESETS",
+    "ParsedPreference",
     "JudgeParser",
     "JudgePromptPreset",
     "ResolvedJudgePrompt",
