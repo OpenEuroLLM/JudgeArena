@@ -13,15 +13,15 @@ import pandas as pd
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets.pairwise import load_pairwise_task_data
 from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
+from judgearena.reports import BattleReport
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 from judgearena.utils import cache_function_dataframe, generation_cache_token
-from judgearena.utils.eval import BattleReport
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -102,13 +102,43 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     resolved_task = resolved_task or get_packaged_task(cfg.task)
     if resolved_task is None:
         raise ValueError(f"Unknown task {cfg.task!r}.")
-    scorer = PAIRWISE_SCORERS[resolved_task.spec.protocol.scoring.adapter]
     task_data = load_pairwise_task_data(
         resolved_task,
         n_instructions=cfg.generation.n_instructions,
     )
     instructions_df = task_data.instructions
     instructions = instructions_df.loc[:, "instruction"]
+    metric_columns = {
+        "instruction_index",
+        "model",
+        "baseline",
+        "completion_model",
+        "completion_baseline",
+        "pref",
+        "orientation",
+        "judge",
+        "judge_prompt_preset",
+        "judge_temperature",
+        "judge_max_out_tokens",
+        "model_a",
+        "model_b",
+        "completion_a",
+        "completion_b",
+        "evaluation_model",
+        "source",
+        "pref_hard",
+        *instructions_df.columns,
+    }
+    missing_groups = sorted(
+        {
+            field
+            for request in resolved_task.spec.protocol.scoring.metrics
+            for field in request.group_by
+        }
+        - metric_columns
+    )
+    if missing_groups:
+        raise ValueError(f"Metric group_by columns are unavailable: {missing_groups}.")
 
     n_instructions = (
         cfg.generation.n_instructions
@@ -273,6 +303,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     eval_instruction_index = [
         index for _, group_index in prompt_groups for index in group_index
     ]
+    eval_prompt_presets = [
+        group_prompt.preset_name
+        for group_prompt, group_index in prompt_groups
+        for _ in group_index
+    ]
     baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     df = pd.DataFrame(annotations)
     df["instruction_index"] = eval_instruction_index
@@ -305,29 +340,61 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
 
-    # Scorers see one canonically-oriented row per judged battle; under
-    # swap_mode="both" every instruction contributes two rows.
+    # Metrics see one canonically-oriented row per judgment. Under
+    # swap_mode="both", every physical battle contributes both answer orders.
     repeats = 2 if cfg.judge.swap_mode == "both" else 1
-    battles = pd.DataFrame(
-        {
-            "instruction_index": list(eval_instruction_index) * repeats,
-            "model": cfg.model.name,
-            "baseline": baseline_per_eval.tolist() * repeats,
-            "completion_model": completions_A.loc[eval_instruction_index].tolist()
-            * repeats,
-            "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
-            * repeats,
-            "pref": pd.Series(prefs, dtype="float64").to_numpy(),
-        }
+    battle_data = {
+        "instruction_index": list(eval_instruction_index) * repeats,
+        "model": cfg.model.name,
+        "baseline": baseline_per_eval.tolist() * repeats,
+        "completion_model": completions_A.loc[eval_instruction_index].tolist()
+        * repeats,
+        "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
+        * repeats,
+        "model_a": cfg.model.name,
+        "model_b": baseline_per_eval.tolist() * repeats,
+        "completion_a": completions_A.loc[eval_instruction_index].tolist() * repeats,
+        "completion_b": completions_B.loc[eval_instruction_index].tolist() * repeats,
+        "evaluation_model": cfg.model.name,
+        "source": "llm-judge",
+        "pref": pd.Series(prefs, dtype="float64").to_numpy(),
+        "orientation": (
+            ["direct"] * len(eval_instruction_index)
+            + ["reversed"] * len(eval_instruction_index)
+        )
+        if repeats == 2
+        else ["single"] * len(eval_instruction_index),
+        "judge": cfg.judge.model,
+        "judge_prompt_preset": eval_prompt_presets * repeats,
+        "judge_temperature": cfg.judge.temperature,
+        "judge_max_out_tokens": cfg.judge.max_out_tokens,
+    }
+    for column in instructions_df.columns:
+        if column not in battle_data:
+            battle_data[column] = (
+                instructions_df.loc[eval_instruction_index, column].tolist() * repeats
+            )
+    battles = pd.DataFrame(battle_data)
+    battles["pref_hard"] = battles["pref"].map(
+        lambda pref: (
+            float("nan")
+            if pd.isna(pref)
+            else 0.0
+            if pref < 0.5
+            else 1.0
+            if pref > 0.5
+            else 0.5
+        )
     )
-    summary = scorer(battles)
+    metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
+    metric_results = calculate_metrics(battles, metrics)
 
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=baseline_plan.display_name,
         judge_model=cfg.judge.model,
-        summary=summary,
+        metrics=metric_results,
         swap_mode=cfg.judge.swap_mode,
         result_folder=str(res_folder),
         preferences=prefs.tolist(),

@@ -60,7 +60,9 @@ protocol:
   judge:
     default_prompt_preset: default
   scoring:
-    adapter: pairwise_win_rate
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: length_controlled_winrate
 ```
 
 Reuse a private `_base.yaml` with `extends: _base.yaml` when several versions
@@ -83,9 +85,19 @@ runner code.
 Keep task YAML boring: declarative facts belong in YAML, while downloading,
 format conversion, and scoring algorithms belong in Python.
 
-The judge prompt preset owns the expected output format and its parser. The
-scoring adapter owns the calculation, primary metric, and metric direction;
-task YAML only selects those components by ID.
+The judge prompt preset owns the expected output format and its parser. Scoring
+metrics consume battle dataframes and return result dictionaries. Task YAML
+selects metrics in order and may provide parameters or grouped breakdowns:
+
+```yaml
+scoring:
+  metrics:
+    - metric: pairwise_win_rate
+      group_by: [category]
+```
+
+Each metric owns its calculation and rendering. Runners only build battle data
+and invoke the shared metric executor.
 
 If an upstream dataset has a new format, implement a dataset adapter under
 `judgearena/datasets/` and register it in the dataset registry. Task validation

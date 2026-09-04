@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pandas as pd
@@ -17,6 +19,7 @@ from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_a
 from judgearena.config import RunConfig
 from judgearena.datasets.pairwise import PairwiseTaskData
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
 
 def _cfg(
@@ -328,6 +331,47 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
     assert captured["make_model"]["tensor_parallel_size"] == 4
 
 
+def test_pairwise_grouping_accepts_all_canonical_battle_columns(tmp_path):
+    task = get_packaged_task("alpaca-eval")
+    canonical_fields = (
+        "model_a",
+        "model_b",
+        "completion_a",
+        "completion_b",
+        "evaluation_model",
+        "source",
+        "pref_hard",
+    )
+    protocol = task.spec.protocol.model_copy(
+        update={
+            "scoring": ScoringSpec(
+                metrics=(
+                    MetricSpec(
+                        metric="pairwise_win_rate",
+                        group_by=canonical_fields,
+                    ),
+                )
+            )
+        }
+    )
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="Dummy/score A: 10 score B: 0",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        ),
+        task,
+    )
+
+    assert len(prefs) == 2
+    assert (prefs < 0.5).all()
+
+
 def test_run_writes_roundtrippable_config(tmp_path):
     from judgearena.config import load_config
 
@@ -343,6 +387,9 @@ def test_run_writes_roundtrippable_config(tmp_path):
     )
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
+    result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert result["metrics"]["pairwise_win_rate"]["num_battles"] == 2
+    assert "winrate" not in result
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval"
     assert reloaded.model.name == "Dummy/no answer"

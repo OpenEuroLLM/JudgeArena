@@ -42,7 +42,7 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
                 "default_prompt_preset": "default",
                 "default_swap_mode": "fixed",
             },
-            "scoring": {"adapter": "pairwise_win_rate"},
+            "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]},
         },
     }
 
@@ -98,7 +98,10 @@ def test_packaged_registry_discovers_versioned_tasks():
     )
     assert elo_comparia.spec.protocol.runner == "elo"
     assert elo_comparia.spec.protocol.arena == "ComparIA"
-    assert elo_comparia.spec.protocol.scoring.adapter == "bradley_terry"
+    assert [metric.metric for metric in elo_comparia.spec.protocol.scoring.metrics] == [
+        "pairwise_win_rate",
+        "bradley_terry",
+    ]
     assert elo_comparia.spec.dataset.sources["comparia"].revision == (
         "7a40bce496c1f2aa3be4001da85a49cb4743042b"
     )
@@ -151,7 +154,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.dataset.sources["benchmark"].revision == (
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
-    assert alpaca.spec.protocol.scoring.adapter == "pairwise_win_rate"
+    assert alpaca.spec.protocol.scoring.metrics[0].metric == "pairwise_win_rate"
 
 
 def test_find_returns_none_for_unregistered_task():
@@ -368,9 +371,9 @@ def test_registry_rejects_dataset_adapter_from_another_protocol(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_registry_rejects_unknown_scorer_id(tmp_path):
+def test_registry_rejects_unknown_metric_id(tmp_path):
     definition = _task_definition()
-    definition["protocol"]["scoring"]["adapter"] = "missing_scorer"
+    definition["protocol"]["scoring"]["metrics"] = [{"metric": "missing_metric"}]
     _write_family(
         tmp_path,
         family="example",
@@ -378,13 +381,15 @@ def test_registry_rejects_unknown_scorer_id(tmp_path):
         definition=definition,
     )
 
-    with pytest.raises(TaskDefinitionError, match="unknown scorer"):
+    with pytest.raises(TaskDefinitionError, match="unknown metric"):
         load_tasks(tmp_path)
 
 
-def test_registry_rejects_scorer_from_another_protocol(tmp_path):
+def test_registry_validates_metric_parameters_with_source_path(tmp_path):
     definition = _task_definition()
-    definition["protocol"]["scoring"]["adapter"] = "bradley_terry"
+    definition["protocol"]["scoring"]["metrics"] = [
+        {"metric": "pairwise_win_rate", "parameters": {"soft": False}}
+    ]
     _write_family(
         tmp_path,
         family="example",
@@ -392,8 +397,31 @@ def test_registry_rejects_scorer_from_another_protocol(tmp_path):
         definition=definition,
     )
 
-    with pytest.raises(TaskDefinitionError, match="unknown scorer"):
+    with pytest.raises(
+        TaskDefinitionError,
+        match=r"example/test-task.yaml: invalid metric 'pairwise_win_rate'.*unexpected",
+    ):
         load_tasks(tmp_path)
+
+
+def test_metric_parameters_are_preserved_in_resolved_task(tmp_path):
+    definition = _task_definition()
+    definition["protocol"]["scoring"]["metrics"] = [
+        {"metric": "bradley_terry", "parameters": {"n_bootstraps": 2}}
+    ]
+    _write_family(
+        tmp_path,
+        family="example",
+        filename="test-task.yaml",
+        definition=definition,
+    )
+
+    task = load_tasks(tmp_path)["test-task"]
+
+    assert task.spec.protocol.scoring.metrics[0].parameters == {"n_bootstraps": 2}
+    assert task.spec.model_dump(mode="json")["protocol"]["scoring"]["metrics"][0][
+        "parameters"
+    ] == {"n_bootstraps": 2}
 
 
 def test_official_outputs_must_reference_declared_source(tmp_path):
@@ -518,3 +546,46 @@ def test_main_cli_intercepts_task_commands(monkeypatch, capsys):
     cli_module.cli(["tasks", "list"])
 
     assert "alpaca-eval" in capsys.readouterr().out
+
+
+def test_scoring_metrics_reject_duplicate_names():
+    definition = _task_definition()
+    definition["protocol"]["scoring"]["metrics"] = [
+        {"metric": "pairwise_win_rate"},
+        {"metric": "pairwise_win_rate", "group_by": ["category"]},
+    ]
+
+    with pytest.raises(ValueError, match="duplicate names"):
+        from judgearena.tasks.schema import TaskSpec
+
+        TaskSpec.model_validate(definition)
+
+
+def test_mt_bench_accepts_any_registered_metric(tmp_path):
+    definition = _task_definition("mt-test")
+    definition["protocol"] = {
+        "runner": "mt_bench",
+        "generation": {"mode": "multi_turn_chat"},
+        "baseline": {
+            "strategy": "task_default",
+            "reference_id": "reference-output",
+        },
+        "judge": {
+            "default_prompt_preset": "default",
+            "default_swap_mode": "fixed",
+            "turns_mode": "both",
+            "fastchat_prompt_preset": "default",
+            "fastchat_temperature": 0.0,
+        },
+        "scoring": {"metrics": [{"metric": "length_controlled_winrate"}]},
+    }
+    _write_family(
+        tmp_path,
+        family="mt",
+        filename="mt-test.yaml",
+        definition=definition,
+    )
+
+    task = load_tasks(tmp_path)["mt-test"]
+
+    assert task.spec.protocol.scoring.metrics[0].metric == "length_controlled_winrate"

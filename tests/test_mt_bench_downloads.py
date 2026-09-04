@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -500,3 +501,106 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
         "coding",
         "arena-hard-200",
     )
+
+
+def test_mt_bench_finalization_uses_shared_grouped_metric(monkeypatch, tmp_path):
+    task = get_packaged_task("mt-bench")
+    assert task is not None
+    captured = {}
+
+    class CapturingReport:
+        def __init__(self, **values):
+            captured.update(values)
+
+        def to_dict(self):
+            return dict(captured)
+
+        def render(self):
+            return None
+
+        def save(self, _path):
+            return None
+
+    monkeypatch.setattr(mt_bench_runner, "BattleReport", CapturingReport)
+    monkeypatch.setattr(
+        mt_bench_runner, "_save_mt_bench_results", lambda **_kwargs: None
+    )
+    calculate_metrics = mt_bench_runner.calculate_metrics
+
+    def capture_battles(battles, metrics):
+        captured["battles"] = battles.copy()
+        return calculate_metrics(battles, metrics)
+
+    monkeypatch.setattr(mt_bench_runner, "calculate_metrics", capture_battles)
+    cfg = SimpleNamespace(
+        task="mt-bench",
+        model=SimpleNamespace(name="candidate", baseline="reference"),
+        judge=SimpleNamespace(
+            model="judge",
+            battle_thinking_token_budget=None,
+            strip_thinking_before_judging=False,
+        ),
+    )
+    prompt = SimpleNamespace(
+        metadata=lambda: {},
+        system_prompt=None,
+        user_prompt_template="{instruction}",
+    )
+    index = pd.Index([1, 2], name="question_id")
+    questions = pd.DataFrame(
+        {"turn_1": ["q1", "q2"], "turn_2": ["q1b", "q2b"]}, index=index
+    )
+    completions_a = pd.DataFrame(
+        {"completion_turn_1": ["a1", "a2"], "completion_turn_2": ["a1b", "a2b"]},
+        index=index,
+    )
+    completions_b = pd.DataFrame(
+        {"completion_turn_1": ["b1", "b2"], "completion_turn_2": ["b1b", "b2b"]},
+        index=index,
+    )
+    preferences = pd.Series([0.0, 1.0, 0.0, 0.5])
+    metadata = [
+        {"question_id": 1, "category": "math", "turn": 1},
+        {"question_id": 1, "category": "math", "turn": 2},
+        {"question_id": 2, "category": "writing", "turn": 1},
+        {"question_id": 2, "category": "writing", "turn": 2},
+    ]
+
+    returned = mt_bench_runner._finalize_mt_bench_run(
+        cfg=cfg,
+        protocol=task.spec.protocol,
+        res_folder=tmp_path,
+        result_name="result",
+        prefs=preferences,
+        annotations=[],
+        combined_metadata=metadata,
+        resolved_prompt=prompt,
+        questions_df=questions,
+        completions_a=completions_a,
+        completions_b=completions_b,
+        started_at_utc=datetime.now(UTC),
+    )
+
+    assert returned.equals(preferences)
+    metric = captured["metrics"]["pairwise_win_rate"]
+    assert metric["winrate"] == pytest.approx(0.625)
+    assert [item["group"] for item in metric["groups"]["category"]] == [
+        "math",
+        "writing",
+    ]
+    assert [item["group"] for item in metric["groups"]["turn"]] == [1, 2]
+    assert {
+        "instruction_index",
+        "model",
+        "baseline",
+        "completion_model",
+        "completion_baseline",
+        "orientation",
+        "pref",
+    } <= set(captured["battles"])
+    assert captured["battles"]["instruction_index"].tolist() == [
+        "1:turn-1",
+        "1:turn-2",
+        "2:turn-1",
+        "2:turn-2",
+    ]

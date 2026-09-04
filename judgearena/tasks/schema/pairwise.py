@@ -8,6 +8,7 @@ from pydantic import Field
 
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import BaselineSpec
+from judgearena.tasks.schema.metrics import ScoringSpec
 
 
 class SingleTurnGeneration(StrictFrozenModel):
@@ -28,10 +29,6 @@ class PairwiseJudgeSpec(StrictFrozenModel):
     category_prompts: dict[str, str] = Field(default_factory=dict)
     """Per-category prompt presets overriding ``default_prompt_preset`` (e.g. the
     Arena-Hard v2.0 creative-writing judge prompt)."""
-
-
-class ScoringSpec(StrictFrozenModel):
-    adapter: str = Field(min_length=1)
 
 
 class PairwiseProtocol(StrictFrozenModel):

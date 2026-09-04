@@ -3,8 +3,6 @@ from __future__ import annotations
 import pandas as pd
 
 import judgearena.datasets.arena_battles as arena_battles
-from judgearena.benchmarks.elo.rating import fit_bradley_terry
-from judgearena.benchmarks.elo.scoring import ELO_SCORERS
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -49,9 +47,3 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
     assert captured["repo_id"] == "lmarena-ai/arena-human-preference-100k"
     assert captured["revision"] == "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
     assert captured["allow_patterns"] == ("data/*.parquet",)
-
-
-def test_elo_scoring_adapter_resolves_task_selection():
-    task = _elo_task()
-
-    assert ELO_SCORERS[task.spec.protocol.scoring.adapter].fit is fit_bradley_terry
