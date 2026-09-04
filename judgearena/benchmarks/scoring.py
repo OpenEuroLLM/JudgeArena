@@ -8,6 +8,10 @@ from typing import Protocol
 import pandas as pd
 
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
+from judgearena.benchmarks.meta_eval.scoring import (
+    MetaEvalAgreementMetric,
+    MetaEvalRankingMetric,
+)
 from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     AlpacaEvalLengthControlledMetric,
 )
@@ -47,6 +51,8 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "arena_hard_v01": ArenaHardV01Metric,
     "arena_hard_v20": ArenaHardV20Metric,
     "alpaca_eval_length_controlled": AlpacaEvalLengthControlledMetric,
+    "meta_eval_agreement": MetaEvalAgreementMetric,
+    "meta_eval_ranking": MetaEvalRankingMetric,
 }
 
 ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric], ...]
