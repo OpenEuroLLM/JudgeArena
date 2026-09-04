@@ -102,19 +102,11 @@ def test_registered_task_defaults_do_not_replace_explicit_judge_config(
     ) == expected
 
 
-def test_elo_config_derives_arena():
+def test_elo_config_derives_scoring_defaults():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
-    assert cfg.elo.arena == "ComparIA"
     assert cfg.elo.soft_elo is True
     assert cfg.elo.soft_elo_temperature == 0.3
-
-
-def test_elo_config_keeps_explicit_arena_override():
-    data = _base_elo()
-    data["elo"] = {"arena": "LMArena-100k"}
-
-    assert RunConfig(**data).elo.arena == "LMArena-100k"
 
 
 def test_elo_config_allows_runtime_scoring_overrides():
@@ -272,7 +264,6 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     cli_module.cli(["--config_path", str(yaml_path)])
     assert isinstance(captured["benchmark"], RunConfig)
     assert captured["benchmark"].elo is not None
-    assert captured["benchmark"].elo.arena == "ComparIA"
 
 
 def test_build_run_config_cli_only():
@@ -334,7 +325,7 @@ def test_build_run_config_engine_kwargs_json():
     assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
 
 
-def test_build_run_config_elo_arena_derived():
+def test_build_run_config_elo_defaults():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
@@ -347,4 +338,5 @@ def test_build_run_config_elo_arena_derived():
             "Dummy/j",
         ]
     )
-    assert cfg.elo is not None and cfg.elo.arena == "ComparIA"
+    assert cfg.elo is not None
+    assert cfg.elo.soft_elo is True

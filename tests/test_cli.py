@@ -55,15 +55,15 @@ def test_task_dispatches_to_benchmark_registry(capture_mains, task: str):
 
 
 @pytest.mark.parametrize(
-    "task, expected_arena",
+    "task",
     [
-        ("elo-comparia", "ComparIA"),
-        ("elo-lmarena-140k", "LMArena-140k"),
-        ("elo-lmarena-100k", "LMArena-100k"),
-        ("elo-lmarena", "LMArena"),
+        "elo-comparia",
+        "elo-lmarena-140k",
+        "elo-lmarena-100k",
+        "elo-lmarena",
     ],
 )
-def test_elo_task_dispatches(capture_mains, task: str, expected_arena: str):
+def test_elo_task_dispatches(capture_mains, task: str):
     cli_module.cli(
         ["--task", task, "--model.name", "Dummy/X", "--judge.model", "Dummy/J"]
     )
@@ -71,7 +71,6 @@ def test_elo_task_dispatches(capture_mains, task: str, expected_arena: str):
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
     assert cfg.elo is not None
-    assert cfg.elo.arena == expected_arena
     assert cfg.model.name == "Dummy/X"
 
 

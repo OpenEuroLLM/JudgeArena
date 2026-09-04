@@ -309,9 +309,6 @@ class EloArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    arena: str | None = None
-    """Arena whose battles supply opponents. Defaults to the task definition."""
-
     baseline_model: str | None = None
     """Model anchored at 1000 ELO; ratings are reported relative to it."""
 
@@ -446,8 +443,6 @@ class RunConfig(BaseSettings):
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if "arena" not in self.elo.model_fields_set:
-                self.elo.arena = protocol.arena
             if "soft_elo" not in self.elo.model_fields_set:
                 self.elo.soft_elo = protocol.scoring.default_soft
             if "soft_elo_temperature" not in self.elo.model_fields_set:
