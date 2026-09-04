@@ -134,3 +134,38 @@ def test_eloreport_to_dict_envelope():
         "schema_version": "1",
         "report_type": "EloReport",
     }
+
+
+def test_meta_eval_report_keeps_results_under_metrics_and_renders_them(
+    capsys, monkeypatch
+):
+    from judgearena.benchmarks import scoring
+    from judgearena.reports import MetaEvalReport
+
+    metrics = {"meta_eval_agreement": {"ok": True}}
+    monkeypatch.setattr(scoring, "render_metrics", lambda result: "rendered metrics")
+    report = MetaEvalReport(
+        task="meta-eval-comparia",
+        arena="ComparIA",
+        judge_model="judge",
+        prompt_preset="meta-eval-pair-score",
+        languages=["en"],
+        top_models=["a", "b", "c"],
+        n_battles=1,
+        n_annotations=1,
+        n_parsed_annotations=1,
+        n_scored_battles=1,
+        battle_parse_status={"complete": 1},
+        swap_mode="fixed",
+        battles_per_language={"en": 1},
+        human_winner_counts={"model_a": 1},
+        metrics=metrics,
+    )
+
+    result = report.to_dict()
+    report.render()
+
+    assert result["metrics"] == metrics
+    assert "agreement" not in result
+    assert "language_summary" not in result
+    assert "rendered metrics" in capsys.readouterr().out

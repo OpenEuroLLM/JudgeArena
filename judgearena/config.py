@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     CliSettingsSource,
@@ -19,7 +19,7 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, MetaEvalProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -344,6 +344,55 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class MetaEvalArgs(BaseModel):
+    """Sampling and optional metric overrides for judge meta-evaluation."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+    top_models: int = Field(default=20, ge=3)
+    """Number of the arena's most-battled models to include."""
+
+    battles_per_model: int = Field(default=50, gt=0)
+    """Minimum number of sampled incident battles for each selected model."""
+
+    languages: list[str] | None = None
+    """Restrict arena battles to these language codes. Defaults to all languages."""
+
+    n_bootstraps: int | None = Field(default=None, ge=0)
+    """Override task-owned bootstrap counts for agreement and ranking metrics."""
+
+    include_human_ties: bool | None = None
+    """Override whether ranking metrics include human ties."""
+
+    elo_gap_battles: list[int] | None = None
+    """Override task-owned Elo-gap annotation budgets."""
+
+    elo_gap_seeds: int | None = Field(default=None, gt=0)
+    """Override the number of Elo-gap sampling seeds."""
+
+    @field_validator("languages")
+    @classmethod
+    def _validate_languages(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value or any(not isinstance(item, str) or not item for item in value):
+            raise ValueError("languages must be a non-empty list of non-empty strings")
+        if len(set(value)) != len(value):
+            raise ValueError("languages must not contain duplicates")
+        return value
+
+    @field_validator("elo_gap_battles")
+    @classmethod
+    def _validate_elo_gap_battles(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        if not value or any(type(item) is not int or item <= 0 for item in value):
+            raise ValueError("elo_gap_battles must contain positive integers")
+        if any(left >= right for left, right in zip(value, value[1:], strict=False)):
+            raise ValueError("elo_gap_battles must be unique and ordered ascending")
+        return value
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -396,6 +445,9 @@ class RunConfig(BaseSettings):
 
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
+
+    meta_eval: MetaEvalArgs | None = None
+    """Runtime settings used only by tasks with a meta-evaluation protocol."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -457,7 +509,12 @@ class RunConfig(BaseSettings):
             self.judge.top_logprobs = task_judge.default_top_logprobs
 
         is_elo = isinstance(protocol, EloProtocol)
+        is_meta_eval = isinstance(protocol, MetaEvalProtocol)
         if is_elo:
+            if self.meta_eval is not None:
+                raise ValueError(
+                    "meta_eval config is only valid for meta-evaluation tasks."
+                )
             if self.elo is None:
                 self.elo = EloArgs()
             if "soft_elo" not in self.elo.model_fields_set:
@@ -468,9 +525,28 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
                 raise ValueError("model.baseline is not supported for ELO tasks.")
+        elif is_meta_eval:
+            if self.elo is not None:
+                raise ValueError("elo config is only valid for ELO tasks.")
+            if self.meta_eval is None:
+                self.meta_eval = MetaEvalArgs()
+            if self.model.name is not None or self.model.baseline is not None:
+                raise ValueError(
+                    "model.name and model.baseline are not supported for "
+                    "meta-evaluation tasks."
+                )
+            if self.judge.swap_mode == "random":
+                raise ValueError(
+                    "judge.swap_mode='random' is not supported for "
+                    "meta-evaluation tasks."
+                )
         else:
             if self.elo is not None:
                 raise ValueError("elo config is only valid for ELO tasks.")
+            if self.meta_eval is not None:
+                raise ValueError(
+                    "meta_eval config is only valid for meta-evaluation tasks."
+                )
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (
