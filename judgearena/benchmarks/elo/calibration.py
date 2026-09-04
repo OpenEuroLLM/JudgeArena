@@ -71,6 +71,14 @@ def calibrate_pairscore_temperature(
             "--calibrate-temperature has no effect with --no-soft-elo; skipping."
         )
         return None
+    if not isinstance(prompt.parser, PairScore):
+        parser_name = getattr(prompt.parser, "name", type(prompt.parser).__name__)
+        logger.warning(
+            "PairScore temperature calibration does not apply to parser %r; "
+            "using its preferences unchanged.",
+            parser_name,
+        )
+        return None
 
     logger.info("Calibrating PairScore temperature against human annotations.")
     n_samples = (
@@ -114,7 +122,9 @@ def calibrate_pairscore_temperature(
     for annotation, human_winner in zip(
         annotations, calibration_battles["winner"].tolist(), strict=True
     ):
-        score_a, score_b = PairScore.parse_raw_scores(annotation.judge_completion)
+        scores = {} if annotation.parsed is None else annotation.parsed.scores
+        score_a = scores.get("A")
+        score_b = scores.get("B")
         if score_a is None or score_b is None:
             continue
         human_preference = winner_to_pref(human_winner)
