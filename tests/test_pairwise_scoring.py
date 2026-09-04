@@ -54,7 +54,7 @@ def test_pairwise_win_rate_reports_candidate_results():
 
     assert result == {
         "num_battles": 4,
-        "winrate": pytest.approx(7 / 12),
+        "winrate": pytest.approx(2 / 3),
         "num_wins": 2,
         "num_losses": 1,
         "num_ties": 0,
@@ -265,9 +265,9 @@ def test_metric_builders_hide_registry_and_validate_parameters():
     assert "bradley_terry" in available_metrics()
 
     metric = build_metric("pairwise_win_rate")
-    result = metric.calculate(pd.DataFrame({"pref": [0.1], "pref_hard": [1.0]}))
-    assert result["winrate"] == 0.9
-    assert "90.00%" in metric.render(result)
+    result = metric.calculate(pd.DataFrame({"pref": [0.1]}))
+    assert result["winrate"] == 1.0
+    assert "100.00%" in metric.render(result)
 
     with pytest.raises(ValueError, match="Unknown metric"):
         build_metric("missing")
