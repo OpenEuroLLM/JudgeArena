@@ -340,3 +340,75 @@ def test_build_run_config_elo_defaults():
     )
     assert cfg.elo is not None
     assert cfg.elo.soft_elo is True
+
+
+def _base_meta_eval() -> dict:
+    return {
+        "task": "meta-eval-comparia",
+        "judge": {"model": "Dummy/j"},
+    }
+
+
+def test_meta_eval_config_uses_sampling_defaults_and_task_metric_defaults():
+    cfg = RunConfig(**_base_meta_eval())
+
+    assert cfg.model.name is None
+    assert cfg.model.baseline is None
+    assert cfg.elo is None
+    assert cfg.meta_eval is not None
+    assert cfg.meta_eval.top_models == 20
+    assert cfg.meta_eval.battles_per_model == 50
+    assert cfg.meta_eval.languages is None
+    assert cfg.meta_eval.n_bootstraps is None
+    assert cfg.meta_eval.include_human_ties is None
+    assert cfg.meta_eval.elo_gap_battles is None
+    assert cfg.meta_eval.elo_gap_seeds is None
+
+
+def test_meta_eval_config_accepts_explicit_valid_overrides():
+    data = _base_meta_eval()
+    data["meta_eval"] = {
+        "top_models": 4,
+        "battles_per_model": 12,
+        "languages": ["fr", "en"],
+        "n_bootstraps": 5,
+        "include_human_ties": True,
+        "elo_gap_battles": [2, 6, 12],
+        "elo_gap_seeds": 3,
+    }
+
+    cfg = RunConfig(**data)
+
+    assert cfg.meta_eval is not None
+    assert cfg.meta_eval.elo_gap_battles == [2, 6, 12]
+    assert cfg.meta_eval.include_human_ties is True
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [
+        ({"model": {"name": "Dummy/m"}}, "model.name"),
+        ({"model": {"baseline": "Dummy/b"}}, "model.baseline"),
+        ({"elo": {}}, "elo config"),
+        ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
+        ({"meta_eval": {"top_models": 2}}, "greater than or equal to 3"),
+        ({"meta_eval": {"languages": []}}, "languages"),
+        ({"meta_eval": {"languages": ["en", "en"]}}, "duplicates"),
+        ({"meta_eval": {"elo_gap_battles": [10, 5]}}, "ordered ascending"),
+        ({"meta_eval": {"elo_gap_battles": []}}, "positive integers"),
+    ],
+)
+def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):
+    data = _base_meta_eval()
+    data.update(update)
+
+    with pytest.raises(ValidationError, match=message):
+        RunConfig(**data)
+
+
+def test_meta_eval_block_is_rejected_for_non_meta_task():
+    data = _base_generate()
+    data["meta_eval"] = {"top_models": 4}
+
+    with pytest.raises(ValidationError, match="only valid for meta-evaluation"):
+        RunConfig(**data)

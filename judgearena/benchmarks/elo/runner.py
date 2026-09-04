@@ -14,6 +14,7 @@ from judgearena.artifacts import (
     write_run_metadata_safely,
 )
 from judgearena.battles import Leaderboard, RatingEntry, write_battles
+from judgearena.benchmarks.arena import resolve_task_languages
 from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
@@ -58,22 +59,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     logger.info("Step 1: Loading battles from %s", arena)
     df_arena_all = load_battles(task)
 
-    # Filter by language: a task variant (e.g. elo-lmarena-140k-en) preselects
-    # languages; elo.languages narrows further within that selection.
-    selected_languages = list(cfg.elo.languages or [])
-    if task.selection is not None:
-        variant_languages = list(task.selection.values)
-        if selected_languages:
-            selected_languages = [
-                lang for lang in selected_languages if lang in set(variant_languages)
-            ]
-            if not selected_languages:
-                raise ValueError(
-                    f"elo.languages {cfg.elo.languages} has no overlap with the "
-                    f"languages of task {cfg.task!r} ({variant_languages})."
-                )
-        else:
-            selected_languages = variant_languages
+    # A task variant preselects languages; elo.languages may narrow it further.
+    selected_languages = resolve_task_languages(
+        task, cfg.elo.languages, setting="elo.languages"
+    )
 
     df_battles = df_arena_all
     if selected_languages:

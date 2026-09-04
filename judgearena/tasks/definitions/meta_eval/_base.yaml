@@ -1,0 +1,36 @@
+schema_version: 1
+task_version: 1
+tags: [meta-eval, arena, judge]
+
+dataset:
+  adapter: arena_battles
+  fields:
+    id: question_id
+    instruction: conversation_a
+    category: lang
+
+protocol:
+  runner: meta_eval
+  baseline:
+    strategy: none
+  judge:
+    default_prompt_preset: meta-eval-pair-score
+    default_swap_mode: fixed
+  scoring:
+    metrics:
+      - metric: meta_eval_agreement
+        group_by: [language_group]
+        parameters:
+          n_bootstraps: 1000
+          tie_tolerance: 0.01
+      - metric: meta_eval_ranking
+        group_by: [language_group]
+        parameters:
+          n_bootstraps: 1000
+          tie_tolerance: 0.01
+          include_human_ties: false
+      - metric: meta_eval_elo_gap
+        parameters:
+          battle_counts: [10, 20, 30, 40, 50]
+          n_seeds: 10
+          tie_tolerance: 0.01
