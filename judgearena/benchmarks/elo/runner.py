@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from judgearena.arenas_utils import _extract_instruction_text
+from judgearena.arenas_utils import extract_turn_text
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
@@ -115,7 +115,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
         [
-            _extract_instruction_text(row["conversation_a"][0])
+            extract_turn_text(row["conversation_a"][0])
             for _, row in df_battles.iterrows()
         ],
         name="instruction",
@@ -188,9 +188,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
 
     opponent_completions = [
         (
-            _extract_instruction_text(row["conversation_a"][1])
+            extract_turn_text(row["conversation_a"][1])
             if use_model_a_as_opponent[i]
-            else _extract_instruction_text(row["conversation_b"][1])
+            else extract_turn_text(row["conversation_b"][1])
         )
         for i, (_, row) in enumerate(df_battles.iterrows())
     ]
