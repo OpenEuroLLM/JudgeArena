@@ -99,14 +99,8 @@ class MetaEvalReport(Report):
     prompt_preset: str
     languages: list[str]
     top_models: list[str]
-    n_battles: int
-    n_annotations: int
-    n_parsed_annotations: int
-    n_scored_battles: int
-    battle_parse_status: dict[str, int]
+    n_sampled_battles: int
     swap_mode: str
-    battles_per_language: dict[str, int]
-    human_winner_counts: dict[str, int]
     metrics: dict[str, dict[str, object]]
 
     def render(self) -> None:
@@ -115,12 +109,7 @@ class MetaEvalReport(Report):
         print(f"\n=== Meta-eval: {self.task} ===")
         print(f"Arena: {self.arena} | Judge: {self.judge_model}")
         print(
-            f"Models: {len(self.top_models)} | Battles: {self.n_battles} | "
-            f"Judge passes: {self.n_annotations} ({self.swap_mode})"
-        )
-        print(
-            f"Parsed passes: {self.n_parsed_annotations}/"
-            f"{self.n_annotations} | Scored battles: "
-            f"{self.n_scored_battles}/{self.n_battles}"
+            f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
+            f"Swap mode: {self.swap_mode}"
         )
         print(render_metrics(self.metrics))

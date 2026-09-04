@@ -695,9 +695,7 @@ def test_packaged_meta_eval_tasks_use_pinned_battle_sources_and_metrics():
             "meta_eval_ranking",
             "meta_eval_elo_gap",
         ]
-        assert metrics[0].group_by == ("language_group",)
-        assert metrics[1].group_by == ("language_group",)
-        assert metrics[2].group_by == ()
+        assert all(metric.group_by == () for metric in metrics)
 
     english = get_packaged_task("meta-eval-lmarena-100k-en")
     assert english is not None

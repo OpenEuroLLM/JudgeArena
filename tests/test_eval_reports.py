@@ -151,14 +151,8 @@ def test_meta_eval_report_keeps_results_under_metrics_and_renders_them(
         prompt_preset="meta-eval-pair-score",
         languages=["en"],
         top_models=["a", "b", "c"],
-        n_battles=1,
-        n_annotations=1,
-        n_parsed_annotations=1,
-        n_scored_battles=1,
-        battle_parse_status={"complete": 1},
+        n_sampled_battles=1,
         swap_mode="fixed",
-        battles_per_language={"en": 1},
-        human_winner_counts={"model_a": 1},
         metrics=metrics,
     )
 
@@ -166,6 +160,4 @@ def test_meta_eval_report_keeps_results_under_metrics_and_renders_them(
     report.render()
 
     assert result["metrics"] == metrics
-    assert "agreement" not in result
-    assert "language_summary" not in result
     assert "rendered metrics" in capsys.readouterr().out
