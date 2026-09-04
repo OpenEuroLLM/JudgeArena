@@ -171,6 +171,20 @@ def test_parse_arena_hard_verdict(judgment, expected):
     assert parse_arena_hard_verdict(judgment) == expected
 
 
+def test_official_parsers_preserve_structured_evidence():
+    arena_result = parse_arena_hard_verdict.parse_result("[[A>B]] then [[B>>A]]")
+    assert arena_result is not None
+    assert arena_result.preference == 1.0
+    assert arena_result.label == "B>>A"
+
+    logprobs = {"m": math.log(0.25), "M": math.log(0.75)}
+    alpaca_result = parse_alpaca_eval_token.parse_result("M", top_logprobs=logprobs)
+    assert alpaca_result is not None
+    assert alpaca_result.preference == pytest.approx(0.75)
+    assert alpaca_result.label == "M"
+    assert alpaca_result.scores == logprobs
+
+
 def test_alpaca_eval_token_requires_and_weights_logprobs():
     assert parse_alpaca_eval_token(
         "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}

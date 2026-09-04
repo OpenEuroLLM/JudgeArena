@@ -106,6 +106,15 @@ class ArenaHardVerdict(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None:
+        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
+        return None if result is None else result.preference
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
         text = strip_thinking_tags(judge_completion).upper()
         matches = [m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m]
         if not matches:
@@ -114,7 +123,11 @@ class ArenaHardVerdict(JudgeParser):
             ]
         if not matches:
             return None
-        return ARENA_HARD_VERDICT_PREFERENCES.get(matches[-1].strip())
+        label = matches[-1].strip()
+        preference = ARENA_HARD_VERDICT_PREFERENCES.get(label)
+        if preference is None:
+            return None
+        return ParsedPreference(preference=preference, label=label)
 
 
 class AlpacaEvalToken(JudgeParser):
@@ -133,11 +146,32 @@ class AlpacaEvalToken(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> float | None:
+        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
+        return None if result is None else result.preference
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
         if not top_logprobs:
             raise ValueError(
                 "The official AlpacaEval parser requires first-token top logprobs."
             )
-        return weighted_token_preference(top_logprobs, self._TOKENS)
+        preference = weighted_token_preference(top_logprobs, self._TOKENS)
+        if preference is None:
+            return None
+        label = strip_thinking_tags(judge_completion).strip()
+        return ParsedPreference(
+            preference=preference,
+            label=label if label in self._TOKENS else None,
+            scores={
+                token: top_logprobs[token]
+                for token in self._TOKENS
+                if token in top_logprobs
+            },
+        )
 
 
 def weighted_token_preference(
