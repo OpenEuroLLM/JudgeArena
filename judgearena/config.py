@@ -17,6 +17,7 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol
 
@@ -176,10 +177,28 @@ class ModelArgs(BaseModel):
         return kwargs
 
 
+class JudgePromptSpec(BaseModel):
+    """A custom judge prompt: two template files plus the parser for its output."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    system_file: Path
+    """Path to the judge system prompt file."""
+
+    user_file: Path
+    """Path to the judge user-prompt template file."""
+
+    parser: str = "score"
+    """Named parser for the judge's output (see
+    ``judgearena.prompts.parsing.JUDGE_PARSERS``)."""
+
+
 class JudgeArgs(BaseModel):
     """The judge model and how it scores each battle."""
 
-    model_config = ConfigDict(protected_namespaces=(), use_attribute_docstrings=True)
+    model_config = ConfigDict(
+        protected_namespaces=(), use_attribute_docstrings=True, extra="forbid"
+    )
 
     model: str
     """LLM used as the judge, in ``{backend}/{model path}`` format (e.g.
@@ -213,24 +232,23 @@ class JudgeArgs(BaseModel):
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
 
-    provide_explanation: bool = False
-    """If set, the judge explains its reasoning before scoring. Aids
-    interpretation; does not necessarily improve accuracy."""
-
-    swap_mode: Literal["fixed", "both"] = "fixed"
+    swap_mode: Literal["fixed", "both", "random"] = "fixed"
     """Position-bias handling. ``fixed``: a single A-B judge pass. ``both``:
-    judge each battle in both orders (A-B and B-A) and combine."""
+    judge each battle in both orders (A-B and B-A) and combine. ``random``:
+    a single pass with the pair order flipped deterministically per
+    instruction (AlpacaEval's scheme)."""
+
+    top_logprobs: int | None = None
+    """Request the judge's top-N token logprobs (used by logprob-weighted
+    annotators like AlpacaEval's). Unset requests none."""
 
     prompt_preset: str | None = None
     """Named judge prompt preset to use (see ``judgearena.prompts``). Defaults
     to the task's preset when unset."""
 
-    system_prompt_file: str | None = None
-    """Path to a custom judge system prompt, overriding the preset's system
-    prompt."""
-
-    user_prompt_file: str | None = None
-    """Path to a custom judge user-prompt template, overriding the preset's."""
+    prompt: JudgePromptSpec | None = None
+    """Custom judge prompt bundle (system/user template files plus the parser
+    for the judge's output), overriding any preset."""
 
     battle_thinking_token_budget: int | None = None
     """Token budget allotted to a thinking judge's reasoning block. Unset
@@ -263,6 +281,7 @@ class JudgeArgs(BaseModel):
                     "top_p": self.top_p,
                     "top_k": self.top_k,
                     "seed": self.seed,
+                    "top_logprobs": self.top_logprobs,
                 }
             )
         )
@@ -289,10 +308,6 @@ class EloArgs(BaseModel):
     """Experiment settings for tasks using the ELO protocol."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
-
-    arena: str | None = None
-    """Arena whose battles supply opponents. Derived from the task definition;
-    an explicit value must match it."""
 
     baseline_model: str | None = None
     """Model anchored at 1000 ELO; ratings are reported relative to it."""
@@ -387,6 +402,16 @@ class RunConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
+        if self.judge.prompt is not None:
+            if self.judge.prompt_preset is not None:
+                raise ValueError(
+                    "judge.prompt and judge.prompt_preset are mutually exclusive."
+                )
+            resolve_judge_parser(self.judge.prompt.parser)
+            for path in (self.judge.prompt.system_file, self.judge.prompt.user_file):
+                if not path.is_file():
+                    raise ValueError(f"judge prompt file not found: {path}")
+
         resolved_task = get_packaged_task(self.task)
         if resolved_task is None:
             raise ValueError(
@@ -398,38 +423,26 @@ class RunConfig(BaseSettings):
         task_judge = protocol.judge
         if "swap_mode" not in self.judge.model_fields_set:
             self.judge.swap_mode = task_judge.default_swap_mode
-        if self.judge.swap_mode not in task_judge.allowed_swap_modes:
-            raise ValueError(
-                f"judge.swap_mode={self.judge.swap_mode!r} is not supported "
-                f"by task {self.task!r}; choose from "
-                f"{list(task_judge.allowed_swap_modes)}."
-            )
         if (
-            self.judge.temperature is None
+            "temperature" not in self.judge.model_fields_set
             and task_judge.default_temperature is not None
         ):
             self.judge.temperature = task_judge.default_temperature
-
-        baseline = protocol.baseline
         if (
-            self.model.baseline is not None
-            and getattr(baseline, "allow_runtime_override", True) is False
+            "max_out_tokens" not in self.judge.model_fields_set
+            and task_judge.default_max_out_tokens is not None
         ):
-            raise ValueError(
-                f"model.baseline cannot override the baseline defined by "
-                f"task {self.task!r}."
-            )
+            self.judge.max_out_tokens = task_judge.default_max_out_tokens
+        if (
+            "top_logprobs" not in self.judge.model_fields_set
+            and task_judge.default_top_logprobs is not None
+        ):
+            self.judge.top_logprobs = task_judge.default_top_logprobs
 
         is_elo = isinstance(protocol, EloProtocol)
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if self.elo.arena is not None and self.elo.arena != protocol.arena:
-                raise ValueError(
-                    f"elo.arena={self.elo.arena!r} does not match task "
-                    f"{self.task!r} ({protocol.arena!r})."
-                )
-            self.elo.arena = protocol.arena
             if "soft_elo" not in self.elo.model_fields_set:
                 self.elo.soft_elo = protocol.scoring.default_soft
             if "soft_elo_temperature" not in self.elo.model_fields_set:
@@ -509,5 +522,5 @@ def load_config(path: str | Path) -> RunConfig:
 def dump_config(cfg: RunConfig, path: str | Path) -> None:
     """Write the resolved config as YAML (round-trippable via ``--config_path``)."""
     Path(path).write_text(
-        yaml.safe_dump(cfg.model_dump(), sort_keys=False), encoding="utf-8"
+        yaml.safe_dump(cfg.model_dump(mode="json"), sort_keys=False), encoding="utf-8"
     )

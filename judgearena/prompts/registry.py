@@ -6,7 +6,13 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
-JudgeParserMode = Literal["score"]
+from judgearena.prompts.parsing import (
+    JUDGE_PARSERS,
+    JudgeParser,
+    parser_name,
+    resolve_judge_parser,
+)
+
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
@@ -34,7 +40,8 @@ FLUENCY_SYSTEM_PROMPT = (
 @dataclass(frozen=True)
 class JudgePromptPreset:
     name: str
-    parser_mode: JudgeParserMode = "score"
+    parser: JudgeParser | None = None
+    """Parser for this preset's judge-output format; None only when delegated."""
     system_file: str | None = None
     user_file: str | None = None
     inline_system: str | None = None
@@ -45,7 +52,7 @@ class JudgePromptPreset:
 @dataclass(frozen=True)
 class ResolvedJudgePrompt:
     preset_name: str
-    parser_mode: JudgeParserMode
+    parser: JudgeParser | None
     system_prompt: str | None
     user_prompt_template: str
     source: PromptSource
@@ -58,6 +65,9 @@ class ResolvedJudgePrompt:
     def metadata(self) -> dict[str, str | bool | None]:
         return {
             "judge_prompt_preset": self.preset_name,
+            "judge_parser": (
+                parser_name(self.parser) if self.parser is not None else None
+            ),
             "judge_prompt_source": self.source,
             "judge_prompt_delegated": self.delegated,
             "judge_prompt_system_path": self.system_path,
@@ -67,20 +77,25 @@ class ResolvedJudgePrompt:
         }
 
 
+SCORE_PARSER = JUDGE_PARSERS["score"]
+
 PRESETS: dict[str, JudgePromptPreset] = {
     DEFAULT_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=DEFAULT_JUDGE_PROMPT_PRESET,
+        parser=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt.txt",
     ),
     DEFAULT_WITH_EXPLANATION_PRESET: JudgePromptPreset(
         name=DEFAULT_WITH_EXPLANATION_PRESET,
+        parser=SCORE_PARSER,
         system_file="system-prompt.txt",
         user_file="prompt-with-explanation.txt",
         with_explanation=True,
     ),
     FLUENCY_JUDGE_PROMPT_PRESET: JudgePromptPreset(
         name=FLUENCY_JUDGE_PROMPT_PRESET,
+        parser=SCORE_PARSER,
         inline_system=FLUENCY_SYSTEM_PROMPT,
         user_file="prompt.txt",
     ),
@@ -101,7 +116,7 @@ def default_preset_for_task(task: str | None) -> str:
 
     resolved = get_packaged_task(task)
     if resolved is not None:
-        return resolved.spec.protocol.judge.default_prompt
+        return resolved.spec.protocol.judge.default_prompt_preset
     return DEFAULT_JUDGE_PROMPT_PRESET
 
 
@@ -110,7 +125,11 @@ def _sha256(text: str) -> str:
 
 
 def _load_packaged_text(filename: str) -> str:
-    return files(PROMPTS_PACKAGE).joinpath(filename).read_text(encoding="utf-8")
+    return (
+        files(PROMPTS_PACKAGE)
+        .joinpath("templates", filename)
+        .read_text(encoding="utf-8")
+    )
 
 
 def _materialize_user_template(
@@ -132,7 +151,7 @@ def _resolve_file_prompt(
     system_file: str | Path,
     user_file: str | Path,
     multi_turn: bool,
-    provide_explanation: bool,
+    parser: JudgeParser,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file)
     user_path = Path(user_file)
@@ -140,11 +159,11 @@ def _resolve_file_prompt(
     user_prompt_template = _materialize_user_template(
         user_path.read_text(encoding="utf-8"),
         multi_turn=multi_turn,
-        with_explanation=provide_explanation,
+        with_explanation=False,
     )
     return ResolvedJudgePrompt(
         preset_name=f"file:{system_path.name}+{user_path.name}",
-        parser_mode="score",
+        parser=parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="file",
@@ -162,7 +181,7 @@ def resolve_judge_prompt(
     system_file: str | Path | None = None,
     user_file: str | Path | None = None,
     multi_turn: bool = False,
-    provide_explanation: bool = False,
+    parser: str | None = None,
 ) -> ResolvedJudgePrompt:
     if (system_file is None) != (user_file is None):
         raise ValueError(
@@ -174,19 +193,16 @@ def resolve_judge_prompt(
             system_file=system_file,
             user_file=user_file,
             multi_turn=multi_turn,
-            provide_explanation=provide_explanation,
+            parser=resolve_judge_parser(parser or "score"),
+        )
+    if parser is not None:
+        raise ValueError(
+            "judge.parser requires judge prompt files; a preset already "
+            "defines its parser."
         )
 
     if preset is None:
-        # `provide_explanation` is a legacy alias for explicitly selecting the
-        # explanation preset. It intentionally takes precedence over the task
-        # default (so e.g. `--provide_explanation` on any task yields
-        # `default_with_explanation`); pass `--judge_prompt_preset` to opt out.
-        preset = (
-            DEFAULT_WITH_EXPLANATION_PRESET
-            if provide_explanation
-            else default_preset_for_task(task)
-        )
+        preset = default_preset_for_task(task)
 
     spec = PRESETS.get(preset)
     if spec is None:
@@ -197,7 +213,7 @@ def resolve_judge_prompt(
     if spec.delegated:
         return ResolvedJudgePrompt(
             preset_name=spec.name,
-            parser_mode=spec.parser_mode,
+            parser=spec.parser,
             system_prompt=None,
             user_prompt_template="",
             source="delegated",
@@ -219,7 +235,7 @@ def resolve_judge_prompt(
     )
     return ResolvedJudgePrompt(
         preset_name=spec.name,
-        parser_mode=spec.parser_mode,
+        parser=spec.parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="preset",
@@ -236,11 +252,12 @@ def resolve_run_judge_prompt(
     *,
     multi_turn: bool = False,
 ) -> ResolvedJudgePrompt:
+    prompt = getattr(judge_cfg, "prompt", None)
     return resolve_judge_prompt(
         task=task,
         preset=getattr(judge_cfg, "prompt_preset", None),
-        system_file=getattr(judge_cfg, "system_prompt_file", None),
-        user_file=getattr(judge_cfg, "user_prompt_file", None),
+        system_file=prompt.system_file if prompt is not None else None,
+        user_file=prompt.user_file if prompt is not None else None,
         multi_turn=multi_turn,
-        provide_explanation=getattr(judge_cfg, "provide_explanation", False),
+        parser=prompt.parser if prompt is not None else None,
     )

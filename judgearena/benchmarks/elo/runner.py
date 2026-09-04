@@ -325,11 +325,11 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             completions_A=completions_A,
             completions_B=completions_B,
             swap_mode=cfg.judge.swap_mode,
-            provide_explanation=cfg.judge.provide_explanation,
             strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
             system_prompt=resolved_prompt.system_prompt,
             user_prompt_template=resolved_prompt.user_prompt_template,
             prompt_preset=resolved_prompt.preset_name,
+            parse=resolved_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
         )
@@ -350,7 +350,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 [our_model_is_position_a, our_model_is_position_a]
             )
             row_opponents = list(opponent_models) + list(opponent_models)
-        return pd.DataFrame(
+        frame = pd.DataFrame(
             {
                 "judge_completion": [a.judge_completion for a in row_annotations],
                 "instruction": [a.instruction for a in row_annotations],
@@ -362,6 +362,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 "opponent_model": row_opponents,
             }
         )
+        return frame
 
     # Stripping reasoning traces changes the judged text but not the cached
     # completions, so it must be part of the judge cache key. Only append when
@@ -473,7 +474,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 completions_A=cal_completions_a,
                 completions_B=cal_completions_b,
                 swap_mode=cfg.judge.swap_mode,
-                provide_explanation=cfg.judge.provide_explanation,
+                system_prompt=resolved_prompt.system_prompt,
+                user_prompt_template=resolved_prompt.user_prompt_template,
+                prompt_preset=resolved_prompt.preset_name,
+                parse=resolved_prompt.parser,
                 truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             )
 

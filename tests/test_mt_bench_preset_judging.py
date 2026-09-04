@@ -55,7 +55,6 @@ def test_select_preset_prompt_rejects_delegated_preset():
             multi_turn=False,
             reference_categories=REFERENCE_CATEGORIES,
             prompt_preset=FASTCHAT_PAIRWISE_PROMPT_PRESET,
-            provide_explanation=False,
         )
 
 
@@ -79,7 +78,6 @@ def test_select_preset_prompt_variants(
         multi_turn=multi_turn,
         reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
-        provide_explanation=False,
     )
 
     assert prompt.name == expected_name
@@ -99,7 +97,6 @@ def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
         truncate_input_chars=None,
         reference_categories=REFERENCE_CATEGORIES,
         prompt_preset="default",
-        provide_explanation=False,
     )
 
     assert [item.turn for item in items] == [1, 2]
@@ -150,10 +147,38 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
     assert prefs.iloc[0] < 0.5
     assert annotations[0]["model_A"] == "model-a"
+    assert annotations[0]["parsed"]["scores"] == {"A": 10.0, "B": 0.0}
+    assert annotations[0]["preference"] < 0.5
     assert annotations[1]["model_A"] == "model-b"
+    assert annotations[1]["parsed"]["scores"] == {"A": 0.0, "B": 10.0}
+    assert annotations[1]["preference"] > 0.5
     assert annotations[1]["swapped"] is True
     assert "B1" in annotations[1]["user_prompt"]
     assert metadata == [
         {"question_id": 1, "category": "writing", "turn": 1},
         {"question_id": 1, "category": "writing", "turn": 1},
     ]
+
+
+def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    sentinel = object()
+    monkeypatch.setitem(JUDGE_PARSERS, "sentinel", sentinel)
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("system")
+    user_file.write_text(
+        "{user_prompt} {completion_A} {completion_B}\n# Your output\nscores"
+    )
+
+    prompt = _select_preset_prompt(
+        "writing",
+        multi_turn=False,
+        reference_categories=REFERENCE_CATEGORIES,
+        system_file=str(system_file),
+        user_file=str(user_file),
+        parser="sentinel",
+    )
+
+    assert prompt.parse is sentinel

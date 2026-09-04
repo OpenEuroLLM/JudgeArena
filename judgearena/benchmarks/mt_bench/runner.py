@@ -205,7 +205,9 @@ def _finalize_mt_bench_run(
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
     scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
-    stats = scorer.summarize(prefs)
+    # MT-Bench battles carry per-turn prefs only; the win-rate scorer reads
+    # just the pref column of the canonical battles frame.
+    stats = scorer(pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
@@ -320,9 +322,9 @@ def _run_mt_bench_preset(
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
         prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
-        provide_explanation=cfg.judge.provide_explanation,
-        system_file=cfg.judge.system_prompt_file,
-        user_file=cfg.judge.user_prompt_file,
+        system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
+        user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
+        parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
@@ -379,7 +381,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         questions_df=questions_df,
     )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
-    if resolved_prompt.delegated and not cfg.judge.provide_explanation:
+    if resolved_prompt.delegated:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."

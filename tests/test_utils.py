@@ -88,7 +88,7 @@ def test_strip_thinking_tags_keeps_unclosed_reasoning_block():
     assert cleaned == answer
 
 
-def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
+def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
     """vLLM-engine-only kwargs must not leak into ChatOpenAI.model_kwargs.
 
     Regression guard for #20: unknown kwargs forwarded to ``ChatOpenAI`` land
@@ -107,14 +107,23 @@ def test_make_model_openrouter_strips_vllm_only_kwargs(monkeypatch):
         gpu_memory_utilization=0.9,
         enforce_eager=True,
         temperature=0.5,
+        top_logprobs=5,
+        extra_body={"provider": {"require_parameters": True}},
     )
 
+    payload = model._get_request_payload("test")
     assert "max_model_len" not in model.model_kwargs
     assert "chat_template" not in model.model_kwargs
     assert "language_model_only" not in model.model_kwargs
     assert "gpu_memory_utilization" not in model.model_kwargs
     assert "enforce_eager" not in model.model_kwargs
-    assert model.max_tokens == 16
+    assert "max_completion_tokens" not in payload
+    assert payload["extra_body"] == {
+        "max_tokens": 16,
+        "provider": {"require_parameters": True},
+    }
+    assert payload["logprobs"] is True
+    assert payload["top_logprobs"] == 5
     assert model.temperature == 0.5
 
 
