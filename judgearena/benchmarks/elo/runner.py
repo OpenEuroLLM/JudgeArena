@@ -397,9 +397,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         metrics,
         runtime_by_metric={"bradley_terry": {"rng": rng}},
     )
-    rating_result = metric_results["bradley_terry"]
-    entries = [RatingEntry(**entry) for entry in rating_result["rating_entries"]]
-
     report = EloReport(
         arena=arena,
         judge_model=cfg.judge.model,
@@ -441,10 +438,12 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         res_dir / "battles.parquet",
         df_llm_judge[[c for c in battle_cols if c in df_llm_judge.columns]],
     )
-    if rating_result["bootstrap_ratings"]:
+    rating_result = metric_results.get("bradley_terry")
+    if rating_result is not None and rating_result["bootstrap_ratings"]:
         pd.DataFrame(rating_result["bootstrap_ratings"]).to_csv(
             res_dir / "bootstrap_ratings.csv", index=False
         )
+        entries = [RatingEntry(**entry) for entry in rating_result["rating_entries"]]
         Leaderboard(
             arena=arena,
             model=model_name,

@@ -75,10 +75,7 @@ class PairwiseWinRateMetric:
     def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
         frame = _pairwise_view(battles)
         preferences = _preferences(frame)
-        result = compute_pref_summary(preferences).to_dict()
-        parsed = preferences.dropna()
-        result["winrate"] = float((1 - parsed).mean()) if len(parsed) else float("nan")
-        return result
+        return compute_pref_summary(preferences).to_dict()
 
     @staticmethod
     def render(result: dict[str, object]) -> str:

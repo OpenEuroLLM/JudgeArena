@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -19,6 +20,7 @@ from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]
@@ -94,7 +96,6 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     task = kwargs.pop("task", "elo-comparia")
-    arena = kwargs.pop("arena", None)
     model = kwargs.pop("model", "Dummy/my model")
     judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
     n_instructions = kwargs.pop("n_instructions", 10)
@@ -118,7 +119,6 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         judge=judge,
         generation={"n_instructions": n_instructions},
         elo={
-            "arena": arena,
             "n_bootstraps": n_bootstraps,
             "languages": languages,
             "calibrate_temperature": calibrate_temperature,
@@ -291,6 +291,22 @@ def test_run_elo_returns_metrics(tmp_path):
     assert "rating_entries" in _rating_metric(result)
     assert "winrate" not in result
     assert "bootstrap_ratings" not in result
+
+
+def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
+    cfg = _default_args(result_folder=str(tmp_path))
+    task = get_packaged_task(cfg.task)
+    scoring = task.spec.protocol.scoring.model_copy(
+        update={"metrics": (MetricSpec(metric="pairwise_win_rate"),)}
+    )
+    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+
+    result = run_elo(cfg, task)
+
+    assert set(result["metrics"]) == {"pairwise_win_rate"}
+    assert not list(tmp_path.rglob("bootstrap_ratings.csv"))
+    assert not list(tmp_path.rglob("elo_ratings.json"))
 
 
 def test_run_elo_winrate_depends_on_judge(tmp_path):
