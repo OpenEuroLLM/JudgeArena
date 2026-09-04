@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from dataclasses import dataclass
 from numbers import Real
@@ -435,4 +436,229 @@ class MetaEvalRankingMetric:
                 ranking["elo_mae"], ranking["elo_mae_se"], digits=1
             )
             lines.append(f"  {name}: spearman={spearman}, elo_mae={elo_mae}")
+        return "\n".join(lines)
+
+
+_ELO_GAP_VARIANTS = ("hard", "soft", "hard_no_judge_ties")
+
+
+def _validate_elo_gap_configuration(
+    battle_counts: object, n_seeds: int, tie_tolerance: float
+) -> tuple[int, ...]:
+    _validate_configuration(0, tie_tolerance)
+    if not isinstance(battle_counts, (list, tuple)) or not battle_counts:
+        raise ValueError("battle_counts must be a non-empty ordered sequence")
+    if any(type(count) is not int or count <= 0 for count in battle_counts):
+        raise ValueError("battle_counts values must be positive integers")
+    counts = tuple(battle_counts)
+    if any(left >= right for left, right in zip(counts, counts[1:], strict=False)):
+        raise ValueError("battle_counts values must be unique and ordered ascending")
+    if type(n_seeds) is not int or n_seeds <= 0:
+        raise ValueError("n_seeds must be a positive integer")
+    return counts
+
+
+def _elo_gap_priority(
+    schedule_seed: int, replicate: int, focal_model: str, battle_id: object
+) -> bytes:
+    battle_type, battle_value = _battle_sort_key(battle_id)
+    payload = (
+        f"{schedule_seed}\0{replicate}\0{focal_model}\0{battle_type}\0{battle_value}"
+    )
+    return hashlib.sha256(payload.encode()).digest()
+
+
+def _elo_gap_vector(rows: pd.DataFrame, models: list[str]) -> np.ndarray | None:
+    if comparison_components(rows, models) != [frozenset(models)]:
+        return None
+    try:
+        ratings = fit_bradley_terry(rows, pref_col="pref")
+    except (TypeError, ValueError):
+        return None
+    return _centered_vector(ratings, models)
+
+
+def _elo_gap_rows(
+    *,
+    models: list[str],
+    battles: pd.DataFrame,
+    schedules: dict[tuple[int, str], list[object]],
+    reference: np.ndarray | None,
+    battle_counts: tuple[int, ...],
+    n_seeds: int,
+    tie_tolerance: float,
+) -> dict[str, list[dict[str, float | int]]]:
+    results: dict[str, list[dict[str, float | int]]] = {
+        variant: [] for variant in _ELO_GAP_VARIANTS
+    }
+    by_id = battles.set_index("battle_id", drop=False)
+    human_by_model = {}
+    for focal_model in models:
+        incident = battles["model_a"].eq(focal_model) | battles["model_b"].eq(
+            focal_model
+        )
+        human_by_model[focal_model] = battles.loc[
+            ~incident, ["model_a", "model_b", "reference_pref"]
+        ].rename(columns={"reference_pref": "pref"})
+
+    for battle_count in battle_counts:
+        replicate_gaps = {variant: [] for variant in _ELO_GAP_VARIANTS}
+        parsed_counts: list[int] = []
+        used_counts = {variant: [] for variant in _ELO_GAP_VARIANTS}
+
+        for replicate in range(n_seeds):
+            gaps = {variant: [] for variant in _ELO_GAP_VARIANTS}
+            for focal_index, focal_model in enumerate(models):
+                selected_ids = schedules[replicate, focal_model][:battle_count]
+                selected = by_id.loc[selected_ids]
+                parsed = selected.loc[selected["parse_status"].eq("complete")].copy()
+                hard_prefs = _hard_preferences(parsed["pref"], tie_tolerance) / 2.0
+                parsed_counts.append(len(parsed))
+                human = human_by_model[focal_model]
+
+                for variant in _ELO_GAP_VARIANTS:
+                    judge = parsed[["model_a", "model_b"]].copy()
+                    judge["pref"] = (
+                        parsed["pref"].to_numpy(dtype=float)
+                        if variant == "soft"
+                        else hard_prefs
+                    )
+                    if variant == "hard_no_judge_ties":
+                        judge = judge.loc[judge["pref"].ne(0.5)]
+                    used_counts[variant].append(len(judge))
+
+                    hybrid = pd.concat([human, judge], ignore_index=True)
+                    fitted = _elo_gap_vector(hybrid, models)
+                    if reference is not None and fitted is not None:
+                        gaps[variant].append(
+                            abs(fitted[focal_index] - reference[focal_index])
+                        )
+
+            for variant in _ELO_GAP_VARIANTS:
+                if len(gaps[variant]) == len(models) and models:
+                    replicate_gaps[variant].append(float(np.mean(gaps[variant])))
+
+        for variant in _ELO_GAP_VARIANTS:
+            valid = replicate_gaps[variant]
+            mean_gap = float(np.mean(valid)) if valid else float("nan")
+            sampling_se = (
+                float(np.std(valid, ddof=1) / np.sqrt(len(valid)))
+                if len(valid) >= 2
+                else float("nan")
+            )
+            results[variant].append(
+                {
+                    "attempted_battles_per_model": battle_count,
+                    "mean_gap": mean_gap,
+                    "sampling_se": sampling_se,
+                    "n_seeds_valid": len(valid),
+                    "n_seeds_failed": n_seeds - len(valid),
+                    "n_models": len(models),
+                    "mean_parsed_per_model": float(np.mean(parsed_counts))
+                    if parsed_counts
+                    else float("nan"),
+                    "mean_used_per_model": float(np.mean(used_counts[variant]))
+                    if used_counts[variant]
+                    else float("nan"),
+                }
+            )
+    return results
+
+
+@dataclass(frozen=True, kw_only=True)
+class MetaEvalEloGapMetric:
+    """Held-out focal-model Elo error at fixed annotation budgets."""
+
+    battle_counts: tuple[int, ...] = (10, 20, 30, 40, 50)
+    n_seeds: int = 10
+    tie_tolerance: float = 0.01
+
+    def __post_init__(self) -> None:
+        counts = _validate_elo_gap_configuration(
+            self.battle_counts, self.n_seeds, self.tie_tolerance
+        )
+        object.__setattr__(self, "battle_counts", counts)
+
+    def calculate(
+        self,
+        battles: pd.DataFrame,
+        *,
+        rng: np.random.Generator | None = None,
+    ) -> dict[str, object]:
+        """Calculate hard, soft, and judge-tie-excluded Elo gaps."""
+        _validate_battles(battles)
+        if rng is None:
+            raise ValueError("Meta-evaluation Elo gap requires an RNG.")
+
+        models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
+        attempted = battles.loc[battles["sampled"]]
+        maximum = max(self.battle_counts)
+        attempted_ids_by_model = {}
+        shortfalls = {}
+        for model in models:
+            incident = attempted["model_a"].eq(model) | attempted["model_b"].eq(model)
+            battle_ids = attempted.loc[incident, "battle_id"].tolist()
+            attempted_ids_by_model[model] = battle_ids
+            if len(battle_ids) < maximum:
+                shortfalls[model] = len(battle_ids)
+        if shortfalls:
+            raise ValueError(
+                f"Every model needs at least {maximum} attempted incident battles; "
+                f"available counts: {shortfalls}."
+            )
+
+        schedule_seed = int(rng.integers(0, 2**63))
+        schedules: dict[tuple[int, str], list[object]] = {}
+        for replicate in range(self.n_seeds):
+            for focal_model in models:
+                schedules[replicate, focal_model] = sorted(
+                    attempted_ids_by_model[focal_model],
+                    key=lambda battle_id: (
+                        _elo_gap_priority(
+                            schedule_seed, replicate, focal_model, battle_id
+                        ),
+                        _battle_sort_key(battle_id),
+                    ),
+                )
+
+        human = battles[["model_a", "model_b", "reference_pref"]].rename(
+            columns={"reference_pref": "pref"}
+        )
+        reference = _elo_gap_vector(human, models)
+        variants = _elo_gap_rows(
+            models=models,
+            battles=battles,
+            schedules=schedules,
+            reference=reference,
+            battle_counts=self.battle_counts,
+            n_seeds=self.n_seeds,
+            tie_tolerance=self.tie_tolerance,
+        )
+        return {
+            "schedule_seed": schedule_seed,
+            "battle_counts_requested": list(self.battle_counts),
+            "n_seeds_requested": self.n_seeds,
+            **variants,
+        }
+
+    @staticmethod
+    def render(values: dict[str, object]) -> str:
+        """Render Elo gaps and their sampling standard errors."""
+        lines = [
+            "meta_eval_elo_gap: "
+            f"{values['n_seeds_requested']} sampling seeds "
+            f"(schedule seed {values['schedule_seed']})"
+        ]
+        for variant in _ELO_GAP_VARIANTS:
+            lines.append(f"  {variant}:")
+            for row in values[variant]:
+                gap = _format_estimate(row["mean_gap"], row["sampling_se"], digits=1)
+                lines.append(
+                    f"    {row['attempted_battles_per_model']} attempted battles/focal: "
+                    f"mean_gap={gap} (sampling SE; "
+                    f"valid seeds {row['n_seeds_valid']}/"
+                    f"{values['n_seeds_requested']}, "
+                    f"parsed/model={row['mean_parsed_per_model']:.1f}, "
+                    f"used/model={row['mean_used_per_model']:.1f})"
+                )
         return "\n".join(lines)
