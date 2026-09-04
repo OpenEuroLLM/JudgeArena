@@ -136,12 +136,6 @@ def _build_mt_bench_preset_items(
     )
 
 
-def _normalize_preference(preference: float | None, *, swapped: bool) -> float:
-    if preference is None:
-        return math.nan
-    return 1.0 - preference if swapped else float(preference)
-
-
 def judge_mt_bench_with_preset(
     *,
     judge_chat_model,
@@ -201,13 +195,9 @@ def judge_mt_bench_with_preset(
         ):
             prompt: MTBenchPresetPrompt = item.prompt
             parsed = prompt.parse.parse_result(raw_judgment)
-            slot_preference = _normalize_preference(
-                None if parsed is None else parsed.preference,
-                swapped=False,
-            )
-            normalized_preference = _normalize_preference(
-                slot_preference,
-                swapped=swapped,
+            slot_preference = math.nan if parsed is None else float(parsed.preference)
+            normalized_preference = (
+                1.0 - slot_preference if swapped else slot_preference
             )
             annotations.append(
                 {
@@ -241,8 +231,8 @@ def judge_mt_bench_with_preset(
     _append_results(judgments, prompt_kwargs_used, swapped=False)
 
     if swap_mode == "both":
-        # swap_mode="both": append the inverted swapped-order scores as
-        # additional data points (see _normalize_preference(swapped=True)).
+        # Append swapped-order judgments as additional, canonically oriented
+        # preferences.
         swapped_judgments, swapped_prompt_kwargs = (
             infer_pairwise_judgments_by_prompt_groups(
                 judge_chat_model=judge_chat_model,
