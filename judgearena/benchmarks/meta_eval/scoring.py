@@ -9,6 +9,8 @@ from numbers import Real
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
+from sklearn.metrics import cohen_kappa_score
 
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
 from judgearena.benchmarks.meta_eval.sampling import comparison_components
@@ -88,15 +90,10 @@ def _hard_preferences(values: pd.Series, tie_tolerance: float) -> np.ndarray:
 
 
 def _cohen_kappa(reference: np.ndarray, judge: np.ndarray) -> float:
-    if len(reference) == 0:
+    labels = np.unique(np.concatenate((reference, judge)))
+    if len(labels) < 2:
         return float("nan")
-    observed = float(np.mean(reference == judge))
-    reference_counts = np.bincount(reference, minlength=3) / len(reference)
-    judge_counts = np.bincount(judge, minlength=3) / len(judge)
-    expected = float(np.dot(reference_counts, judge_counts))
-    if expected == 1.0:
-        return float("nan")
-    return (observed - expected) / (1.0 - expected)
+    return float(cohen_kappa_score(reference, judge, labels=[0, 1, 2]))
 
 
 def _sample_std(values: list[float]) -> float:
@@ -195,8 +192,8 @@ def _agreement_view(
 class MetaEvalAgreementMetric:
     """Configured battle-level agreement with human reference preferences."""
 
-    tie_tolerance: float = 0.01
-    n_bootstraps: int = 1000
+    tie_tolerance: float
+    n_bootstraps: int
 
     def __post_init__(self) -> None:
         _validate_configuration(self.n_bootstraps, self.tie_tolerance)
@@ -283,9 +280,7 @@ def _ranking_values(reference: np.ndarray, judge: np.ndarray) -> dict[str, float
     if len(np.unique(reference)) < 2 or len(np.unique(judge)) < 2:
         spearman = float("nan")
     else:
-        reference_ranks = pd.Series(reference).rank(method="average").to_numpy()
-        judge_ranks = pd.Series(judge).rank(method="average").to_numpy()
-        spearman = float(np.corrcoef(reference_ranks, judge_ranks)[0, 1])
+        spearman = float(spearmanr(reference, judge).statistic)
     return {
         "spearman": spearman,
         "elo_mae": float(np.mean(np.abs(reference - judge))),
@@ -335,9 +330,9 @@ def _pair_stratified_sample(
 class MetaEvalRankingMetric:
     """Configured hard and soft Bradley-Terry agreement with human rankings."""
 
-    tie_tolerance: float = 0.01
-    include_human_ties: bool = False
-    n_bootstraps: int = 1000
+    tie_tolerance: float
+    include_human_ties: bool
+    n_bootstraps: int
 
     def __post_init__(self) -> None:
         _validate_configuration(self.n_bootstraps, self.tie_tolerance)
@@ -366,9 +361,7 @@ class MetaEvalRankingMetric:
             n_models=len(models),
             n_bootstraps=self.n_bootstraps,
         )
-        if len(models) < 3 or comparison_components(rows, models) != [
-            frozenset(models)
-        ]:
+        if comparison_components(rows, models) != [frozenset(models)]:
             return unavailable
         point = _fit_rating_bundle(rows, models, self.tie_tolerance)
         if point is None:
@@ -413,7 +406,7 @@ class MetaEvalRankingMetric:
         return "\n".join(lines)
 
 
-_ELO_GAP_VARIANTS = ("hard", "soft", "hard_no_judge_ties")
+_ELO_GAP_METHODS = ("hard", "soft", "hard_no_judge_ties")
 
 
 def _validate_elo_gap_configuration(
@@ -459,7 +452,7 @@ def _elo_gap_rows(
     tie_tolerance: float,
 ) -> dict[str, list[dict[str, float | int]]]:
     results: dict[str, list[dict[str, float | int]]] = {
-        variant: [] for variant in _ELO_GAP_VARIANTS
+        variant: [] for variant in _ELO_GAP_METHODS
     }
     by_id = battles.set_index("battle_id", drop=False)
     human_by_model = {}
@@ -472,12 +465,12 @@ def _elo_gap_rows(
         ].rename(columns={"reference_pref": "pref"})
 
     for battle_count in battle_counts:
-        replicate_gaps = {variant: [] for variant in _ELO_GAP_VARIANTS}
+        replicate_gaps = {variant: [] for variant in _ELO_GAP_METHODS}
         complete_counts: list[int] = []
-        used_counts = {variant: [] for variant in _ELO_GAP_VARIANTS}
+        used_counts = {variant: [] for variant in _ELO_GAP_METHODS}
 
         for replicate in range(n_seeds):
-            gaps = {variant: [] for variant in _ELO_GAP_VARIANTS}
+            gaps = {variant: [] for variant in _ELO_GAP_METHODS}
             for focal_index, focal_model in enumerate(models):
                 selected_ids = schedules[replicate, focal_model][:battle_count]
                 selected = by_id.loc[selected_ids]
@@ -486,7 +479,7 @@ def _elo_gap_rows(
                 complete_counts.append(len(complete))
                 human = human_by_model[focal_model]
 
-                for variant in _ELO_GAP_VARIANTS:
+                for variant in _ELO_GAP_METHODS:
                     judge = complete[["model_a", "model_b"]].copy()
                     judge["pref"] = (
                         complete["pref"].to_numpy(dtype=float)
@@ -504,11 +497,11 @@ def _elo_gap_rows(
                             abs(fitted[focal_index] - reference[focal_index])
                         )
 
-            for variant in _ELO_GAP_VARIANTS:
+            for variant in _ELO_GAP_METHODS:
                 if len(gaps[variant]) == len(models) and models:
                     replicate_gaps[variant].append(float(np.mean(gaps[variant])))
 
-        for variant in _ELO_GAP_VARIANTS:
+        for variant in _ELO_GAP_METHODS:
             valid = replicate_gaps[variant]
             mean_gap = float(np.mean(valid)) if valid else float("nan")
             sampling_se = (
@@ -539,9 +532,9 @@ def _elo_gap_rows(
 class MetaEvalEloGapMetric:
     """Held-out focal-model Elo error at fixed annotation budgets."""
 
-    battle_counts: tuple[int, ...] = (10, 20, 30, 40, 50)
-    n_seeds: int = 10
-    tie_tolerance: float = 0.01
+    battle_counts: tuple[int, ...]
+    n_seeds: int
+    tie_tolerance: float
 
     def __post_init__(self) -> None:
         counts = _validate_elo_gap_configuration(
@@ -555,7 +548,7 @@ class MetaEvalEloGapMetric:
         *,
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
-        """Calculate hard, soft, and judge-tie-excluded Elo gaps."""
+        """Calculate the hard, soft, and judge-tie-excluded Elo-gap methods."""
         _validate_battles(battles)
         if rng is None:
             raise ValueError("Meta-evaluation Elo gap requires an RNG.")
@@ -595,7 +588,7 @@ class MetaEvalEloGapMetric:
             columns={"reference_pref": "pref"}
         )
         reference = _elo_gap_vector(human, models)
-        variants = _elo_gap_rows(
+        methods = _elo_gap_rows(
             models=models,
             battles=battles,
             schedules=schedules,
@@ -608,7 +601,7 @@ class MetaEvalEloGapMetric:
             "schedule_seed": schedule_seed,
             "battle_counts_requested": list(self.battle_counts),
             "n_seeds_requested": self.n_seeds,
-            **variants,
+            **methods,
         }
 
     @staticmethod
@@ -619,7 +612,7 @@ class MetaEvalEloGapMetric:
             f"{values['n_seeds_requested']} sampling seeds "
             f"(schedule seed {values['schedule_seed']})"
         ]
-        for variant in _ELO_GAP_VARIANTS:
+        for variant in _ELO_GAP_METHODS:
             lines.append(f"  {variant}:")
             for row in values[variant]:
                 gap = _format_estimate(row["mean_gap"], row["sampling_se"], digits=1)

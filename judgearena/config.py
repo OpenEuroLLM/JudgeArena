@@ -349,7 +349,7 @@ class MetaEvalArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    top_models: int = Field(default=20, ge=3)
+    top_models: int = Field(default=20, ge=2)
     """Number of the arena's most-battled models to include."""
 
     battles_per_model: int = Field(default=50, gt=0)

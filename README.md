@@ -305,7 +305,7 @@ The task definitions configure three metrics:
 
 - `meta_eval_agreement` reports coverage, attempted accuracy, complete-only accuracy, and complete-only Cohen's kappa. It reports bootstrap standard errors for both accuracies and kappa. Incomplete judgments count as incorrect in attempted accuracy.
 - `meta_eval_ranking` compares human, hard-judge, and soft-judge Bradley-Terry ratings using Spearman correlation and Elo MAE. Bootstrap draws resample battles within matchup strata.
-- `meta_eval_elo_gap` measures the mean focal-model rating gap at budgets of attempted incident battles per focal model. These values are not run-wide annotation counts.
+- `meta_eval_elo_gap` measures the mean focal-model rating gap at budgets of attempted incident battles per focal model. It reports hard, soft, and hard-without-judge-ties methods on the same nested sampling schedules. These values are not run-wide annotation counts.
 
 The default prompt is `meta-eval-pair-score`. It requires integer scores from 0 to 10 for both responses and converts them to a continuous preference with temperature `0.5`.
 
