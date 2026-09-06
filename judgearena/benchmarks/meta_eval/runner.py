@@ -16,6 +16,7 @@ from judgearena.artifacts import (
     write_run_metadata_safely,
 )
 from judgearena.benchmarks.arena import resolve_task_languages
+from judgearena.benchmarks.elo.rating import winner_to_pref
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
@@ -38,12 +39,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_WINNER_PREFERENCES = {
-    "model_a": 0.0,
-    "model_b": 1.0,
-    "tie": 0.5,
-    "tie (bothbad)": 0.5,
-}
 _REQUIRED_COLUMNS = {
     "question_id",
     "model_a",
@@ -87,7 +82,7 @@ def _prepare_arena_battles(
             f"Task {task!r} contains duplicate physical battle IDs."
         )
 
-    battles["reference_pref"] = battles["winner"].map(_WINNER_PREFERENCES)
+    battles["reference_pref"] = battles["winner"].map(winner_to_pref)
     invalid_winners = sorted(
         {
             str(value)

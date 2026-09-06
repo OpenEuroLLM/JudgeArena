@@ -407,7 +407,7 @@ def test_meta_eval_config_accepts_explicit_sampling_settings():
         ({"model": {"baseline": "Dummy/b"}}, "model.baseline"),
         ({"elo": {}}, "elo config"),
         ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
-        ({"meta_eval": {"top_models": 2}}, "greater than or equal to 3"),
+        ({"meta_eval": {"top_models": 1}}, "greater than or equal to 2"),
         ({"meta_eval": {"n_bootstraps": 7}}, "Extra inputs are not permitted"),
     ],
 )
