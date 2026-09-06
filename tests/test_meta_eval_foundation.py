@@ -114,17 +114,35 @@ def _meta_task() -> dict[str, object]:
             "arena": "Test Arena",
             "baseline": {"strategy": "none"},
             "judge": {"default_prompt_preset": "meta-eval-pair-score"},
-            "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]},
+            "scoring": {
+                "metrics": [
+                    {
+                        "metric": "meta_eval_agreement",
+                        "parameters": {"n_bootstraps": 10, "tie_tolerance": 0.01},
+                    }
+                ]
+            },
         },
     }
 
 
 def test_meta_eval_protocol_uses_no_baseline_and_current_scoring_schema():
-    task = TaskSpec.model_validate(_meta_task())
+    definition = _meta_task()
+    task = TaskSpec.model_validate(definition)
 
     assert isinstance(task.protocol, MetaEvalProtocol)
     assert task.protocol.baseline.strategy == "none"
-    assert task.protocol.scoring.metrics[0].metric == "pairwise_win_rate"
+    assert task.protocol.scoring.metrics[0].metric == "meta_eval_agreement"
+
+    metric = definition["protocol"]["scoring"]["metrics"][0]  # type: ignore[index]
+    metric["metric"] = "pairwise_win_rate"
+    with pytest.raises(ValueError, match="unsupported meta-evaluation metric"):
+        TaskSpec.model_validate(definition)
+
+    metric["metric"] = "meta_eval_agreement"
+    metric["group_by"] = ["lang"]
+    with pytest.raises(ValueError, match="does not support group_by"):
+        TaskSpec.model_validate(definition)
 
 
 def test_meta_eval_protocol_rejects_a_model_baseline():

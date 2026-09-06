@@ -74,6 +74,21 @@ def _fake_annotations(sample: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def test_prepare_arena_battles_drops_self_comparisons():
+    arena = _arena()
+    self_comparison = arena.iloc[[0]].copy()
+    self_comparison["question_id"] = "self-comparison"
+    self_comparison["model_b"] = self_comparison["model_a"]
+    source = pd.concat([arena, self_comparison], ignore_index=True)
+
+    prepared = runner_module._prepare_arena_battles(
+        source, task="meta-eval-test", arena="TestArena", languages=[]
+    )
+
+    assert len(prepared) == len(arena)
+    assert not (prepared["model_a"] == prepared["model_b"]).any()
+
+
 def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monkeypatch):
     task = get_packaged_task("meta-eval-comparia")
     assert task is not None

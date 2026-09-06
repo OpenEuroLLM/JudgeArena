@@ -515,8 +515,6 @@ def _elo_gap_rows(
                     "mean_gap": mean_gap,
                     "sampling_se": sampling_se,
                     "n_seeds_valid": len(valid),
-                    "n_seeds_failed": n_seeds - len(valid),
-                    "n_models": len(models),
                     "mean_complete_per_model": float(np.mean(complete_counts))
                     if complete_counts
                     else float("nan"),
@@ -599,7 +597,7 @@ class MetaEvalEloGapMetric:
         )
         return {
             "schedule_seed": schedule_seed,
-            "battle_counts_requested": list(self.battle_counts),
+            "n_models": len(models),
             "n_seeds_requested": self.n_seeds,
             **methods,
         }

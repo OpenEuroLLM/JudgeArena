@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -75,6 +76,18 @@ def _pass_row(battle_id: str, orientation: str, pref: float) -> dict[str, object
         "orientation": orientation,
         "pref": pref,
     }
+
+
+def test_battle_texts_accepts_parquet_array_conversations():
+    sample = _sample()
+    for column in ("conversation_a", "conversation_b"):
+        sample.at[0, column] = np.asarray(sample.at[0, column], dtype=object)
+
+    assert _battle_texts(sample) == (
+        ["Same prompt"],
+        ["Alpha answer"],
+        ["Beta answer"],
+    )
 
 
 def test_annotation_uses_each_structured_parse_and_preserves_raw_evidence(
