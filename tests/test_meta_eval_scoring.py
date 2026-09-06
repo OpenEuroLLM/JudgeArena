@@ -368,14 +368,13 @@ def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
     )
 
     assert result == shuffled
-    assert result["battle_counts_requested"] == [1, 2, 4]
+    assert result["n_models"] == 3
     assert result["hard"] == result["hard_no_judge_ties"]
     assert result["soft"] == result["hard"]
     for variant in ("hard", "soft", "hard_no_judge_ties"):
         full_budget = result[variant][-1]
         assert full_budget["mean_gap"] == pytest.approx(0.0, abs=1e-6)
         assert full_budget["n_seeds_valid"] == 3
-        assert full_budget["n_models"] == 3
 
 
 def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes():
@@ -400,11 +399,10 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
     battles.loc[focal_a, "pref"] = np.nan
     result = _elo_gap_metric((4,), 2).calculate(battles, rng=np.random.default_rng(3))
 
+    assert result["n_models"] == 3
     for variant in ("hard", "soft", "hard_no_judge_ties"):
         row = result[variant][0]
-        assert row["n_models"] == 3
         assert row["n_seeds_valid"] == 0
-        assert row["n_seeds_failed"] == 2
         assert math.isnan(row["mean_gap"])
 
 

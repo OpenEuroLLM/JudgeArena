@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
@@ -32,7 +33,10 @@ def _battle_texts(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
         conversations = []
         for column in ("conversation_a", "conversation_b"):
             conversation = battle[column]
-            if not isinstance(conversation, (list, tuple)) or len(conversation) < 2:
+            if (
+                not isinstance(conversation, (list, tuple, np.ndarray))
+                or len(conversation) < 2
+            ):
                 raise ValueError(
                     f"Battle {battle_id!r} requires user and assistant turns in "
                     f"{column}."
