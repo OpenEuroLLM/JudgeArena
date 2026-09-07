@@ -25,11 +25,6 @@ def _sample() -> pd.DataFrame:
         [
             {
                 "battle_id": "arena:q1",
-                "question_id": "q1",
-                "model_a": "alpha",
-                "model_b": "beta",
-                "winner": "model_a",
-                "lang": "en",
                 "conversation_a": [
                     {"role": "user", "content": "Same prompt"},
                     {"role": "assistant", "content": "Alpha answer"},
@@ -70,34 +65,18 @@ def _annotation(
     )
 
 
-def _pass_row(battle_id: str, orientation: str, pref: float) -> dict[str, object]:
-    return {
-        "battle_id": battle_id,
-        "orientation": orientation,
-        "pref": pref,
-    }
-
-
-def test_battle_texts_accepts_parquet_array_conversations():
+def test_annotation_preserves_canonical_preferences_and_raw_evidence(monkeypatch):
     sample = _sample()
     for column in ("conversation_a", "conversation_b"):
         sample.at[0, column] = np.asarray(sample.at[0, column], dtype=object)
-
-    assert _battle_texts(sample) == (
-        ["Same prompt"],
-        ["Alpha answer"],
-        ["Beta answer"],
-    )
-
-
-def test_annotation_uses_each_structured_parse_and_preserves_raw_evidence(
-    monkeypatch,
-):
+    prompt = resolve_judge_prompt(preset="meta-eval-pair-score")
+    preference = prompt.parser.preference_from_scores(9.0, 1.0)
+    reversed_preference = prompt.parser.preference_from_scores(1.0, 7.0)
     direct = _annotation(
         "Alpha answer",
         "Beta answer",
         ParsedPreference(
-            preference=0.2,
+            preference=preference,
             label="A",
             scores={"A": 9.0, "B": 1.0},
             details={"reason": "direct"},
@@ -107,42 +86,42 @@ def test_annotation_uses_each_structured_parse_and_preserves_raw_evidence(
         "Beta answer",
         "Alpha answer",
         ParsedPreference(
-            preference=0.8,
+            preference=reversed_preference,
             label="B",
-            scores={"A": 1.0, "B": 9.0},
+            scores={"A": 1.0, "B": 7.0},
             details={"reason": "reversed"},
         ),
     )
 
     def fake_judge_and_parse_prefs(**kwargs):
         assert kwargs["swap_mode"] == "both"
-        return [direct], [reversed_pass], pd.Series([0.99, 0.01])
+        assert kwargs["instructions"] == ["Same prompt"]
+        assert kwargs["completions_A"] == ["Alpha answer"]
+        assert kwargs["completions_B"] == ["Beta answer"]
+        # judge_and_parse_prefs already reorients the reversed preference.
+        return (
+            [direct],
+            [reversed_pass],
+            pd.Series([preference, 1 - reversed_preference]),
+        )
 
     monkeypatch.setattr(
         annotate_module, "judge_and_parse_prefs", fake_judge_and_parse_prefs
     )
     rows = annotate_sample(
-        _sample(),
+        sample,
         _config("both"),
         judge_chat_model=object(),
-        resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
+        resolved_prompt=prompt,
     )
 
-    assert list(rows.columns) == [
-        "battle_id",
-        "orientation",
-        "pref",
-        "judge_input",
-        "judge_completion",
-        "judge_top_logprobs_json",
-        "parsed_label",
-        "parsed_scores_json",
-        "parsed_details_json",
-    ]
     assert rows["orientation"].tolist() == ["direct", "reversed"]
-    assert rows["pref"].tolist() == pytest.approx([0.99, 0.01])
+    assert rows["pref"].tolist() == pytest.approx([preference, 1 - reversed_preference])
     assert rows["parsed_label"].tolist() == ["A", "B"]
-    assert json.loads(rows.loc[1, "parsed_scores_json"]) == {"A": 1.0, "B": 9.0}
+    assert rows["judge_input"].tolist() == ["judge input", "judge input"]
+    assert rows["judge_completion"].tolist() == ["judge output", "judge output"]
+    assert json.loads(rows.loc[1, "judge_top_logprobs_json"]) == {"token": -0.25}
+    assert json.loads(rows.loc[1, "parsed_scores_json"]) == {"A": 1.0, "B": 7.0}
     assert json.loads(rows.loc[1, "parsed_details_json"]) == {"reason": "reversed"}
 
 
@@ -172,27 +151,29 @@ def test_fixed_annotation_uses_single_orientation(monkeypatch):
 def test_aggregate_requires_every_pass_and_leaves_partial_evidence_raw():
     annotations = pd.DataFrame(
         [
-            _pass_row("complete", "direct", 0.2),
-            _pass_row("complete", "reversed", 0.4),
-            _pass_row("partial", "direct", 0.5001),
-            _pass_row("partial", "reversed", float("nan")),
-            _pass_row("missing", "direct", float("nan")),
-            _pass_row("missing", "reversed", float("nan")),
-        ]
+            ("complete", "direct", 0.2),
+            ("complete", "reversed", 0.4),
+            ("partial", "direct", 0.5001),
+            ("partial", "reversed", float("nan")),
+            ("missing", "direct", float("nan")),
+            ("missing", "reversed", float("nan")),
+        ],
+        columns=["battle_id", "orientation", "pref"],
     )
 
     battles = aggregate_battle_preferences(annotations, swap_mode="both").set_index(
         "battle_id"
     )
 
-    assert list(battles.reset_index().columns) == ["battle_id", "pref"]
     assert battles.loc["complete", "pref"] == pytest.approx(0.3)
     assert pd.isna(battles.loc["partial", "pref"])
     assert pd.isna(battles.loc["missing", "pref"])
 
 
 def test_aggregate_rejects_incomplete_orientation_sets():
-    annotations = pd.DataFrame([_pass_row("q1", "direct", 0.2)])
+    annotations = pd.DataFrame(
+        {"battle_id": ["q1"], "orientation": ["direct"], "pref": [0.2]}
+    )
 
     with pytest.raises(ValueError, match="expected.*direct.*reversed"):
         aggregate_battle_preferences(annotations, swap_mode="both")

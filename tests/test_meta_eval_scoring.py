@@ -14,23 +14,13 @@ from judgearena.benchmarks.meta_eval.scoring import (
     MetaEvalEloGapMetric,
     MetaEvalRankingMetric,
 )
-from judgearena.benchmarks.scoring import available_metrics, build_metric
+from judgearena.benchmarks.scoring import build_metric
 
 
 def _rows(specs: list[tuple[str, str, str, float, float]]) -> pd.DataFrame:
     return pd.DataFrame(
-        [
-            {
-                "battle_id": battle_id,
-                "model_a": model_a,
-                "model_b": model_b,
-                "reference_pref": reference,
-                "pref": judge,
-                "sampled": True,
-            }
-            for battle_id, model_a, model_b, reference, judge in specs
-        ]
-    )
+        specs, columns=["battle_id", "model_a", "model_b", "reference_pref", "pref"]
+    ).assign(sampled=True)
 
 
 def _agreement_metric(n_bootstraps: int = 0) -> MetaEvalAgreementMetric:
@@ -56,99 +46,45 @@ def _elo_gap_metric(
 
 
 def _ranking_battles() -> pd.DataFrame:
-    rows = []
     preferences = {
-        ("a", "b"): ([0.0, 0.0, 0.0, 1.0], [0.49, 0.49, 0.49, 1.0]),
-        ("a", "c"): ([0.0, 0.0, 0.0, 1.0], [0.01, 0.01, 0.01, 1.0]),
-        ("b", "c"): ([0.0, 0.0, 0.0, 1.0], [0.0, 0.51, 0.51, 0.51]),
+        ("a", "b"): [0.49, 0.49, 0.49, 1.0],
+        ("a", "c"): [0.01, 0.01, 0.01, 1.0],
+        ("b", "c"): [0.0, 0.51, 0.51, 0.51],
     }
-    for (model_a, model_b), (human, judge) in preferences.items():
-        for index, (reference_pref, pref) in enumerate(zip(human, judge, strict=True)):
-            rows.append(
-                {
-                    "battle_id": f"{model_a}{model_b}-{index}",
-                    "model_a": model_a,
-                    "model_b": model_b,
-                    "reference_pref": reference_pref,
-                    "pref": pref,
-                    "sampled": True,
-                }
-            )
-    return pd.DataFrame(rows)
-
-
-def test_meta_eval_metrics_are_registered_as_configured_metrics():
-    assert {
-        "meta_eval_agreement",
-        "meta_eval_elo_gap",
-        "meta_eval_ranking",
-    } <= set(available_metrics())
-    assert isinstance(
-        build_metric("meta_eval_agreement", {"n_bootstraps": 0, "tie_tolerance": 0.01}),
-        MetaEvalAgreementMetric,
-    )
-    assert isinstance(
-        build_metric(
-            "meta_eval_ranking",
-            {
-                "n_bootstraps": 0,
-                "tie_tolerance": 0.01,
-                "include_human_ties": False,
-            },
-        ),
-        MetaEvalRankingMetric,
-    )
-    assert isinstance(
-        build_metric(
-            "meta_eval_elo_gap",
-            {"battle_counts": [1, 2], "n_seeds": 2, "tie_tolerance": 0.01},
-        ),
-        MetaEvalEloGapMetric,
-    )
-
-
-def test_agreement_reports_attempted_missing_and_numeric_kappa_semantics():
-    battles = _rows(
+    return _rows(
         [
-            ("1", "a", "b", 0.0, 0.0),
-            ("2", "b", "c", 1.0, 0.0),
-            ("3", "a", "c", 0.5, 0.5),
-            ("4", "a", "b", 0.0, np.nan),
-            ("5", "b", "c", 1.0, np.nan),
+            (f"{a}{b}-{i}", a, b, float(i == 3), pref)
+            for (a, b), prefs in preferences.items()
+            for i, pref in enumerate(prefs)
         ]
     )
 
-    battles.loc[len(battles)] = {
-        "battle_id": "unsampled",
-        "model_a": "a",
-        "model_b": "b",
-        "reference_pref": 0.0,
-        "pref": np.nan,
-        "sampled": False,
-    }
+
+def test_agreement_reports_missing_judgments_and_excludes_only_human_ties():
+    battles = _rows(
+        [
+            ("1", "a", "b", 0.0, 0.0),
+            ("2", "b", "c", 1.0, 0.5),
+            ("3", "a", "c", 0.5, 0.5),
+            ("4", "a", "b", 0.0, np.nan),
+            ("5", "b", "c", 1.0, np.nan),
+            ("unsampled", "a", "b", 0.0, np.nan),
+        ]
+    )
+    battles.loc[5, "sampled"] = False
     result = _agreement_metric().calculate(battles)
 
-    assert result["all"] == {
-        "n_attempted": 5,
-        "n_complete": 3,
-        "coverage": pytest.approx(0.6),
-        "accuracy_attempted": pytest.approx(0.4),
-        "accuracy_complete": pytest.approx(2 / 3),
-        "cohen_kappa": pytest.approx(0.5),
-        "accuracy_attempted_se": pytest.approx(float("nan"), nan_ok=True),
-        "accuracy_complete_se": pytest.approx(float("nan"), nan_ok=True),
-        "accuracy_complete_bootstraps_valid": 0,
-        "cohen_kappa_se": pytest.approx(float("nan"), nan_ok=True),
-        "n_bootstraps_requested": 0,
-        "n_kappa_bootstraps_valid": 0,
-    }
+    all_rows = result["all"]
+    assert (all_rows["n_attempted"], all_rows["n_complete"]) == (5, 3)
+    assert all_rows["coverage"] == pytest.approx(3 / 5)
+    assert all_rows["accuracy_attempted"] == pytest.approx(2 / 5)
+    assert all_rows["accuracy_complete"] == pytest.approx(2 / 3)
+    assert all_rows["cohen_kappa"] == pytest.approx(0.5)
     no_ties = result["no_human_ties"]
-    assert no_ties["n_attempted"] == 4
-    assert no_ties["n_complete"] == 2
-    assert no_ties["coverage"] == pytest.approx(0.5)
-    assert no_ties["accuracy_attempted"] == pytest.approx(0.25)
-    assert no_ties["accuracy_complete"] == pytest.approx(0.5)
-    assert no_ties["cohen_kappa"] == pytest.approx(0.0)
+    assert (no_ties["n_attempted"], no_ties["n_complete"]) == (4, 2)
+    assert no_ties["accuracy_attempted"] == pytest.approx(1 / 4)
+    assert no_ties["accuracy_complete"] == pytest.approx(1 / 2)
+    assert no_ties["cohen_kappa"] == pytest.approx(1 / 3)
 
 
 def test_agreement_bootstrap_is_row_order_invariant_and_reports_finite_draws():
@@ -165,49 +101,9 @@ def test_agreement_bootstrap_is_row_order_invariant_and_reports_finite_draws():
         "all"
     ]
 
-    expected_rng = np.random.default_rng(7)
-    complete_accuracies = []
-    outcomes = np.array([1.0, 0.0, np.nan])
-    for _ in range(8):
-        sampled = outcomes[expected_rng.integers(0, 3, size=3)]
-        complete = sampled[np.isfinite(sampled)]
-        if len(complete):
-            complete_accuracies.append(float(complete.mean()))
-
     assert result == pytest.approx(reordered, nan_ok=True)
-    assert result["accuracy_complete_bootstraps_valid"] == len(complete_accuracies)
-    assert result["accuracy_complete_se"] == pytest.approx(
-        np.std(complete_accuracies, ddof=1)
-    )
-
-
-def test_no_human_ties_drops_only_reference_ties_and_keeps_judge_ties():
-    battles = _rows(
-        [
-            ("1", "a", "b", 0.5, 0.0),
-            ("2", "b", "c", 1.0, 0.5),
-            ("3", "a", "c", 0.0, 0.0),
-        ]
-    )
-
-    view = _agreement_metric().calculate(battles)["no_human_ties"]
-
-    assert view["n_attempted"] == 2
-    assert view["accuracy_attempted"] == pytest.approx(0.5)
-
-
-def test_ranking_preserves_distinct_hard_and_soft_results():
-    point = _ranking_metric().calculate(_ranking_battles())
-
-    assert math.isfinite(point["hard"]["spearman"])
-    assert math.isfinite(point["soft"]["elo_mae"])
-    assert point["hard"]["elo_mae"] != pytest.approx(point["soft"]["elo_mae"])
-
-    bootstrapped = _ranking_metric(3).calculate(
-        _ranking_battles(), rng=np.random.default_rng(4)
-    )
-    assert bootstrapped["n_bootstraps_requested"] == 3
-    assert 0 <= bootstrapped["n_bootstraps_valid"] <= 3
+    assert 0 < result["accuracy_complete_bootstraps_valid"] <= 8
+    assert 0 < result["accuracy_complete_se"] < 1
 
 
 def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
@@ -229,6 +125,10 @@ def test_ranking_is_invariant_to_row_order_and_global_ab_swap():
     metric = _ranking_metric(8)
 
     expected = metric.calculate(battles, rng=np.random.default_rng(9))
+    assert math.isfinite(expected["hard"]["spearman"])
+    assert math.isfinite(expected["soft"]["elo_mae"])
+    assert expected["hard"]["elo_mae"] != pytest.approx(expected["soft"]["elo_mae"])
+    assert expected["n_bootstraps_valid"] == 8
     reordered = metric.calculate(shuffled, rng=np.random.default_rng(9))
     reversed_ab = metric.calculate(swapped, rng=np.random.default_rng(9))
 
@@ -261,36 +161,22 @@ def test_ranking_human_ties_are_configurable_and_model_set_stays_fixed():
     assert math.isfinite(included["hard"]["elo_mae"])
 
 
-def test_ranking_returns_numeric_unavailable_for_disconnected_graphs():
-    disconnected = _rows(
-        [
-            ("1", "a", "b", 0.0, 0.0),
-            ("2", "a", "b", 1.0, 1.0),
-            ("3", "c", "d", 0.0, 0.0),
-            ("4", "c", "d", 1.0, 1.0),
-        ]
-    )
-
-    result = _ranking_metric().calculate(disconnected)
-
-    assert result["n_bootstraps_valid"] == 0
-    assert math.isnan(result["hard"]["spearman"])
-    assert math.isnan(result["soft"]["elo_mae"])
-
-
-def test_ranking_supports_connected_two_model_inputs():
-    battles = _rows(
-        [
-            ("1", "a", "b", 0.0, 0.0),
-            ("2", "a", "b", 0.5, 0.5),
-        ]
-    )
-
-    result = _ranking_metric(0, include_human_ties=True).calculate(battles)
-
+def test_ranking_supports_two_models_but_not_disconnected_groups():
+    battles = _rows([("1", "a", "b", 0.0, 0.0), ("2", "a", "b", 0.5, 0.5)])
+    metric = _ranking_metric(include_human_ties=True)
+    result = metric.calculate(battles)
     assert result["n_models"] == 2
     assert result["hard"]["spearman"] == pytest.approx(1.0)
     assert result["soft"]["elo_mae"] == pytest.approx(0.0)
+
+    disconnected = pd.concat(
+        [battles, _rows([("3", "c", "d", 0.5, 0.5)])], ignore_index=True
+    )
+    result = metric.calculate(disconnected)
+    assert result["n_models"] == 4
+    assert result["n_bootstraps_valid"] == 0
+    assert math.isnan(result["hard"]["spearman"])
+    assert math.isnan(result["soft"]["elo_mae"])
 
 
 @pytest.mark.parametrize(

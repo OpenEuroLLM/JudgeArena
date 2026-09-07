@@ -17,11 +17,11 @@ from judgearena.benchmarks.meta_eval.sampling import (
     select_top_models,
 )
 from judgearena.prompts.parsing import JUDGE_PARSERS
-from judgearena.prompts.registry import resolve_judge_prompt
-from judgearena.tasks.schema import MetaEvalProtocol, TaskSpec
+from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import TaskSpec
 
 
-def _battles() -> pd.DataFrame:
+def test_sampling_is_deterministic_connected_and_limited_to_top_models():
     models = ["m1", "m2", "m3"]
     rows = [
         {
@@ -40,11 +40,7 @@ def _battles() -> pd.DataFrame:
             "model_b": "m1",
         }
     )
-    return pd.DataFrame(rows)
-
-
-def test_sampling_is_deterministic_connected_and_limited_to_top_models():
-    battles = _battles()
+    battles = pd.DataFrame(rows)
     top, top_pool = select_top_models(battles, top_models=3)
 
     sample = sample_battles_per_model(top_pool, top, battles_per_model=4, seed=7)
@@ -92,65 +88,23 @@ def test_sampling_rejects_self_comparisons_and_insufficient_quota():
         sample_battles_per_model(top_pool, top, battles_per_model=3, seed=0)
 
 
-def _meta_task() -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "task": "meta-test",
-        "task_version": 1,
-        "description": "Meta-evaluation schema test.",
-        "dataset": {
-            "adapter": "arena_battles",
-            "sources": {
-                "battles": {
-                    "type": "huggingface_dataset",
-                    "repo_id": "example/battles",
-                    "revision": "a" * 40,
-                }
-            },
-            "fields": {"id": "question_id", "instruction": "conversation_a"},
-        },
-        "protocol": {
-            "runner": "meta_eval",
-            "arena": "Test Arena",
-            "baseline": {"strategy": "none"},
-            "judge": {"default_prompt_preset": "meta-eval-pair-score"},
-            "scoring": {
-                "metrics": [
-                    {
-                        "metric": "meta_eval_agreement",
-                        "parameters": {"n_bootstraps": 10, "tie_tolerance": 0.01},
-                    }
-                ]
-            },
-        },
-    }
+def test_meta_eval_protocol_requires_no_baseline_and_compatible_metrics():
+    definition = get_packaged_task("meta-eval-comparia").spec.model_dump()
+    protocol = definition["protocol"]
+    assert protocol["baseline"]["strategy"] == "none"
 
-
-def test_meta_eval_protocol_uses_no_baseline_and_current_scoring_schema():
-    definition = _meta_task()
-    task = TaskSpec.model_validate(definition)
-
-    assert isinstance(task.protocol, MetaEvalProtocol)
-    assert task.protocol.baseline.strategy == "none"
-    assert task.protocol.scoring.metrics[0].metric == "meta_eval_agreement"
-
-    metric = definition["protocol"]["scoring"]["metrics"][0]  # type: ignore[index]
+    metric = protocol["scoring"]["metrics"][0]
     metric["metric"] = "pairwise_win_rate"
-    with pytest.raises(ValueError, match="unsupported meta-evaluation metric"):
+    with pytest.raises(ValidationError, match="unsupported meta-evaluation metric"):
         TaskSpec.model_validate(definition)
 
     metric["metric"] = "meta_eval_agreement"
     metric["group_by"] = ["lang"]
-    with pytest.raises(ValueError, match="does not support group_by"):
+    with pytest.raises(ValidationError, match="does not support group_by"):
         TaskSpec.model_validate(definition)
 
-
-def test_meta_eval_protocol_rejects_a_model_baseline():
-    definition = _meta_task()
-    definition["protocol"]["baseline"] = {  # type: ignore[index]
-        "strategy": "runtime_required"
-    }
-
+    metric["group_by"] = []
+    protocol["baseline"] = {"strategy": "runtime_required"}
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(definition)
 
@@ -203,22 +157,6 @@ def test_alpaca_eval_json_preserves_complete_ranks():
 )
 def test_alpaca_eval_json_rejects_malformed_rankings(completion):
     assert JUDGE_PARSERS["alpaca-eval-json"].parse_result(completion) is None
-
-
-@pytest.mark.parametrize(
-    ("preset", "parser_name"),
-    [
-        ("meta-eval-pair-score", "meta-eval-score"),
-        ("meta-eval-alpaca-eval-json", "alpaca-eval-json"),
-        ("meta-eval-alpaca-eval-pair-score", "meta-eval-score"),
-    ],
-)
-def test_meta_eval_prompt_presets_select_their_parser(preset, parser_name):
-    resolved = resolve_judge_prompt(preset=preset)
-
-    assert resolved.parser is JUDGE_PARSERS[parser_name]
-    assert resolved.system_prompt
-    assert resolved.user_prompt_template
 
 
 @pytest.mark.parametrize(

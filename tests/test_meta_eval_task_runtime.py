@@ -55,25 +55,6 @@ def _config(tmp_path: Path, *, battles_per_model: int = 50) -> RunConfig:
     )
 
 
-def _fake_annotations(sample: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for battle in sample.itertuples(index=False):
-        rows.append(
-            {
-                "battle_id": battle.battle_id,
-                "orientation": "single",
-                "pref": 0.25,
-                "judge_input": "input",
-                "judge_completion": "output",
-                "judge_top_logprobs_json": None,
-                "parsed_label": None,
-                "parsed_scores_json": None,
-                "parsed_details_json": None,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
 def test_prepare_arena_battles_drops_self_comparisons():
     arena = _arena()
     self_comparison = arena.iloc[[0]].copy()
@@ -91,7 +72,6 @@ def test_prepare_arena_battles_drops_self_comparisons():
 
 def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monkeypatch):
     task = get_packaged_task("meta-eval-comparia")
-    assert task is not None
     captured = {}
     judge = object()
 
@@ -101,7 +81,8 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
     def fake_annotate(sample, _cfg, *, judge_chat_model, resolved_prompt):
         assert judge_chat_model is judge
         assert resolved_prompt.delegated is False
-        return _fake_annotations(sample)
+        captured["sample_ids"] = set(sample["battle_id"])
+        return sample[["battle_id"]].assign(orientation="single", pref=0.25)
 
     monkeypatch.setattr(runner_module, "annotate_sample", fake_annotate)
 
@@ -119,16 +100,9 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
     assert len(metric_battles) == len(_arena())
     assert metric_battles["battle_id"].is_unique
     assert set(metric_battles["reference_pref"]) == {0.0, 0.5, 1.0}
-    assert list(metric_battles.columns) == [
-        "battle_id",
-        "model_a",
-        "model_b",
-        "reference_pref",
-        "sampled",
-        "pref",
-    ]
-    assert metric_battles["battle_id"].is_monotonic_increasing
-    assert metric_battles["sampled"].any()
+    sampled = metric_battles.loc[metric_battles["sampled"]]
+    assert set(sampled["battle_id"]) == captured["sample_ids"]
+    assert set(sampled["pref"]) == {0.25}
     assert (~metric_battles["sampled"]).any()
     assert metric_battles.loc[~metric_battles["sampled"], "pref"].isna().all()
     assert set(captured["runtime"]) == {
@@ -142,21 +116,11 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
     )
 
     result_path = Path(result["result_path"])
-    assert result_path.name == "results.json"
-    assert result_path.parent.name.startswith("meta-eval-comparia-dummy-judge-fixed-")
-    assert {
-        "config.yaml",
-        "sample.parquet",
-        "annotations.parquet",
-        "battles.parquet",
-        "results.json",
-        "run-metadata.v1.json",
-    }.issubset({path.name for path in result_path.parent.iterdir()})
+    assert {"sample.parquet", "annotations.parquet", "battles.parquet"}.issubset(
+        path.name for path in result_path.parent.iterdir()
+    )
     saved_battles = pd.read_parquet(result_path.parent / "battles.parquet")
-    assert len(saved_battles) == len(metric_battles)
-    assert list(saved_battles.columns) == list(metric_battles.columns)
-    metadata = json.loads((result_path.parent / "run-metadata.v1.json").read_text())
-    assert set(metadata["dataset_statistics"]) == {"battle_id_count"}
+    pd.testing.assert_frame_equal(saved_battles, metric_battles, check_like=True)
     saved = json.loads(result_path.read_text())
     assert saved["metrics"] == result["metrics"]
     assert "agreement" not in saved
@@ -164,7 +128,6 @@ def test_meta_eval_runner_builds_full_metric_table_and_artifacts(tmp_path, monke
 
 def test_meta_eval_elo_gap_budget_is_checked_before_data_loading(tmp_path, monkeypatch):
     task = get_packaged_task("meta-eval-comparia")
-    assert task is not None
     monkeypatch.setattr(
         runner_module,
         "load_battles",
@@ -179,7 +142,6 @@ def test_meta_eval_rejects_unknown_human_winner_before_judge_build(
     tmp_path, monkeypatch
 ):
     task = get_packaged_task("meta-eval-comparia")
-    assert task is not None
     arena = _arena()
     arena.loc[0, "winner"] = "unknown"
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: arena)

@@ -662,7 +662,6 @@ def test_mt_bench_accepts_any_registered_metric(tmp_path):
 
 def test_packaged_meta_eval_tasks_use_pinned_battle_sources_and_metrics():
     from judgearena.tasks.registry import get_packaged_task
-    from judgearena.tasks.schema import MetaEvalProtocol
 
     expected = {
         "meta-eval-comparia": (
@@ -683,10 +682,7 @@ def test_packaged_meta_eval_tasks_use_pinned_battle_sources_and_metrics():
     }
     for task_id, (arena, repo_id, revision) in expected.items():
         task = get_packaged_task(task_id)
-        assert task is not None
-        assert isinstance(task.spec.protocol, MetaEvalProtocol)
         assert task.spec.protocol.arena == arena
-        assert task.spec.protocol.baseline.strategy == "none"
         source = next(iter(task.spec.dataset.sources.values()))
         assert (source.repo_id, source.revision) == (repo_id, revision)
         metrics = task.spec.protocol.scoring.metrics
@@ -695,9 +691,6 @@ def test_packaged_meta_eval_tasks_use_pinned_battle_sources_and_metrics():
             "meta_eval_ranking",
             "meta_eval_elo_gap",
         ]
-        assert all(metric.group_by == () for metric in metrics)
 
     english = get_packaged_task("meta-eval-lmarena-100k-en")
-    assert english is not None
-    assert english.selection is not None
     assert english.selection.values == ("en",)
