@@ -287,27 +287,11 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 | `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
 | `elo-comparia`      | Battles sampled from the ComparIA arena                            |
 
-### Judge meta-evaluation
-
-| Task                     | Description                                          |
-|--------------------------|------------------------------------------------------|
-| `meta-eval-lmarena-100k` | Score a judge against LMSYS Chatbot Arena 100k votes |
-| `meta-eval-lmarena-140k` | Score a judge against LMSYS Chatbot Arena 140k votes |
-| `meta-eval-comparia`     | Score a judge against ComparIA human votes           |
-
-Language suffixes are supported, for example `meta-eval-lmarena-100k-en` and `meta-eval-comparia-fr`.
-
 ## Meta-evaluating a judge
 
-Meta-evaluation uses existing human-labeled arena battles. It does not generate completions or rate a candidate model. The runner selects the most-battled models, builds a deterministic connected sample, and asks the configured judge to compare the stored responses.
+Meta-evaluation scores a judge against existing human-labeled arena battles. It samples a connected set of battles and reports agreement, hard and soft ranking similarity, and held-out Elo error.
 
-The task definitions configure three metrics:
-
-- `meta_eval_agreement` reports coverage, attempted accuracy, complete-only accuracy, and complete-only Cohen's kappa. It reports bootstrap standard errors for both accuracies and kappa. Incomplete judgments count as incorrect in attempted accuracy.
-- `meta_eval_ranking` compares human, hard-judge, and soft-judge Bradley-Terry ratings using Spearman correlation and Elo MAE. Bootstrap draws resample battles within matchup strata.
-- `meta_eval_elo_gap` measures the mean focal-model rating gap at budgets of attempted incident battles per focal model. It reports hard, soft, and hard-without-judge-ties methods on the same nested sampling schedules. These values are not run-wide annotation counts.
-
-The default prompt is `meta-eval-pair-score`. It requires integer scores from 0 to 10 for both responses and converts them to a continuous preference with temperature `0.5`.
+Packaged tasks are `meta-eval-lmarena-100k`, `meta-eval-lmarena-140k`, and `meta-eval-comparia`. Language suffixes such as `-en` and `-fr` are supported.
 
 ```bash
 judgearena \
@@ -318,11 +302,7 @@ judgearena \
   --meta_eval.battles_per_model 50
 ```
 
-Runtime sampling defaults to 20 models and 50 sampled incident battles per model. The task YAML owns metric parameters: the packaged tasks use 1,000 agreement and ranking bootstrap draws, Elo-gap budgets `[10, 20, 30, 40, 50]`, and 10 Elo-gap sampling replicates. The largest Elo-gap budget cannot exceed `--meta_eval.battles_per_model`.
-
-Do not set `--model.name` or `--model.baseline`; meta-evaluation rejects both fields because the arena responses already exist. `judge.swap_mode=random` is also unsupported. With `both`, a physical battle gets a preference only if both passes parse. If only one pass parses, its evidence remains in `annotations.parquet`, while the battle preference is null. Ranking and Elo-gap use only battles with a non-null judge preference. Attempted agreement retains all sampled battles and treats a null preference as incorrect.
-
-A successful run writes `config.yaml`, `sample.parquet`, `annotations.parquet`, `battles.parquet`, and `results.json` to a timestamped directory. `annotations.parquet` contains one lean evidence row per judge pass. `battles.parquet` contains the full selected top-model pool, including unsampled rows, with numeric human references and a nullable complete judge preference. `run-metadata.v1.json` is written on a best-effort basis.
+Runs save the selected sample, judge evidence, metric battles, configuration, and results under `--run.result_folder`.
 
 ## 📈 Estimating ELO Ratings
 
