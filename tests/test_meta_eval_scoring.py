@@ -358,6 +358,7 @@ def test_elo_gap_surfaces_unexpected_fit_errors(monkeypatch):
 
 def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
     battles = _elo_gap_battles()
+    battles.loc[0, ["reference_pref", "pref"]] = 0.5
     metric = _elo_gap_metric((1, 2, 4), 3)
 
     with pytest.raises(ValueError, match="requires an RNG"):
@@ -369,12 +370,12 @@ def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
 
     assert result == shuffled
     assert result["n_models"] == 3
-    assert result["hard"] == result["hard_no_judge_ties"]
     assert result["soft"] == result["hard"]
-    for variant in ("hard", "soft", "hard_no_judge_ties"):
+    for variant in ("hard", "soft"):
         full_budget = result[variant][-1]
         assert full_budget["mean_gap"] == pytest.approx(0.0, abs=1e-6)
         assert full_budget["n_seeds_valid"] == 3
+        assert full_budget["mean_used_per_model"] == 4
 
 
 def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes():
@@ -384,7 +385,7 @@ def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes(
         battles, rng=np.random.default_rng(7)
     )
 
-    for variant in ("hard", "soft", "hard_no_judge_ties"):
+    for variant in ("hard", "soft"):
         rows = result[variant]
         complete = [row["mean_complete_per_model"] for row in rows]
         assert complete == sorted(complete)
@@ -400,7 +401,7 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
     result = _elo_gap_metric((4,), 2).calculate(battles, rng=np.random.default_rng(3))
 
     assert result["n_models"] == 3
-    for variant in ("hard", "soft", "hard_no_judge_ties"):
+    for variant in ("hard", "soft"):
         row = result[variant][0]
         assert row["n_seeds_valid"] == 0
         assert math.isnan(row["mean_gap"])
