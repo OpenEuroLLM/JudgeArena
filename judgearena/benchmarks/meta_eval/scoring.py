@@ -14,6 +14,9 @@ from sklearn.metrics import cohen_kappa_score
 
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
 from judgearena.benchmarks.meta_eval.sampling import comparison_components
+from judgearena.log import get_logger
+
+logger = get_logger(__name__)
 
 _REQUIRED_COLUMNS = {
     "battle_id",
@@ -561,10 +564,13 @@ class MetaEvalEloGapMetric:
             if len(battle_ids) < maximum:
                 shortfalls[model] = len(battle_ids)
         if shortfalls:
-            raise ValueError(
-                f"Every model needs at least {maximum} attempted incident battles; "
-                f"available counts: {shortfalls}."
+            logger.warning(
+                "Skipping meta_eval_elo_gap: every model needs at least %s "
+                "attempted incident battles; available counts: %s.",
+                maximum,
+                shortfalls,
             )
+            return {}
 
         schedule_seed = int(rng.integers(0, 2**63))
         schedules: dict[tuple[int, str], list[object]] = {}

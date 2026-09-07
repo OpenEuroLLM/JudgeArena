@@ -11,8 +11,6 @@ from pydantic import ValidationError
 import judgearena.evaluate as evaluate_module
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
-    comparison_components,
-    count_battles_per_model,
     sample_battles_per_model,
     select_top_models,
 )
@@ -21,50 +19,30 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
 
 
-def test_sampling_is_deterministic_connected_and_limited_to_top_models():
-    models = ["m1", "m2", "m3"]
+def test_sampling_preserves_the_only_bridge_and_each_models_quota():
     rows = [
-        {
-            "battle_id": f"arena:q{i}",
-            "question_id": f"q{i}",
-            "model_a": models[i % 3],
-            "model_b": models[(i + 1) % 3],
-        }
-        for i in range(18)
+        (f"{a}{b}-{i}", a, b) for a, b in (("a", "b"), ("c", "d")) for i in range(6)
     ]
-    rows.append(
-        {
-            "battle_id": "arena:rare",
-            "question_id": "rare",
-            "model_a": "rare",
-            "model_b": "m1",
-        }
-    )
-    battles = pd.DataFrame(rows)
-    top, top_pool = select_top_models(battles, top_models=3)
-
-    sample = sample_battles_per_model(top_pool, top, battles_per_model=4, seed=7)
+    # The dense pairs can meet their quotas without connecting to each other.
+    rows += [("bridge", "b", "c"), ("rare", "rare", "a")]
+    battles = pd.DataFrame(rows, columns=["battle_id", "model_a", "model_b"])
+    top, pool = select_top_models(battles, top_models=4)
+    sample = sample_battles_per_model(pool, top, battles_per_model=4, seed=7)
     shuffled = sample_battles_per_model(
-        top_pool.sample(frac=1, random_state=42),
-        top,
-        battles_per_model=4,
-        seed=7,
+        pool.sample(frac=1, random_state=42), top, battles_per_model=4, seed=7
     )
 
-    assert set(top) == {"m1", "m2", "m3"}
-    assert "rare" not in set(top_pool["question_id"])
+    counts = pd.concat([sample["model_a"], sample["model_b"]]).value_counts()
+    assert set(counts.index) == set(top) == {"a", "b", "c", "d"}
+    assert counts.min() >= 4
     assert sample["battle_id"].is_unique
-    assert all(count >= 4 for count in count_battles_per_model(sample).values())
-    assert comparison_components(sample, top) == [frozenset(top)]
+    assert "bridge" in set(sample["battle_id"])
     pd.testing.assert_frame_equal(sample, shuffled)
 
 
 def test_sampling_rejects_disconnected_top_model_pool():
     battles = pd.DataFrame(
-        [
-            {"model_a": "a", "model_b": "b"},
-            {"model_a": "c", "model_b": "d"},
-        ]
+        [{"model_a": "a", "model_b": "b"}, {"model_a": "c", "model_b": "d"}]
     )
 
     with pytest.raises(MetaEvalSamplingError, match="disconnected"):
@@ -160,8 +138,7 @@ def test_alpaca_eval_json_rejects_malformed_rankings(completion):
 
 
 @pytest.mark.parametrize(
-    "preset",
-    ["meta-eval-alpaca-eval-json", "meta-eval-alpaca-eval-pair-score"],
+    "preset", ["meta-eval-alpaca-eval-json", "meta-eval-alpaca-eval-pair-score"]
 )
 def test_meta_eval_alpaca_prompts_embed_json_safe_inputs(preset, monkeypatch):
     captured_inputs = []

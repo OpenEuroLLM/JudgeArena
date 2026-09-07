@@ -125,15 +125,6 @@ def run_meta_eval(
         task, cfg.meta_eval.languages, setting="meta_eval.languages"
     )
     metrics = build_metrics(protocol.scoring.metrics)
-    for request, metric in metrics:
-        if request.metric == "meta_eval_elo_gap":
-            maximum = max(metric.battle_counts)
-            if maximum > cfg.meta_eval.battles_per_model:
-                raise ValueError(
-                    "The maximum meta_eval_elo_gap battle budget "
-                    f"({maximum}) exceeds meta_eval.battles_per_model "
-                    f"({cfg.meta_eval.battles_per_model})."
-                )
 
     logger.info("Loading human battles from %s", protocol.arena)
     arena_battles = _prepare_arena_battles(

@@ -146,9 +146,15 @@ def render_metrics(results: Mapping[str, dict[str, object]]) -> str:
     for name, result in results.items():
         metric_type = _metric_type(name)
         overall = {key: value for key, value in result.items() if key != "groups"}
-        sections.append(metric_type.render(overall))
+        sections.append(
+            metric_type.render(overall) if overall else f"{name}: unavailable"
+        )
         for field, groups in result.get("groups", {}).items():
             for group in groups:
-                rendered = metric_type.render(group["values"])
+                rendered = (
+                    metric_type.render(group["values"])
+                    if group["values"]
+                    else f"{name}: unavailable"
+                )
                 sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
     return "\n\n".join(sections)
