@@ -406,7 +406,7 @@ class MetaEvalRankingMetric:
         return "\n".join(lines)
 
 
-_ELO_GAP_METHODS = ("hard", "soft", "hard_no_judge_ties")
+_ELO_GAP_METHODS = ("hard", "soft")
 
 
 def _validate_elo_gap_configuration(
@@ -486,8 +486,6 @@ def _elo_gap_rows(
                         if variant == "soft"
                         else hard_prefs
                     )
-                    if variant == "hard_no_judge_ties":
-                        judge = judge.loc[judge["pref"].ne(0.5)]
                     used_counts[variant].append(len(judge))
 
                     hybrid = pd.concat([human, judge], ignore_index=True)
@@ -546,7 +544,7 @@ class MetaEvalEloGapMetric:
         *,
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
-        """Calculate the hard, soft, and judge-tie-excluded Elo-gap methods."""
+        """Calculate hard and soft Elo gaps, retaining ties in both methods."""
         _validate_battles(battles)
         if rng is None:
             raise ValueError("Meta-evaluation Elo gap requires an RNG.")
