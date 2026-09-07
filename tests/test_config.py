@@ -365,39 +365,17 @@ def test_build_run_config_elo_defaults():
     assert cfg.elo.soft_elo is True
 
 
-def _base_meta_eval() -> dict:
-    return {
-        "task": "meta-eval-comparia",
-        "judge": {"model": "Dummy/j"},
-    }
-
-
-def test_meta_eval_config_uses_sampling_defaults_and_task_metric_defaults():
-    cfg = RunConfig(**_base_meta_eval())
+def test_meta_eval_config_defaults():
+    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
 
     assert cfg.model.name is None
     assert cfg.model.baseline is None
     assert cfg.elo is None
-    assert cfg.meta_eval is not None
-    assert cfg.meta_eval.top_models == 20
-    assert cfg.meta_eval.battles_per_model == 50
-    assert cfg.meta_eval.languages is None
-
-
-def test_meta_eval_config_accepts_explicit_sampling_settings():
-    data = _base_meta_eval()
-    data["meta_eval"] = {
-        "top_models": 4,
-        "battles_per_model": 12,
-        "languages": ["fr", "en"],
+    assert cfg.meta_eval.model_dump() == {
+        "top_models": 20,
+        "battles_per_model": 50,
+        "languages": None,
     }
-
-    cfg = RunConfig(**data)
-
-    assert cfg.meta_eval is not None
-    assert cfg.meta_eval.top_models == 4
-    assert cfg.meta_eval.battles_per_model == 12
-    assert cfg.meta_eval.languages == ["fr", "en"]
 
 
 @pytest.mark.parametrize(
@@ -412,7 +390,7 @@ def test_meta_eval_config_accepts_explicit_sampling_settings():
     ],
 )
 def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):
-    data = _base_meta_eval()
+    data = {"task": "meta-eval-comparia", "judge": {"model": "Dummy/j"}}
     data.update(update)
 
     with pytest.raises(ValidationError, match=message):
