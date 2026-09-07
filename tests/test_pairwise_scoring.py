@@ -296,3 +296,13 @@ def test_build_metrics_preserves_order_and_applies_overrides():
     ]
     assert configured[1][1].n_bootstraps == 3
     assert configured[1][0].parameters == {"n_bootstraps": 2}
+
+
+def test_render_metrics_handles_empty_overall_and_group_results():
+    results = {
+        "pairwise_win_rate": {"groups": {"lang": [{"group": "en", "values": {}}]}}
+    }
+
+    assert render_metrics(results) == (
+        "pairwise_win_rate: unavailable\n\nlang=en:\n  pairwise_win_rate: unavailable"
+    )

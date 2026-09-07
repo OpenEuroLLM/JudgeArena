@@ -222,11 +222,7 @@ def _elo_gap_battles() -> pd.DataFrame:
     ],
 )
 def test_elo_gap_configuration_rejects_invalid_parameters(parameters):
-    valid = {
-        "battle_counts": [1, 2],
-        "n_seeds": 2,
-        "tie_tolerance": 0.01,
-    }
+    valid = {"battle_counts": [1, 2], "n_seeds": 2, "tie_tolerance": 0.01}
     with pytest.raises(ValueError, match="Invalid parameters"):
         build_metric("meta_eval_elo_gap", valid | parameters)
 
@@ -257,11 +253,16 @@ def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
     assert result == shuffled
     assert result["n_models"] == 3
     assert result["soft"] == result["hard"]
-    for variant in ("hard", "soft"):
-        full_budget = result[variant][-1]
-        assert full_budget["mean_gap"] == pytest.approx(0.0, abs=1e-6)
-        assert full_budget["n_seeds_valid"] == 3
-        assert full_budget["mean_used_per_model"] == 4
+    full_budget = result["hard"][-1]
+    assert full_budget["mean_gap"] == pytest.approx(0.0, abs=1e-6)
+    assert full_budget["n_seeds_valid"] == 3
+    assert full_budget["mean_used_per_model"] == 4
+
+    # Moving confidence without changing a hard label must affect only soft Elo.
+    battles.loc[battles["pref"].eq(0.0), "pref"] = 0.2
+    softened = metric.calculate(battles, rng=np.random.default_rng(11))
+    assert softened["hard"] == result["hard"]
+    assert softened["soft"][-1]["mean_gap"] != pytest.approx(full_budget["mean_gap"])
 
 
 def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes():
@@ -293,10 +294,13 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
         assert math.isnan(row["mean_gap"])
 
 
-def test_elo_gap_rejects_attempted_battle_shortfalls():
+def test_elo_gap_warns_and_returns_empty_for_attempted_battle_shortfalls(caplog):
     battles = _elo_gap_battles()
     battles.loc[battles["battle_id"].eq("ab-0"), "sampled"] = False
     battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
 
-    with pytest.raises(ValueError, match="Every model needs at least 4"):
-        _elo_gap_metric((4,), 1).calculate(battles, rng=np.random.default_rng(1))
+    result = _elo_gap_metric((4,), 1).calculate(battles, rng=np.random.default_rng(1))
+
+    assert result == {}
+    assert "Skipping meta_eval_elo_gap" in caplog.text
+    assert "at least 4 attempted incident battles" in caplog.text

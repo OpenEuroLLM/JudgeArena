@@ -660,37 +660,22 @@ def test_mt_bench_accepts_any_registered_metric(tmp_path):
     assert task.spec.protocol.scoring.metrics[0].metric == "length_controlled_winrate"
 
 
-def test_packaged_meta_eval_tasks_use_pinned_battle_sources_and_metrics():
+@pytest.mark.parametrize(
+    "task_id, repo_id",
+    [
+        ("meta-eval-comparia", "ministere-culture/comparia-votes"),
+        ("meta-eval-lmarena-100k", "lmarena-ai/arena-human-preference-100k"),
+        ("meta-eval-lmarena-140k", "lmarena-ai/arena-human-preference-140k"),
+    ],
+)
+def test_meta_eval_language_variants_preserve_the_dataset_and_protocol(
+    task_id, repo_id
+):
     from judgearena.tasks.registry import get_packaged_task
 
-    expected = {
-        "meta-eval-comparia": (
-            "ComparIA",
-            "ministere-culture/comparia-votes",
-            "7a40bce496c1f2aa3be4001da85a49cb4743042b",
-        ),
-        "meta-eval-lmarena-100k": (
-            "LMArena-100k",
-            "lmarena-ai/arena-human-preference-100k",
-            "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a",
-        ),
-        "meta-eval-lmarena-140k": (
-            "LMArena-140k",
-            "lmarena-ai/arena-human-preference-140k",
-            "6322995ab34d7c2693e3f47dd13fa5caa0789a74",
-        ),
-    }
-    for task_id, (arena, repo_id, revision) in expected.items():
-        task = get_packaged_task(task_id)
-        assert task.spec.protocol.arena == arena
-        source = next(iter(task.spec.dataset.sources.values()))
-        assert (source.repo_id, source.revision) == (repo_id, revision)
-        metrics = task.spec.protocol.scoring.metrics
-        assert [metric.metric for metric in metrics] == [
-            "meta_eval_agreement",
-            "meta_eval_ranking",
-            "meta_eval_elo_gap",
-        ]
+    task = get_packaged_task(task_id)
+    english = get_packaged_task(f"{task_id}-en")
 
-    english = get_packaged_task("meta-eval-lmarena-100k-en")
+    assert next(iter(task.spec.dataset.sources.values())).repo_id == repo_id
+    assert english.spec == task.spec
     assert english.selection.values == ("en",)

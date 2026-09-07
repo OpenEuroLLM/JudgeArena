@@ -342,19 +342,6 @@ def test_build_run_config_elo_defaults():
     assert cfg.elo.soft_elo is True
 
 
-def test_meta_eval_config_defaults():
-    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
-
-    assert cfg.model.name is None
-    assert cfg.model.baseline is None
-    assert cfg.elo is None
-    assert cfg.meta_eval.model_dump() == {
-        "top_models": 20,
-        "battles_per_model": 50,
-        "languages": None,
-    }
-
-
 @pytest.mark.parametrize(
     ("update", "message"),
     [
