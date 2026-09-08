@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 from dataclasses import dataclass
 from numbers import Real
@@ -79,10 +78,6 @@ def _validate_battles(battles: pd.DataFrame) -> None:
         )
 
 
-def _reference_labels(values: pd.Series) -> np.ndarray:
-    return (values.to_numpy(dtype=float) * 2).astype(int)
-
-
 def _hard_preferences(values: pd.Series, tie_tolerance: float) -> np.ndarray:
     numeric = values.to_numpy(dtype=float)
     return np.where(
@@ -117,80 +112,6 @@ def _battle_sort_key(value: object) -> tuple[str, str]:
     return type(value).__name__, repr(value)
 
 
-def _agreement_point(
-    rows: pd.DataFrame, tie_tolerance: float
-) -> dict[str, float | int]:
-    n_attempted = len(rows)
-    complete = rows["pref"].notna()
-    complete_rows = rows.loc[complete]
-    n_complete = len(complete_rows)
-    if n_complete:
-        complete_reference = _reference_labels(complete_rows["reference_pref"])
-        complete_judge = _hard_preferences(complete_rows["pref"], tie_tolerance)
-        complete_correct = complete_reference == complete_judge
-        accuracy_complete = float(np.mean(complete_correct))
-        kappa = _cohen_kappa(complete_reference, complete_judge)
-    else:
-        complete_correct = np.array([], dtype=bool)
-        accuracy_complete = kappa = float("nan")
-
-    if n_attempted:
-        correct = np.zeros(n_attempted, dtype=bool)
-        correct[complete.to_numpy()] = complete_correct
-        accuracy_attempted = float(np.mean(correct))
-        coverage = n_complete / n_attempted
-    else:
-        accuracy_attempted = coverage = float("nan")
-    return {
-        "n_attempted": n_attempted,
-        "n_complete": n_complete,
-        "coverage": coverage,
-        "accuracy_attempted": accuracy_attempted,
-        "accuracy_complete": accuracy_complete,
-        "cohen_kappa": kappa,
-    }
-
-
-def _agreement_view(
-    rows: pd.DataFrame,
-    *,
-    tie_tolerance: float,
-    n_bootstraps: int,
-    rng: np.random.Generator | None,
-) -> dict[str, float | int]:
-    rows = (
-        rows.assign(_battle_sort=rows["battle_id"].map(_battle_sort_key))
-        .sort_values("_battle_sort", kind="stable")
-        .drop(columns="_battle_sort")
-    )
-    point = _agreement_point(rows, tie_tolerance)
-    attempted_samples: list[float] = []
-    complete_samples: list[float] = []
-    kappa_samples: list[float] = []
-    if len(rows):
-        for _ in range(n_bootstraps):
-            assert rng is not None
-            indices = rng.integers(0, len(rows), size=len(rows))
-            sample = rows.iloc[indices]
-            values = _agreement_point(sample, tie_tolerance)
-            attempted_samples.append(float(values["accuracy_attempted"]))
-            complete_accuracy = float(values["accuracy_complete"])
-            if math.isfinite(complete_accuracy):
-                complete_samples.append(complete_accuracy)
-            kappa = float(values["cohen_kappa"])
-            if math.isfinite(kappa):
-                kappa_samples.append(kappa)
-    return {
-        **point,
-        "accuracy_attempted_se": _sample_std(attempted_samples),
-        "accuracy_complete_se": _sample_std(complete_samples),
-        "accuracy_complete_bootstraps_valid": len(complete_samples),
-        "cohen_kappa_se": _sample_std(kappa_samples),
-        "n_bootstraps_requested": n_bootstraps,
-        "n_kappa_bootstraps_valid": len(kappa_samples),
-    }
-
-
 @dataclass(frozen=True, kw_only=True)
 class MetaEvalAgreementMetric:
     """Configured battle-level agreement with human reference preferences."""
@@ -214,18 +135,78 @@ class MetaEvalAgreementMetric:
         attempted = battles.loc[battles["sampled"]].copy()
         reference_is_tie = attempted["reference_pref"].eq(0.5)
         return {
-            "all": _agreement_view(
-                attempted,
-                tie_tolerance=self.tie_tolerance,
-                n_bootstraps=self.n_bootstraps,
-                rng=rng,
+            "all": self._agreement_view(attempted, rng),
+            "no_human_ties": self._agreement_view(
+                attempted.loc[~reference_is_tie], rng
             ),
-            "no_human_ties": _agreement_view(
-                attempted.loc[~reference_is_tie],
-                tie_tolerance=self.tie_tolerance,
-                n_bootstraps=self.n_bootstraps,
-                rng=rng,
-            ),
+        }
+
+    def _agreement_point(self, rows: pd.DataFrame) -> dict[str, float | int]:
+        n_attempted = len(rows)
+        complete = rows["pref"].notna()
+        complete_rows = rows.loc[complete]
+        n_complete = len(complete_rows)
+        if n_complete:
+            complete_reference = (
+                complete_rows["reference_pref"].to_numpy(dtype=float) * 2
+            ).astype(int)
+            complete_judge = _hard_preferences(
+                complete_rows["pref"], self.tie_tolerance
+            )
+            n_correct = int(np.count_nonzero(complete_reference == complete_judge))
+            accuracy_complete = n_correct / n_complete
+            kappa = _cohen_kappa(complete_reference, complete_judge)
+        else:
+            n_correct = 0
+            accuracy_complete = kappa = float("nan")
+
+        if n_attempted:
+            accuracy_attempted = n_correct / n_attempted
+            coverage = n_complete / n_attempted
+        else:
+            accuracy_attempted = coverage = float("nan")
+        return {
+            "n_attempted": n_attempted,
+            "n_complete": n_complete,
+            "coverage": coverage,
+            "accuracy_attempted": accuracy_attempted,
+            "accuracy_complete": accuracy_complete,
+            "cohen_kappa": kappa,
+        }
+
+    def _agreement_view(
+        self, rows: pd.DataFrame, rng: np.random.Generator | None
+    ) -> dict[str, float | int]:
+        rows = (
+            rows.assign(_battle_sort=rows["battle_id"].map(_battle_sort_key))
+            .sort_values("_battle_sort", kind="stable")
+            .drop(columns="_battle_sort")
+        )
+        point = self._agreement_point(rows)
+        attempted_samples: list[float] = []
+        complete_samples: list[float] = []
+        kappa_samples: list[float] = []
+        if len(rows):
+            for _ in range(self.n_bootstraps):
+                assert rng is not None
+                indices = rng.integers(0, len(rows), size=len(rows))
+                sample = rows.iloc[indices]
+                values = self._agreement_point(sample)
+                attempted_samples.append(float(values["accuracy_attempted"]))
+                complete_accuracy = float(values["accuracy_complete"])
+                if math.isfinite(complete_accuracy):
+                    complete_samples.append(complete_accuracy)
+                kappa = float(values["cohen_kappa"])
+                if math.isfinite(kappa):
+                    kappa_samples.append(kappa)
+        return {
+            **point,
+            "accuracy_attempted_se": _sample_std(attempted_samples),
+            "accuracy_complete_se": _sample_std(complete_samples),
+            "accuracy_complete_bootstraps_valid": len(complete_samples),
+            "cohen_kappa_se": _sample_std(kappa_samples),
+            "n_bootstraps_requested": self.n_bootstraps,
+            "n_kappa_bootstraps_valid": len(kappa_samples),
         }
 
     @staticmethod
@@ -290,31 +271,7 @@ def _ranking_values(reference: np.ndarray, judge: np.ndarray) -> dict[str, float
     }
 
 
-def _fit_rating_bundle(
-    rows: pd.DataFrame, models: list[str], tie_tolerance: float
-) -> dict[str, dict[str, float]] | None:
-    fitting = rows[["model_a", "model_b"]].copy()
-    fitting["human"] = rows["reference_pref"].to_numpy(dtype=float)
-    fitting["hard"] = _hard_preferences(rows["pref"], tie_tolerance) / 2.0
-    fitting["soft"] = rows["pref"].to_numpy(dtype=float)
-    vectors = {
-        name: _centered_vector(fit_bradley_terry(fitting, pref_col=name), models)
-        for name in ("human", "hard", "soft")
-    }
-    if any(vector is None for vector in vectors.values()):
-        return None
-    human = vectors["human"]
-    assert human is not None
-    return {
-        name: _ranking_values(human, vector)
-        for name, vector in (("hard", vectors["hard"]), ("soft", vectors["soft"]))
-        if vector is not None
-    }
-
-
-def _pair_stratified_sample(
-    rows: pd.DataFrame, rng: np.random.Generator
-) -> pd.DataFrame:
+def _pair_strata(rows: pd.DataFrame) -> list[pd.DataFrame]:
     working = rows.assign(
         _pair=[
             tuple(sorted(pair))
@@ -322,11 +279,10 @@ def _pair_stratified_sample(
         ],
         _battle_sort=rows["battle_id"].map(_battle_sort_key),
     ).sort_values(["_pair", "_battle_sort"], kind="stable")
-    parts = []
-    for _, stratum in working.groupby("_pair", sort=True):
-        indices = rng.integers(0, len(stratum), size=len(stratum))
-        parts.append(stratum.iloc[indices])
-    return pd.concat(parts, ignore_index=True).drop(columns=["_pair", "_battle_sort"])
+    return [
+        stratum.drop(columns=["_pair", "_battle_sort"])
+        for _, stratum in working.groupby("_pair", sort=True)
+    ]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -366,15 +322,22 @@ class MetaEvalRankingMetric:
         )
         if comparison_components(rows, models) != [frozenset(models)]:
             return unavailable
-        point = _fit_rating_bundle(rows, models, self.tie_tolerance)
+        point = self._fit_rating_bundle(rows, models)
         if point is None:
             return unavailable
 
+        strata = _pair_strata(rows) if self.n_bootstraps else []
         samples: list[dict[str, dict[str, float]]] = []
         for _ in range(self.n_bootstraps):
             assert rng is not None
-            sample = _pair_stratified_sample(rows, rng)
-            fitted = _fit_rating_bundle(sample, models, self.tie_tolerance)
+            sample = pd.concat(
+                [
+                    stratum.iloc[rng.integers(0, len(stratum), size=len(stratum))]
+                    for stratum in strata
+                ],
+                ignore_index=True,
+            )
+            fitted = self._fit_rating_bundle(sample, models)
             if fitted is not None:
                 samples.append(fitted)
 
@@ -391,6 +354,24 @@ class MetaEvalRankingMetric:
                 result[kind][f"{metric}_se"] = _sample_std(valid)
                 result[kind][f"{metric}_bootstraps_valid"] = len(valid)
         return result
+
+    def _fit_rating_bundle(
+        self, rows: pd.DataFrame, models: list[str]
+    ) -> dict[str, dict[str, float]] | None:
+        fitting = rows[["model_a", "model_b"]].copy()
+        fitting["human"] = rows["reference_pref"].to_numpy(dtype=float)
+        fitting["hard"] = _hard_preferences(rows["pref"], self.tie_tolerance) / 2.0
+        fitting["soft"] = rows["pref"].to_numpy(dtype=float)
+        vectors = {
+            name: _centered_vector(fit_bradley_terry(fitting, pref_col=name), models)
+            for name in ("human", "hard", "soft")
+        }
+        if any(vector is None for vector in vectors.values()):
+            return None
+        return {
+            name: _ranking_values(vectors["human"], vectors[name])
+            for name in ("hard", "soft")
+        }
 
     @staticmethod
     def render(values: dict[str, object]) -> str:
@@ -412,119 +393,10 @@ class MetaEvalRankingMetric:
 _ELO_GAP_METHODS = ("hard", "soft")
 
 
-def _validate_elo_gap_configuration(
-    battle_counts: object, n_seeds: int, tie_tolerance: float
-) -> tuple[int, ...]:
-    _validate_configuration(0, tie_tolerance)
-    if not isinstance(battle_counts, (list, tuple)) or not battle_counts:
-        raise ValueError("battle_counts must be a non-empty ordered sequence")
-    if any(type(count) is not int or count <= 0 for count in battle_counts):
-        raise ValueError("battle_counts values must be positive integers")
-    counts = tuple(battle_counts)
-    if any(left >= right for left, right in zip(counts, counts[1:], strict=False)):
-        raise ValueError("battle_counts values must be unique and ordered ascending")
-    if type(n_seeds) is not int or n_seeds <= 0:
-        raise ValueError("n_seeds must be a positive integer")
-    return counts
-
-
-def _elo_gap_priority(
-    schedule_seed: int, replicate: int, focal_model: str, battle_id: object
-) -> bytes:
-    battle_type, battle_value = _battle_sort_key(battle_id)
-    payload = (
-        f"{schedule_seed}\0{replicate}\0{focal_model}\0{battle_type}\0{battle_value}"
-    )
-    return hashlib.sha256(payload.encode()).digest()
-
-
 def _elo_gap_vector(rows: pd.DataFrame, models: list[str]) -> np.ndarray | None:
     if comparison_components(rows, models) != [frozenset(models)]:
         return None
     return _centered_vector(fit_bradley_terry(rows, pref_col="pref"), models)
-
-
-def _elo_gap_rows(
-    *,
-    models: list[str],
-    battles: pd.DataFrame,
-    schedules: dict[tuple[int, str], list[object]],
-    reference: np.ndarray | None,
-    battle_counts: tuple[int, ...],
-    n_seeds: int,
-    tie_tolerance: float,
-) -> dict[str, list[dict[str, float | int]]]:
-    results: dict[str, list[dict[str, float | int]]] = {
-        variant: [] for variant in _ELO_GAP_METHODS
-    }
-    by_id = battles.set_index("battle_id", drop=False)
-    human_by_model = {}
-    for focal_model in models:
-        incident = battles["model_a"].eq(focal_model) | battles["model_b"].eq(
-            focal_model
-        )
-        human_by_model[focal_model] = battles.loc[
-            ~incident, ["model_a", "model_b", "reference_pref"]
-        ].rename(columns={"reference_pref": "pref"})
-
-    for battle_count in battle_counts:
-        replicate_gaps = {variant: [] for variant in _ELO_GAP_METHODS}
-        complete_counts: list[int] = []
-        used_counts = {variant: [] for variant in _ELO_GAP_METHODS}
-
-        for replicate in range(n_seeds):
-            gaps = {variant: [] for variant in _ELO_GAP_METHODS}
-            for focal_index, focal_model in enumerate(models):
-                selected_ids = schedules[replicate, focal_model][:battle_count]
-                selected = by_id.loc[selected_ids]
-                complete = selected.loc[selected["pref"].notna()].copy()
-                hard_prefs = _hard_preferences(complete["pref"], tie_tolerance) / 2.0
-                complete_counts.append(len(complete))
-                human = human_by_model[focal_model]
-
-                for variant in _ELO_GAP_METHODS:
-                    judge = complete[["model_a", "model_b"]].copy()
-                    judge["pref"] = (
-                        complete["pref"].to_numpy(dtype=float)
-                        if variant == "soft"
-                        else hard_prefs
-                    )
-                    used_counts[variant].append(len(judge))
-
-                    hybrid = pd.concat([human, judge], ignore_index=True)
-                    fitted = _elo_gap_vector(hybrid, models)
-                    if reference is not None and fitted is not None:
-                        gaps[variant].append(
-                            abs(fitted[focal_index] - reference[focal_index])
-                        )
-
-            for variant in _ELO_GAP_METHODS:
-                if len(gaps[variant]) == len(models) and models:
-                    replicate_gaps[variant].append(float(np.mean(gaps[variant])))
-
-        for variant in _ELO_GAP_METHODS:
-            valid = replicate_gaps[variant]
-            mean_gap = float(np.mean(valid)) if valid else float("nan")
-            sampling_se = (
-                float(np.std(valid, ddof=1) / np.sqrt(len(valid)))
-                if len(valid) >= 2
-                else float("nan")
-            )
-            results[variant].append(
-                {
-                    "attempted_battles_per_model": battle_count,
-                    "mean_gap": mean_gap,
-                    "sampling_se": sampling_se,
-                    "n_seeds_valid": len(valid),
-                    "mean_complete_per_model": float(np.mean(complete_counts))
-                    if complete_counts
-                    else float("nan"),
-                    "mean_used_per_model": float(np.mean(used_counts[variant]))
-                    if used_counts[variant]
-                    else float("nan"),
-                }
-            )
-    return results
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -536,9 +408,19 @@ class MetaEvalEloGapMetric:
     tie_tolerance: float
 
     def __post_init__(self) -> None:
-        counts = _validate_elo_gap_configuration(
-            self.battle_counts, self.n_seeds, self.tie_tolerance
-        )
+        _validate_configuration(0, self.tie_tolerance)
+        battle_counts = self.battle_counts
+        if not isinstance(battle_counts, (list, tuple)) or not battle_counts:
+            raise ValueError("battle_counts must be a non-empty ordered sequence")
+        if any(type(count) is not int or count <= 0 for count in battle_counts):
+            raise ValueError("battle_counts values must be positive integers")
+        counts = tuple(battle_counts)
+        if any(left >= right for left, right in zip(counts, counts[1:], strict=False)):
+            raise ValueError(
+                "battle_counts values must be unique and ordered ascending"
+            )
+        if type(self.n_seeds) is not int or self.n_seeds <= 0:
+            raise ValueError("n_seeds must be a positive integer")
         object.__setattr__(self, "battle_counts", counts)
 
     def calculate(
@@ -560,7 +442,7 @@ class MetaEvalEloGapMetric:
         for model in models:
             incident = attempted["model_a"].eq(model) | attempted["model_b"].eq(model)
             battle_ids = attempted.loc[incident, "battle_id"].tolist()
-            attempted_ids_by_model[model] = battle_ids
+            attempted_ids_by_model[model] = sorted(battle_ids, key=_battle_sort_key)
             if len(battle_ids) < maximum:
                 shortfalls[model] = len(battle_ids)
         if shortfalls:
@@ -573,38 +455,103 @@ class MetaEvalEloGapMetric:
             return {}
 
         schedule_seed = int(rng.integers(0, 2**63))
+        schedule_rng = np.random.default_rng(schedule_seed)
         schedules: dict[tuple[int, str], list[object]] = {}
+        # Each budget takes a prefix of the same shuffle, shared by hard and soft.
         for replicate in range(self.n_seeds):
-            for focal_model in models:
-                schedules[replicate, focal_model] = sorted(
-                    attempted_ids_by_model[focal_model],
-                    key=lambda battle_id: (
-                        _elo_gap_priority(
-                            schedule_seed, replicate, focal_model, battle_id
-                        ),
-                        _battle_sort_key(battle_id),
-                    ),
-                )
+            for model, battle_ids in attempted_ids_by_model.items():
+                order = schedule_rng.permutation(len(battle_ids))
+                schedules[replicate, model] = [battle_ids[index] for index in order]
 
         human = battles[["model_a", "model_b", "reference_pref"]].rename(
             columns={"reference_pref": "pref"}
         )
         reference = _elo_gap_vector(human, models)
-        methods = _elo_gap_rows(
-            models=models,
-            battles=battles,
-            schedules=schedules,
-            reference=reference,
-            battle_counts=self.battle_counts,
-            n_seeds=self.n_seeds,
-            tie_tolerance=self.tie_tolerance,
-        )
+        methods = self._elo_gap_rows(battles, models, schedules, reference)
         return {
             "schedule_seed": schedule_seed,
             "n_models": len(models),
             "n_seeds_requested": self.n_seeds,
             **methods,
         }
+
+    def _elo_gap_rows(
+        self,
+        battles: pd.DataFrame,
+        models: list[str],
+        schedules: dict[tuple[int, str], list[object]],
+        reference: np.ndarray | None,
+    ) -> dict[str, list[dict[str, float | int]]]:
+        results: dict[str, list[dict[str, float | int]]] = {
+            variant: [] for variant in _ELO_GAP_METHODS
+        }
+        by_id = battles.set_index("battle_id", drop=False)
+        human_by_model = {}
+        for focal_model in models:
+            incident = battles["model_a"].eq(focal_model) | battles["model_b"].eq(
+                focal_model
+            )
+            human_by_model[focal_model] = battles.loc[
+                ~incident, ["model_a", "model_b", "reference_pref"]
+            ].rename(columns={"reference_pref": "pref"})
+
+        for battle_count in self.battle_counts:
+            replicate_gaps = {variant: [] for variant in _ELO_GAP_METHODS}
+            complete_counts: list[int] = []
+
+            for replicate in range(self.n_seeds):
+                gaps = {variant: [] for variant in _ELO_GAP_METHODS}
+                for focal_index, focal_model in enumerate(models):
+                    selected_ids = schedules[replicate, focal_model][:battle_count]
+                    selected = by_id.loc[selected_ids]
+                    complete = selected.loc[selected["pref"].notna()].copy()
+                    hard_prefs = (
+                        _hard_preferences(complete["pref"], self.tie_tolerance) / 2.0
+                    )
+                    complete_counts.append(len(complete))
+                    human = human_by_model[focal_model]
+
+                    for variant in _ELO_GAP_METHODS:
+                        judge = complete[["model_a", "model_b"]].copy()
+                        judge["pref"] = (
+                            complete["pref"].to_numpy(dtype=float)
+                            if variant == "soft"
+                            else hard_prefs
+                        )
+
+                        hybrid = pd.concat([human, judge], ignore_index=True)
+                        fitted = _elo_gap_vector(hybrid, models)
+                        if reference is not None and fitted is not None:
+                            gaps[variant].append(
+                                abs(fitted[focal_index] - reference[focal_index])
+                            )
+
+                for variant in _ELO_GAP_METHODS:
+                    if len(gaps[variant]) == len(models) and models:
+                        replicate_gaps[variant].append(float(np.mean(gaps[variant])))
+
+            mean_complete = (
+                float(np.mean(complete_counts)) if complete_counts else float("nan")
+            )
+            for variant in _ELO_GAP_METHODS:
+                valid = replicate_gaps[variant]
+                mean_gap = float(np.mean(valid)) if valid else float("nan")
+                sampling_se = (
+                    float(np.std(valid, ddof=1) / np.sqrt(len(valid)))
+                    if len(valid) >= 2
+                    else float("nan")
+                )
+                results[variant].append(
+                    {
+                        "attempted_battles_per_model": battle_count,
+                        "mean_gap": mean_gap,
+                        "sampling_se": sampling_se,
+                        "n_seeds_valid": len(valid),
+                        "mean_complete_per_model": mean_complete,
+                        "mean_used_per_model": mean_complete,
+                    }
+                )
+        return results
 
     @staticmethod
     def render(values: dict[str, object]) -> str:

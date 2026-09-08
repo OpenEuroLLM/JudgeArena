@@ -95,8 +95,8 @@ def _prepare_arena_battles(
         )
 
     if languages:
-        battles = battles.loc[battles["lang"].isin(languages)].copy()
-    battles = battles.loc[battles["model_a"] != battles["model_b"]].copy()
+        battles = battles.loc[battles["lang"].isin(languages)]
+    battles = battles.loc[battles["model_a"] != battles["model_b"]]
     if battles.empty:
         raise MetaEvalSamplingError(
             f"Task {task!r} has no battles in languages {languages}."

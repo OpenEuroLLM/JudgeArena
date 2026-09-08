@@ -16,7 +16,7 @@ def resolve_task_languages(
     variant_languages = list(task.selection.values)
     if not selected:
         return variant_languages
-    narrowed = [language for language in selected if language in set(variant_languages)]
+    narrowed = [language for language in selected if language in variant_languages]
     if not narrowed:
         raise ValueError(
             f"{setting} {requested} has no overlap with the languages of task "

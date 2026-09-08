@@ -48,7 +48,7 @@ def comparison_components(
             stack.extend(adjacency[model] - component)
         unseen -= component
         components.append(frozenset(component))
-    return sorted(components, key=lambda component: sorted(component))
+    return components
 
 
 def require_connected_pool(
@@ -80,8 +80,7 @@ def select_top_models(
         raise MetaEvalSamplingError(
             f"Requested {top_models} top models, but only {len(top)} are available."
         )
-    top_set = set(top)
-    df_top = df[df["model_a"].isin(top_set) & df["model_b"].isin(top_set)].copy()
+    df_top = df[df["model_a"].isin(top) & df["model_b"].isin(top)].copy()
     require_connected_pool(df_top, top, context="Top-model")
     return top, df_top
 
@@ -136,8 +135,8 @@ def sample_battles_per_model(
         lambda battle_id: _stable_priority(battle_id, seed=seed)
     )
     working = working.sort_values(
-        ["_sample_priority", "battle_id"], kind="stable"
-    ).reset_index(drop=True)
+        ["_sample_priority", "battle_id"], kind="stable", ignore_index=True
+    )
     available_counts = count_battles_per_model(working)
     shortfalls = {
         model: available_counts.get(model, 0)
@@ -160,6 +159,6 @@ def sample_battles_per_model(
         if needed:
             selected_ids.update(candidates.head(needed)["battle_id"].tolist())
 
-    sample = working[working["battle_id"].isin(selected_ids)].copy()
+    sample = working[working["battle_id"].isin(selected_ids)]
 
     return sample.drop(columns="_sample_priority").reset_index(drop=True)
