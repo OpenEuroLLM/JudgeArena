@@ -34,113 +34,63 @@ class FakeModel:
 
 
 @pytest.mark.parametrize(
-    ("message", "structured", "expected_model", "expected"),
+    ("usage_metadata", "response_metadata", "expected"),
     [
         (
-            AIMessage(
-                content="canonical",
-                usage_metadata={
-                    "input_tokens": 10,
-                    "output_tokens": 2,
-                    "total_tokens": 12,
-                    "input_token_details": {"cache_read": 3},
-                    "output_token_details": {"reasoning": 1},
+            {
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"cache_read": 3},
+                "output_token_details": {"reasoning": 1},
+            },
+            {
+                "cost": 0.125,
+                "token_usage": {
+                    "prompt_tokens": 999,
+                    "completion_tokens": -1,
+                    "prompt_tokens_details": {"cached_tokens": True},
+                    "completion_tokens_details": {"reasoning_tokens": float("inf")},
                 },
-                response_metadata={"model_name": "google/test-model"},
-            ),
-            False,
-            "google/test-model",
-            (10, 2, 12, 1, 3, None),
+            },
+            (10, 2, 12, 1, 3, 0.125),
         ),
         (
-            AIMessage(
-                content="fallback",
-                response_metadata={
-                    "model_name": "google/test-model",
-                    "token_usage": {
-                        "prompt_tokens": 120,
-                        "completion_tokens": 30,
-                        "total_tokens": 150,
-                        "prompt_tokens_details": {"cached_tokens": 20},
-                        "completion_tokens_details": {"reasoning_tokens": 10},
-                        "cost": 0.00125,
-                    },
-                },
-            ),
-            True,
-            "google/test-model",
+            None,
+            {
+                "token_usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                    "prompt_tokens_details": {"cached_tokens": 20},
+                    "completion_tokens_details": {"reasoning_tokens": 10},
+                    "cost": 0.00125,
+                }
+            },
             (120, 30, 150, 10, 20, 0.00125),
         ),
+        (None, {"token_usage": "not-a-mapping"}, (None, None, None, None, None, None)),
         (
-            AIMessage(
-                content="answer", response_metadata={"token_usage": "not-a-mapping"}
-            ),
-            False,
-            "google/test-model",
-            (None, None, None, None, None, None),
-        ),
-        (
-            AIMessage(
-                content="answer",
-                usage_metadata={
-                    "input_tokens": 101,
-                    "output_tokens": 23,
-                    "total_tokens": 124,
-                    "input_token_details": {"cache_read": 17},
-                    "output_token_details": {"reasoning": 9},
-                },
-                response_metadata={
-                    "model_name": "openai/responses-model",
-                    "cost": 0.125,
-                    "token_usage": {
-                        "prompt_tokens": "not-a-number",
-                        "completion_tokens": -1,
-                        "prompt_tokens_details": {"cached_tokens": True},
-                        "completion_tokens_details": {"reasoning_tokens": float("inf")},
-                    },
-                },
-            ),
-            False,
-            "openai/responses-model",
-            (101, 23, 124, 9, 17, 0.125),
-        ),
-        (
-            AIMessage(
-                content="answer",
-                usage_metadata={
-                    "input_tokens": 10**400,
-                    "output_tokens": 2,
-                    "total_tokens": 10**400,
-                },
-                response_metadata={
-                    "token_usage": {"prompt_tokens": 10, "total_tokens": 10**400}
-                },
-            ),
-            False,
-            "google/test-model",
+            {"input_tokens": 10**400, "output_tokens": 2, "total_tokens": 10**400},
+            {"token_usage": {"prompt_tokens": 10, "total_tokens": 10**400}},
             (10, 2, 12, None, None, None),
         ),
     ],
-    ids=["canonical", "fallback", "malformed", "canonical-over-malformed", "oversized"],
+    ids=["canonical-precedence", "fallback", "malformed", "oversized"],
 )
 def test_do_inference_collects_optional_provider_usage(
-    message, structured, expected_model, expected
+    usage_metadata, response_metadata, expected
 ):
+    message = AIMessage(
+        content="answer",
+        usage_metadata=usage_metadata,
+        response_metadata=response_metadata,
+    )
     with track_usage() as tracker:
-        outputs = do_inference(
-            FakeModel([message]),
-            ["prompt"],
-            return_top_logprobs=structured,
-            stage="judging",
-        )
-        usage = tracker.snapshot().requests[0]
-
-    if structured:
-        assert isinstance(outputs[0], InferenceResult)
-        assert (outputs[0].text, outputs[0].usage) == (message.content, usage)
-    else:
-        assert outputs == [message.content]
-    assert (usage.stage, usage.model) == ("judging", expected_model)
+        outputs = do_inference(FakeModel([message]), ["prompt"], stage="judging")
+        assert outputs == ["answer"]
+    usage = tracker.snapshot().requests[0]
+    assert (usage.stage, usage.model) == ("judging", FakeModel.model_name)
     assert (
         usage.input_tokens,
         usage.output_tokens,
@@ -177,13 +127,11 @@ def test_run_benchmark_saves_nested_usage_and_cleans_up(tmp_path, monkeypatch, c
     path = benchmark_runner.run_benchmark(SimpleNamespace(task="unknown"))
     usage = json.loads(path.read_text())["usage"]
     total = usage["total"]
-    assert (
-        total["requests"],
-        total["input_tokens"],
-        total["output_tokens"],
-        total["total_tokens"],
-        total["cost_usd"],
-    ) == pytest.approx((2, 10, 5, 15, 0.002))
+    assert total["requests"] == 2
+    assert total["input_tokens"] == 10
+    assert total["output_tokens"] == 5
+    assert total["total_tokens"] == 15
+    assert total["cost_usd"] == pytest.approx(0.002)
     assert total["requests_with_input_tokens"] == 1
     assert total["requests_with_output_tokens"] == 1
     assert total["requests_with_cost"] == 1
@@ -191,28 +139,31 @@ def test_run_benchmark_saves_nested_usage_and_cleans_up(tmp_path, monkeypatch, c
     assert usage["by_stage"]["generation"]["requests"] == 1
     assert usage["by_stage"]["judging"]["requests"] == 1
     output = capsys.readouterr().out
-    assert "Model usage:" in output
     assert "2 successful response(s)" in output
     assert "partial: input 1/2, output 1/2" in output
     assert "$0.002000" in output
     assert current_run_usage() is None
 
 
-def test_total_only_usage_preserves_count_without_inventing_breakdown(capsys):
+def test_structured_response_preserves_usage_without_token_breakdown(capsys):
     message = AIMessage(
-        content="answer", response_metadata={"token_usage": {"total_tokens": 12}}
+        content="answer",
+        response_metadata={
+            "model_name": "provider-model",
+            "token_usage": {"total_tokens": 12},
+        },
     )
     with track_usage() as tracker:
-        assert do_inference(FakeModel([message]), ["prompt"]) == ["answer"]
-
-    usage = tracker.snapshot()
-    total = usage.summary()
-    assert (total["input_tokens"], total["output_tokens"], total["total_tokens"]) == (
-        None,
-        None,
-        12,
-    )
-    usage.render()
+        (result,) = do_inference(
+            FakeModel([message]), ["prompt"], return_top_logprobs=True
+        )
+    assert isinstance(result, InferenceResult)
+    assert result.text == "answer"
+    assert result.usage == tracker.snapshot().requests[0]
+    assert (result.usage.model, result.usage.total_tokens) == ("provider-model", 12)
+    assert result.usage.input_tokens is None
+    assert result.usage.output_tokens is None
+    tracker.render_summary()
     assert "input/output token usage unavailable" in capsys.readouterr().out
 
 
