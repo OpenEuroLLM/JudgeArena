@@ -241,6 +241,8 @@ def test_elo_gap_surfaces_unexpected_fit_errors(monkeypatch):
 def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
     battles = _elo_gap_battles()
     battles.loc[0, ["reference_pref", "pref"]] = 0.5
+    battles["battle_id"] = battles["battle_id"].astype(object)
+    battles.loc[0, "battle_id"] = 0  # Preserve ID types when shuffling.
     metric = _elo_gap_metric((1, 2, 4), 3)
 
     with pytest.raises(ValueError, match="requires an RNG"):
@@ -251,6 +253,11 @@ def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
     )
 
     assert result == shuffled
+    fewer_budgets = _elo_gap_metric((1, 4), 3).calculate(
+        battles, rng=np.random.default_rng(11)
+    )
+    for method in ("hard", "soft"):
+        assert fewer_budgets[method] == [result[method][0], result[method][-1]]
     assert result["n_models"] == 3
     assert result["soft"] == result["hard"]
     full_budget = result["hard"][-1]

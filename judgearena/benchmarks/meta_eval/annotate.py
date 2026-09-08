@@ -115,14 +115,16 @@ def aggregate_battle_preferences(
     annotations: pd.DataFrame, *, swap_mode: str
 ) -> pd.DataFrame:
     """Combine canonical judge passes into one row per physical battle."""
-    expected_passes = 2 if swap_mode == "both" else 1
     expected_orientations = (
         {"direct", "reversed"} if swap_mode == "both" else {"single"}
     )
     rows = []
     for battle_id, passes in annotations.groupby("battle_id", sort=False):
         orientations = set(passes["orientation"])
-        if len(passes) != expected_passes or orientations != expected_orientations:
+        if (
+            len(passes) != len(expected_orientations)
+            or orientations != expected_orientations
+        ):
             raise ValueError(
                 f"Battle {battle_id!r} has {len(passes)} passes and orientations "
                 f"{sorted(orientations)}; expected {sorted(expected_orientations)}."

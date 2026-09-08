@@ -351,7 +351,7 @@ class AlpacaEvalJSON(JudgeParser):
             if type(rank) is not int or rank not in {1, 2}:
                 return None
             ranks[model] = rank
-        if set(ranks) != {"m", "M"} or set(ranks.values()) != {1, 2}:
+        if ranks["m"] == ranks["M"]:
             return None
 
         winner = "m" if ranks["m"] == 1 else "M"

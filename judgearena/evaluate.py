@@ -303,7 +303,8 @@ def judge_and_parse_prefs(
         n_failed = sum(1 for result in results if result is None)
         if n_failed:
             logger.warning(
-                "%d/%d judge outputs could not be parsed (%s) — those battles are dropped from stats.",
+                "%d/%d judge outputs could not be parsed (%s) — "
+                "those outputs are treated as missing preferences.",
                 n_failed,
                 len(results),
                 label,

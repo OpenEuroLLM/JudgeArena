@@ -471,11 +471,13 @@ class RunConfig(BaseSettings):
 
         is_elo = isinstance(protocol, EloProtocol)
         is_meta_eval = isinstance(protocol, MetaEvalProtocol)
+        if self.elo is not None and not is_elo:
+            raise ValueError("elo config is only valid for ELO tasks.")
+        if self.meta_eval is not None and not is_meta_eval:
+            raise ValueError(
+                "meta_eval config is only valid for meta-evaluation tasks."
+            )
         if is_elo:
-            if self.meta_eval is not None:
-                raise ValueError(
-                    "meta_eval config is only valid for meta-evaluation tasks."
-                )
             if self.elo is None:
                 self.elo = EloArgs()
             if "soft_elo" not in self.elo.model_fields_set:
@@ -487,8 +489,6 @@ class RunConfig(BaseSettings):
             if self.model.baseline is not None:
                 raise ValueError("model.baseline is not supported for ELO tasks.")
         elif is_meta_eval:
-            if self.elo is not None:
-                raise ValueError("elo config is only valid for ELO tasks.")
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
             if self.model.name is not None or self.model.baseline is not None:
@@ -502,12 +502,6 @@ class RunConfig(BaseSettings):
                     "meta-evaluation tasks."
                 )
         else:
-            if self.elo is not None:
-                raise ValueError("elo config is only valid for ELO tasks.")
-            if self.meta_eval is not None:
-                raise ValueError(
-                    "meta_eval config is only valid for meta-evaluation tasks."
-                )
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (
