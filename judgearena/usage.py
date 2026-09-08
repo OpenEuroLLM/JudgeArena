@@ -109,20 +109,16 @@ class RunUsage:
 
     def render(self) -> None:
         data = self.to_dict()
-        total = data["total"]
-        assert isinstance(total, dict)
 
         print("\nModel usage:")
         if not self.requests:
-            print("  No model requests were made during this run.")
+            print("  No successful model responses were recorded during this run.")
             return
 
         by_stage = data["by_stage"]
-        assert isinstance(by_stage, dict)
         for stage, summary in by_stage.items():
-            assert isinstance(summary, dict)
             print(f"  {stage.capitalize()}: {_format_summary(summary)}")
-        print(f"  Total: {self.format_summary()}")
+        print(f"  Total: {_format_summary(data['total'])}")
 
 
 def _format_summary(summary: dict[str, object]) -> str:
@@ -135,7 +131,7 @@ def _format_summary(summary: dict[str, object]) -> str:
     cost_reported = int(summary["requests_with_cost"])
 
     if input_tokens is None and output_tokens is None:
-        tokens = "token usage unavailable"
+        tokens = "input/output token usage unavailable"
     else:
         input_text = f"{int(input_tokens):,}" if input_tokens is not None else "unknown"
         output_text = (
@@ -165,9 +161,6 @@ class UsageTracker:
 
     def __init__(self) -> None:
         self._requests: list[RequestUsage] = []
-
-    def record(self, usage: RequestUsage) -> None:
-        self._requests.append(usage)
 
     def record_many(self, usage: list[RequestUsage]) -> None:
         self._requests.extend(usage)
