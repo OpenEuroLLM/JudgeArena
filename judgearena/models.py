@@ -502,9 +502,9 @@ def _optional_number(value, number_type):
         return None
     try:
         number = number_type(value)
+        if not math.isfinite(float(number)) or number < 0:
+            return None
     except (TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(float(number)) or number < 0:
         return None
     return number
 
@@ -630,20 +630,23 @@ def _usage_invoke_kwargs(chat_model, *, stage: str) -> dict[str, str]:
 def _collect_inference_results(
     chat_model, responses, *, stage: str
 ) -> list[InferenceResult]:
+    default_model = _model_name(chat_model)
     results = [
         _to_inference_result(
             response,
             stage=stage,
-            default_model=_model_name(chat_model),
+            default_model=default_model,
         )
         for response in responses
     ]
-    request_usage = [result.usage for result in results if result.usage is not None]
+    request_usage = [result.usage for result in results]
     record_usage(request_usage)
 
     batch_usage = RunUsage(tuple(request_usage))
-    summary = batch_usage.summary()
-    if summary["requests_with_any_token_usage"] or summary["requests_with_cost"]:
+    if any(
+        request.has_token_usage or request.cost_usd is not None
+        for request in request_usage
+    ):
         logger.info("Model usage (%s): %s.", stage, batch_usage.format_summary())
     return results
 
