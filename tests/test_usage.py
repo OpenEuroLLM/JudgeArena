@@ -190,7 +190,13 @@ def test_failed_inference_reports_no_recorded_responses(monkeypatch, capsys):
 
 def test_generation_paths_preserve_existing_sync_async_behavior(monkeypatch):
     model = FakeModel(["batch", "batch"], async_response="async")
-    monkeypatch.setattr(generate_module, "make_model", lambda *args, **kwargs: model)
+    prepared_kwargs = {}
+
+    def fake_prepare_model(*args, **kwargs):
+        prepared_kwargs.update(kwargs)
+        return model
+
+    monkeypatch.setattr(generate_module, "prepare_model", fake_prepare_model)
     instructions = pd.Series(["one", "two"])
 
     instruction_outputs = generate_module.generate_instructions(
@@ -202,4 +208,4 @@ def test_generation_paths_preserve_existing_sync_async_behavior(monkeypatch):
         instructions, "Dummy/model", max_tokens=123, use_tqdm=True
     )
     assert base_outputs["completion"].tolist() == ["batch", "batch"]
-    assert model.batch_kwargs["max_tokens"] == 123
+    assert prepared_kwargs["max_tokens"] == 123
