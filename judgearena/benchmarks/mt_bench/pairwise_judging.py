@@ -76,6 +76,8 @@ def infer_pairwise_judgments_by_prompt_groups(
     items: list[MTBenchJudgeItem],
     use_tqdm: bool,
     swap_answers: bool,
+    model_a: str,
+    model_b: str,
 ) -> tuple[list[str], list[dict[str, str]]]:
     judgments: list[str] = [""] * len(items)
     used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
@@ -97,6 +99,17 @@ def infer_pairwise_judgments_by_prompt_groups(
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
             stage="judging",
+            cache_metadata=[
+                {
+                    "instruction_id": (
+                        f"{items[item_index].question_id}:turn-{items[item_index].turn}"
+                    ),
+                    "model_a": model_b if swap_answers else model_a,
+                    "model_b": model_a if swap_answers else model_b,
+                    "orientation": "reversed" if swap_answers else "direct",
+                }
+                for item_index in idxs
+            ],
         )
         for item_index, output, prompt_kwargs in zip(
             idxs, outputs, batch_kwargs, strict=True

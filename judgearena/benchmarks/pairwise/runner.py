@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
-from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
+from judgearena.benchmarks.execution import (
+    build_completion_cache,
+    build_generation_kwargs,
+    build_judge,
+)
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets.pairwise import load_pairwise_task_data
@@ -21,7 +25,6 @@ from judgearena.log import get_logger
 from judgearena.reports import BattleReport
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
-from judgearena.utils import cache_function_dataframe, generation_cache_token
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -97,11 +100,6 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     """
 
     run_started_at = datetime.now(UTC)
-
-    # Not working with vllm, not detecting model changes and serving the same cache for two different models...
-    # if not cfg.run.ignore_cache:
-    #     set_langchain_cache()
-    ignore_cache = cfg.run.ignore_cache
 
     resolved_task = resolved_task or get_packaged_task(cfg.task)
     if resolved_task is None:
@@ -198,6 +196,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             model=model_spec,
             truncate_input_chars=cfg.generation.truncate_all_input_chars,
             use_tqdm=cfg.run.use_tqdm,
+            inference_cache=build_completion_cache(cfg),
             **generation_kwargs,
         )
 
@@ -216,18 +215,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
         if preloaded is not None:
             return preloaded
-        # Fold the resolved generation kwargs into the cache key so that changing
-        # any sampling param (temperature, seed, top_p/k, max_tokens, ...) busts
-        # the cached completions instead of silently reusing a stale run.
         generation_kwargs = build_generation_kwargs(cfg, model_spec, role=role)
-        sampling_token = generation_cache_token(generation_kwargs)
-        generated = cache_function_dataframe(
-            lambda: _run_generation(model_spec, generation_kwargs=generation_kwargs),
-            ignore_cache=ignore_cache,
-            cache_name=(
-                f"{cfg.task}_{model_spec}_{cfg.generation.n_instructions}_"
-                f"{sampling_token}"
-            ),
+        generated = _run_generation(
+            model_spec,
+            generation_kwargs=generation_kwargs,
         )
         completions = _align_completion_series(generated)
         return (
@@ -294,6 +285,12 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         judged_B = completions_A.mask(swap_mask, completions_B)
     else:
         judged_A, judged_B = completions_A, completions_B
+    candidate_models = pd.Series(cfg.model.name, index=instructions.index)
+    if swap_mask is not None:
+        judged_model_a = baseline_per_index.mask(swap_mask, cfg.model.name)
+        judged_model_b = candidate_models.mask(swap_mask, baseline_per_index)
+    else:
+        judged_model_a, judged_model_b = baseline_per_index, candidate_models
 
     annotations = []
     annotations_reversed = [] if cfg.judge.swap_mode == "both" else None
@@ -312,6 +309,19 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             parse=group_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
+            cache_metadata=[
+                {
+                    "instruction_id": str(index),
+                    "model_a": judged_model_a.loc[index],
+                    "model_b": judged_model_b.loc[index],
+                    "orientation": (
+                        "direct"
+                        if judged_model_a.loc[index] == cfg.model.name
+                        else "reversed"
+                    ),
+                }
+                for index in group_index
+            ],
         )
         annotations.extend(group_annotations)
         if group_reversed is not None:

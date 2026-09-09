@@ -14,6 +14,10 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.benchmarks.execution import (
+    build_completion_cache,
+    build_judgement_cache,
+)
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
@@ -26,14 +30,10 @@ from judgearena.datasets.mt_bench import (
 )
 from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
-from judgearena.models import is_thinking_model, make_model
+from judgearena.models import is_thinking_model, prepare_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBenchProtocol
-from judgearena.utils import (
-    cache_function_dataframe,
-    generation_cache_token,
-)
 
 logger = get_logger(__name__)
 
@@ -86,8 +86,6 @@ def _generate_mt_bench_completions(
     protocol: MTBenchProtocol,
     questions_df: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cache_prefix = cfg.task
-
     def _run_generation(
         model_name: str, *, generation_kwargs: dict[str, object]
     ) -> pd.DataFrame:
@@ -106,6 +104,7 @@ def _generate_mt_bench_completions(
             use_tqdm=cfg.run.use_tqdm,
             temperature_config=temperature_config,
             strip_thinking_before_turn_2_prompt=cfg.judge.strip_thinking_before_judging,
+            inference_cache=build_completion_cache(cfg),
             **generation_kwargs,
         )
 
@@ -119,19 +118,12 @@ def _generate_mt_bench_completions(
                 completions=loaded_answers,
                 model_name=model_name,
             )
-        # Fold the resolved generation kwargs into the cache key so changing any
-        # sampling param busts cached completions instead of reusing a stale run.
         generation_kwargs = _build_mt_bench_generation_kwargs(
             cfg=cfg, model_spec=model_name, role=role
         )
-        sampling_token = generation_cache_token(generation_kwargs)
-        generated_answers = cache_function_dataframe(
-            lambda: _run_generation(model_name, generation_kwargs=generation_kwargs),
-            ignore_cache=cfg.run.ignore_cache,
-            cache_name=(
-                f"{cache_prefix}_{model_name}_{cfg.generation.n_instructions}_"
-                f"{sampling_token}"
-            ),
+        generated_answers = _run_generation(
+            model_name,
+            generation_kwargs=generation_kwargs,
         )
         return _align_mt_bench_completions(
             questions_df=questions_df,
@@ -435,7 +427,11 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         judge_model_kwargs.setdefault(
             "temperature", protocol.judge.fastchat_temperature
         )
-    judge_chat_model = make_model(model=cfg.judge.model, **judge_model_kwargs)
+    judge_chat_model = prepare_model(
+        model=cfg.judge.model,
+        cache=build_judgement_cache(cfg),
+        **judge_model_kwargs,
+    )
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
             cfg=cfg,

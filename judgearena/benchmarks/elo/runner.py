@@ -1,6 +1,4 @@
-import hashlib
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,10 +17,13 @@ from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperatur
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     prefs_to_battle_results,
-    sampling_cache_token,
     select_seeded_random_arena_battles,
 )
-from judgearena.benchmarks.execution import build_generation_kwargs
+from judgearena.benchmarks.execution import (
+    build_completion_cache,
+    build_generation_kwargs,
+    build_judgement_cache,
+)
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_battles
 from judgearena.evaluate import (
@@ -33,10 +34,9 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
-from judgearena.models import build_default_judge_model_kwargs, make_model
+from judgearena.models import build_default_judge_model_kwargs, prepare_model
 from judgearena.reports import EloReport
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
-from judgearena.utils import cache_function_dataframe
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -107,6 +107,11 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             extract_turn_text(row["conversation_a"][0])
             for _, row in df_battles.iterrows()
         ],
+        index=(
+            arena + ":" + df_battles["question_id"].astype(str)
+            if "question_id" in df_battles
+            else df_battles.index.astype(str)
+        ),
         name="instruction",
     )
     logger.debug("First instruction:\n%s", instructions.iloc[0][:300])
@@ -120,48 +125,13 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # dropped battle_thinking_token_budget).
     extra_kwargs = build_generation_kwargs(cfg, cfg.model.name, role="A")
     use_tqdm = False
-    gen_fun = partial(
-        generate_instructions,
+    completions_df = generate_instructions(
+        instructions=instructions,
+        model=cfg.model.name,
         truncate_input_chars=cfg.generation.truncate_all_input_chars,
         use_tqdm=use_tqdm,
+        inference_cache=build_completion_cache(cfg),
         **extra_kwargs,
-    )
-
-    def replace_slash(s: str) -> str:
-        return s.replace("/", "_")
-
-    languages_str = (
-        "-".join(sorted(selected_languages)) if selected_languages else "all"
-    )
-    extra_kwargs_str = (
-        "_".join(f"{k}={v}" for k, v in sorted(extra_kwargs.items()))
-        if extra_kwargs
-        else ""
-    )
-    cache_token = sampling_cache_token(
-        sampling_metadata,
-        n_instructions=cfg.generation.n_instructions,
-        n_instructions_per_language=cfg.elo.n_instructions_per_language,
-    )
-    cache_suffix = (
-        f"{arena}_{replace_slash(cfg.model.name)}_"
-        f"{cache_token}_"
-        f"{languages_str}_{cfg.generation.truncate_all_input_chars}_{extra_kwargs['max_tokens']}"
-        + (f"_{extra_kwargs_str}" if extra_kwargs_str else "")
-    )
-    if len(cache_suffix) > 100:
-        cache_hash = hashlib.sha256(cache_suffix.encode()).hexdigest()[:16]
-        logger.debug(
-            "Cache suffix too long (%d chars), using hash: %s (full: %s)",
-            len(cache_suffix),
-            cache_hash,
-            cache_suffix,
-        )
-        cache_suffix = cache_hash
-    completions_df = cache_function_dataframe(
-        lambda: gen_fun(instructions=instructions, model=cfg.model.name),
-        ignore_cache=cfg.run.ignore_cache,
-        cache_name=f"elo/{cache_suffix}",
     ).set_index("instruction_index")
     completions = completions_df.loc[:, "completion"]
 
@@ -209,8 +179,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     )
 
     def run_judge() -> pd.DataFrame:
-        judge_chat_model = make_model(
+        judge_chat_model = prepare_model(
             model=cfg.judge.model,
+            cache=build_judgement_cache(cfg),
             **judge_extra_kwargs,
         )
         annotations, annotations_reversed, prefs = judge_and_parse_prefs(
@@ -226,6 +197,25 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             parse=resolved_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
+            cache_metadata=[
+                {
+                    "instruction_id": str(instructions.index[index]),
+                    "model_a": (
+                        cfg.model.name
+                        if our_model_is_position_a[index]
+                        else opponent_models[index]
+                    ),
+                    "model_b": (
+                        opponent_models[index]
+                        if our_model_is_position_a[index]
+                        else cfg.model.name
+                    ),
+                    "orientation": (
+                        "direct" if our_model_is_position_a[index] else "reversed"
+                    ),
+                }
+                for index in range(n)
+            ],
         )
         if annotations_reversed is None:
             row_annotations = list(annotations)
@@ -258,17 +248,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         )
         return frame
 
-    # Stripping reasoning traces changes the judged text but not the cached
-    # completions, so it must be part of the judge cache key. Only append when
-    # enabled so prior (non-stripped) runs keep their existing cache hashes.
-    judge_cache_suffix = f"judge_{cache_suffix}"
-    if cfg.judge.strip_thinking_before_judging:
-        judge_cache_suffix += "_stripthinking"
-    df_judge = cache_function_dataframe(
-        run_judge,
-        ignore_cache=cfg.run.ignore_cache,
-        cache_name=f"elo/{judge_cache_suffix}",
-    )
+    df_judge = run_judge()
 
     # Restore position arrays and prefs from cache (in case loaded from disk)
     use_model_a_as_opponent = df_judge["use_model_a_as_opponent"].to_numpy()
@@ -307,6 +287,8 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         prompt=resolved_prompt,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         default_temperature=cfg.elo.soft_elo_temperature,
+        arena=arena,
+        inference_cache=build_judgement_cache(cfg),
     )
 
     # Build the score parser used for the main evaluation run.

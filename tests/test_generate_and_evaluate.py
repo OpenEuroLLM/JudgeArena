@@ -79,13 +79,6 @@ def mock_external_data_and_cache(monkeypatch):
         ),
     )
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        generate_and_evaluate, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _mock_alpaca_judge(monkeypatch, message) -> dict[str, object]:
     from judgearena.benchmarks.pairwise.scoring import alpaca_eval
@@ -100,7 +93,7 @@ def _mock_alpaca_judge(monkeypatch, message) -> dict[str, object]:
         captured.update(kwargs)
         return FakeJudge()
 
-    monkeypatch.setattr(benchmark_execution, "make_model", make_fake_judge)
+    monkeypatch.setattr(benchmark_execution, "prepare_model", make_fake_judge)
     monkeypatch.setattr(
         alpaca_eval,
         "_length_controlled_metrics",
@@ -336,7 +329,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 
         return FakeJudge()
 
-    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+    monkeypatch.setattr(benchmark_execution, "prepare_model", fake_make_model)
 
     prefs = run_pairwise(
         _cfg(

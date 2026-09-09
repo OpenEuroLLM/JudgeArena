@@ -16,6 +16,7 @@ from judgearena.benchmarks.elo.rating import (
 )
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric, _anchor_ratings
+from judgearena.cache_sqlite import JudgementCache
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
@@ -86,13 +87,6 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
     monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", mock_generate)
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        estimate_elo_ratings, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     task = kwargs.pop("task", "elo-comparia")
@@ -105,6 +99,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     strip_thinking_before_judging = kwargs.pop("strip_thinking_before_judging", False)
     calibrate_temperature = kwargs.pop("calibrate_temperature", False)
     battle_thinking_token_budget = kwargs.pop("battle_thinking_token_budget", None)
+    store_root = kwargs.pop("store_root", None)
     assert not kwargs, f"unexpected kwargs: {kwargs}"
     judge: dict[str, object] = {
         "model": judge_model,
@@ -123,7 +118,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
             "languages": languages,
             "calibrate_temperature": calibrate_temperature,
         },
-        run={"result_folder": result_folder},
+        run={"result_folder": result_folder, "store_root": store_root},
     )
 
 
@@ -605,11 +600,19 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
         estimate_elo_ratings, "load_battles", lambda _task: _arena_df(900)
     )
 
+    store_root = tmp_path / "cache"
     run_elo_with_task(
-        _default_args(result_folder=str(tmp_path), calibrate_temperature=True)
+        _default_args(
+            result_folder=str(tmp_path),
+            calibrate_temperature=True,
+            store_root=str(store_root),
+        )
     )
 
     assert captured["n_pairs"] >= 10
+    judgement_db = next((store_root / "judgements").rglob("judgements.db"))
+    with JudgementCache(judgement_db) as cache:
+        assert cache.query()["instruction_id"].str.startswith("ComparIA:").all()
 
 
 def test_extract_turn_text_tolerates_moderated_turns():
