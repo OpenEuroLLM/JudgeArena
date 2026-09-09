@@ -1,0 +1,9 @@
+Note that only the response of the "assistant" in the LAST ROUND of conversations is the output of the large language model (the AI assistant) that needs to be evaluated.
+
+You must provide your explanation. After providing your explanation, show the score by strictly following this format: "Rating: [[score]]", for example "Rating: [[6]]".
+
+The DIALOGUE needs to be judged in this format:
+
+***
+DIALOGUE
+***
