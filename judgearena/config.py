@@ -371,8 +371,8 @@ class RunArgs(BaseModel):
     """Directory where annotations, results, and the resolved ``config.yaml``
     are written (under a per-run subfolder)."""
 
-    ignore_cache: bool = False
-    """If set, ignore cached completions and regenerate them."""
+    store_root: str | None = None
+    """Root directory for content-addressed completion and judgement caches."""
 
     use_tqdm: bool = False
     """Show a tqdm progress bar (not compatible with vLLM)."""

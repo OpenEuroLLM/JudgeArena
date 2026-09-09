@@ -362,6 +362,8 @@ def judge_mt_bench_pairwise_fastchat(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        model_a=model_a,
+        model_b=model_b,
     )
 
     g2_judgments: list[str] | None = None
@@ -371,6 +373,8 @@ def judge_mt_bench_pairwise_fastchat(
             items=items,
             use_tqdm=use_tqdm,
             swap_answers=True,
+            model_a=model_a,
+            model_b=model_b,
         )
 
     annotations: list[dict[str, Any]] = []

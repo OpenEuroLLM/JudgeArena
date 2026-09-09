@@ -111,6 +111,7 @@ def annotate_battles(
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
+    cache_metadata: list[dict] | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -182,6 +183,7 @@ def annotate_battles(
         use_tqdm=use_tqdm,
         return_top_logprobs=collect_top_logprobs,
         stage="judging",
+        cache_metadata=cache_metadata,
     )
     if not collect_top_logprobs:
         judge_results = [InferenceResult(text=text) for text in judge_results]
@@ -229,6 +231,7 @@ def judge_and_parse_prefs(
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
     parse: JudgeParser | None = None,
+    cache_metadata: list[dict] | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -262,10 +265,28 @@ def judge_and_parse_prefs(
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
         collect_top_logprobs=parse.requires_top_logprobs,
+        cache_metadata=cache_metadata,
     )
 
     annotations_reversed = None
     if swap_mode == "both":
+        reversed_cache_metadata = (
+            [
+                {
+                    **metadata,
+                    "model_a": metadata["model_b"],
+                    "model_b": metadata["model_a"],
+                    "orientation": (
+                        "reversed"
+                        if metadata.get("orientation") == "direct"
+                        else "direct"
+                    ),
+                }
+                for metadata in cache_metadata
+            ]
+            if cache_metadata is not None
+            else None
+        )
         annotations_reversed = annotate_battles(
             judge_chat_model=judge_chat_model,
             instructions=instructions,
@@ -278,6 +299,7 @@ def judge_and_parse_prefs(
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
             collect_top_logprobs=parse.requires_top_logprobs,
+            cache_metadata=reversed_cache_metadata,
         )
 
     def _none_to_nan(x):

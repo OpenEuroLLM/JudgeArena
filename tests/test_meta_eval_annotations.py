@@ -23,6 +23,8 @@ def _sample() -> pd.DataFrame:
         [
             {
                 "battle_id": "arena:q1",
+                "model_a": "alpha",
+                "model_b": "beta",
                 "conversation_a": [
                     {"role": "user", "content": "Same prompt"},
                     {"role": "assistant", "content": "Alpha answer"},

@@ -38,7 +38,7 @@ def test_skipped_calibration_does_not_consume_rng_or_build_judge(
     def fail_if_called(**_kwargs):
         raise AssertionError("calibration judge was built")
 
-    monkeypatch.setattr(elo_calibration, "make_model", fail_if_called)
+    monkeypatch.setattr(elo_calibration, "prepare_model", fail_if_called)
     result = calibrate_pairscore_temperature(
         pd.DataFrame(),
         pd.DataFrame(),
@@ -52,6 +52,7 @@ def test_skipped_calibration_does_not_consume_rng_or_build_judge(
         prompt=prompt,
         truncate_input_chars=None,
         default_temperature=0.3,
+        arena="test-arena",
     )
 
     assert result is None
