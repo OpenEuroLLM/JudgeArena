@@ -39,6 +39,8 @@ def test_expand_mt_bench_101_turn_rules():
     mr_rows = eval_items[eval_items["task"] == "MR"]
     assert mr_rows.iloc[0]["requires_reference"]
     assert mr_rows.iloc[0]["reference_answer"] == "ref"
+    assert mr_rows.iloc[0]["ability"] == "reasoning"
+    assert mr_rows.iloc[0]["domain"] == "adaptability"
 
 
 def test_expand_mt_bench_101_unknown_task():
