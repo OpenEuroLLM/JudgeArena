@@ -1,0 +1,41 @@
+schema_version: 1
+task: mt-bench-101
+task_version: 1
+description: >-
+  MT-Bench-101 golden-context single-answer grading (Bai et al., 2024). Each
+  model is scored 1-10 per evaluated turn, dialogue scores use the minimum
+  over turns, and pairwise win rate is derived from those scores. Swap mode
+  has no effect. n_instructions selects complete dialogues, not individual
+  turns.
+tags: [pointwise, instruction-following, multi-turn, mt-bench-101]
+
+dataset:
+  adapter: mt_bench_101
+  sources:
+    benchmark:
+      type: git_raw
+      repository: https://github.com/mtbench101/mt-bench-101
+      revision: "bc18b3e2c18c99164e11528f1a79c92083db5953"
+      path: data/subjective/mtbench101.jsonl
+  fields:
+    id: dialogue_uid
+    instruction: user_message
+    category: task
+
+protocol:
+  runner: mt_bench_101
+  generation:
+    mode: golden_context_chat
+  baseline:
+    strategy: runtime_required
+  judge:
+    default_prompt_preset: mt-bench-101
+    default_temperature: 0.6
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+        group_by: [task, ability]
+
+metadata:
+  paper: https://arxiv.org/abs/2402.14762
+  reference_implementation: https://github.com/mtbench101/mt-bench-101
