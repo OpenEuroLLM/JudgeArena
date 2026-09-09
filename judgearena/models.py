@@ -22,7 +22,7 @@ from judgearena.inference import (
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
-    canonicalize_chat_input,
+    canonicalize_model_input,
 )
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
@@ -811,7 +811,8 @@ def do_inference(
     if cache_metadata is None or len(cache_metadata) != len(inputs):
         raise ValueError("cache_metadata must contain one row per inference input.")
 
-    input_texts = [canonicalize_chat_input(item) for item in inputs]
+    input_mode = chat_model.descriptor["input_mode"]
+    input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
     input_hashes = [input_hash(input_text) for input_text in input_texts]
     with cache.open_store(chat_model) as store:
         cached_rows = store.query(input_hashes).set_index("input_hash")
@@ -893,6 +894,61 @@ def _route_sampling_params(
     return engine_kwargs
 
 
+_VLLM_ONLY_KWARGS = (
+    "max_model_len",
+    "chat_template",
+    "language_model_only",
+    "gpu_memory_utilization",
+    "enforce_eager",
+    "tensor_parallel_size",
+    "quantization",
+    "kv_cache_dtype",
+    "reasoning_parser",
+    "reasoning_config",
+    "trust_remote_code",
+)
+_REMOTE_ENDPOINTS = {
+    "ChatOpenAI": "https://api.openai.com/v1",
+    "OpenAI": "https://api.openai.com/v1",
+    "OpenRouter": "https://openrouter.ai/api/v1",
+    "Together": "https://api.together.xyz/v1/completions",
+}
+
+
+def _resolve_model_config(
+    model: str,
+    max_tokens: int | None,
+    engine_kwargs: dict,
+) -> tuple[str, str, dict, dict]:
+    """Resolve shared provider and sampling inputs once."""
+    resolved_kwargs = engine_kwargs.copy()
+    resolved_kwargs["max_tokens"] = max_tokens or 8192
+    sampling = {
+        key: resolved_kwargs.pop(key, None)
+        for key in ("temperature", "top_p", "top_k", "seed", "top_logprobs")
+    }
+    provider, model_name = _split_model_spec(model)
+    if provider != "VLLM":
+        for key in _VLLM_ONLY_KWARGS:
+            resolved_kwargs.pop(key, None)
+    return provider, model_name, resolved_kwargs, sampling
+
+
+def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
+    if provider == "OpenRouter":
+        return _REMOTE_ENDPOINTS[provider]
+    for key in ("base_url", "openai_api_base", "together_api_base"):
+        if resolved_kwargs.get(key):
+            return str(resolved_kwargs[key])
+    if provider in {"ChatOpenAI", "OpenAI"}:
+        return (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or _REMOTE_ENDPOINTS[provider]
+        )
+    return _REMOTE_ENDPOINTS.get(provider)
+
+
 def prepare_model(
     model: str,
     max_tokens: int | None = 8192,
@@ -901,13 +957,28 @@ def prepare_model(
     **engine_kwargs,
 ) -> PreparedModel:
     """Prepare cache identity without constructing the provider backend."""
-    provider, model_name = _split_model_spec(model)
-    resolved_kwargs = {**engine_kwargs, "max_tokens": max_tokens or 8192}
+    provider, model_name, resolved_kwargs, sampling = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
     descriptor = (
-        build_model_descriptor(provider, model_name, resolved_kwargs)
+        build_model_descriptor(
+            provider,
+            model_name,
+            {**resolved_kwargs, **sampling},
+            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+        )
         if cache is not None
         else None
     )
+    routing = (resolved_kwargs.get("extra_body") or {}).get("provider") or {}
+    if (
+        cache is not None
+        and provider == "OpenRouter"
+        and (not routing.get("order") or routing.get("allow_fallbacks") is not False)
+    ):
+        logger.warning("OpenRouter cache identity uses unpinned provider routing.")
+    if cache is not None and descriptor is None:
+        logger.warning("Caching is not supported for %s; running uncached.", model)
     factory_kwargs = engine_kwargs.copy()
     return PreparedModel(
         model_spec=model,
@@ -933,40 +1004,14 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``top_k``, ``seed``. vLLM-only keys (``max_model_len``,
             ``chat_template``) are stripped before reaching hosted providers.
     """
-    # Avoid mutating the original engine_kwargs dictionary
-    # NOTE: this is a shallow copy since we are not modifying any
-    # mutable objects in the dictionary.
-    engine_kwargs = engine_kwargs.copy()
-
-    # Dedicated arguments like max_tokens always win over engine_kwargs.
-    engine_kwargs["max_tokens"] = max_tokens or 8192
-
-    temperature = engine_kwargs.pop("temperature", None)
-    top_p = engine_kwargs.pop("top_p", None)
-    top_k = engine_kwargs.pop("top_k", None)
-    seed = engine_kwargs.pop("seed", None)
-    top_logprobs = engine_kwargs.pop("top_logprobs", None)
-
-    model_provider, model_name = _split_model_spec(model)
-
-    # vLLM-engine-only kwargs must not leak to remote-API providers
-    # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
-    # kwargs via model_kwargs into chat.completions.create, which rejects them.
-    if model_provider != "VLLM":
-        for key in (
-            "max_model_len",
-            "chat_template",
-            "language_model_only",
-            "gpu_memory_utilization",
-            "enforce_eager",
-            "tensor_parallel_size",
-            "quantization",
-            "kv_cache_dtype",
-            "reasoning_parser",
-            "reasoning_config",
-            "trust_remote_code",
-        ):
-            engine_kwargs.pop(key, None)
+    model_provider, model_name, engine_kwargs, sampling = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
+    temperature = sampling["temperature"]
+    top_p = sampling["top_p"]
+    top_k = sampling["top_k"]
+    seed = sampling["seed"]
+    top_logprobs = sampling["top_logprobs"]
 
     if model_provider == "Dummy":
         if top_logprobs is not None:
