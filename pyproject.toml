@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.cli:cli"
+judgearena-cache-browse = "judgearena.browse_cache:main"
 
 [project]
 name = "judgearena"
@@ -97,6 +98,11 @@ quote-style = "double"
 indent-style = "space"
 
 [project.optional-dependencies]
+browser = [
+    "ipython>=9.5.0",
+    "ipywidgets>=8.1.7",
+    "textual>=6.1.0",
+]
 # vLLM 0.19.1 is the pinned judge/battle runtime on this branch. Its own
 # Requires-Dist is `transformers!=5.0.*,...,!=5.5.0,>=4.56.0`, so the
 # only sub-range >=5.x that vLLM 0.19.1 accepts is >=5.5.1 — hence the
