@@ -16,7 +16,14 @@ from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
+from judgearena.cache_sqlite import input_hash
 from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
+from judgearena.inference import (
+    InferenceCache,
+    PreparedModel,
+    build_model_descriptor,
+    canonicalize_chat_input,
+)
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
@@ -663,7 +670,7 @@ def batch_inference_once(
     return [result.text for result in results]
 
 
-def do_inference(
+def _do_inference_uncached(
     chat_model,
     inputs,
     use_tqdm: bool = False,
@@ -772,6 +779,78 @@ def do_inference(
     return [result.text for result in results]
 
 
+def do_inference(
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    return_top_logprobs: bool = False,
+    *,
+    stage: str = "unspecified",
+    cache_metadata: list[dict] | None = None,
+):
+    """Reuse raw provider outputs and invoke the backend only for cache misses."""
+    inputs = list(inputs)
+    if not isinstance(chat_model, PreparedModel):
+        return _do_inference_uncached(
+            chat_model,
+            inputs,
+            use_tqdm,
+            return_top_logprobs,
+            stage=stage,
+        )
+
+    cache = chat_model.cache
+    if cache is None or chat_model.descriptor is None:
+        return _do_inference_uncached(
+            chat_model.materialize(),
+            inputs,
+            use_tqdm,
+            return_top_logprobs,
+            stage=stage,
+        )
+    if cache_metadata is None or len(cache_metadata) != len(inputs):
+        raise ValueError("cache_metadata must contain one row per inference input.")
+
+    input_texts = [canonicalize_chat_input(item) for item in inputs]
+    input_hashes = [input_hash(input_text) for input_text in input_texts]
+    with cache.open_store(chat_model) as store:
+        cached_rows = store.query(input_hashes).set_index("input_hash")
+        results: list[InferenceResult | None] = [
+            (
+                InferenceResult(**cache.cached_result(cached_rows.loc[key]).__dict__)
+                if key in cached_rows.index
+                else None
+            )
+            for key in input_hashes
+        ]
+        missing_indices = [
+            index for index, result in enumerate(results) if result is None
+        ]
+        if missing_indices:
+            generated = _do_inference_uncached(
+                chat_model.materialize(),
+                [inputs[index] for index in missing_indices],
+                use_tqdm,
+                True,
+                stage=stage,
+            )
+            for index, result in zip(missing_indices, generated, strict=True):
+                results[index] = result
+            cache.save_outputs(
+                store,
+                chat_model,
+                input_texts,
+                generated,
+                cache_metadata,
+                missing_indices,
+            )
+
+    resolved_results = [result for result in results if result is not None]
+    if return_top_logprobs:
+        return resolved_results
+    return [result.text for result in resolved_results]
+
+
 def _route_sampling_params(
     engine_kwargs: dict,
     *,
@@ -812,6 +891,34 @@ def _route_sampling_params(
             continue
         engine_kwargs[key] = value
     return engine_kwargs
+
+
+def prepare_model(
+    model: str,
+    max_tokens: int | None = 8192,
+    *,
+    cache: InferenceCache | None = None,
+    **engine_kwargs,
+) -> PreparedModel:
+    """Prepare cache identity without constructing the provider backend."""
+    provider, model_name = _split_model_spec(model)
+    resolved_kwargs = {**engine_kwargs, "max_tokens": max_tokens or 8192}
+    descriptor = (
+        build_model_descriptor(provider, model_name, resolved_kwargs)
+        if cache is not None
+        else None
+    )
+    factory_kwargs = engine_kwargs.copy()
+    return PreparedModel(
+        model_spec=model,
+        descriptor=descriptor,
+        factory=lambda: make_model(
+            model,
+            max_tokens=max_tokens,
+            **factory_kwargs,
+        ),
+        cache=cache,
+    )
 
 
 def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
