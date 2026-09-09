@@ -13,6 +13,21 @@ from judgearena.tasks.schema import GitRawSource, ResolvedTaskSpec
 MT_BENCH_101_TURN2_ONLY_TASKS = {"CM", "AR", "CR", "FR", "SC", "SA"}
 MT_BENCH_101_REFERENCE_TASKS = {"MR", "GR"}
 MT_BENCH_101_TASK_TO_ABILITY = {
+    "CM": "memory",
+    "AR": "understanding",
+    "SI": "understanding",
+    "TS": "interference",
+    "CC": "interference",
+    "CR": "rephrasing",
+    "FR": "rephrasing",
+    "SC": "reflection",
+    "SA": "reflection",
+    "MR": "reasoning",
+    "GR": "reasoning",
+    "IC": "questioning",
+    "PI": "questioning",
+}
+MT_BENCH_101_TASK_TO_DOMAIN = {
     "CM": "perceptivity",
     "AR": "perceptivity",
     "SI": "perceptivity",
@@ -119,6 +134,7 @@ def expand_mt_bench_101_records(records: list[dict]) -> pd.DataFrame:
                     "dialogue_uid": f"{task_name}:{dialogue_id}",
                     "task": task_name,
                     "ability": MT_BENCH_101_TASK_TO_ABILITY[task_name],
+                    "domain": MT_BENCH_101_TASK_TO_DOMAIN[task_name],
                     "turn_index": turn_pos,
                     "golden_context": golden_context,
                     "user_message": user_message,

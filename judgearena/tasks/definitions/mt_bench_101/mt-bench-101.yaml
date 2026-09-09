@@ -34,7 +34,7 @@ protocol:
   scoring:
     metrics:
       - metric: pairwise_win_rate
-        group_by: [task, ability]
+        group_by: [task, ability, domain]
 
 metadata:
   paper: https://arxiv.org/abs/2402.14762
