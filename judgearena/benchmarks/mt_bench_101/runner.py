@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
 from judgearena.benchmarks.mt_bench_101.evaluate import (
+    aggregate_mt_bench_101_dialogues,
     derive_mt_bench_101_pairwise_preferences,
     judge_mt_bench_101_single,
     summarize_mt_bench_101_absolute_scores,
@@ -21,7 +23,6 @@ from judgearena.benchmarks.mt_bench_101.generate import (
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_instructions
 from judgearena.log import get_logger
-from judgearena.models import make_model
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBench101Protocol
 from judgearena.utils import cache_function_dataframe, generation_cache_token
@@ -47,14 +48,9 @@ def _generate_cached(
     cfg: RunConfig,
     eval_items: pd.DataFrame,
     model_name: str,
-    role: str,
+    role: Literal["A", "B"],
 ) -> pd.DataFrame:
-    if role == "A":
-        generation_kwargs = cfg.model.evaluated_generation_kwargs()
-    elif role == "B":
-        generation_kwargs = cfg.model.baseline_generation_kwargs()
-    else:
-        raise ValueError(f"Unknown generation role: {role!r}")
+    generation_kwargs = build_generation_kwargs(cfg, model_name, role=role)
     sampling_token = generation_cache_token(generation_kwargs)
     return cache_function_dataframe(
         lambda: generate_mt_bench_101_completions(
@@ -107,23 +103,14 @@ def run_mt_bench_101_benchmark(
     completions_b = _generate_cached(
         cfg=cfg, eval_items=eval_items, model_name=cfg.model.baseline, role="B"
     )
-    judge_model_kwargs = cfg.judge.model_kwargs(
-        base_engine_kwargs=cfg.model.engine_kwargs,
-        fallback_chat_template=cfg.model.chat_template,
-    )
-    if cfg.judge.temperature is None:
-        judge_model_kwargs.setdefault("temperature", protocol.judge.default_temperature)
-    if protocol.judge.default_max_out_tokens is not None:
-        judge_model_kwargs.setdefault(
-            "max_tokens", protocol.judge.default_max_out_tokens
-        )
-    judge_chat_model = make_model(model=cfg.judge.model, **judge_model_kwargs)
+    judge_chat_model = build_judge(cfg)
     scored_a = judge_mt_bench_101_single(
         judge_chat_model=judge_chat_model,
         eval_items=eval_items,
         completions=completions_a,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     scored_b = judge_mt_bench_101_single(
         judge_chat_model=judge_chat_model,
@@ -131,15 +118,17 @@ def run_mt_bench_101_benchmark(
         completions=completions_b,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
-    pairwise = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
+    pairwise_turns = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
+    pairwise = aggregate_mt_bench_101_dialogues(pairwise_turns)
     battles = pd.DataFrame(
         {
-            "instruction_index": pairwise["instruction_index"],
+            "instruction_index": pairwise["dialogue_uid"],
             "task": pairwise["task"],
             "ability": pairwise["ability"],
+            "domain": pairwise["domain"],
             "dialogue_uid": pairwise["dialogue_uid"],
-            "turn": pairwise["turn_index"],
             "model_a": cfg.model.name,
             "model_b": cfg.model.baseline,
             "evaluation_model": cfg.model.name,
@@ -158,9 +147,11 @@ def run_mt_bench_101_benchmark(
         preferences=pairwise["preference"].tolist(),
         metadata={
             "evaluation_mode": "single_answer_grading",
-            "judge_temperature": judge_model_kwargs.get("temperature"),
+            "judge_temperature": cfg.judge.temperature,
             "model_A_scores": summarize_mt_bench_101_absolute_scores(scored_a),
             "model_B_scores": summarize_mt_bench_101_absolute_scores(scored_b),
+            "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
+            "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             "date": datetime.now(UTC).isoformat(),
             "user": os.getenv("USER", ""),
         },
@@ -175,6 +166,14 @@ def run_mt_bench_101_benchmark(
         ],
         ignore_index=True,
     )
+    annotations = annotations.merge(
+        pairwise_turns.loc[
+            :, ["instruction_index", "score_A", "score_B", "preference"]
+        ].rename(columns={"preference": "turn_preference"}),
+        on="instruction_index",
+        how="left",
+        validate="many_to_one",
+    )
     annotations.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
     write_run_metadata_safely(
         output_dir=res_folder,
@@ -184,7 +183,18 @@ def run_mt_bench_101_benchmark(
         input_payloads={
             "instruction_index": eval_items.index.tolist(),
             "dialogue_uid": eval_items["dialogue_uid"].tolist(),
+            "user_message": eval_items["user_message"].tolist(),
+            "golden_context": eval_items["golden_context"].tolist(),
+            "completion_A": completions_a["completion"].tolist(),
+            "completion_B": completions_b["completion"].tolist(),
         },
+        judge_prompt_variants=[
+            {
+                "task": task_name,
+                "system_prompt": group.iloc[0]["system_prompt"],
+            }
+            for task_name, group in scored_a.groupby("task", sort=True)
+        ],
         started_at_utc=run_started_at,
     )
     return pd.Series(pairwise["preference"].tolist())

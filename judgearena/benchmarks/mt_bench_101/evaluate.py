@@ -15,7 +15,7 @@ from judgearena.datasets.mt_bench_101 import (
 )
 from judgearena.models import do_inference
 from judgearena.prompts.parsing import PairScore
-from judgearena.utils import safe_text
+from judgearena.utils import safe_text, strip_thinking_tags
 
 DOUBLE_BRACKET_PATTERN = re.compile(r"\[\[(\d+)\]\]")
 
@@ -86,6 +86,7 @@ def judge_mt_bench_101_single(
     completions: pd.DataFrame,
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
+    strip_thinking_before_judging: bool = False,
 ) -> pd.DataFrame:
     prompts = load_mt_bench_101_prompts()
     task_prompts = prompts["task_prompts"]
@@ -99,10 +100,10 @@ def judge_mt_bench_101_single(
         eval_row = eval_items.loc[idx]
         completion_row = completion_by_idx.loc[idx]
         task = str(eval_row["task"])
-        model_response = safe_text(
-            completion_row.get("completion", ""),
-            truncate_input_chars,
-        )
+        model_response = safe_text(completion_row.get("completion", ""), None)
+        if strip_thinking_before_judging:
+            model_response = strip_thinking_tags(model_response)
+        model_response = safe_text(model_response, truncate_input_chars)
         dialogue = format_mt_bench_101_dialogue(
             golden_context=list(eval_row.get("golden_context") or []),
             user_message=safe_text(
@@ -129,6 +130,7 @@ def judge_mt_bench_101_single(
                 "dialogue_uid": eval_row["dialogue_uid"],
                 "task": task,
                 "ability": eval_row.get("ability", MT_BENCH_101_TASK_TO_ABILITY[task]),
+                "domain": eval_row["domain"],
                 "turn_index": eval_row["turn_index"],
                 "model_completion": model_response,
                 "system_prompt": system_prompt,
@@ -158,7 +160,7 @@ def judge_mt_bench_101_single(
 
 def compute_mt_bench_101_dialogue_scores(scored_turns: pd.DataFrame) -> pd.DataFrame:
     grouped = scored_turns.groupby(
-        ["dialogue_uid", "dialogue_id", "task", "ability"], as_index=False
+        ["dialogue_uid", "dialogue_id", "task", "ability", "domain"], as_index=False
     )["score"].min()
     return grouped.rename(columns={"score": "dialogue_score"})
 
@@ -173,6 +175,9 @@ def summarize_mt_bench_101_absolute_scores(
     per_ability_series = (
         dialogue_scores.groupby("ability")["dialogue_score"].mean().sort_index()
     )
+    per_domain_series = (
+        dialogue_scores.groupby("domain")["dialogue_score"].mean().sort_index()
+    )
     overall = per_task_series.mean() if len(per_task_series) else float("nan")
     return {
         "num_turns": int(len(scored_turns)),
@@ -185,6 +190,11 @@ def summarize_mt_bench_101_absolute_scores(
         "per_ability": {
             ability: float(score)
             for ability, score in per_ability_series.items()
+            if pd.notna(score)
+        },
+        "per_domain": {
+            domain: float(score)
+            for domain, score in per_domain_series.items()
             if pd.notna(score)
         },
         "overall": float(overall) if pd.notna(overall) else None,
@@ -201,6 +211,7 @@ def derive_mt_bench_101_pairwise_preferences(
         "dialogue_id",
         "task",
         "ability",
+        "domain",
         "turn_index",
     ]
     merged = (
@@ -220,3 +231,21 @@ def derive_mt_bench_101_pairwise_preferences(
         for score_a, score_b in zip(merged["score_A"], merged["score_B"], strict=True)
     ]
     return merged
+
+
+def aggregate_mt_bench_101_dialogues(pairwise_turns: pd.DataFrame) -> pd.DataFrame:
+    """Apply the benchmark's minimum-turn rule before deriving preferences."""
+    group_columns = ["dialogue_uid", "dialogue_id", "task", "ability", "domain"]
+    dialogues = pairwise_turns.groupby(group_columns, as_index=False)[
+        ["score_A", "score_B"]
+    ].min()
+    scorer = PairScore()
+    dialogues["preference"] = [
+        None
+        if pd.isna(score_a) or pd.isna(score_b)
+        else float(scorer.preference_from_scores(score_a, score_b))
+        for score_a, score_b in zip(
+            dialogues["score_A"], dialogues["score_B"], strict=True
+        )
+    ]
+    return dialogues

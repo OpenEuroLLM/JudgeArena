@@ -6,6 +6,7 @@ import pytest
 import judgearena.benchmarks.mt_bench_101.runner as runner
 import judgearena.datasets.mt_bench_101 as mt_bench_101
 from judgearena.benchmarks.mt_bench_101.evaluate import (
+    aggregate_mt_bench_101_dialogues,
     derive_mt_bench_101_pairwise_preferences,
     judge_mt_bench_101_single,
     parse_mt_bench_101_rating,
@@ -110,7 +111,8 @@ def test_judge_mt_bench_101_includes_reference_block_for_mr():
             "dialogue_id": [1],
             "dialogue_uid": ["MR:1"],
             "task": ["MR"],
-            "ability": ["adaptability"],
+            "ability": ["reasoning"],
+            "domain": ["adaptability"],
             "turn_index": [2],
             "golden_context": [[{"user": "q1", "bot": "a1"}]],
             "user_message": ["q2"],
@@ -118,18 +120,20 @@ def test_judge_mt_bench_101_includes_reference_block_for_mr():
         }
     ).set_index("instruction_index")
     completions = pd.DataFrame(
-        {"instruction_index": [0], "completion": ["model answer"]}
+        {"instruction_index": [0], "completion": ["<think>hidden</think>model answer"]}
     )
     scored = judge_mt_bench_101_single(
         judge_chat_model=DummyModel("Dummy/Rating: [[8]]"),
         eval_items=eval_items,
         completions=completions,
         use_tqdm=False,
+        strip_thinking_before_judging=True,
     )
     user_prompt = scored.iloc[0]["user_prompt"]
     assert scored.iloc[0]["score"] == pytest.approx(8.0)
     assert "The reference solution is:" in user_prompt
     assert "ref answer" in user_prompt
+    assert "hidden" not in user_prompt
 
 
 def test_mt_bench_101_min_dialogue_and_pairwise():
@@ -139,7 +143,8 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
             "dialogue_uid": ["PI:1", "PI:1", "PI:2"],
             "dialogue_id": [1, 1, 2],
             "task": ["PI", "PI", "PI"],
-            "ability": ["interactivity", "interactivity", "interactivity"],
+            "ability": ["questioning", "questioning", "questioning"],
+            "domain": ["interactivity", "interactivity", "interactivity"],
             "turn_index": [1, 2, 1],
             "score": [9.0, 2.0, 4.0],
         }
@@ -147,8 +152,11 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
     scored_b = scored_a.assign(score=[8.0, 1.0, 6.0])
     absolute_a = summarize_mt_bench_101_absolute_scores(scored_a)
     assert absolute_a["per_task"]["PI"] == pytest.approx(3.0)
-    pairwise = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
-    assert len(pairwise) == 3
+    pairwise_turns = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
+    pairwise = aggregate_mt_bench_101_dialogues(pairwise_turns)
+    assert len(pairwise) == 2
+    assert pairwise["score_A"].tolist() == [2.0, 4.0]
+    assert pairwise["score_B"].tolist() == [1.0, 6.0]
 
 
 def test_run_mt_bench_101_dummy(tmp_path, monkeypatch):
