@@ -11,8 +11,9 @@ from scipy.optimize import minimize_scalar
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.benchmarks.elo.rating import winner_to_pref
 from judgearena.evaluate import judge_and_parse_prefs
+from judgearena.inference import JudgementInferenceCache
 from judgearena.log import get_logger
-from judgearena.models import make_model
+from judgearena.models import prepare_model
 from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import ResolvedJudgePrompt
 
@@ -62,6 +63,8 @@ def calibrate_pairscore_temperature(
     prompt: ResolvedJudgePrompt,
     truncate_input_chars: int | None,
     default_temperature: float,
+    arena: str,
+    inference_cache: JudgementInferenceCache | None = None,
 ) -> float | None:
     """Judge sampled human battles and return a fitted PairScore temperature."""
     if not enabled:
@@ -103,7 +106,12 @@ def calibrate_pairscore_temperature(
         for index in calibration_battles.index
     ]
 
-    calibration_judge = make_model(model=judge_model, **dict(judge_model_kwargs))
+    source_rows = source_battles.loc[calibration_battles.index]
+    calibration_judge = prepare_model(
+        model=judge_model,
+        cache=inference_cache,
+        **dict(judge_model_kwargs),
+    )
     annotations, _, _ = judge_and_parse_prefs(
         judge_chat_model=calibration_judge,
         instructions=instructions,
@@ -115,6 +123,15 @@ def calibrate_pairscore_temperature(
         prompt_preset=prompt.preset_name,
         parse=prompt.parser,
         truncate_input_chars=truncate_input_chars,
+        cache_metadata=[
+            {
+                "instruction_id": f"{arena}:{row.question_id}",
+                "model_a": row.model_a,
+                "model_b": row.model_b,
+                "orientation": "direct",
+            }
+            for row in source_rows.itertuples()
+        ],
     )
 
     score_differences: list[float] = []

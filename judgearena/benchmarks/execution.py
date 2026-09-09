@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
 from judgearena.models import (
     build_default_judge_model_kwargs,
     is_thinking_model,
-    make_model,
+    prepare_model,
 )
 
 if TYPE_CHECKING:
@@ -35,8 +37,9 @@ def build_generation_kwargs(
 
 def build_judge(cfg: RunConfig):
     """Construct the configured judge consistently across benchmark runners."""
-    return make_model(
+    return prepare_model(
         model=cfg.judge.model,
+        cache=build_judgement_cache(cfg),
         **build_default_judge_model_kwargs(
             cfg.judge.model,
             cfg.model.engine_kwargs,
@@ -45,3 +48,15 @@ def build_judge(cfg: RunConfig):
             ),
         ),
     )
+
+
+def build_completion_cache(cfg: RunConfig) -> CompletionInferenceCache | None:
+    if cfg.run.store_root is None:
+        return None
+    return CompletionInferenceCache(Path(cfg.run.store_root), cfg.task)
+
+
+def build_judgement_cache(cfg: RunConfig) -> JudgementInferenceCache | None:
+    if cfg.run.store_root is None:
+        return None
+    return JudgementInferenceCache(Path(cfg.run.store_root), cfg.task)

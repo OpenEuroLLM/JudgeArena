@@ -201,7 +201,7 @@ def test_judge_settings_include_inherited_engine_kwargs(
     monkeypatch.setattr(
         config_module, "get_packaged_task", lambda _task: _registered_task()
     )
-    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
+    monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
     data = _base_generate()
     data["model"]["engine_kwargs"] = {
         "temperature": 0.5,
@@ -235,7 +235,7 @@ def test_judge_engine_inheritance_matches_the_runner(
     data["task"] = task
     data["model"]["engine_kwargs"] = {"max_tokens": 128}
     data["judge"]["model"] = judge_model
-    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
+    monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
 
     cfg = RunConfig(**data)
     if task == "mt-bench":
