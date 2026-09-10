@@ -11,16 +11,6 @@ from judgearena.battles import summarize_bootstrap
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
 
 
-def _anchor_ratings(
-    ratings: dict[str, float], baseline_model: str | None
-) -> dict[str, float]:
-    """Apply the existing optional Elo origin when the anchor is present."""
-    if baseline_model is None or baseline_model not in ratings:
-        return ratings
-    shift = 1000.0 - ratings[baseline_model]
-    return {model: rating + shift for model, rating in ratings.items()}
-
-
 @dataclass(frozen=True, kw_only=True)
 class BradleyTerryMetric:
     """Configured arena-anchored Bradley-Terry calculation."""
@@ -53,8 +43,8 @@ class BradleyTerryMetric:
         scoring_battles = battles.copy()
         if not self.soft:
             scoring_battles["pref"] = scoring_battles["pref_hard"]
-        point_ratings = _anchor_ratings(
-            fit_bradley_terry(scoring_battles, pref_col="pref"), self.baseline_model
+        point_ratings = fit_bradley_terry(
+            scoring_battles, pref_col="pref", baseline_model=self.baseline_model
         )
         lifecycle_columns = {"pref_hard", "source", "evaluation_model"}
         missing_lifecycle = sorted(lifecycle_columns - set(battles.columns))
@@ -77,8 +67,8 @@ class BradleyTerryMetric:
 
         human_battles = scoring_battles.loc[scoring_battles["source"] == "human"].copy()
         human_battles["pref"] = human_battles["pref_hard"]
-        human_ratings = _anchor_ratings(
-            fit_bradley_terry(human_battles, pref_col="pref"), self.baseline_model
+        human_ratings = fit_bradley_terry(
+            human_battles, pref_col="pref", baseline_model=self.baseline_model
         )
 
         battle_counts: dict[str, int] = {}
@@ -96,8 +86,8 @@ class BradleyTerryMetric:
                 random_state=int(rng.integers(0, 2**31)),
             )
             bootstrap_ratings.append(
-                _anchor_ratings(
-                    fit_bradley_terry(sample, pref_col="pref"), self.baseline_model
+                fit_bradley_terry(
+                    sample, pref_col="pref", baseline_model=self.baseline_model
                 )
             )
 

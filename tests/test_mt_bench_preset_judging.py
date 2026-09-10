@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
+import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
+from judgearena.benchmarks.elo.rating import fit_bradley_terry
 from judgearena.benchmarks.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
     _select_preset_prompt,
@@ -14,7 +19,13 @@ from judgearena.benchmarks.mt_bench.runner import _build_mt_bench_battles
 from judgearena.benchmarks.pairwise.scoring.metrics import (
     LengthControlledWinrateMetric,
 )
-from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
+from judgearena.config import RunConfig
+from judgearena.prompts.registry import (
+    FASTCHAT_PAIRWISE_PROMPT_PRESET,
+    resolve_judge_prompt,
+)
+from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
 
@@ -221,6 +232,107 @@ def test_fixed_preset_judgment_builds_one_single_orientation_battle():
         "num_scored": 1,
         "winrate": None,
     }
+
+
+def test_mt_bench_battles_preserve_preferences_and_turn_ids():
+    prefs = pd.Series([0.2, 0.8, 0.5, np.nan])
+    metadata = [
+        {"question_id": question_id, "turn": turn}
+        for question_id, turn in [(1, 1), (1, 2), (2, 1), (2, 2)]
+    ]
+    battles = _build_mt_bench_battles(
+        cfg=SimpleNamespace(
+            model=SimpleNamespace(name="candidate", baseline="reference"),
+            judge=SimpleNamespace(model="judge"),
+        ),
+        prefs=prefs,
+        combined_metadata=metadata,
+        completions_a=pd.DataFrame(
+            {"completion_turn_1": ["a1", "a2"], "completion_turn_2": ["a1b", "a2b"]},
+            index=[1, 2],
+        ),
+        completions_b=pd.DataFrame(
+            {"completion_turn_1": ["b1", "b2"], "completion_turn_2": ["b1b", "b2b"]},
+            index=[1, 2],
+        ),
+    )
+
+    pd.testing.assert_series_equal(battles["pref"], prefs.rename("pref"))
+    pd.testing.assert_series_equal(
+        battles["pref_hard"], pd.Series([0.0, 1.0, 0.5, np.nan], name="pref_hard")
+    )
+    assert {
+        "instruction_index",
+        "model",
+        "baseline",
+        "completion_model",
+        "completion_baseline",
+        "orientation",
+        "pref",
+    } <= set(battles)
+    assert battles["instruction_index"].tolist() == [
+        "1:turn-1",
+        "1:turn-2",
+        "2:turn-1",
+        "2:turn-2",
+    ]
+
+
+@pytest.mark.parametrize("seed", [17, 29])
+def test_mt_bench_hard_bootstraps_use_run_seed(monkeypatch, tmp_path, seed):
+    monkeypatch.setattr(
+        mt_bench_runner, "write_run_metadata_safely", lambda **_kwargs: None
+    )
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "candidate", "baseline": "reference"},
+        judge={"model": "judge", "prompt_preset": "default", "swap_mode": "fixed"},
+        run={"seed": seed, "use_tqdm": False},
+    )
+    protocol = get_packaged_task(cfg.task).spec.protocol.model_copy(
+        update={
+            "scoring": ScoringSpec(
+                metrics=(
+                    MetricSpec(
+                        metric="bradley_terry",
+                        parameters={"soft": False, "n_bootstraps": 3},
+                    ),
+                )
+            )
+        }
+    )
+
+    mt_bench_runner._run_mt_bench_preset(
+        cfg=cfg,
+        protocol=protocol,
+        res_folder=tmp_path,
+        result_name="result",
+        questions_df=_questions_df(),
+        completions_a=_completions_df("A"),
+        completions_b=_completions_df("B"),
+        judge_chat_model=SequenceJudge(
+            ["score A: 10 score B: 0", "score A: 0 score B: 10"]
+        ),
+        resolved_prompt=resolve_judge_prompt(preset="default"),
+        started_at_utc=datetime.now(UTC),
+    )
+
+    battles = pd.DataFrame(
+        {"model_a": "candidate", "model_b": "reference", "pref": [0.0, 1.0]}
+    )
+    rng = np.random.default_rng(seed)
+    expected = [
+        fit_bradley_terry(
+            battles.sample(
+                n=len(battles), replace=True, random_state=int(rng.integers(0, 2**31))
+            )
+        )
+        for _ in range(3)
+    ]
+    saved = json.loads((tmp_path / "results-result.json").read_text())
+    metric = saved["metrics"]["bradley_terry"]
+    assert metric["method"] == "ELO"
+    assert metric["bootstrap_ratings"] == expected
 
 
 def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):

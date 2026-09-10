@@ -11,15 +11,16 @@ class MetricSpec(StrictFrozenModel):
     """One named calculation over a battle dataframe."""
 
     metric: str = Field(min_length=1)
-    group_by: tuple[str, ...] = ()
+    breakdown_by: tuple[str, ...] = ()
+    """Each field produces a separate breakdown; fields are not combined."""
     parameters: dict[str, object] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _validate_group_by(self) -> MetricSpec:
-        if any(not field for field in self.group_by):
-            raise ValueError("metric group_by fields must not be empty")
-        if len(set(self.group_by)) != len(self.group_by):
-            raise ValueError("metric group_by fields must not contain duplicates")
+    def _validate_breakdown_by(self) -> MetricSpec:
+        if any(not field for field in self.breakdown_by):
+            raise ValueError("metric breakdown_by fields must not be empty")
+        if len(set(self.breakdown_by)) != len(self.breakdown_by):
+            raise ValueError("metric breakdown_by fields must not contain duplicates")
         return self
 
 

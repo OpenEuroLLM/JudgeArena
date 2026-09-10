@@ -2,13 +2,16 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
+from langchain_core.language_models.fake import FakeListLLM
 
 import judgearena.benchmarks.execution as benchmark_execution
 import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.benchmarks.registry as benchmark_registry
 import judgearena.benchmarks.runner as benchmark_runner
+from judgearena.benchmarks.elo.rating import fit_bradley_terry
 from judgearena.benchmarks.pairwise.baselines import (
     BaselinePlan,
     native_pairwise_baseline,
@@ -348,7 +351,7 @@ def test_pairwise_grouping_accepts_all_canonical_battle_columns(tmp_path):
                 metrics=(
                     MetricSpec(
                         metric="pairwise_win_rate",
-                        group_by=canonical_fields,
+                        breakdown_by=canonical_fields,
                     ),
                 )
             )
@@ -370,6 +373,58 @@ def test_pairwise_grouping_accepts_all_canonical_battle_columns(tmp_path):
 
     assert len(prefs) == 2
     assert (prefs < 0.5).all()
+
+
+@pytest.mark.parametrize("seed", [17, 29])
+def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path, seed):
+    monkeypatch.setattr(
+        benchmark_execution,
+        "make_model",
+        lambda **_kwargs: FakeListLLM(
+            responses=[
+                "score A: 10 score B: 0",
+                "score A: 0 score B: 10",
+                "score A: 5 score B: 5",
+            ]
+        ),
+    )
+    cfg = _cfg(
+        task="alpaca-eval",
+        model_A="Dummy/a",
+        model_B="Dummy/b",
+        judge_model="Dummy/judge",
+        n_instructions=3,
+        result_folder=str(tmp_path),
+    )
+    cfg.run.seed = seed
+    task = get_packaged_task(cfg.task)
+    protocol = task.spec.protocol.model_copy(
+        update={
+            "scoring": ScoringSpec(
+                metrics=(
+                    MetricSpec(metric="bradley_terry", parameters={"n_bootstraps": 3}),
+                )
+            )
+        }
+    )
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+
+    prefs = run_pairwise(cfg, task)
+
+    battles = pd.DataFrame(
+        {"model_a": cfg.model.name, "model_b": cfg.model.baseline, "pref": prefs}
+    )
+    rng = np.random.default_rng(seed)
+    expected = [
+        fit_bradley_terry(
+            battles.sample(
+                n=len(battles), replace=True, random_state=int(rng.integers(0, 2**31))
+            )
+        )
+        for _ in range(3)
+    ]
+    saved = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert saved["metrics"]["bradley_terry"]["bootstrap_ratings"] == expected
 
 
 def test_run_writes_roundtrippable_config(tmp_path):

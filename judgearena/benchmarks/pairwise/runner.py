@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
@@ -133,12 +134,14 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         {
             field
             for request in resolved_task.spec.protocol.scoring.metrics
-            for field in request.group_by
+            for field in request.breakdown_by
         }
         - metric_columns
     )
     if missing_groups:
-        raise ValueError(f"Metric group_by columns are unavailable: {missing_groups}.")
+        raise ValueError(
+            f"Metric breakdown_by columns are unavailable: {missing_groups}."
+        )
 
     n_instructions = (
         cfg.generation.n_instructions
@@ -387,7 +390,13 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         )
     )
     metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
-    metric_results = calculate_metrics(battles, metrics)
+    metric_results = calculate_metrics(
+        battles,
+        metrics,
+        runtime_by_metric={
+            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
+        },
+    )
 
     report = BattleReport(
         task=cfg.task,

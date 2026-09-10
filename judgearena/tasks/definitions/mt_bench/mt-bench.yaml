@@ -51,7 +51,7 @@ protocol:
   scoring:
     metrics:
       - metric: pairwise_win_rate
-        group_by: [category, turn]
+        breakdown_by: [category, turn]
 
 metadata:
   reference_implementation: https://github.com/lm-sys/FastChat/tree/master/fastchat/llm_judge

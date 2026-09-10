@@ -552,7 +552,7 @@ def test_scoring_metrics_reject_duplicate_names():
     definition = _task_definition()
     definition["protocol"]["scoring"]["metrics"] = [
         {"metric": "pairwise_win_rate"},
-        {"metric": "pairwise_win_rate", "group_by": ["category"]},
+        {"metric": "pairwise_win_rate", "breakdown_by": ["category"]},
     ]
 
     with pytest.raises(ValueError, match="duplicate names"):

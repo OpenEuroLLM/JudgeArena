@@ -322,7 +322,7 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
                 f"{request.metric!r}: {exc}"
             ) from exc
         if isinstance(spec.protocol, MTBenchProtocol):
-            unsupported = sorted(set(request.group_by) - {"category", "turn"})
+            unsupported = sorted(set(request.breakdown_by) - {"category", "turn"})
             if unsupported:
                 raise TaskDefinitionError(
                     f"{resolved.provenance.source_path}: MT-Bench cannot group "

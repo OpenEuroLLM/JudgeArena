@@ -93,8 +93,11 @@ selects metrics in order and may provide parameters or grouped breakdowns:
 scoring:
   metrics:
     - metric: pairwise_win_rate
-      group_by: [category]
+      breakdown_by: [category]
 ```
+
+Each `breakdown_by` field produces a separate breakdown. For example,
+`[category, turn]` gives results per category and per turn, not per combination.
 
 Each metric owns its calculation and rendering. Runners only build battle data
 and invoke the shared metric executor.

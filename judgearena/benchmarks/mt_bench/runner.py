@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
@@ -202,6 +203,11 @@ def _build_mt_bench_battles(
         question_id = metadata["question_id"]
         turn = int(metadata["turn"])
         completion_column = f"completion_turn_{turn}"
+        pref_hard = pref
+        if pref < 0.5:
+            pref_hard = 0.0
+        elif pref > 0.5:
+            pref_hard = 1.0
         rows.append(
             {
                 **metadata,
@@ -221,6 +227,7 @@ def _build_mt_bench_battles(
                 "orientation": metadata.get("orientation", "single"),
                 "judge": cfg.judge.model,
                 "pref": pref,
+                "pref_hard": pref_hard,
             }
         )
     return pd.DataFrame(rows)
@@ -250,7 +257,13 @@ def _finalize_mt_bench_run(
         completions_b=completions_b,
     )
     metrics = build_metrics(protocol.scoring.metrics)
-    metric_results = calculate_metrics(battles, metrics)
+    metric_results = calculate_metrics(
+        battles,
+        metrics,
+        runtime_by_metric={
+            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
+        },
+    )
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,

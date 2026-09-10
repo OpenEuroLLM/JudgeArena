@@ -97,26 +97,43 @@ def test_length_control_requires_complete_answer_order_pairs():
     assert result == {"num_pairs": 3, "num_scored": 2, "winrate": None}
 
 
-def test_metrics_can_be_calculated_by_group():
+def test_metrics_produce_separate_breakdowns_for_each_field():
     battles = pd.DataFrame(
         {
             "pref": [0.0, 1.0, 0.0, 0.0],
             "category": ["a", "a", "b", "b"],
+            "turn": [1, 2, 1, 2],
         }
     )
 
     results = _calculate_metrics(
         battles,
-        (MetricSpec(metric="pairwise_win_rate", group_by=("category",)),),
+        (MetricSpec(metric="pairwise_win_rate", breakdown_by=("category", "turn")),),
     )
 
     metric = results["pairwise_win_rate"]
     assert metric["winrate"] == 0.75
-    assert [item["group"] for item in metric["groups"]["category"]] == ["a", "b"]
-    assert [item["values"]["winrate"] for item in metric["groups"]["category"]] == [
-        0.5,
-        1.0,
-    ]
+    assert set(metric["groups"]) == {"category", "turn"}
+    for field, expected in {
+        "category": [("a", 0.5), ("b", 1.0)],
+        "turn": [(1, 1.0), (2, 0.5)],
+    }.items():
+        groups = metric["groups"][field]
+        assert [
+            (item["group"], item["values"]["winrate"]) for item in groups
+        ] == expected
+        assert [item["values"]["num_battles"] for item in groups] == [2, 2]
+
+
+def test_metric_spec_accepts_breakdown_by_and_rejects_old_group_by():
+    spec = MetricSpec.model_validate(
+        {"metric": "pairwise_win_rate", "breakdown_by": ["category", "turn"]}
+    )
+    assert spec.model_dump(mode="json")["breakdown_by"] == ["category", "turn"]
+    with pytest.raises(ValueError, match="group_by"):
+        MetricSpec.model_validate(
+            {"metric": "pairwise_win_rate", "group_by": ["category"]}
+        )
 
 
 def test_pairwise_metrics_reject_invalid_preferences():
@@ -143,7 +160,7 @@ def test_grouped_metric_rejects_missing_column():
     with pytest.raises(ValueError, match="missing column 'category'"):
         _calculate_metrics(
             pd.DataFrame({"pref": [0.0, 1.0]}),
-            (MetricSpec(metric="pairwise_win_rate", group_by=("category",)),),
+            (MetricSpec(metric="pairwise_win_rate", breakdown_by=("category",)),),
         )
 
 
@@ -190,7 +207,7 @@ def test_grouped_metrics_preserve_distinct_group_values():
 
     result = _calculate_metrics(
         battles,
-        (MetricSpec(metric="pairwise_win_rate", group_by=("group",)),),
+        (MetricSpec(metric="pairwise_win_rate", breakdown_by=("group",)),),
     )
 
     values = [item["group"] for item in result["pairwise_win_rate"]["groups"]["group"]]

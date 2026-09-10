@@ -29,7 +29,7 @@ class MetricRequest(Protocol):
     """The request fields needed to construct and group one metric."""
 
     metric: str
-    group_by: tuple[str, ...]
+    breakdown_by: tuple[str, ...]
     parameters: Mapping[str, object]
 
 
@@ -98,9 +98,9 @@ def calculate_metrics(
     for request, metric in metrics:
         runtime = dict(runtime_by_metric.get(request.metric, {}))
         values = dict(metric.calculate(battles, **runtime))
-        if request.group_by:
+        if request.breakdown_by:
             groups: dict[str, list[dict[str, object]]] = {}
-            for field in request.group_by:
+            for field in request.breakdown_by:
                 if field not in battles:
                     raise ValueError(
                         f"Metric {request.metric!r} cannot group by missing column "

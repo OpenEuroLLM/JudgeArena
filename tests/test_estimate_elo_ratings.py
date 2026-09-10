@@ -15,7 +15,7 @@ from judgearena.benchmarks.elo.rating import (
     winner_to_pref,
 )
 from judgearena.benchmarks.elo.runner import run_elo
-from judgearena.benchmarks.elo.scoring import BradleyTerryMetric, _anchor_ratings
+from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.config import RunConfig
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
@@ -127,12 +127,6 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     )
 
 
-def test_missing_bootstrap_baseline_keeps_unshifted_ratings():
-    ratings = {"candidate": 1010.0, "opponent": 990.0}
-
-    assert _anchor_ratings(ratings, "missing-baseline") == ratings
-
-
 def test_missing_preference_remains_missing_in_hard_battles():
     battles = prefs_to_battle_results([float("nan")], [True], ["opponent"], "candidate")
 
@@ -160,7 +154,8 @@ def test_bradley_terry_hard_mode_uses_hard_preferences():
     assert hard["ratings"]["candidate"] > hard["ratings"]["opponent"]
 
 
-def test_bradley_terry_metric_owns_existing_bootstrap_outputs():
+@pytest.mark.parametrize("baseline_model", [None, "anchor-b", "missing-baseline"])
+def test_bradley_terry_metric_owns_existing_bootstrap_outputs(baseline_model):
     battles = pd.DataFrame(
         {
             "model_a": ["anchor-a", "anchor-b", "candidate", "anchor-a"],
@@ -180,12 +175,20 @@ def test_bradley_terry_metric_owns_existing_bootstrap_outputs():
             replace=True,
             random_state=int(expected_rng.integers(0, 2**31)),
         )
-        expected_bootstraps.append(fit_bradley_terry(sample))
+        expected_bootstraps.append(
+            fit_bradley_terry(sample, baseline_model=baseline_model)
+        )
 
-    result = BradleyTerryMetric(n_bootstraps=3).calculate(battles, rng=metric_rng)
+    result = BradleyTerryMetric(
+        n_bootstraps=3, baseline_model=baseline_model
+    ).calculate(battles, rng=metric_rng)
 
-    assert result["ratings"] == fit_bradley_terry(battles)
-    assert result["human_ratings"] == fit_bradley_terry(battles.iloc[:2])
+    assert result["ratings"] == fit_bradley_terry(
+        battles, baseline_model=baseline_model
+    )
+    assert result["human_ratings"] == fit_bradley_terry(
+        battles.iloc[:2], baseline_model=baseline_model
+    )
     assert result["bootstrap_ratings"] == expected_bootstraps
     assert result["n_bootstraps"] == 3
     assert result["evaluation_model"] == "candidate"
