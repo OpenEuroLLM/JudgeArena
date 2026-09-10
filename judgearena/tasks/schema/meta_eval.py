@@ -34,8 +34,8 @@ class MetaEvalProtocol(StrictFrozenModel):
                 raise ValueError(
                     f"unsupported meta-evaluation metric: {request.metric}"
                 )
-            if request.group_by:
+            if request.breakdown_by:
                 raise ValueError(
-                    f"meta-evaluation metric {request.metric} does not support group_by"
+                    f"meta-evaluation metric {request.metric} does not support breakdown_by"
                 )
         return self

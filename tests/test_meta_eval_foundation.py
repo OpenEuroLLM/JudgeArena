@@ -77,11 +77,11 @@ def test_meta_eval_protocol_requires_no_baseline_and_compatible_metrics():
         TaskSpec.model_validate(definition)
 
     metric["metric"] = "meta_eval_agreement"
-    metric["group_by"] = ["lang"]
-    with pytest.raises(ValidationError, match="does not support group_by"):
+    metric["breakdown_by"] = ["lang"]
+    with pytest.raises(ValidationError, match="does not support breakdown_by"):
         TaskSpec.model_validate(definition)
 
-    metric["group_by"] = []
+    metric["breakdown_by"] = []
     protocol["baseline"] = {"strategy": "runtime_required"}
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(definition)
