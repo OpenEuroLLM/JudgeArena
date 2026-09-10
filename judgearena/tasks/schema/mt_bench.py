@@ -8,7 +8,8 @@ from pydantic import Field, model_validator
 
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import BaselineSpec
-from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec, ScoringSpec
+from judgearena.tasks.schema.metrics import ScoringSpec
+from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec
 
 
 class MultiTurnGeneration(StrictFrozenModel):

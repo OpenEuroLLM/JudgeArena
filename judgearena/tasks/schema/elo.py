@@ -8,13 +8,13 @@ from pydantic import Field
 
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import NoBaseline
+from judgearena.tasks.schema.metrics import ScoringSpec
 from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec, SingleTurnGeneration
 
 
-class EloScoringSpec(StrictFrozenModel):
+class EloScoringSpec(ScoringSpec):
     """Task-owned defaults for fitting arena-anchored ratings."""
 
-    adapter: str = Field(min_length=1)
     default_soft: bool = True
     default_temperature: float = Field(default=0.3, gt=0)
 

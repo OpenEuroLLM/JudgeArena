@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
@@ -19,7 +20,7 @@ from judgearena.benchmarks.mt_bench.fastchat_compat import (
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-from judgearena.benchmarks.pairwise.scoring import PAIRWISE_SCORERS
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_instructions
 from judgearena.datasets.mt_bench import (
     load_mt_bench_model_answers,
@@ -28,12 +29,12 @@ from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
 from judgearena.models import is_thinking_model, make_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
+from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBenchProtocol
 from judgearena.utils import (
     cache_function_dataframe,
     generation_cache_token,
 )
-from judgearena.utils.eval import BattleReport, _compute_grouped_stats
 
 logger = get_logger(__name__)
 
@@ -188,6 +189,50 @@ def _save_mt_bench_results(
     )
 
 
+def _build_mt_bench_battles(
+    *,
+    cfg: RunConfig,
+    prefs: pd.Series,
+    combined_metadata: list[dict[str, object]],
+    completions_a: pd.DataFrame,
+    completions_b: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the canonical metric table for judged MT-Bench turns."""
+    rows: list[dict[str, object]] = []
+    for metadata, pref in zip(combined_metadata, prefs, strict=True):
+        question_id = metadata["question_id"]
+        turn = int(metadata["turn"])
+        completion_column = f"completion_turn_{turn}"
+        pref_hard = pref
+        if pref < 0.5:
+            pref_hard = 0.0
+        elif pref > 0.5:
+            pref_hard = 1.0
+        rows.append(
+            {
+                **metadata,
+                "instruction_index": f"{question_id}:turn-{turn}",
+                "model": cfg.model.name,
+                "baseline": cfg.model.baseline,
+                "completion_model": completions_a.loc[question_id, completion_column],
+                "completion_baseline": completions_b.loc[
+                    question_id, completion_column
+                ],
+                "model_a": cfg.model.name,
+                "model_b": cfg.model.baseline,
+                "completion_a": completions_a.loc[question_id, completion_column],
+                "completion_b": completions_b.loc[question_id, completion_column],
+                "evaluation_model": cfg.model.name,
+                "source": "llm-judge",
+                "orientation": metadata.get("orientation", "single"),
+                "judge": cfg.judge.model,
+                "pref": pref,
+                "pref_hard": pref_hard,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _finalize_mt_bench_run(
     *,
     cfg: RunConfig,
@@ -204,18 +249,27 @@ def _finalize_mt_bench_run(
     started_at_utc: datetime,
     extra_result_fields: dict[str, object] | None = None,
 ) -> pd.Series:
-    scorer = PAIRWISE_SCORERS[protocol.scoring.adapter]
-    # MT-Bench battles carry per-turn prefs only; the win-rate scorer reads
-    # just the pref column of the canonical battles frame.
-    stats = scorer(pd.DataFrame({"pref": pd.Series(prefs, dtype="float64")}))
+    battles = _build_mt_bench_battles(
+        cfg=cfg,
+        prefs=pd.Series(prefs, dtype="float64"),
+        combined_metadata=combined_metadata,
+        completions_a=completions_a,
+        completions_b=completions_b,
+    )
+    metrics = build_metrics(protocol.scoring.metrics)
+    metric_results = calculate_metrics(
+        battles,
+        metrics,
+        runtime_by_metric={
+            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
+        },
+    )
     report = BattleReport(
         task=cfg.task,
         model_a=cfg.model.name,
         model_b=cfg.model.baseline,
         judge_model=cfg.judge.model,
-        summary=stats,
-        per_category=_compute_grouped_stats(prefs, combined_metadata, "category"),
-        per_turn=_compute_grouped_stats(prefs, combined_metadata, "turn"),
+        metrics=metric_results,
         preferences=prefs.tolist(),
         metadata={
             **resolved_prompt.metadata(),

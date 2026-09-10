@@ -27,7 +27,8 @@ protocol:
     default_prompt_preset: default
     default_swap_mode: fixed
   scoring:
-    adapter: pairwise_win_rate
+    metrics:
+      - metric: pairwise_win_rate
 
 metadata:
   reference_implementation: https://github.com/tatsu-lab/alpaca_eval
