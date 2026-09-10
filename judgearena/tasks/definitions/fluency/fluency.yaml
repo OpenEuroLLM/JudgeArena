@@ -69,9 +69,8 @@ protocol:
   baseline:
     strategy: runtime_required
   judge:
-    default_prompt: fluency
+    default_prompt_preset: fluency
     default_swap_mode: fixed
-    allowed_swap_modes: [fixed, both]
   scoring:
     adapter: pairwise_win_rate
 

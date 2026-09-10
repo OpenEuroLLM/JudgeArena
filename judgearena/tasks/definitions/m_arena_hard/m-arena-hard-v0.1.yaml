@@ -16,7 +16,5 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: CohereLabs/aya-expanse-8b
-    allow_runtime_override: true
-
 metadata:
   reference_implementation: https://huggingface.co/datasets/CohereLabs/m-ArenaHard

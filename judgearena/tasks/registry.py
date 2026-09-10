@@ -248,6 +248,8 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = frozenset({"elo", "mt_bench", "pairwise"})
+    # Keep in sync with judgearena.datasets.registry; importing it here
+    # would create a cycle.
     instruction_datasets: frozenset[str] = frozenset(
         {"arena_hard", "fluency", "judgearena_tables", "m_arena_hard", "mt_bench"}
     )
@@ -307,13 +309,21 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, dataset_names),
-        "prompt": (spec.protocol.judge.default_prompt, adapters.prompts),
         "scorer": (spec.protocol.scoring.adapter, scorer_names),
     }
+    judge = spec.protocol.judge
+    references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
     for kind, (adapter_id, available) in references.items():
         if adapter_id not in available:
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown {kind} {adapter_id!r}"
+            )
+    category_prompts = getattr(spec.protocol.judge, "category_prompts", {})
+    for category, preset in category_prompts.items():
+        if preset not in adapters.prompts:
+            raise TaskDefinitionError(
+                f"{resolved.provenance.source_path}: unknown prompt {preset!r} "
+                f"for category {category!r}"
             )
 
 

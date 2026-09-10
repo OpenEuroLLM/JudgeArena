@@ -404,6 +404,21 @@ def test_run_elo_thinking_budget_absent_for_nonthinking_model(monkeypatch, tmp_p
     assert "thinking_token_budget" not in captured["gen_kwargs"]
 
 
+def test_judge_and_parse_prefs_retains_structured_result():
+    judge = make_model("Dummy/Score_A: 6\nScore_B: 8")
+
+    annotations, _, prefs = judge_and_parse_prefs(
+        judge_chat_model=judge,
+        instructions=["Q"],
+        completions_A=["A"],
+        completions_B=["B"],
+    )
+
+    assert prefs.tolist() == pytest.approx([0.6456563062257954])
+    assert annotations[0].parsed is not None
+    assert annotations[0].parsed.scores == {"A": 6.0, "B": 8.0}
+
+
 def test_judge_and_parse_prefs_none_prefs_swap_mode_both():
     """swap_mode='both' must not raise when judge output is unparseable (None prefs).
 
@@ -509,3 +524,20 @@ def test_extract_instruction_text_tolerates_moderated_turns():
         )
         == ""
     )
+
+
+def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    captured = {}
+    real = estimate_elo_ratings.judge_and_parse_prefs
+
+    def spy(*args, **kwargs):
+        captured["parse"] = kwargs.get("parse")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy)
+    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
+
+    # The default preset's registered parser instance, not a fresh fallback.
+    assert captured["parse"] is JUDGE_PARSERS["score"]

@@ -53,7 +53,7 @@ exclude = ["slurmpilot_scripts*"]
 
 [tool.setuptools.package-data]
 "judgearena.criteria" = ["data/*.yaml"]
-"judgearena.prompts" = ["*.txt", "*/*.txt"]
+"judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt"]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
 
 [dependency-groups]

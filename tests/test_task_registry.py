@@ -37,12 +37,10 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
             "baseline": {
                 "strategy": "task_default",
                 "reference_id": "reference-output",
-                "allow_runtime_override": True,
             },
             "judge": {
-                "default_prompt": "default",
+                "default_prompt_preset": "default",
                 "default_swap_mode": "fixed",
-                "allowed_swap_modes": ["fixed", "both"],
             },
             "scoring": {"adapter": "pairwise_win_rate"},
         },
@@ -110,7 +108,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert fluency is not None
     assert fluency.spec.protocol.generation.mode == "base_completion"
     assert fluency.spec.protocol.baseline.strategy == "runtime_required"
-    assert fluency.spec.protocol.judge.default_prompt == "fluency"
+    assert fluency.spec.protocol.judge.default_prompt_preset == "fluency"
     assert fluency.selection is not None
     assert fluency.selection.values == ("french",)
     assert [resource.path for resource in arena_v20.provenance.resources] == [
@@ -143,7 +141,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.protocol.runner == "mt_bench"
     assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
     assert mt_bench.spec.protocol.baseline.reference_id == "gpt-4"
-    assert mt_bench.spec.protocol.judge.default_prompt == "fastchat-pairwise"
+    assert mt_bench.spec.protocol.judge.default_prompt_preset == "fastchat-pairwise"
     assert mt_bench.spec.protocol.judge.reference_categories == (
         "math",
         "reasoning",

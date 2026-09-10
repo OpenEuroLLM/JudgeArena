@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import pandas as pd
@@ -19,7 +19,7 @@ from judgearena.benchmarks.mt_bench.pairwise_judging import (
 from judgearena.benchmarks.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
 )
-from judgearena.evaluate import PairScore
+from judgearena.prompts.parsing import JudgeParser, parser_name
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -31,7 +31,7 @@ from judgearena.prompts.registry import (
 class MTBenchPresetPrompt:
     name: str
     preset_name: str
-    parser_mode: str
+    parse: JudgeParser
     system_prompt: str | None
     user_prompt_template: str
     multi_turn: bool
@@ -66,17 +66,17 @@ def _select_preset_prompt(
     *,
     reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
+    parser: str | None = None,
 ) -> MTBenchPresetPrompt:
     ref_based = is_reference_based_category(category, reference_categories)
     resolved_prompt = resolve_judge_prompt(
         preset=prompt_preset,
         system_file=system_file,
         user_file=user_file,
-        provide_explanation=provide_explanation,
         multi_turn=multi_turn,
+        parser=parser,
     )
     if resolved_prompt.delegated:
         raise ValueError(
@@ -89,7 +89,7 @@ def _select_preset_prompt(
     return MTBenchPresetPrompt(
         name=f"{resolved_prompt.preset_name}-{suffix}",
         preset_name=resolved_prompt.preset_name,
-        parser_mode=resolved_prompt.parser_mode,
+        parse=resolved_prompt.parser,
         system_prompt=resolved_prompt.system_prompt,
         user_prompt_template=_build_mt_bench_preset_user_prompt_template(
             resolved_prompt=resolved_prompt,
@@ -111,9 +111,9 @@ def _build_mt_bench_preset_items(
     truncate_input_chars: int | None,
     reference_categories: Collection[str],
     prompt_preset: str,
-    provide_explanation: bool,
     system_file: str | None = None,
     user_file: str | None = None,
+    parser: str | None = None,
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
     return build_mt_bench_pairwise_judge_items(
@@ -128,18 +128,12 @@ def _build_mt_bench_preset_items(
             multi_turn=multi_turn,
             reference_categories=reference_categories,
             prompt_preset=prompt_preset,
-            provide_explanation=provide_explanation,
             system_file=system_file,
             user_file=user_file,
+            parser=parser,
         ),
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
-
-
-def _normalize_preference(preference: float | None, *, swapped: bool) -> float:
-    if preference is None:
-        return math.nan
-    return 1.0 - preference if swapped else float(preference)
 
 
 def judge_mt_bench_with_preset(
@@ -157,9 +151,9 @@ def judge_mt_bench_with_preset(
     use_tqdm: bool,
     reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    provide_explanation: bool = False,
     system_file: str | None = None,
     user_file: str | None = None,
+    parser: str | None = None,
     strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
@@ -174,9 +168,9 @@ def judge_mt_bench_with_preset(
         truncate_input_chars=truncate_input_chars,
         reference_categories=reference_categories,
         prompt_preset=prompt_preset,
-        provide_explanation=provide_explanation,
         system_file=system_file,
         user_file=user_file,
+        parser=parser,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
     judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(
@@ -200,12 +194,10 @@ def judge_mt_bench_with_preset(
             items, raw_judgments, used_prompt_kwargs, strict=True
         ):
             prompt: MTBenchPresetPrompt = item.prompt
-            parsed_preference = PairScore(
-                parser_mode=prompt.parser_mode
-            ).parse_model_raw(raw_judgment)
-            normalized_preference = _normalize_preference(
-                parsed_preference,
-                swapped=swapped,
+            parsed = prompt.parse.parse_result(raw_judgment)
+            slot_preference = math.nan if parsed is None else float(parsed.preference)
+            normalized_preference = (
+                1.0 - slot_preference if swapped else slot_preference
             )
             annotations.append(
                 {
@@ -217,12 +209,13 @@ def judge_mt_bench_with_preset(
                     "judge": judge_model,
                     "prompt_name": prompt.name,
                     "prompt_preset": prompt.preset_name,
-                    "parser_mode": prompt.parser_mode,
+                    "parser_mode": parser_name(prompt.parse),
                     "system_prompt": prompt.system_prompt,
                     "user_prompt_template": prompt.user_prompt_template,
                     "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
                     "judge_completion": raw_judgment,
-                    "preference": normalized_preference,
+                    "preference": slot_preference,
+                    "parsed": None if parsed is None else asdict(parsed),
                     "swapped": swapped,
                 }
             )
@@ -238,8 +231,8 @@ def judge_mt_bench_with_preset(
     _append_results(judgments, prompt_kwargs_used, swapped=False)
 
     if swap_mode == "both":
-        # swap_mode="both": append the inverted swapped-order scores as
-        # additional data points (see _normalize_preference(swapped=True)).
+        # Append swapped-order judgments as additional, canonically oriented
+        # preferences.
         swapped_judgments, swapped_prompt_kwargs = (
             infer_pairwise_judgments_by_prompt_groups(
                 judge_chat_model=judge_chat_model,

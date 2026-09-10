@@ -7,6 +7,7 @@ import json
 import os
 import time
 import warnings
+from dataclasses import dataclass
 
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
@@ -201,6 +202,7 @@ class ChatVLLM:
         top_p: float | None = None,
         top_k: int | None = None,
         seed: int | None = None,
+        top_logprobs: int | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -256,6 +258,9 @@ class ChatVLLM:
             self._sampling_params_kwargs["top_k"] = int(top_k)
         if seed is not None:
             self._sampling_params_kwargs["seed"] = int(seed)
+        self._top_logprobs = top_logprobs
+        if top_logprobs is not None:
+            self._sampling_params_kwargs["logprobs"] = int(top_logprobs)
         if thinking_token_budget is not None:
             if max_tokens is not None:
                 thinking_token_budget = min(int(thinking_token_budget), int(max_tokens))
@@ -402,10 +407,28 @@ class ChatVLLM:
             )
         return outputs
 
-    def batch(self, inputs: list, **invoke_kwargs) -> list[str]:
-        """Return the text completion for each input in *inputs*."""
+    def batch(self, inputs: list, **invoke_kwargs) -> list:
+        """Return the completion for each input in *inputs*.
+
+        Plain text, or ``InferenceResult`` objects carrying the first token's
+        top logprobs when the model was constructed with ``top_logprobs``.
+        """
         outputs = self._run_raw_batch(inputs)
-        return [out.outputs[0].text for out in outputs]
+        if self._top_logprobs is None:
+            return [out.outputs[0].text for out in outputs]
+        results = []
+        for out in outputs:
+            generation = out.outputs[0]
+            top = None
+            if generation.logprobs:
+                top = {
+                    entry.decoded_token: float(entry.logprob)
+                    for entry in generation.logprobs[0].values()
+                }
+            results.append(
+                InferenceResult(text=generation.text, first_token_top_logprobs=top)
+            )
+        return results
 
     def invoke(self, input_item, **invoke_kwargs) -> str:
         """Process a single input."""
@@ -422,8 +445,45 @@ class ChatVLLM:
         )
 
 
-def do_inference(chat_model, inputs, use_tqdm: bool = False):
+@dataclass(frozen=True)
+class InferenceResult:
+    """A text completion with the first generated token's top logprobs, when
+    the backend was asked for (and returned) them."""
+
+    text: str
+    first_token_top_logprobs: dict[str, float] | None = None
+
+
+def _first_token_top_logprobs(response) -> dict[str, float] | None:
+    """Extract first-token top logprobs from a langchain AIMessage, if any."""
+    metadata = getattr(response, "response_metadata", None) or {}
+    content = (metadata.get("logprobs") or {}).get("content") or []
+    if not content:
+        return None
+    return {
+        entry["token"]: float(entry["logprob"])
+        for entry in content[0].get("top_logprobs", [])
+    }
+
+
+def _to_inference_result(response) -> InferenceResult:
+    if isinstance(response, InferenceResult):
+        return response
+    if hasattr(response, "content"):
+        return InferenceResult(
+            text=response.content,
+            first_token_top_logprobs=_first_token_top_logprobs(response),
+        )
+    return InferenceResult(text=response)
+
+
+def do_inference(
+    chat_model, inputs, use_tqdm: bool = False, return_top_logprobs: bool = False
+):
     """Run inference over *inputs*, returning a list of text completions.
+
+    With ``return_top_logprobs=True``, returns ``InferenceResult`` objects
+    carrying the first token's top logprobs where the backend provided them.
 
     Retries on rate-limit/server errors with exponential backoff. The async
     path (``use_tqdm=True``) retries individual calls; the batch path splits
@@ -511,11 +571,12 @@ def do_inference(chat_model, inputs, use_tqdm: bool = False):
 
         res = batch_with_retry(inputs)
 
-    # Not sure why the API of Langchain returns sometime a string and sometimes an AIMessage object
-    # is it because of using Chat and barebones models?
-    # when using OpenAI, the output is AIMessage not a string...
-    res = [x.content if hasattr(x, "content") else x for x in res]
-    return res
+    # Langchain chat models return AIMessage objects, barebones models plain
+    # strings, and ChatVLLM with logprobs enabled InferenceResult objects.
+    res = [_to_inference_result(x) for x in res]
+    if return_top_logprobs:
+        return res
+    return [r.text for r in res]
 
 
 def _route_sampling_params(
@@ -584,6 +645,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     top_p = engine_kwargs.pop("top_p", None)
     top_k = engine_kwargs.pop("top_k", None)
     seed = engine_kwargs.pop("seed", None)
+    top_logprobs = engine_kwargs.pop("top_logprobs", None)
 
     model_provider, model_name = _split_model_spec(model)
 
@@ -633,12 +695,19 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
 
         return ChatVLLM(
             model=model_name,
+            top_logprobs=top_logprobs,
             **engine_kwargs,
         )
 
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
         openai_kwargs = dict(engine_kwargs)
+        # ChatOpenAI aliases its max_tokens field to max_completion_tokens,
+        # which breaks OpenRouter's require_parameters routing: providers
+        # advertise the OpenRouter-native max_tokens parameter instead.
+        extra_body = dict(openai_kwargs.pop("extra_body", {}) or {})
+        extra_body["max_tokens"] = openai_kwargs.pop("max_tokens")
+        openai_kwargs["extra_body"] = extra_body
         # OpenAI-compatible chat backends expose temperature/top_p/seed directly
         # but not top_k, which has to be tunneled through model_kwargs.
         _route_sampling_params(
@@ -649,6 +718,9 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             seed=seed,
             top_k_via_model_kwargs=True,
         )
+        if top_logprobs is not None:
+            openai_kwargs["logprobs"] = True
+            openai_kwargs["top_logprobs"] = int(top_logprobs)
         return ChatOpenAI(
             api_key=os.getenv("OPENROUTER_API_KEY"),
             base_url="https://openrouter.ai/api/v1",
@@ -687,6 +759,15 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         # and drop any param the class cannot accept (e.g. Together has no
         # ``seed``) instead of raising at construction time.
         supported_fields = set(getattr(model_cls, "model_fields", {}))
+        if top_logprobs is not None:
+            if "top_logprobs" in supported_fields:
+                engine_kwargs["logprobs"] = True
+                engine_kwargs["top_logprobs"] = int(top_logprobs)
+            else:
+                logger.warning(
+                    "%s backend does not support top_logprobs; dropping it.",
+                    model_provider,
+                )
         _route_sampling_params(
             engine_kwargs,
             temperature=temperature,

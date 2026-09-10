@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, dump_config, load_config
 
 
 def _base_generate() -> dict:
@@ -32,79 +32,81 @@ def test_generate_config_constructs():
     assert cfg.elo is None
 
 
+def test_removed_judge_prompt_fields_fail_loudly():
+    data = _base_generate()
+    data["judge"].update(
+        {
+            "provide_explanation": True,
+            "system_prompt_file": "system.txt",
+            "user_prompt_file": "user.txt",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        RunConfig(**data)
+
+
 def _registered_task(
     *,
     default_swap_mode: str = "both",
-    allowed_swap_modes: tuple[str, ...] = ("both",),
     default_temperature: float | None = 0.25,
-    allow_runtime_override: bool = True,
+    default_max_out_tokens: int | None = 4096,
+    default_top_logprobs: int | None = 5,
 ):
     return SimpleNamespace(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
                 judge=SimpleNamespace(
                     default_swap_mode=default_swap_mode,
-                    allowed_swap_modes=allowed_swap_modes,
                     default_temperature=default_temperature,
+                    default_max_out_tokens=default_max_out_tokens,
+                    default_top_logprobs=default_top_logprobs,
                 ),
-                baseline=SimpleNamespace(allow_runtime_override=allow_runtime_override),
             )
         )
     )
 
 
-def test_registered_task_applies_judge_defaults(monkeypatch):
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, ("both", 0.25, 4096, 5)),
+        (
+            {
+                "swap_mode": "random",
+                "temperature": None,
+                "max_out_tokens": 512,
+                "top_logprobs": 2,
+            },
+            ("random", None, 512, 2),
+        ),
+    ],
+)
+def test_registered_task_defaults_do_not_replace_explicit_judge_config(
+    monkeypatch, overrides, expected
+):
     monkeypatch.setattr(
         config_module, "get_packaged_task", lambda _task: _registered_task()
     )
     data = _base_generate()
     data["task"] = "yaml-task"
+    data["judge"].update(overrides)
 
     cfg = RunConfig(**data)
 
-    assert cfg.judge.swap_mode == "both"
-    assert cfg.judge.temperature == 0.25
+    assert (
+        cfg.judge.swap_mode,
+        cfg.judge.temperature,
+        cfg.judge.max_out_tokens,
+        cfg.judge.top_logprobs,
+    ) == expected
 
 
-def test_registered_task_rejects_unsupported_swap_mode(monkeypatch):
-    monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-    data["judge"]["swap_mode"] = "fixed"
-
-    with pytest.raises(ValidationError, match="not supported"):
-        RunConfig(**data)
-
-
-def test_registered_task_can_forbid_baseline_override(monkeypatch):
-    monkeypatch.setattr(
-        config_module,
-        "get_packaged_task",
-        lambda _task: _registered_task(allow_runtime_override=False),
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-
-    with pytest.raises(ValidationError, match="cannot override"):
-        RunConfig(**data)
-
-
-def test_elo_config_derives_arena():
+def test_elo_config_derives_scoring_defaults():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
-    assert cfg.elo.arena == "ComparIA"
     assert cfg.elo.soft_elo is True
     assert cfg.elo.soft_elo_temperature == 0.3
-
-
-def test_elo_config_rejects_arena_that_conflicts_with_task():
-    data = _base_elo()
-    data["elo"] = {"arena": "LMArena-100k"}
-
-    with pytest.raises(ValidationError, match="does not match task"):
-        RunConfig(**data)
 
 
 def test_elo_config_allows_runtime_scoring_overrides():
@@ -155,8 +157,6 @@ def test_generate_requires_model_path():
 
 
 def test_load_config_from_yaml(tmp_path):
-    from judgearena.config import load_config
-
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
         "task: alpaca-eval\n"
@@ -166,15 +166,41 @@ def test_load_config_from_yaml(tmp_path):
         "  max_out_tokens: 4096\n"
         "judge:\n"
         "  model: Dummy/j\n"
-        "  provide_explanation: true\n"
+        "  prompt_preset: default_with_explanation\n"
         "generation:\n"
         "  n_instructions: 10\n"
     )
     cfg = load_config(yaml_path)
     assert cfg.model.name == "Dummy/a"
     assert cfg.model.max_out_tokens == 4096
-    assert cfg.judge.provide_explanation is True
+    assert cfg.judge.prompt_preset == "default_with_explanation"
     assert cfg.generation.n_instructions == 10
+
+
+def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
+    system_file = tmp_path / "system.txt"
+    user_file = tmp_path / "user.txt"
+    system_file.write_text("Judge carefully.")
+    user_file.write_text(
+        "Instruction: {user_prompt}\nA: {completion_A}\nB: {completion_B}"
+    )
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={
+            "model": "Dummy/j",
+            "prompt": {
+                "system_file": system_file,
+                "user_file": user_file,
+                "parser": "score",
+            },
+        },
+    )
+    config_path = tmp_path / "resolved.yaml"
+
+    dump_config(cfg, config_path)
+
+    assert load_config(config_path) == cfg
 
 
 def test_cli_yaml_equivalence_generate(tmp_path):
@@ -238,7 +264,6 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     cli_module.cli(["--config_path", str(yaml_path)])
     assert isinstance(captured["benchmark"], RunConfig)
     assert captured["benchmark"].elo is not None
-    assert captured["benchmark"].elo.arena == "ComparIA"
 
 
 def test_build_run_config_cli_only():
@@ -300,7 +325,7 @@ def test_build_run_config_engine_kwargs_json():
     assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
 
 
-def test_build_run_config_elo_arena_derived():
+def test_build_run_config_elo_defaults():
     from judgearena.config import build_run_config
 
     cfg = build_run_config(
@@ -313,4 +338,5 @@ def test_build_run_config_elo_arena_derived():
             "Dummy/j",
         ]
     )
-    assert cfg.elo is not None and cfg.elo.arena == "ComparIA"
+    assert cfg.elo is not None
+    assert cfg.elo.soft_elo is True
