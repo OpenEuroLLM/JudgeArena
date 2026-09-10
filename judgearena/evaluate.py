@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 
 import pandas as pd
@@ -156,18 +157,23 @@ def annotate_battles(
         completions_A = [strip_thinking_tags(c) for c in completions_A]
         completions_B = [strip_thinking_tags(c) for c in completions_B]
 
-    inputs = prompt_template.batch(
-        [
+    prompt_inputs = []
+    for user_prompt, completion_A, completion_B in zip(
+        instructions, completions_A, completions_B, strict=True
+    ):
+        completion_A = truncate(completion_A, max_len=truncate_input_chars)
+        completion_B = truncate(completion_B, max_len=truncate_input_chars)
+        prompt_inputs.append(
             {
                 "user_prompt": user_prompt,
-                "completion_A": truncate(completion_A, max_len=truncate_input_chars),
-                "completion_B": truncate(completion_B, max_len=truncate_input_chars),
+                "completion_A": completion_A,
+                "completion_B": completion_B,
+                "user_prompt_json": json.dumps(user_prompt, ensure_ascii=False),
+                "completion_A_json": json.dumps(completion_A, ensure_ascii=False),
+                "completion_B_json": json.dumps(completion_B, ensure_ascii=False),
             }
-            for user_prompt, completion_A, completion_B in zip(
-                instructions, completions_A, completions_B, strict=True
-            )
-        ]
-    )
+        )
+    inputs = prompt_template.batch(prompt_inputs)
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     judge_results = do_inference(
@@ -203,12 +209,7 @@ def annotate_battles(
 
 
 def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
-    """Combine swap_mode='both' prefs into one P(B wins) series: [pref_AB, 1 - pref_BA].
-
-    ``prefs_ab`` are P(B wins) from the AB ordering; ``prefs_ba`` are P(B wins)
-    from the swapped BA ordering, so ``1 - prefs_ba`` re-orients them to the AB
-    frame before stacking.
-    """
+    """Stack direct preferences before reversed preferences reoriented to A/B."""
     return pd.concat(
         [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
     ).reset_index(drop=True)
@@ -233,8 +234,8 @@ def judge_and_parse_prefs(
     Returns:
         annotations: original-order JudgeAnnotations
         annotations_reversed: reversed-order JudgeAnnotations (None if swap_mode != "both")
-        prefs: pd.Series of floats (0=A wins, 0.5=tie, 1=B wins, None=unparseable),
-               already combined for swap_mode="both"
+        prefs: canonical A/B preferences. With swap_mode="both", the direct
+               block is followed by the reoriented reversed block.
     """
     if parse is None:
         parse = PairScore()
@@ -302,7 +303,8 @@ def judge_and_parse_prefs(
         n_failed = sum(1 for result in results if result is None)
         if n_failed:
             logger.warning(
-                "%d/%d judge outputs could not be parsed (%s) — those battles are dropped from stats.",
+                "%d/%d judge outputs could not be parsed (%s) — "
+                "those outputs are treated as missing preferences.",
                 n_failed,
                 len(results),
                 label,

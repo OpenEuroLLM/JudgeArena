@@ -19,7 +19,7 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, MetaEvalProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -344,6 +344,21 @@ class EloArgs(BaseModel):
     Defaults to all. Requires ``calibrate_temperature``."""
 
 
+class MetaEvalArgs(BaseModel):
+    """Sampling settings for judge meta-evaluation."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    top_models: int = Field(default=20, ge=2)
+    """Number of the arena's most-battled models to include."""
+
+    battles_per_model: int = Field(default=50, gt=0)
+    """Minimum number of sampled incident battles for each selected model."""
+
+    languages: list[str] | None = None
+    """Restrict arena battles to these language codes. Defaults to all languages."""
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -396,6 +411,9 @@ class RunConfig(BaseSettings):
 
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
+
+    meta_eval: MetaEvalArgs | None = None
+    """Runtime settings used only by tasks with a meta-evaluation protocol."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -457,6 +475,13 @@ class RunConfig(BaseSettings):
             self.judge.top_logprobs = task_judge.default_top_logprobs
 
         is_elo = isinstance(protocol, EloProtocol)
+        is_meta_eval = isinstance(protocol, MetaEvalProtocol)
+        if self.elo is not None and not is_elo:
+            raise ValueError("elo config is only valid for ELO tasks.")
+        if self.meta_eval is not None and not is_meta_eval:
+            raise ValueError(
+                "meta_eval config is only valid for meta-evaluation tasks."
+            )
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
@@ -468,9 +493,20 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
                 raise ValueError("model.baseline is not supported for ELO tasks.")
+        elif is_meta_eval:
+            if self.meta_eval is None:
+                self.meta_eval = MetaEvalArgs()
+            if self.model.name is not None or self.model.baseline is not None:
+                raise ValueError(
+                    "model.name and model.baseline are not supported for "
+                    "meta-evaluation tasks."
+                )
+            if self.judge.swap_mode == "random":
+                raise ValueError(
+                    "judge.swap_mode='random' is not supported for "
+                    "meta-evaluation tasks."
+                )
         else:
-            if self.elo is not None:
-                raise ValueError("elo config is only valid for ELO tasks.")
             if self.model.name is None:
                 raise ValueError("model.name is required.")
             if (

@@ -240,7 +240,7 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harness) conventions. Generate+judge tasks produce pairwise preferences between two models; tasks using the ELO protocol estimate a single model's rating against human-annotated arena opponents.
+Generate+judge tasks produce pairwise preferences between two models. Elo tasks estimate a single model's rating against human-annotated arena opponents. Meta-evaluation tasks score a judge against human arena votes.
 
 ### Generate + judge (pairwise)
 
@@ -286,6 +286,23 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
 | `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
 | `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
 | `elo-comparia`      | Battles sampled from the ComparIA arena                            |
+
+## Meta-evaluating a judge
+
+Meta-evaluation scores a judge against existing human-labeled arena battles. It samples a connected set of battles and reports agreement, hard and soft ranking similarity, and held-out Elo error.
+
+Packaged tasks are `meta-eval-lmarena-100k`, `meta-eval-lmarena-140k`, and `meta-eval-comparia`. Language suffixes such as `-en` and `-fr` are supported.
+
+```bash
+judgearena \
+  --task meta-eval-lmarena-140k \
+  --judge.model OpenRouter/deepseek/deepseek-v3.2 \
+  --meta_eval.languages '["en", "es"]' \
+  --meta_eval.top_models 20 \
+  --meta_eval.battles_per_model 50
+```
+
+Runs save the selected sample, judge evidence, metric battles, configuration, and results under `--run.result_folder`.
 
 ## 📈 Estimating ELO Ratings
 
