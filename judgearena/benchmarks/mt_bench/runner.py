@@ -349,6 +349,11 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
     protocol = task.spec.protocol if task is not None else None
     if not isinstance(protocol, MTBenchProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define an MT-Bench protocol.")
+    if cfg.judge.swap_mode not in ("fixed", "both"):
+        raise ValueError(
+            "MT-Bench supports only swap_mode='fixed' or 'both'; "
+            f"got {cfg.judge.swap_mode!r}."
+        )
     if cfg.model.baseline is None:
         baseline = native_pairwise_baseline(cfg.task)
         cfg.model.baseline = baseline if isinstance(baseline, str) else None
