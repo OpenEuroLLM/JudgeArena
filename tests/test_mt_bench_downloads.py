@@ -258,47 +258,8 @@ def test_run_mt_bench_rejects_random_before_preparation(monkeypatch, prompt_pres
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch, tmp_path
 ):
-    questions_df = pd.DataFrame(
-        {"turn_1": ["Q1"], "turn_2": ["Q1b"]},
-        index=pd.Index([1], name="instruction_index"),
-    )
     captured = {}
-
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "load_instructions",
-        lambda dataset, n_instructions=None: questions_df,
-    )
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
-            pd.DataFrame(
-                {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
-                index=questions_df.index,
-            ),
-            pd.DataFrame(
-                {"completion_turn_1": ["B1"], "completion_turn_2": ["B2"]},
-                index=questions_df.index,
-            ),
-        ),
-    )
-
-    def fake_make_model(**kwargs):
-        captured["make_model"] = kwargs
-        return object()
-
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
-
-    def fake_run_mt_bench_fastchat(**kwargs):
-        captured["fastchat"] = kwargs
-        return pd.Series([0.0], dtype=float)
-
-    monkeypatch.setattr(
-        mt_bench_runner,
-        "_run_mt_bench_fastchat",
-        fake_run_mt_bench_fastchat,
-    )
+    _stub_mt_bench_dispatch(monkeypatch, captured)
 
     cfg = RunConfig(
         task="mt-bench",

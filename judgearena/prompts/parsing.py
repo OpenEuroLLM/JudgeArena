@@ -39,30 +39,25 @@ class JudgeParser(abc.ABC):
     """Whether judging should collect first-token top logprobs for this
     parser (the backend must also be asked for them via judge.top_logprobs)."""
 
-    @abc.abstractmethod
     def __call__(
         self,
         judge_completion: str,
         *,
         top_logprobs: dict[str, float] | None = None,
-    ) -> float | None: ...
+    ) -> float | None:
+        result = self.parse_result(
+            judge_completion,
+            top_logprobs=top_logprobs,
+        )
+        return None if result is None else result.preference
 
+    @abc.abstractmethod
     def parse_result(
         self,
         judge_completion: str,
         *,
         top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        """Wrap a scalar parser result for the structured parser interface."""
-        preference = self(
-            judge_completion,
-            top_logprobs=top_logprobs,
-        )
-        return (
-            None
-            if preference is None
-            else ParsedPreference(preference=float(preference))
-        )
+    ) -> ParsedPreference | None: ...
 
 
 class PairScore(JudgeParser):
@@ -80,18 +75,6 @@ class PairScore(JudgeParser):
             return 1.0 / (1.0 + math.exp(-logit))
         exp_logit = math.exp(logit)
         return exp_logit / (1.0 + exp_logit)
-
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(
-            judge_completion,
-            top_logprobs=top_logprobs,
-        )
-        return None if result is None else result.preference
 
     def parse_result(
         self,

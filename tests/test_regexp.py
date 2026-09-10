@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from judgearena.prompts.parsing import JudgeParser, PairScore, ParsedPreference
+from judgearena.prompts.parsing import PairScore, ParsedPreference
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
@@ -59,21 +59,6 @@ def test_pair_score_returns_structured_preference():
     assert parsed.label is None
     assert parsed.details == {}
     assert parser(raw_text) == parsed.preference
-
-
-class LegacyScalarParser(JudgeParser):
-    name = "legacy"
-
-    def __call__(self, judge_completion, *, top_logprobs=None):
-        return 0.75
-
-
-def test_legacy_scalar_parser_gets_a_structured_result():
-    parsed = LegacyScalarParser().parse_result("ignored")
-
-    assert parsed is not None
-    assert parsed.preference == 0.75
-    assert parsed.scores == {}
 
 
 @pytest.mark.parametrize("preference", [-0.1, 1.1, math.inf, math.nan])
