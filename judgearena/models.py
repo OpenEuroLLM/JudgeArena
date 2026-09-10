@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 import warnings
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
@@ -16,6 +18,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
 from judgearena.log import get_logger
+from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
 
 logger = get_logger(__name__)
@@ -413,20 +416,47 @@ class ChatVLLM:
         Plain text, or ``InferenceResult`` objects carrying the first token's
         top logprobs when the model was constructed with ``top_logprobs``.
         """
+        usage_stage = invoke_kwargs.pop("usage_stage", None)
         outputs = self._run_raw_batch(inputs)
-        if self._top_logprobs is None:
+        if self._top_logprobs is None and usage_stage is None:
             return [out.outputs[0].text for out in outputs]
         results = []
         for out in outputs:
             generation = out.outputs[0]
             top = None
-            if generation.logprobs:
+            if getattr(generation, "logprobs", None):
                 top = {
                     entry.decoded_token: float(entry.logprob)
                     for entry in generation.logprobs[0].values()
                 }
+            usage = None
+            if usage_stage is not None:
+                prompt_token_ids = getattr(out, "prompt_token_ids", None)
+                output_token_ids = getattr(generation, "token_ids", None)
+                input_tokens = (
+                    len(prompt_token_ids) if prompt_token_ids is not None else None
+                )
+                output_tokens = (
+                    len(output_token_ids) if output_token_ids is not None else None
+                )
+                total_tokens = (
+                    input_tokens + output_tokens
+                    if input_tokens is not None and output_tokens is not None
+                    else None
+                )
+                usage = RequestUsage(
+                    stage=usage_stage,
+                    model=self.model_path,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
             results.append(
-                InferenceResult(text=generation.text, first_token_top_logprobs=top)
+                InferenceResult(
+                    text=generation.text,
+                    first_token_top_logprobs=top,
+                    usage=usage,
+                )
             )
         return results
 
@@ -447,11 +477,11 @@ class ChatVLLM:
 
 @dataclass(frozen=True)
 class InferenceResult:
-    """A text completion with the first generated token's top logprobs, when
-    the backend was asked for (and returned) them."""
+    """A text completion and optional provider response details."""
 
     text: str
     first_token_top_logprobs: dict[str, float] | None = None
+    usage: RequestUsage | None = None
 
 
 def _first_token_top_logprobs(response) -> dict[str, float] | None:
@@ -467,24 +497,185 @@ def _first_token_top_logprobs(response) -> dict[str, float] | None:
     return top_logprobs or None
 
 
-def _to_inference_result(response) -> InferenceResult:
+def _optional_number(value, number_type):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = number_type(value)
+        if not math.isfinite(float(number)) or number < 0:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number
+
+
+def _mapping(value) -> Mapping:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _first_present(*values):
+    return next((value for value in values if value is not None), None)
+
+
+def _first_valid_number(number_type, *values):
+    for value in values:
+        number = _optional_number(value, number_type)
+        if number is not None:
+            return number
+    return None
+
+
+def _request_usage(
+    response,
+    *,
+    stage: str,
+    default_model: str | None,
+) -> RequestUsage:
+    response_metadata = _mapping(getattr(response, "response_metadata", None))
+    raw_usage = _mapping(response_metadata.get("token_usage"))
+    standard_usage = _mapping(getattr(response, "usage_metadata", None))
+    prompt_details = _mapping(raw_usage.get("prompt_tokens_details"))
+    completion_details = _mapping(raw_usage.get("completion_tokens_details"))
+    input_details = _mapping(standard_usage.get("input_token_details"))
+    output_details = _mapping(standard_usage.get("output_token_details"))
+
+    input_tokens = _first_valid_number(
+        int,
+        standard_usage.get("input_tokens"),
+        raw_usage.get("prompt_tokens"),
+    )
+    output_tokens = _first_valid_number(
+        int,
+        standard_usage.get("output_tokens"),
+        raw_usage.get("completion_tokens"),
+    )
+    total_tokens = _first_valid_number(
+        int,
+        standard_usage.get("total_tokens"),
+        raw_usage.get("total_tokens"),
+    )
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    model = _first_present(
+        response_metadata.get("model_name"),
+        response_metadata.get("model"),
+        default_model,
+    )
+    return RequestUsage(
+        stage=stage,
+        model=str(model) if model is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        reasoning_tokens=_first_valid_number(
+            int,
+            output_details.get("reasoning"),
+            completion_details.get("reasoning_tokens"),
+        ),
+        cached_tokens=_first_valid_number(
+            int,
+            input_details.get("cache_read"),
+            prompt_details.get("cached_tokens"),
+        ),
+        cost_usd=_first_valid_number(
+            float,
+            raw_usage.get("cost"),
+            response_metadata.get("cost"),
+        ),
+    )
+
+
+def _model_name(chat_model) -> str | None:
+    for attribute in ("model_name", "model", "model_path", "name"):
+        value = getattr(chat_model, attribute, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _to_inference_result(
+    response,
+    *,
+    stage: str,
+    default_model: str | None,
+) -> InferenceResult:
     if isinstance(response, InferenceResult):
-        return response
+        if response.usage is not None:
+            return response
+        return replace(
+            response,
+            usage=RequestUsage(stage=stage, model=default_model),
+        )
     if hasattr(response, "content"):
         return InferenceResult(
             text=response.content,
             first_token_top_logprobs=_first_token_top_logprobs(response),
+            usage=_request_usage(
+                response,
+                stage=stage,
+                default_model=default_model,
+            ),
         )
-    return InferenceResult(text=response)
+    return InferenceResult(
+        text=response,
+        usage=RequestUsage(stage=stage, model=default_model),
+    )
+
+
+def _usage_invoke_kwargs(chat_model, *, stage: str) -> dict[str, str]:
+    return {"usage_stage": stage} if isinstance(chat_model, ChatVLLM) else {}
+
+
+def _collect_inference_results(
+    chat_model, responses, *, stage: str
+) -> list[InferenceResult]:
+    default_model = _model_name(chat_model)
+    results = [
+        _to_inference_result(
+            response,
+            stage=stage,
+            default_model=default_model,
+        )
+        for response in responses
+    ]
+    request_usage = [result.usage for result in results]
+    record_usage(request_usage)
+
+    batch_usage = RunUsage(tuple(request_usage))
+    if any(
+        request.has_token_usage or request.cost_usd is not None
+        for request in request_usage
+    ):
+        logger.info("Model usage (%s): %s.", stage, batch_usage.format_summary())
+    return results
+
+
+def batch_inference_once(
+    chat_model, inputs, *, stage: str = "unspecified", **invoke_kwargs
+) -> list:
+    """Run one native synchronous batch without changing its public outputs."""
+    invoke_kwargs.update(_usage_invoke_kwargs(chat_model, stage=stage))
+    responses = chat_model.batch(inputs=inputs, **invoke_kwargs)
+    results = _collect_inference_results(chat_model, responses, stage=stage)
+    if isinstance(chat_model, ChatVLLM) and chat_model._top_logprobs is not None:
+        return responses
+    return [result.text for result in results]
 
 
 def do_inference(
-    chat_model, inputs, use_tqdm: bool = False, return_top_logprobs: bool = False
+    chat_model,
+    inputs,
+    use_tqdm: bool = False,
+    return_top_logprobs: bool = False,
+    *,
+    stage: str = "unspecified",
 ):
     """Run inference over *inputs*, returning a list of text completions.
 
     With ``return_top_logprobs=True``, returns ``InferenceResult`` objects
     carrying the first token's top logprobs where the backend provided them.
+    ``stage`` labels request usage for the run-level summary.
 
     Retries on rate-limit/server errors with exponential backoff. The async
     path (``use_tqdm=True``) retries individual calls; the batch path splits
@@ -493,6 +684,7 @@ def do_inference(
     invoke_kwargs = {
         # "stop": ["```"],
         # "max_tokens": 100,
+        **_usage_invoke_kwargs(chat_model, stage=stage),
     }
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
@@ -572,12 +764,12 @@ def do_inference(
 
         res = batch_with_retry(inputs)
 
-    # Langchain chat models return AIMessage objects, barebones models plain
-    # strings, and ChatVLLM with logprobs enabled InferenceResult objects.
-    res = [_to_inference_result(x) for x in res]
+    # LangChain chat models return AIMessage objects, barebones models plain
+    # strings, and ChatVLLM may return structured InferenceResult objects.
+    results = _collect_inference_results(chat_model, res, stage=stage)
     if return_top_logprobs:
-        return res
-    return [r.text for r in res]
+        return results
+    return [result.text for result in results]
 
 
 def _route_sampling_params(

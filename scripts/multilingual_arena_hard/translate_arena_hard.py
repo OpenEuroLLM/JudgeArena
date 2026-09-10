@@ -141,6 +141,7 @@ def generate_translations():
             chat_model=judge_chat_model,
             inputs=inputs,
             use_tqdm=False,
+            stage="generation",
         )
 
         translation_path = f"data/ArenaHard-EU/{language_code}/data.parquet"
