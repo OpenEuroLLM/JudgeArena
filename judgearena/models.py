@@ -460,10 +460,11 @@ def _first_token_top_logprobs(response) -> dict[str, float] | None:
     content = (metadata.get("logprobs") or {}).get("content") or []
     if not content:
         return None
-    return {
+    top_logprobs = {
         entry["token"]: float(entry["logprob"])
         for entry in content[0].get("top_logprobs", [])
     }
+    return top_logprobs or None
 
 
 def _to_inference_result(response) -> InferenceResult:
@@ -669,6 +670,8 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             engine_kwargs.pop(key, None)
 
     if model_provider == "Dummy":
+        if top_logprobs is not None:
+            raise ValueError("Dummy backend does not support top_logprobs.")
         dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         _route_sampling_params(
             dummy_kwargs,
@@ -707,6 +710,12 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         # advertise the OpenRouter-native max_tokens parameter instead.
         extra_body = dict(openai_kwargs.pop("extra_body", {}) or {})
         extra_body["max_tokens"] = openai_kwargs.pop("max_tokens")
+        if top_logprobs is not None:
+            # OpenRouter may otherwise route individual requests through
+            # providers that silently omit requested logprobs.
+            provider = dict(extra_body.get("provider", {}) or {})
+            provider["require_parameters"] = True
+            extra_body["provider"] = provider
         openai_kwargs["extra_body"] = extra_body
         # OpenAI-compatible chat backends expose temperature/top_p/seed directly
         # but not top_k, which has to be tunneled through model_kwargs.
@@ -764,9 +773,8 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
                 engine_kwargs["logprobs"] = True
                 engine_kwargs["top_logprobs"] = int(top_logprobs)
             else:
-                logger.warning(
-                    "%s backend does not support top_logprobs; dropping it.",
-                    model_provider,
+                raise ValueError(
+                    f"{model_provider} backend does not support top_logprobs."
                 )
         _route_sampling_params(
             engine_kwargs,

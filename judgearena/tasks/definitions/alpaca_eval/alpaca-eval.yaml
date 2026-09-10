@@ -1,34 +1,25 @@
-schema_version: 1
+extends: _base.yaml
 task: alpaca-eval
-task_version: 1
-description: Pairwise evaluation on the AlpacaEval instruction set.
-tags: [pairwise, instruction-following]
-
-dataset:
-  adapter: judgearena_tables
-  sources:
-    examples:
-      type: huggingface_dataset
-      repo_id: judge-arena/judge-arena-dataset
-      revision: "004c4a992956eeefffd36b63ade470f32fd0a582"
-      allow_patterns: ["*alpaca-eval*"]
-  fields:
-    id: instruction_index
-    instruction: instruction
+task_version: 2
+description: >-
+  AlpacaEval 2.0 with the official annotator, randomized pair order,
+  logprob-weighted preferences, and length-controlled scoring.
 
 protocol:
-  runner: pairwise
-  generation:
-    mode: single_turn_chat
-  baseline:
-    strategy: task_default
-    reference_id: gpt4_1106_preview
   judge:
-    default_prompt_preset: default
-    default_swap_mode: fixed
+    default_prompt_preset: alpaca-eval
+    default_swap_mode: random
+    default_temperature: 1
+    # The official annotator asks for exactly one token ("m" or "M") and
+    # weights the verdict by its top-5 logprobs.
+    default_max_out_tokens: 1
+    default_top_logprobs: 5
   scoring:
     metrics:
-      - metric: pairwise_win_rate
-
-metadata:
-  reference_implementation: https://github.com/tatsu-lab/alpaca_eval
+      - metric: alpaca_eval_length_controlled
+        parameters:
+          calibration_repo_id: tatsu-lab/alpaca_eval
+          calibration_filename: df_gamed.csv
+          calibration_revision: "2edc6fad8be6b14ea7230aabfd08188da6b8b814"
+          # Upstream uses lambda=0.2 split over two gamed baselines.
+          gamed_weight: 0.1

@@ -1,7 +1,10 @@
 schema_version: 1
 task: mt-bench
 task_version: 1
-description: FastChat-compatible pairwise evaluation on the MT-Bench question set.
+description: >-
+  MT-Bench with the pinned FastChat pairwise defaults: 1024-token evaluated
+  answers with seed 0, gpt-3.5-turbo baseline answers, both answer orders,
+  and the 2048-token budget used by FastChat's default gpt-4 judge.
 tags: [pairwise, instruction-following, multi-turn, mt-bench]
 
 dataset:
@@ -13,7 +16,7 @@ dataset:
       revision: "a4b674ca573c24143824ac7f60d9173e7081e37d"
       allow_patterns:
         - data/mt_bench/question.jsonl
-        - data/mt_bench/model_answer/gpt-4.jsonl
+        - data/mt_bench/model_answer/gpt-3.5-turbo.jsonl
     references:
       type: git_raw
       repository: https://github.com/lm-sys/FastChat
@@ -28,6 +31,8 @@ protocol:
   runner: mt_bench
   generation:
     mode: multi_turn_chat
+    default_max_out_tokens: 1024
+    default_seed: 0
     category_temperatures:
       writing: 0.7
       roleplay: 0.7
@@ -40,10 +45,11 @@ protocol:
       arena-hard-200: 0.0
   baseline:
     strategy: task_default
-    reference_id: gpt-4
+    reference_id: gpt-3.5-turbo
   judge:
     default_prompt_preset: fastchat-pairwise
-    default_swap_mode: fixed
+    default_swap_mode: both
+    default_max_out_tokens: 2048
     turns_mode: both
     fastchat_prompt_preset: default
     fastchat_temperature: 0.0

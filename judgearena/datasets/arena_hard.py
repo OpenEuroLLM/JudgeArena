@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -12,17 +11,6 @@ from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 def is_arena_hard_dataset(dataset: str) -> bool:
     task = get_packaged_task(dataset)
     return task is not None and task.spec.dataset.adapter == "arena_hard"
-
-
-def arena_hard_native_baseline(
-    dataset: str,
-) -> str | Mapping[str, str] | None:
-    """Return the YAML-defined baseline for an Arena-Hard task."""
-    if not is_arena_hard_dataset(dataset):
-        return None
-    from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
-
-    return native_pairwise_baseline(dataset)
 
 
 def normalize_official_arena_hard(

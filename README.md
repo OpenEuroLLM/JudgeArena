@@ -246,9 +246,12 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 
 | Task                         | Description                                                                                                                                                                     |
 |------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `alpaca-eval`                | General instruction-following benchmark                                                                                                                                         |
-| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                                                                                               |
-| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                                                                                        |
+| `alpaca-eval`                | AlpacaEval 2.0 with official judging and length-controlled scoring, backed by the archived 177-model output table                                                               |
+| `alpaca-eval-ja`             | JudgeArena generic judging and metrics on the same AlpacaEval instructions and archived outputs                                                                                 |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 with its official category-aware judging and scoring protocol                                                                                                   |
+| `arena-hard-v2.0-ja`         | JudgeArena generic judging and scoring on the same Arena-Hard v2.0 data and archived outputs                                                                                    |
+| `arena-hard-v0.1`            | Arena-Hard v0.1 with its official judging and weighted scoring protocol                                                                                                         |
+| `arena-hard-v0.1-ja`         | JudgeArena generic judging and scoring on the same Arena-Hard v0.1 data and archived outputs                                                                                    |
 | `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                                                                                    |
 | `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                                                                                         |
 | `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                                                                                                  |

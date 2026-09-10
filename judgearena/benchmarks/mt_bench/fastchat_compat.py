@@ -26,18 +26,6 @@ from judgearena.benchmarks.mt_bench.prompt_templates import (
 from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.utils import strip_thinking_tags
 
-FASTCHAT_TEMPERATURE_CONFIG: dict[str, float] = {
-    "writing": 0.7,
-    "roleplay": 0.7,
-    "extraction": 0.0,
-    "math": 0.0,
-    "coding": 0.0,
-    "reasoning": 0.0,
-    "stem": 0.1,
-    "humanities": 0.1,
-    "arena-hard-200": 0.0,
-}
-
 FastChatVerdict = Literal["A", "B", "tie", "error"]
 PairwiseWinner = Literal["model_A", "model_B", "tie", "error"]
 

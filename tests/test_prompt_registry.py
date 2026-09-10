@@ -23,8 +23,8 @@ class FakeCliArgs:
 
 
 def test_default_presets_are_owned_by_task_yaml():
-    assert default_preset_for_task("alpaca-eval") == "default"
-    assert default_preset_for_task("arena-hard-v2.0") == "default"
+    assert default_preset_for_task("alpaca-eval") == "alpaca-eval"
+    assert default_preset_for_task("alpaca-eval-ja") == "default"
 
 
 def test_default_preset_for_fluency_prefix():
@@ -162,7 +162,7 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
         FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
     )
 
-    assert resolved_default.preset_name == "default"
+    assert resolved_default.preset_name == "alpaca-eval"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 

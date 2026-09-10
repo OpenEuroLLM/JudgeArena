@@ -296,8 +296,8 @@ class GenerationArgs(BaseModel):
     n_instructions: int | None = None
     """Number of instructions/battles to evaluate. Defaults to the full task."""
 
-    truncate_all_input_chars: int = 8192
-    """Character cap applied to each instruction before model generation."""
+    truncate_all_input_chars: int | None = 8192
+    """Character cap before model generation. None preserves the full instruction."""
 
     truncate_judge_input_chars: int | None = None
     """Character cap applied to judge-side inputs before evaluation. Unset
@@ -420,6 +420,23 @@ class RunConfig(BaseSettings):
             )
 
         protocol = resolved_task.spec.protocol
+        task_generation = getattr(protocol, "generation", None)
+        if (
+            "truncate_all_input_chars" not in self.generation.model_fields_set
+            and not getattr(task_generation, "default_truncate_input", True)
+        ):
+            self.generation.truncate_all_input_chars = None
+        if (
+            "max_out_tokens" not in self.model.model_fields_set
+            and getattr(task_generation, "default_max_out_tokens", None) is not None
+        ):
+            self.model.max_out_tokens = task_generation.default_max_out_tokens
+        if (
+            "seed" not in self.model.model_fields_set
+            and getattr(task_generation, "default_seed", None) is not None
+        ):
+            self.model.seed = task_generation.default_seed
+
         task_judge = protocol.judge
         if "swap_mode" not in self.judge.model_fields_set:
             self.judge.swap_mode = task_judge.default_swap_mode

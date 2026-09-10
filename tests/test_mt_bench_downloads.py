@@ -281,7 +281,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
 
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
-    assert cfg.model.baseline == "gpt-4"
+    assert cfg.model.baseline == "gpt-3.5-turbo"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
     assert captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
@@ -343,7 +343,10 @@ def _stub_mt_bench_dispatch(monkeypatch, captured):
     [(None, "fastchat"), ("default_with_explanation", "preset")],
 )
 def test_run_mt_bench_dispatches_defaults_and_prompt_overrides(
-    monkeypatch, tmp_path, prompt_preset, expected_path
+    monkeypatch,
+    tmp_path,
+    prompt_preset,
+    expected_path,
 ):
     captured = {}
     _stub_mt_bench_dispatch(monkeypatch, captured)
@@ -360,7 +363,7 @@ def test_run_mt_bench_dispatches_defaults_and_prompt_overrides(
 
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
-    assert cfg.model.baseline == "gpt-4"
+    assert cfg.model.baseline == "gpt-3.5-turbo"
     assert captured["dispatch"] == [expected_path]
     if expected_path == "fastchat":
         assert captured["make_model"]["temperature"] == 0.0
@@ -447,7 +450,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
