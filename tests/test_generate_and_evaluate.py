@@ -304,6 +304,46 @@ def test_generate_and_evaluate_context_completion(task: str, tmp_path):
     assert avg_pref >= 0.9
 
 
+@pytest.mark.parametrize(
+    ("generation", "expected_limit"),
+    [({}, None), ({"truncate_all_input_chars": 128}, 128)],
+)
+def test_official_generation_receives_full_prompt_unless_explicitly_capped(
+    monkeypatch, tmp_path, generation, expected_limit
+):
+    import judgearena.generate as generation_module
+
+    instruction = "x" * 9000 + "END"
+    instructions = pd.DataFrame(
+        {"instruction": [instruction]},
+        index=pd.Index([0], name="instruction_index"),
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda *_args, **_kwargs: PairwiseTaskData(instructions=instructions),
+    )
+    seen_inputs = []
+
+    def capture_inference(*, inputs, **_kwargs):
+        seen_inputs.extend(prompt.to_messages()[-1].content for prompt in inputs)
+        return ["Generated answer"] * len(inputs)
+
+    monkeypatch.setattr(generation_module, "do_inference", capture_inference)
+    cfg = RunConfig(
+        task="arena-hard-v0.1",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={"model": "Dummy/[[A=B]]"},
+        generation=generation,
+        run={"result_folder": str(tmp_path), "use_tqdm": False},
+    )
+
+    run_pairwise(cfg)
+
+    expected = instruction if expected_limit is None else instruction[:expected_limit]
+    assert seen_inputs == [expected, expected]
+
+
 def test_generate_and_evaluate_correct_order_bias(tmp_path):
     """Test the correction for model order bias.
 

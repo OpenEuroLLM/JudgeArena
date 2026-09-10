@@ -15,6 +15,8 @@ class SingleTurnGeneration(StrictFrozenModel):
     # "single_turn_chat" prompts an instruction-tuned model through its chat
     # template; "base_completion" lets a base model continue the raw text.
     mode: Literal["single_turn_chat", "base_completion"]
+    default_truncate_input: bool = True
+    """Whether generation uses the default input cap when none is specified."""
 
 
 SwapMode = Literal["fixed", "both", "random"]

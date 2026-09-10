@@ -14,6 +14,8 @@ dataset:
     category: category
 
 protocol:
+  generation:
+    default_truncate_input: false
   baseline:
     strategy: category_defaults
     category_field: category

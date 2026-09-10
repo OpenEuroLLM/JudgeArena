@@ -12,6 +12,8 @@ dataset:
         - data/arena-hard-v0.1/model_answer/*.jsonl
 
 protocol:
+  generation:
+    default_truncate_input: false
   baseline:
     strategy: task_default
     reference_id: gpt-4-0314

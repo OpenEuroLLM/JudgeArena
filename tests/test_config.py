@@ -102,6 +102,29 @@ def test_registered_task_defaults_do_not_replace_explicit_judge_config(
     ) == expected
 
 
+@pytest.mark.parametrize(
+    ("task", "generation", "expected"),
+    [
+        ("arena-hard-v0.1", {}, None),
+        ("arena-hard-v2.0", {}, None),
+        ("arena-hard-v0.1-ja", {}, 8192),
+        ("arena-hard-v2.0-ja", {}, 8192),
+        ("arena-hard-v0.1", {"truncate_all_input_chars": 8192}, 8192),
+        ("arena-hard-v2.0", {"truncate_all_input_chars": 128}, 128),
+        ("arena-hard-v0.1-ja", {"truncate_all_input_chars": None}, None),
+    ],
+)
+def test_generation_truncation_defaults_preserve_explicit_overrides(
+    task, generation, expected
+):
+    data = _base_generate()
+    data.update(task=task, generation=generation)
+
+    cfg = RunConfig(**data)
+
+    assert cfg.generation.truncate_all_input_chars == expected
+
+
 def test_elo_config_derives_scoring_defaults():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
