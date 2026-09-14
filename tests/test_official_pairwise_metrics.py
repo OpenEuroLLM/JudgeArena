@@ -158,6 +158,16 @@ def test_arena_hard_fitter_preserves_native_initialization_at_stationary_point()
     np.testing.assert_array_equal(coefficients, [0.5, 0.5])
 
 
+@pytest.mark.parametrize("preferences", [[], [None, None]])
+def test_alpaca_eval_without_parsed_preferences_skips_fitting(monkeypatch, preferences):
+    def unexpected_fit(*_args, **_kwargs):
+        pytest.fail("No parsed preferences should not enter length-controlled fitting")
+
+    monkeypatch.setattr(alpaca_scoring, "_length_controlled_metrics", unexpected_fit)
+
+    assert _alpaca_metric().calculate(_battles(preferences)) == {}
+
+
 def test_alpaca_eval_lc_synthetic_golden_runs_offline(monkeypatch):
     gamed = pd.DataFrame(
         [

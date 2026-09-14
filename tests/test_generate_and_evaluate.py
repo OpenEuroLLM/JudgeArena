@@ -651,6 +651,35 @@ def test_run_pairwise_preserves_incomplete_alpaca_annotations(
     assert "2/4 judge outputs could not be parsed" in caplog.text
 
 
+def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        benchmark_execution,
+        "make_model",
+        lambda **_kwargs: FakeListLLM(responses=["M"]),
+    )
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="OpenRouter/fake-judge",
+            n_instructions=2,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    assert prefs.isna().all()
+    annotations = pd.read_csv(next(tmp_path.glob("*/*-annotations.csv")))
+    assert annotations["judge_completion"].tolist() == ["M", "M"]
+    assert annotations["parsed"].isna().all()
+    results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert results["metrics"]["alpaca_eval_length_controlled"] == {}
+    assert next(tmp_path.glob("*/run-metadata.v1.json")).is_file()
+    assert "alpaca_eval_length_controlled: unavailable" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])
 def test_judging_without_alpaca_logprobs_returns_missing_preferences(swap_mode, caplog):
     from judgearena.evaluate import judge_and_parse_prefs

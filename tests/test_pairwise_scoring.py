@@ -294,6 +294,21 @@ def test_metric_builders_hide_registry_and_validate_parameters():
         build_metric("bradley_terry", {"soft": "false"})
 
 
+def test_empty_metric_results_render_as_unavailable():
+    results = {
+        "alpaca_eval_length_controlled": {
+            "groups": {"category": [{"group": "missing", "values": {}}]},
+        },
+    }
+
+    rendered = render_metrics(results)
+
+    assert rendered == (
+        "alpaca_eval_length_controlled: unavailable\n\n"
+        "category=missing:\n  alpaca_eval_length_controlled: unavailable"
+    )
+
+
 def test_build_metrics_preserves_order_and_applies_overrides():
     requests = (
         MetricSpec(metric="pairwise_win_rate"),
