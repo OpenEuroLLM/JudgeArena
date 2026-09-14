@@ -16,7 +16,7 @@ from judgearena.benchmarks.elo.rating import (
 )
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
 from judgearena.tasks.registry import get_packaged_task
@@ -294,6 +294,75 @@ def test_run_elo_returns_metrics(tmp_path):
     assert "rating_entries" in _rating_metric(result)
     assert "winrate" not in result
     assert "bootstrap_ratings" not in result
+
+
+@pytest.mark.parametrize(
+    ("runtime", "n_bootstraps", "method", "anchor"),
+    [
+        (None, 2, "ELO", ARENA_MODELS[0]),
+        (
+            {"n_bootstraps": 0, "baseline_model": None, "soft_elo": True},
+            0,
+            "Soft-ELO",
+            None,
+        ),
+    ],
+)
+def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
+    monkeypatch, tmp_path, runtime, n_bootstraps, method, anchor
+):
+    cfg = RunConfig(
+        task="elo-comparia",
+        model={"name": "Dummy/my model"},
+        judge={"model": "Dummy/score A: 6 score B: 8"},
+        generation={"n_instructions": 10},
+        elo=runtime,
+        run={"result_folder": str(tmp_path)},
+    )
+    task = get_packaged_task(cfg.task)
+    scoring = task.spec.protocol.scoring.model_copy(
+        update={
+            "metrics": (
+                MetricSpec(
+                    metric="bradley_terry",
+                    parameters={
+                        "n_bootstraps": 2,
+                        "baseline_model": ARENA_MODELS[0],
+                        "soft": False,
+                    },
+                ),
+            ),
+            "default_temperature": 0.4,
+        }
+    )
+    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+    calibration_args = {}
+    calibrate = estimate_elo_ratings.calibrate_pairscore_temperature
+
+    def capture_calibration(*args, **kwargs):
+        calibration_args.update(kwargs)
+        return calibrate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        estimate_elo_ratings, "calibrate_pairscore_temperature", capture_calibration
+    )
+
+    result = run_elo(cfg, task)
+
+    metric = _rating_metric(result)
+    assert metric["method"] == method
+    assert metric["n_bootstraps"] == n_bootstraps
+    assert len(metric["bootstrap_ratings"]) == n_bootstraps
+    if anchor is not None:
+        assert metric["ratings"][anchor] == pytest.approx(1000)
+    else:
+        assert np.mean(list(metric["ratings"].values())) == pytest.approx(1000)
+    assert cfg.elo.baseline_model == anchor
+    assert calibration_args["soft_elo"] is (method == "Soft-ELO")
+    assert calibration_args["default_temperature"] == 0.4
+    saved = load_config(next(tmp_path.rglob("config.yaml")))
+    assert saved.elo == cfg.elo
 
 
 def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):

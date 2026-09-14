@@ -5,7 +5,8 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
-from judgearena.config import RunConfig, dump_config, load_config
+from judgearena.config import EloArgs, RunConfig, dump_config, load_config
+from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
 def _base_generate() -> dict:
@@ -120,11 +121,52 @@ def test_registered_task_defaults_do_not_replace_explicit_judge_config(
     ) == expected
 
 
-def test_elo_config_derives_scoring_defaults():
+def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
     assert cfg.elo.soft_elo is True
     assert cfg.elo.soft_elo_temperature == 0.3
+    assert cfg.elo.model_fields_set == set()
+
+
+@pytest.mark.parametrize(
+    ("parameters", "runtime", "expected"),
+    [
+        ({}, {}, (20, None, False, 0.7)),
+        (
+            {"n_bootstraps": 2, "baseline_model": "anchor", "soft": True},
+            {},
+            (2, "anchor", True, 0.7),
+        ),
+        (
+            {"n_bootstraps": 2, "baseline_model": "anchor", "soft": True},
+            {
+                "n_bootstraps": 0,
+                "baseline_model": None,
+                "soft_elo": False,
+                "soft_elo_temperature": 0.2,
+            },
+            (0, None, False, 0.2),
+        ),
+    ],
+)
+def test_elo_resolution_prefers_runtime_then_metric_then_defaults(
+    parameters, runtime, expected
+):
+    scoring = EloScoringSpec(
+        metrics=(MetricSpec(metric="bradley_terry", parameters=parameters),),
+        default_soft=False,
+        default_temperature=0.7,
+    )
+
+    resolved = EloArgs(**runtime).resolve(scoring)
+
+    assert (
+        resolved.n_bootstraps,
+        resolved.baseline_model,
+        resolved.soft_elo,
+        resolved.soft_elo_temperature,
+    ) == expected
 
 
 def test_elo_config_allows_runtime_scoring_overrides():

@@ -22,7 +22,7 @@ class Report(BaseModel, abc.ABC):
     @computed_field
     @property
     def schema_version(self) -> str:
-        return "1"
+        return "2"
 
     @computed_field
     @property

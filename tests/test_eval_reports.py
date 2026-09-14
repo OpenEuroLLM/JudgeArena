@@ -47,7 +47,7 @@ def test_battle_report_serializes_metrics_as_the_result():
 
     result = report.to_dict()
 
-    assert result["schema_version"] == "1"
+    assert result["schema_version"] == "2"
     assert result["report_type"] == "BattleReport"
     assert result["metrics"] == metrics
     assert result["model_A"] == "my-model"
@@ -110,7 +110,7 @@ def test_battle_report_save_round_trip(tmp_path):
     loaded = json.loads(path.read_text())
 
     assert loaded == report.to_dict()
-    assert loaded["schema_version"] == "1"
+    assert loaded["schema_version"] == "2"
 
 
 def test_eloreport_to_dict_envelope():
@@ -131,6 +131,6 @@ def test_eloreport_to_dict_envelope():
         "num_battles": 10,
         "model_name": "my-model",
         "sampling_metadata": {"sampling_mode": "head"},
-        "schema_version": "1",
+        "schema_version": "2",
         "report_type": "EloReport",
     }
