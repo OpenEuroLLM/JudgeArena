@@ -90,14 +90,14 @@ def mock_external_data_and_cache(monkeypatch):
     )
 
 
-def _mock_alpaca_judge(monkeypatch, message) -> dict[str, object]:
+def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
     from judgearena.benchmarks.pairwise.scoring import alpaca_eval
 
     captured: dict[str, object] = {}
 
     class FakeJudge:
         def batch(self, inputs, **_kwargs):
-            return [message] * len(inputs)
+            return messages
 
     def make_fake_judge(**kwargs):
         captured.update(kwargs)
@@ -595,7 +595,7 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
         },
     )
 
-    judge_kwargs = _mock_alpaca_judge(monkeypatch, message)
+    judge_kwargs = _mock_alpaca_judge(monkeypatch, [message] * 4)
 
     prefs = run_pairwise(
         _cfg(
@@ -615,3 +615,62 @@ def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_
     results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
     assert "alpaca_eval_length_controlled" in results["metrics"]
     assert judge_kwargs["top_logprobs"] == 5
+
+
+@pytest.mark.parametrize("missing_logprobs", [None, {}, {"x": -0.1}])
+def test_run_pairwise_preserves_incomplete_alpaca_annotations(
+    monkeypatch, tmp_path, caplog, missing_logprobs
+):
+    valid = InferenceResult(
+        text="M",
+        first_token_top_logprobs={"m": np.log(0.25), "M": np.log(0.75)},
+    )
+    missing = InferenceResult(text="M", first_token_top_logprobs=missing_logprobs)
+    _mock_alpaca_judge(monkeypatch, [valid, missing, valid, missing])
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/a",
+            model_B="Dummy/b",
+            judge_model="OpenRouter/fake-judge",
+            n_instructions=4,
+            swap_mode="random",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    assert prefs.tolist() == pytest.approx([0.75, np.nan, 0.25, np.nan], nan_ok=True)
+    annotations = pd.read_csv(next(tmp_path.glob("*/*-annotations.csv")))
+    assert annotations["judge_completion"].tolist() == ["M"] * 4
+    assert annotations["parsed"].isna().tolist() == [False, True, False, True]
+    results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    metric = results["metrics"]["alpaca_eval_length_controlled"]
+    assert metric["num_missing"] == 2
+    assert metric["num_wins"] == metric["num_losses"] == 1
+    assert "2/4 judge outputs could not be parsed" in caplog.text
+
+
+@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
+def test_judging_without_alpaca_logprobs_returns_missing_preferences(swap_mode, caplog):
+    from judgearena.evaluate import judge_and_parse_prefs
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    annotations, reversed_annotations, prefs = judge_and_parse_prefs(
+        judge_chat_model=FakeListLLM(responses=["M"]),
+        instructions=["Question 1", "Question 2"],
+        completions_A=["A1", "A2"],
+        completions_B=["B1", "B2"],
+        swap_mode=swap_mode,
+        prompt_preset="alpaca-eval",
+        parse=JUDGE_PARSERS["alpaca-eval-token"],
+    )
+
+    assert len(prefs) == (4 if swap_mode == "both" else 2)
+    assert prefs.isna().all()
+    assert all(annotation.parsed is None for annotation in annotations)
+    if swap_mode == "both":
+        assert all(annotation.parsed is None for annotation in reversed_annotations)
+    else:
+        assert reversed_annotations is None
+    assert "2/2 judge outputs could not be parsed" in caplog.text
