@@ -151,9 +151,7 @@ class AlpacaEvalToken(JudgeParser):
         top_logprobs: dict[str, float] | None = None,
     ) -> ParsedPreference | None:
         if not top_logprobs:
-            raise ValueError(
-                "The official AlpacaEval parser requires first-token top logprobs."
-            )
+            return None
         preference = weighted_token_preference(top_logprobs, self._TOKENS)
         if preference is None:
             return None

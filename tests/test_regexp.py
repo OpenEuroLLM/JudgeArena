@@ -169,16 +169,18 @@ def test_official_parsers_preserve_structured_evidence():
     assert alpaca_result.scores == logprobs
 
 
-def test_alpaca_eval_token_requires_and_weights_logprobs():
+def test_alpaca_eval_token_weights_logprobs():
     assert parse_alpaca_eval_token(
         "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}
     ) == pytest.approx(0.75)
     assert parse_alpaca_eval_token("M", top_logprobs={"M": -0.5}) == 1.0
     assert parse_alpaca_eval_token("m", top_logprobs={"m": -0.5}) == 0.0
     assert parse_alpaca_eval_token("x", top_logprobs={"x": -0.1}) is None
-    for top_logprobs in (None, {}):
-        with pytest.raises(ValueError, match="requires first-token top logprobs"):
-            parse_alpaca_eval_token("M", top_logprobs=top_logprobs)
+
+
+@pytest.mark.parametrize("top_logprobs", [None, {}, {"x": -0.1}])
+def test_alpaca_eval_token_does_not_fall_back_to_text(top_logprobs):
+    assert parse_alpaca_eval_token("M", top_logprobs=top_logprobs) is None
 
 
 def test_alpaca_eval_preset_resolves_token_parser():

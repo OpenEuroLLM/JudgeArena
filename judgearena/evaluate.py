@@ -282,14 +282,6 @@ def judge_and_parse_prefs(
         return float("nan") if x is None else x
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        if parse.requires_top_logprobs:
-            n_no_logprobs = sum(1 for a in ann_list if not a.judge_top_logprobs)
-            if n_no_logprobs:
-                raise ValueError(
-                    f"{n_no_logprobs}/{len(ann_list)} judge responses returned no "
-                    f"first-token top logprobs ({label}); they are required by "
-                    f"parser {parse.name!r}."
-                )
         results = [
             parse.parse_result(
                 annotation.judge_completion,

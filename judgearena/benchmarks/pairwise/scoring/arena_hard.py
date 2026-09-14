@@ -10,7 +10,6 @@ from importlib import resources
 import numpy as np
 import pandas as pd
 from scipy.special import expit
-from sklearn.linear_model import LogisticRegression
 
 from judgearena.utils.eval import PrefSummary
 
@@ -359,20 +358,78 @@ def _build_joint_style_design(
     )
 
 
+def _add_scaled(values: np.ndarray, direction: np.ndarray, scale: float) -> np.ndarray:
+    """Round the float32 scaled addition once, like native Tensor.add_."""
+    return (
+        values.astype("float64")
+        + float(np.float32(scale)) * direction.astype("float64")
+    ).astype("float32")
+
+
 def _logistic_coefficients(features: np.ndarray, outcomes: np.ndarray) -> np.ndarray:
-    """Return joint Bradley-Terry and style coefficients from scikit-learn."""
-    # Sample weights express a tie as half a loss and half a win.
-    design = np.repeat(features, 2, axis=0)
-    labels = np.tile([0.0, 1.0], len(outcomes))
-    weights = np.column_stack((1.0 - outcomes, outcomes)).ravel()
-    model = LogisticRegression(
-        fit_intercept=False,
-        C=np.inf,
-        solver="lbfgs",
-        tol=1e-9,
-        max_iter=1000,
-    ).fit(design, labels, sample_weight=weights)
-    return model.coef_[0].astype("float32")
+    """Fit the native Arena-Hard fixed-step L-BFGS procedure without PyTorch.
+
+    Use the initialization, learning rate and stopping rules from upstream
+    196f6b8 (utils/math_utils.py). A converged logistic fit is not equivalent to
+    its 50-step procedure; the native history limit (100) cannot bind here.
+    NumPy/SciPy math kernels still differ from PyTorch in float32 rounding.
+    See NOTICE-PyTorch.txt for the L-BFGS source attribution.
+    """
+    coefficients = np.full(features.shape[1], 0.5, dtype="float32")
+
+    def loss_and_gradient():
+        logits = features @ coefficients
+        log_sigmoid = np.minimum(logits, 0) - np.log1p(np.exp(-np.abs(logits)))
+        loss = ((1 - outcomes) * logits - log_sigmoid).sum()
+        gradient = features.T @ (expit(logits) - outcomes)
+        return loss, gradient
+
+    loss, gradient = loss_and_gradient()
+    if np.abs(gradient).max() <= 1e-9:
+        return coefficients
+
+    history = []
+    hessian_scale = 1.0
+    for iteration in range(50):
+        # Two-loop recursion applies the approximate inverse Hessian to -g.
+        direction = -gradient
+        alphas = []
+        for displacement, gradient_change, inverse_curvature in reversed(history):
+            alpha = (displacement @ direction) * inverse_curvature
+            direction = _add_scaled(direction, gradient_change, -alpha)
+            alphas.append(alpha)
+        direction *= hessian_scale
+        for (displacement, gradient_change, inverse_curvature), alpha in zip(
+            history, reversed(alphas), strict=True
+        ):
+            beta = (gradient_change @ direction) * inverse_curvature
+            direction = _add_scaled(direction, displacement, alpha - beta)
+
+        previous_gradient = gradient
+        previous_loss = loss
+        step_size = (
+            min(1.0, 1 / np.abs(gradient).sum()) * 0.1 if iteration == 0 else 0.1
+        )
+        if gradient @ direction > -1e-9:
+            break
+        coefficients = _add_scaled(coefficients, direction, step_size)
+        if iteration == 49:
+            break
+        loss, gradient = loss_and_gradient()
+        displacement = step_size * direction
+        if (
+            np.abs(gradient).max() <= 1e-9
+            or np.abs(displacement).max() <= 1e-9
+            or abs(loss - previous_loss) < 1e-9
+        ):
+            break
+
+        gradient_change = gradient - previous_gradient
+        curvature = gradient_change @ displacement
+        if curvature > 1e-10:
+            history.append((displacement, gradient_change, 1 / curvature))
+            hessian_scale = curvature / (gradient_change @ gradient_change)
+    return coefficients
 
 
 def _bootstrap_style_scores(
