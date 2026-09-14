@@ -20,7 +20,16 @@ from judgearena.benchmarks.scoring import (
 from judgearena.tasks.schema import MetricSpec
 
 
-def _battle_rows(length_differences: np.ndarray, outcomes: np.ndarray) -> pd.DataFrame:
+def _calculate_metrics(
+    battles: pd.DataFrame, requests: tuple[MetricSpec, ...]
+) -> dict[str, dict[str, object]]:
+    return calculate_metrics(battles, build_metrics(requests))
+
+
+def _battle_rows(
+    length_differences: np.ndarray,
+    outcomes: np.ndarray,
+) -> pd.DataFrame:
     baseline_length = 200
     return pd.DataFrame(
         {
@@ -37,14 +46,28 @@ def _battle_rows(length_differences: np.ndarray, outcomes: np.ndarray) -> pd.Dat
     )
 
 
+def test_pairwise_win_rate_scorer_owns_metric_semantics():
+    scorer = PairwiseWinRateMetric()
+
+    summary = scorer.calculate(pd.DataFrame({"pref": pd.Series([0.0, 1.0, 0.5])}))
+
+    assert summary["num_battles"] == 3
+    assert summary["winrate"] == pytest.approx(0.5)
+
+
 def test_pairwise_win_rate_reports_candidate_results():
     battles = pd.DataFrame({"pref": [0.0, 0.25, 1.0, None]})
 
     result = PairwiseWinRateMetric().calculate(battles)
 
-    assert result["winrate"] == pytest.approx(2 / 3)
-    assert result["num_battles"] == 4
-    assert result["num_missing"] == 1
+    assert result == {
+        "num_battles": 4,
+        "winrate": pytest.approx(2 / 3),
+        "num_wins": 2,
+        "num_losses": 1,
+        "num_ties": 0,
+        "num_missing": 1,
+    }
 
 
 def test_length_controlled_winrate_predicts_at_equal_length(monkeypatch):
@@ -90,10 +113,10 @@ def test_metrics_produce_separate_breakdowns_for_each_field():
         }
     )
 
-    configured = build_metrics(
-        [MetricSpec(metric="pairwise_win_rate", breakdown_by=("category", "turn"))]
+    results = _calculate_metrics(
+        battles,
+        (MetricSpec(metric="pairwise_win_rate", breakdown_by=("category", "turn")),),
     )
-    results = calculate_metrics(battles, configured)
 
     metric = results["pairwise_win_rate"]
     assert metric["winrate"] == 0.75
@@ -134,10 +157,10 @@ def test_grouped_metrics_preserve_distinct_group_values():
         {"pref": [0.0, 0.0, 0.0, 0.0], "group": [1, "1", None, "missing"]}
     )
 
-    configured = build_metrics(
-        [MetricSpec(metric="pairwise_win_rate", breakdown_by=("group",))]
+    result = _calculate_metrics(
+        battles,
+        (MetricSpec(metric="pairwise_win_rate", breakdown_by=("group",)),),
     )
-    result = calculate_metrics(battles, configured)
 
     values = [item["group"] for item in result["pairwise_win_rate"]["groups"]["group"]]
     assert {(type(value).__name__, value) for value in values} == {
@@ -174,9 +197,7 @@ def test_shared_registry_calculates_and_renders_point_bradley_terry():
         }
     )
 
-    results = calculate_metrics(
-        battles, build_metrics([MetricSpec(metric="bradley_terry")])
-    )
+    results = _calculate_metrics(battles, (MetricSpec(metric="bradley_terry"),))
 
     ratings = results["bradley_terry"]["ratings"]
     assert set(ratings) == {"a", "b"}
