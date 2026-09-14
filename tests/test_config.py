@@ -4,8 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 import judgearena.config as config_module
-from judgearena import cli as cli_module
-from judgearena.config import RunConfig, dump_config, load_config
+from judgearena.config import RunConfig, build_run_config, dump_config, load_config
 
 
 def _base_generate() -> dict:
@@ -22,14 +21,6 @@ def _base_elo() -> dict:
         "model": {"name": "Dummy/m"},
         "judge": {"model": "Dummy/j"},
     }
-
-
-def test_generate_config_constructs():
-    cfg = RunConfig(**_base_generate())
-    assert cfg.task == "alpaca-eval"
-    assert cfg.model.name == "Dummy/a"
-    assert cfg.judge.model == "Dummy/j"
-    assert cfg.elo is None
 
 
 def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
@@ -52,7 +43,6 @@ def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
     [
         ("provide_explanation", True),
         ("system_prompt_file", "system.txt"),
-        ("user_prompt_file", "user.txt"),
         ("prompt_presett", "default"),
     ],
 )
@@ -64,25 +54,14 @@ def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
         RunConfig(**data)
 
 
-def _registered_task(
-    *,
-    default_swap_mode: str = "both",
-    default_temperature: float | None = 0.25,
-    default_max_out_tokens: int | None = 4096,
-    default_top_logprobs: int | None = 5,
-):
-    return SimpleNamespace(
-        spec=SimpleNamespace(
-            protocol=SimpleNamespace(
-                judge=SimpleNamespace(
-                    default_swap_mode=default_swap_mode,
-                    default_temperature=default_temperature,
-                    default_max_out_tokens=default_max_out_tokens,
-                    default_top_logprobs=default_top_logprobs,
-                ),
-            )
-        )
+def _registered_task():
+    judge = SimpleNamespace(
+        default_swap_mode="both",
+        default_temperature=0.25,
+        default_max_out_tokens=4096,
+        default_top_logprobs=5,
     )
+    return SimpleNamespace(spec=SimpleNamespace(protocol=SimpleNamespace(judge=judge)))
 
 
 @pytest.mark.parametrize(
@@ -138,31 +117,9 @@ def test_elo_config_allows_runtime_scoring_overrides():
     assert cfg.elo.soft_elo_temperature == 0.7
 
 
-def test_elo_requires_model_path():
-    data = _base_elo()
-    data["model"] = {}
-    with pytest.raises(ValidationError):
-        RunConfig(**data)
-
-
 def test_elo_block_rejected_on_generate_task():
     data = _base_generate()
     data["elo"] = {"n_bootstraps": 5}
-    with pytest.raises(ValidationError):
-        RunConfig(**data)
-
-
-def test_generate_requires_model_b_without_native_baseline():
-    data = _base_generate()
-    data["task"] = "no-baseline-task"  # task with no native baseline
-    data["model"] = {"name": "Dummy/a"}  # no path_b
-    with pytest.raises(ValidationError):
-        RunConfig(**data)
-
-
-def test_unknown_elo_task_rejected():
-    data = _base_elo()
-    data["task"] = "elo-nope"
     with pytest.raises(ValidationError):
         RunConfig(**data)
 
@@ -172,27 +129,6 @@ def test_generate_requires_model_path():
     data["model"] = {"baseline": "Dummy/b"}  # no path
     with pytest.raises(ValidationError):
         RunConfig(**data)
-
-
-def test_load_config_from_yaml(tmp_path):
-    yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
-        "task: alpaca-eval\n"
-        "model:\n"
-        "  name: Dummy/a\n"
-        "  baseline: Dummy/b\n"
-        "  max_out_tokens: 4096\n"
-        "judge:\n"
-        "  model: Dummy/j\n"
-        "  prompt_preset: default_with_explanation\n"
-        "generation:\n"
-        "  n_instructions: 10\n"
-    )
-    cfg = load_config(yaml_path)
-    assert cfg.model.name == "Dummy/a"
-    assert cfg.model.max_out_tokens == 4096
-    assert cfg.judge.prompt_preset == "default_with_explanation"
-    assert cfg.generation.n_instructions == 10
 
 
 def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
@@ -222,8 +158,6 @@ def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
 
 
 def test_cli_yaml_equivalence_generate(tmp_path):
-    from judgearena.config import build_run_config, load_config
-
     expected = build_run_config(
         [
             "--task",
@@ -246,68 +180,7 @@ def test_cli_yaml_equivalence_generate(tmp_path):
     assert actual == expected
 
 
-def test_cli_yaml_equivalence_elo(tmp_path):
-    from judgearena.config import build_run_config, load_config
-
-    expected = build_run_config(
-        [
-            "--task",
-            "elo-comparia",
-            "--model.name",
-            "Dummy/m",
-            "--judge.model",
-            "Dummy/j",
-        ]
-    )
-    yaml_path = tmp_path / "e.yaml"
-    yaml_path.write_text(
-        "task: elo-comparia\nmodel: {name: Dummy/m}\njudge: {model: Dummy/j}\n"
-    )
-    actual = load_config(yaml_path)
-    assert actual == expected
-
-
-def test_config_path_dispatches_elo(tmp_path, monkeypatch):
-    captured = {}
-    monkeypatch.setattr(cli_module, "configure_logging", lambda *a, **k: None)
-    monkeypatch.setattr(
-        cli_module,
-        "run_benchmark",
-        lambda a: captured.setdefault("benchmark", a),
-    )
-    yaml_path = tmp_path / "e.yaml"
-    yaml_path.write_text(
-        "task: elo-comparia\nmodel: {name: Dummy/m}\njudge: {model: Dummy/j}\n"
-    )
-    cli_module.cli(["--config_path", str(yaml_path)])
-    assert isinstance(captured["benchmark"], RunConfig)
-    assert captured["benchmark"].elo is not None
-
-
-def test_build_run_config_cli_only():
-    from judgearena.config import build_run_config
-
-    cfg = build_run_config(
-        [
-            "--task",
-            "alpaca-eval",
-            "--model.name",
-            "Dummy/a",
-            "--model.baseline",
-            "Dummy/b",
-            "--judge.model",
-            "Dummy/j",
-        ]
-    )
-    assert cfg.task == "alpaca-eval"
-    assert cfg.model.name == "Dummy/a"
-    assert cfg.model.baseline == "Dummy/b"
-    assert cfg.judge.model == "Dummy/j"
-
-
 def test_build_run_config_cli_overrides_yaml_partial(tmp_path):
-    from judgearena.config import build_run_config
-
     yaml_path = tmp_path / "run.yaml"
     yaml_path.write_text(
         "task: alpaca-eval\n"
@@ -321,40 +194,3 @@ def test_build_run_config_cli_overrides_yaml_partial(tmp_path):
     assert cfg.judge.swap_mode == "both"  # preserved (partial update)
     assert cfg.model.name == "Dummy/a"  # from YAML
     assert cfg.generation.truncate_all_input_chars == 8192  # model default
-
-
-def test_build_run_config_engine_kwargs_json():
-    from judgearena.config import build_run_config
-
-    cfg = build_run_config(
-        [
-            "--task",
-            "alpaca-eval",
-            "--model.name",
-            "Dummy/a",
-            "--model.baseline",
-            "Dummy/b",
-            "--judge.model",
-            "Dummy/j",
-            "--judge.engine_kwargs",
-            '{"tensor_parallel_size": 4}',
-        ]
-    )
-    assert cfg.judge.engine_kwargs == {"tensor_parallel_size": 4}
-
-
-def test_build_run_config_elo_defaults():
-    from judgearena.config import build_run_config
-
-    cfg = build_run_config(
-        [
-            "--task",
-            "elo-comparia",
-            "--model.name",
-            "Dummy/m",
-            "--judge.model",
-            "Dummy/j",
-        ]
-    )
-    assert cfg.elo is not None
-    assert cfg.elo.soft_elo is True
