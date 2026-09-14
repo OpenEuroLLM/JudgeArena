@@ -6,8 +6,14 @@ import judgearena.datasets.arena_battles as arena_battles
 from judgearena.tasks.registry import get_packaged_task
 
 
+def _elo_task(task_id: str = "elo-comparia"):
+    task = get_packaged_task(task_id)
+    assert task is not None
+    return task
+
+
 def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_path):
-    task = get_packaged_task("elo-comparia")
+    task = _elo_task()
     captured = {}
 
     def fake_load_arena_dataframe(arena, *, dataset_sources):
@@ -28,10 +34,12 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
 
 
 def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
-    task = get_packaged_task("elo-lmarena-100k")
+    task = _elo_task("elo-lmarena-100k")
     captured = {}
     monkeypatch.setattr(
-        arena_battles, "snapshot_download", lambda **kwargs: captured.update(kwargs)
+        arena_battles,
+        "snapshot_download",
+        lambda **kwargs: captured.update(kwargs),
     )
 
     arena_battles.download_task_sources(task, tmp_path)
