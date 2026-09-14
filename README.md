@@ -207,7 +207,7 @@ uv run judgearena \
 
 ```bash
 uv run judgearena \
-  --task alpaca-eval \
+  --task alpaca-eval-ja \
   --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model.baseline LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --judge.model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
@@ -265,10 +265,10 @@ Generate+judge tasks produce pairwise preferences between two models. Elo tasks 
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
-For MT-Bench, the default pairwise baseline is `gpt-4`.
-We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
-a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
-ship in the `lmsys/mt-bench` HF Space. Override per run with `--model.baseline`.
+For MT-Bench, the default pairwise baseline is `gpt-3.5-turbo`, matching
+FastChat's `pairwise-baseline` default. To keep the previous GPT-4 comparison,
+set `--model.baseline gpt-4`; its completions are available in the
+`lmsys/mt-bench` HF Space.
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`

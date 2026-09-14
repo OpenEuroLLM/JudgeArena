@@ -408,6 +408,15 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench supports only swap_mode='fixed' or 'both'; "
             f"got {cfg.judge.swap_mode!r}."
         )
+    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+    if (
+        resolved_prompt.parser is not None
+        and resolved_prompt.parser.requires_top_logprobs
+    ):
+        raise ValueError(
+            "MT-Bench does not support parsers that require logprobs. "
+            "Use a text-based judge parser."
+        )
     if cfg.model.baseline is None:
         baseline = native_pairwise_baseline(cfg.task)
         cfg.model.baseline = baseline if isinstance(baseline, str) else None
@@ -439,7 +448,6 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         protocol=protocol,
         questions_df=questions_df,
     )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
     if resolved_prompt.delegated:
         logger.info(
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "

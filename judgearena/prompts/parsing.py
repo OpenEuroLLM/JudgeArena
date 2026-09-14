@@ -201,9 +201,17 @@ class PairScore(JudgeParser):
     def __init__(self, *, temperature: float = 0.3):
         self.temperature = temperature
 
-    def preference_from_scores(self, score_a: float, score_b: float) -> float:
-        """Return a bounded preference without overflowing on extreme scores."""
-        logit = self.temperature * (score_b - score_a)
+    def preference_from_scores(
+        self,
+        score_a: float,
+        score_b: float,
+        *,
+        temperature: float | None = None,
+    ) -> float:
+        """Return a bounded preference using a per-call or default temperature."""
+        if temperature is None:
+            temperature = self.temperature
+        logit = temperature * (score_b - score_a)
         if logit >= 0:
             return 1.0 / (1.0 + math.exp(-logit))
         exp_logit = math.exp(logit)
@@ -214,12 +222,15 @@ class PairScore(JudgeParser):
         judge_completion: str,
         *,
         top_logprobs: dict[str, float] | None = None,
+        temperature: float | None = None,
     ) -> ParsedPreference | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
         if score_a is None or score_b is None:
             return None
         return ParsedPreference(
-            preference=float(self.preference_from_scores(score_a, score_b)),
+            preference=float(
+                self.preference_from_scores(score_a, score_b, temperature=temperature)
+            ),
             scores={"A": score_a, "B": score_b},
         )
 

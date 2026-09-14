@@ -69,6 +69,34 @@ def test_pair_score_returns_structured_preference():
     assert parser(raw_text) == parsed.preference
 
 
+@pytest.mark.parametrize(
+    ("parser_name", "default_temperature", "default_preference"),
+    [("score", 0.3, 0.6456563062257954), ("meta-eval-score", 0.5, 0.7310585786300049)],
+)
+@pytest.mark.parametrize(
+    ("temperature", "override_preference"),
+    [(None, None), (0.0, 0.5), (0.8, 0.8320183851339245)],
+)
+def test_score_parser_temperature_override_is_local_to_the_call(
+    parser_name,
+    default_temperature,
+    default_preference,
+    temperature,
+    override_preference,
+):
+    parser = JUDGE_PARSERS[parser_name]
+    text = "score_A: 6\nscore_B: 8"
+
+    parsed = parser.parse_result(text, temperature=temperature)
+
+    assert parsed is not None
+    expected = default_preference if temperature is None else override_preference
+    assert parsed.preference == pytest.approx(expected)
+    assert parsed.scores == {"A": 6.0, "B": 8.0}
+    assert parser.temperature == default_temperature
+    assert parser(text) == pytest.approx(default_preference)
+
+
 @pytest.mark.parametrize("preference", [-0.1, 1.1, math.inf, math.nan])
 def test_parsed_preference_rejects_invalid_values(preference):
     with pytest.raises(ValueError, match="finite and between 0 and 1"):
