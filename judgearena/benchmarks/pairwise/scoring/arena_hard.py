@@ -373,7 +373,6 @@ def _logistic_coefficients(features: np.ndarray, outcomes: np.ndarray) -> np.nda
     196f6b8 (utils/math_utils.py). A converged logistic fit is not equivalent to
     its 50-step procedure; the native history limit (100) cannot bind here.
     NumPy/SciPy math kernels still differ from PyTorch in float32 rounding.
-    See NOTICE-PyTorch.txt for the L-BFGS source attribution.
     """
     coefficients = np.full(features.shape[1], 0.5, dtype="float32")
 
