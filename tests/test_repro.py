@@ -23,7 +23,12 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
             "preferences": [0.0, 0.5, 1.0],
             "judge_score": float("nan"),
         },
-        input_payloads={"instruction_index": [2, 1, 2]},
+        input_payloads={
+            "instruction_index": [2, 1, 2],
+            "instructions": ["i0", "i1", "i2"],
+            "completions_A": ["a0", "a1", "a2"],
+            "completions_B": ["b0", "b1", "b2"],
+        },
         judge_system_prompt="system prompt",
         judge_user_prompt_template="user prompt",
         judge_prompt_variants=[
@@ -36,6 +41,9 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
 
     metadata = json.loads(metadata_path.read_text())
+    assert metadata["schema_version"] == repro.METADATA_SCHEMA_VERSION
+    assert metadata["entrypoint"] == "judgearena.test.entrypoint"
+    assert metadata["results"]["num_battles"] == 3
     assert metadata["results"]["preferences_count"] == 3
     assert metadata["results"]["judge_score"] is None
     assert metadata["dataset_statistics"]["instruction_index_count"] == 3
@@ -43,10 +51,18 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
         "annotations.csv",
         "results.json",
     }
+    assert "extras" not in metadata
     assert metadata["git_hash"] == "a" * 40
+    assert "instruction_indices_sha256" in metadata
     assert "judge_system_prompt_sha256" in metadata
     assert "judge_user_prompt_template_sha256" in metadata
-    assert metadata["judge_prompts"][0]["judge_prompt_preset"] == "default"
+    assert metadata["judge_prompts"] == [
+        {
+            "judge_prompt_preset": "default",
+            "judge_prompt_system_sha256": "system-hash",
+            "judge_prompt_user_sha256": "user-hash",
+        }
+    ]
 
 
 def test_write_run_metadata_hashes_instruction_indices_as_set(tmp_path, monkeypatch):
@@ -74,6 +90,27 @@ def test_write_run_metadata_hashes_instruction_indices_as_set(tmp_path, monkeypa
     )
 
 
+def test_write_run_metadata_omits_optional_fields_when_inputs_missing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(repro, "_get_dependency_versions", lambda *args, **kwargs: {})
+    monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: None)
+
+    metadata_path = repro.write_run_metadata(
+        output_dir=tmp_path,
+        entrypoint="judgearena.test.entrypoint",
+        run={"dataset": "alpaca-eval"},
+    )
+
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["dataset_statistics"] == {}
+    assert metadata["artifacts"] == []
+    assert "git_hash" not in metadata
+    assert "instruction_indices_sha256" not in metadata
+    assert "judge_system_prompt_sha256" not in metadata
+    assert "judge_user_prompt_template_sha256" not in metadata
+
+
 def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypatch):
     monkeypatch.setattr(repro, "_get_dependency_versions", lambda *args, **kwargs: {})
     monkeypatch.setattr(repro, "_get_git_hash", lambda *args, **kwargs: None)
@@ -85,6 +122,7 @@ def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypat
     )
 
     task_definition = json.loads(metadata_path.read_text())["task_definition"]
+    assert task_definition["schema_version"] == 1
     assert task_definition["task_version"] == 2
     assert len(task_definition["resolved_sha256"]) == 64
     assert [resource["path"] for resource in task_definition["resources"]] == [
