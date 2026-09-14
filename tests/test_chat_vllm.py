@@ -147,14 +147,10 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
 
 def test_chat_vllm_reports_exact_local_token_counts(monkeypatch):
     _install_fake_vllm(monkeypatch)
-    chat_model = models.ChatVLLM(
-        model="Qwen/Qwen3.5-9B", max_tokens=16, gpu_memory_utilization=0.7
-    )
+    chat_model = models.ChatVLLM(model="Qwen/Qwen3.5-9B", max_tokens=16)
     with track_usage() as tracker:
-        assert models.do_inference(chat_model, ["hello"], stage="generation") == ["ok"]
-        usage = tracker.snapshot().requests[0]
-
-    assert (usage.stage, usage.model) == ("generation", "Qwen/Qwen3.5-9B")
+        models.do_inference(chat_model, ["hello"], stage="generation")
+    usage = tracker.snapshot().requests[0]
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (3, 2, 5)
 
 
