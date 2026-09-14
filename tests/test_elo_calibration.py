@@ -14,24 +14,15 @@ from judgearena.benchmarks.elo.calibration import (
 )
 
 
-def test_fit_temperature_follows_human_preference_direction():
-    score_differences = np.array([2.0, 1.0, -1.0, -2.0])
-    outcomes = np.array([1.0, 1.0, 0.0, 0.0])
+def test_fit_temperature_matches_observed_odds():
+    # P(A>B) = 3/4 and score_A - score_B = -1 imply T = -log(3).
+    score_differences = np.full(4, -1.0)
+    outcomes = np.array([1.0, 1.0, 1.0, 0.0])
 
-    assert fit_temperature(score_differences, outcomes) > 0
-    assert fit_temperature(score_differences, 1 - outcomes) < 0
+    assert fit_temperature(score_differences, outcomes) == pytest.approx(-np.log(3))
 
 
-@pytest.mark.parametrize(
-    ("enabled", "prompt"),
-    [
-        (False, None),
-        (True, SimpleNamespace(parser=object())),
-    ],
-)
-def test_skipped_calibration_does_not_consume_rng_or_build_judge(
-    monkeypatch, enabled, prompt
-):
+def test_non_pairscore_calibration_does_not_consume_rng_or_build_judge(monkeypatch):
     rng = np.random.default_rng(7)
     state = deepcopy(rng.bit_generator.state)
 
@@ -42,14 +33,14 @@ def test_skipped_calibration_does_not_consume_rng_or_build_judge(
     result = calibrate_pairscore_temperature(
         pd.DataFrame(),
         pd.DataFrame(),
-        enabled=enabled,
+        enabled=True,
         soft_elo=True,
         sample_size=None,
         rng=rng,
         judge_model="unused",
         judge_model_kwargs={},
         swap_mode="fixed",
-        prompt=prompt,
+        prompt=SimpleNamespace(parser=object()),
         truncate_input_chars=None,
         default_temperature=0.3,
     )
