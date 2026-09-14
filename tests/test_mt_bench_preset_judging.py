@@ -40,7 +40,10 @@ def _questions_df(category: str = "writing") -> pd.DataFrame:
 
 def _completions_df(prefix: str) -> pd.DataFrame:
     return pd.DataFrame(
-        {"completion_turn_1": [f"{prefix}1"], "completion_turn_2": [f"{prefix}2"]},
+        {
+            "completion_turn_1": [f"{prefix}1"],
+            "completion_turn_2": [f"{prefix}2"],
+        },
         index=pd.Index([1], name="instruction_index"),
     )
 
@@ -53,6 +56,35 @@ def test_select_preset_prompt_rejects_delegated_preset():
             reference_categories=REFERENCE_CATEGORIES,
             prompt_preset=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         )
+
+
+@pytest.mark.parametrize(
+    ("category", "multi_turn", "expected_name", "expected_ref_based"),
+    [
+        ("writing", False, "default-single", False),
+        ("writing", True, "default-multi", False),
+        ("math", False, "default-single_ref", True),
+        ("math", True, "default-multi_ref", True),
+    ],
+)
+def test_select_preset_prompt_variants(
+    category: str,
+    multi_turn: bool,
+    expected_name: str,
+    expected_ref_based: bool,
+):
+    prompt = _select_preset_prompt(
+        category,
+        multi_turn=multi_turn,
+        reference_categories=REFERENCE_CATEGORIES,
+        prompt_preset="default",
+    )
+
+    assert prompt.name == expected_name
+    assert prompt.ref_based is expected_ref_based
+    input_marker = "Conversation with User" if multi_turn else "[User Question]"
+    assert input_marker in prompt.user_prompt_template
+    assert "# Your output" in prompt.user_prompt_template
 
 
 def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
@@ -68,15 +100,31 @@ def test_build_mt_bench_preset_items_adds_turn_and_reference_kwargs():
     )
 
     assert [item.turn for item in items] == [1, 2]
-    assert items[0].prompt_kwargs["ref_answer_1"] == "R1"
-    assert items[1].prompt_kwargs["question_2"] == "Q2"
-    assert items[1].prompt_kwargs["answer_b_2"] == "B2"
-    assert items[1].prompt_kwargs["ref_answer_2"] == "R2"
-    assert items[1].prompt.ref_based is True
+    assert items[0].prompt_kwargs == {
+        "question": "Q1",
+        "answer_a": "A1",
+        "answer_b": "B1",
+        "ref_answer_1": "R1",
+    }
+    assert items[1].prompt_kwargs == {
+        "question_1": "Q1",
+        "question_2": "Q2",
+        "answer_a_1": "A1",
+        "answer_a_2": "A2",
+        "answer_b_1": "B1",
+        "answer_b_2": "B2",
+        "ref_answer_1": "R1",
+        "ref_answer_2": "R2",
+    }
 
 
 def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
-    judge = SequenceJudge(["score_A: 10\nscore_B: 0", "score_A: 0\nscore_B: 10"])
+    judge = SequenceJudge(
+        [
+            "score_A: 10\nscore_B: 0",
+            "score_A: 0\nscore_B: 10",
+        ]
+    )
 
     prefs, annotations, metadata = judge_mt_bench_with_preset(
         judge_chat_model=judge,
@@ -98,11 +146,18 @@ def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
     assert len(prefs) == 2
     assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
     assert prefs.iloc[0] < 0.5
+    assert annotations[0]["model_A"] == "model-a"
+    assert annotations[0]["parsed"]["scores"] == {"A": 10.0, "B": 0.0}
+    assert annotations[0]["preference"] < 0.5
     assert annotations[1]["model_A"] == "model-b"
     assert annotations[1]["parsed"]["scores"] == {"A": 0.0, "B": 10.0}
     assert annotations[1]["preference"] > 0.5
+    assert annotations[1]["swapped"] is True
     assert "B1" in annotations[1]["user_prompt"]
-    assert [row["question_id"] for row in metadata] == [1, 1]
+    assert metadata == [
+        {"question_id": 1, "category": "writing", "turn": 1},
+        {"question_id": 1, "category": "writing", "turn": 1},
+    ]
 
 
 def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):

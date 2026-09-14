@@ -35,8 +35,31 @@ def _console_handler_level() -> int:
     raise AssertionError("No console handler found")
 
 
-def test_get_logger_naming():
-    assert get_logger("mymodule").name == "judgearena.mymodule"
+# ---------- get_logger ----------
+
+
+@pytest.mark.parametrize(
+    "input_name, expected",
+    [
+        (None, _ROOT_LOGGER_NAME),
+        ("judgearena.utils", "judgearena.utils"),
+        ("mymodule", "judgearena.mymodule"),  # bare names get prefixed
+    ],
+)
+def test_get_logger_naming(input_name, expected):
+    assert get_logger(input_name).name == expected
+
+
+# ---------- configure_logging ----------
+
+
+@pytest.mark.parametrize(
+    "verbosity, expected_level",
+    [(-1, logging.WARNING), (0, logging.INFO), (1, logging.DEBUG), (3, logging.DEBUG)],
+)
+def test_configure_logging_verbosity(verbosity, expected_level):
+    configure_logging(verbosity)
+    assert _console_handler_level() == expected_level
 
 
 def test_configure_logging_no_duplicate_handlers():
@@ -51,7 +74,6 @@ def test_configure_logging_no_duplicate_handlers():
         and not isinstance(h, logging.FileHandler)
     ]
     assert len(console_handlers) == 1
-    assert console_handlers[0].level == logging.DEBUG
 
 
 def test_env_var_overrides_verbosity(monkeypatch):
@@ -59,6 +81,9 @@ def test_env_var_overrides_verbosity(monkeypatch):
     monkeypatch.setenv("JUDGEARENA_LOG_LEVEL", "warning")
     configure_logging(1)  # would normally be DEBUG
     assert _console_handler_level() == logging.WARNING
+
+
+# ---------- file handler ----------
 
 
 def test_file_handler_captures_debug_even_when_console_is_info(tmp_path):
@@ -77,7 +102,7 @@ def test_file_handler_captures_debug_even_when_console_is_info(tmp_path):
 
 
 def test_attach_file_handler_is_idempotent_for_same_path(tmp_path):
-    log_file = tmp_path / "nested" / "run.log"
+    log_file = tmp_path / "run.log"
 
     first = attach_file_handler(log_file)
     second = attach_file_handler(log_file)
@@ -85,9 +110,19 @@ def test_attach_file_handler_is_idempotent_for_same_path(tmp_path):
     root = logging.getLogger(_ROOT_LOGGER_NAME)
     file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
 
-    assert log_file.exists()
     assert first is second
     assert len(file_handlers) == 1
+
+
+def test_attach_file_handler_creates_parent_directory(tmp_path):
+    log_file = tmp_path / "nested" / "logs" / "run.log"
+
+    attach_file_handler(log_file)
+
+    assert log_file.parent.exists()
+
+
+# ---------- verbosity ----------
 
 
 def test_quiet_overrides_verbose():
@@ -109,6 +144,9 @@ def test_quiet_overrides_verbose():
         ]
     )
     assert cfg.run.verbosity == -1
+
+
+# ---------- make_run_log_path ----------
 
 
 def test_make_run_log_path_format(tmp_path):

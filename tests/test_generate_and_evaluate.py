@@ -8,6 +8,7 @@ import judgearena.benchmarks.pairwise.runner as generate_and_evaluate
 import judgearena.benchmarks.registry as benchmark_registry
 import judgearena.benchmarks.runner as benchmark_runner
 from judgearena.benchmarks.pairwise.baselines import (
+    BaselinePlan,
     native_pairwise_baseline,
     resolve_baseline_plan,
 )
@@ -18,28 +19,60 @@ from judgearena.datasets.pairwise import PairwiseTaskData
 from judgearena.tasks.registry import get_packaged_task
 
 
-@pytest.fixture
-def cfg(tmp_path):
+def _cfg(
+    *,
+    task: str,
+    model_A: str,
+    model_B: str | None = None,
+    judge_model: str,
+    n_instructions: int | None = None,
+    swap_mode: str = "fixed",
+    result_folder: str = "results",
+    truncate_judge_input_chars: int | None = None,
+    max_judge_model_len: int | None = None,
+    engine_kwargs: dict | None = None,
+    judge_engine_kwargs: dict | None = None,
+) -> RunConfig:
     return RunConfig(
-        task="alpaca-eval",
-        model={"name": "Dummy/no answer", "baseline": "Dummy/x"},
-        judge={"model": "Dummy/score A: 0 score B: 10", "swap_mode": "fixed"},
-        generation={"n_instructions": 2},
-        run={"result_folder": str(tmp_path)},
+        task=task,
+        model={
+            "name": model_A,
+            "baseline": model_B,
+            "engine_kwargs": engine_kwargs or {},
+        },
+        judge={
+            "model": judge_model,
+            "swap_mode": swap_mode,
+            "max_model_len": max_judge_model_len,
+            "engine_kwargs": judge_engine_kwargs or {},
+        },
+        generation={
+            "n_instructions": n_instructions,
+            "truncate_judge_input_chars": truncate_judge_input_chars,
+        },
+        run={"result_folder": result_folder},
     )
 
 
 @pytest.fixture(autouse=True)
 def mock_external_data_and_cache(monkeypatch):
     instructions = pd.DataFrame(
-        {"instruction": ["Synthetic instruction 0", "Synthetic instruction 1"]},
-        index=pd.Index(range(2), name="instruction_index"),
+        {
+            "instruction": [f"Synthetic instruction {i}" for i in range(20)],
+        },
+        index=pd.Index(range(20), name="instruction_index"),
     )
 
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
+        lambda task, n_instructions=None: PairwiseTaskData(
+            instructions=(
+                instructions.head(n_instructions)
+                if n_instructions is not None
+                else instructions
+            )
+        ),
     )
 
     def _run_without_cache(fun, **_kwargs):
@@ -74,12 +107,24 @@ def test_resolve_plan_v20_routes_per_category():
         task=get_packaged_task("arena-hard-v2.0"),
         runtime_baseline=None,
         instructions=_instructions(
-            ["qh", "qc"], categories=["hard_prompt", "creative_writing"]
+            ["qh", "qc"],
+            categories=["hard_prompt", "creative_writing"],
         ),
     )
     assert not plan.is_single_model
     assert plan.baseline_by_index.loc["qh"] == "o3-mini-2025-01-31"
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
+
+
+def test_resolve_plan_alpaca_eval_uses_native_baseline():
+    plan = resolve_baseline_plan(
+        task_id="alpaca-eval",
+        task=get_packaged_task("alpaca-eval"),
+        runtime_baseline=None,
+        instructions=_instructions(["q1", "q2"]),
+    )
+    assert plan.is_single_model
+    assert plan.single_model == "gpt4_1106_preview"
 
 
 def test_resolve_plan_explicit_model_b_overrides_native():
@@ -88,21 +133,37 @@ def test_resolve_plan_explicit_model_b_overrides_native():
         task=get_packaged_task("arena-hard-v2.0"),
         runtime_baseline="override",
         instructions=_instructions(
-            ["q1", "q2"], categories=["hard_prompt", "creative_writing"]
+            ["q1", "q2"],
+            categories=["hard_prompt", "creative_writing"],
         ),
     )
     assert plan.is_single_model
     assert plan.single_model == "override"
 
 
-def test_native_pairwise_baseline_resolves_registered_task():
-    assert (
-        native_pairwise_baseline("m-arena-hard-v0.1-uk") == "CohereLabs/aya-expanse-8b"
-    )
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("alpaca-eval", "gpt4_1106_preview"),
+        ("mt-bench", "gpt-4"),
+        ("m-arena-hard-v0.1-uk", "CohereLabs/aya-expanse-8b"),
+        ("m-arena-hard-v2.0-EU", "google/gemini-2.5-flash"),
+    ],
+)
+def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected: str):
+    assert native_pairwise_baseline(task) == expected
 
 
-def test_benchmark_adapter_resolution():
-    assert resolve_benchmark_adapter("elo-comparia").name == "elo"
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("alpaca-eval", "pairwise"),
+        ("mt-bench", "mt_bench"),
+        ("elo-comparia", "elo"),
+    ],
+)
+def test_benchmark_adapter_resolution(task: str, expected: str):
+    assert resolve_benchmark_adapter(task).name == expected
 
 
 def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
@@ -159,43 +220,127 @@ def test_resolve_plan_v20_missing_category_raises():
         )
 
 
-def test_generate_and_evaluate_context_completion(cfg):
-    prefs = run_pairwise(cfg)
-    assert sum(prefs) / len(prefs) >= 0.9
+def test_resolve_plan_v20_unknown_category_raises():
+    with pytest.raises(ValueError, match="brand_new"):
+        resolve_baseline_plan(
+            task_id="arena-hard-v2.0",
+            task=get_packaged_task("arena-hard-v2.0"),
+            runtime_baseline=None,
+            instructions=_instructions(["q1"], categories=["brand_new"]),
+        )
 
 
-def test_generate_and_evaluate_correct_order_bias(cfg):
-    """Swapping neutralizes a judge that always favors model B."""
-    cfg.judge.swap_mode = "both"
-    prefs = run_pairwise(cfg)
-    assert sum(prefs) / len(prefs) == 0.5
+def test_baseline_plan_flat_repeats_model():
+    plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
+    assert plan.is_single_model
+    assert plan.baseline_by_index.tolist() == ["b", "b"]
 
 
-def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, cfg):
+def test_baseline_plan_per_row_preserves_order():
+    series = pd.Series(["m1", "m2"], index=["a", "b"], name="model_B")
+    plan = BaselinePlan.per_row(series)
+    assert not plan.is_single_model
+    assert plan.unique_models == ["m1", "m2"]
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "alpaca-eval",
+        "arena-hard-v2.0",
+        "arena-hard-v0.1",
+        "fluency-french",
+        "m-arena-hard-v0.1-EU",
+        "m-arena-hard-v2.0-EU",
+    ],
+)
+def test_generate_and_evaluate_context_completion(task: str, tmp_path):
+    prefs = run_pairwise(
+        _cfg(
+            task=task,
+            model_A="Dummy/no answer",
+            model_B="Dummy/open is better than close isnt'it",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=5,
+            result_folder=str(tmp_path),
+            # default for swap_mode is "fixed"
+        )
+    )
+
+    avg_pref = sum(prefs) / len(prefs)
+    assert avg_pref >= 0.9
+
+
+def test_generate_and_evaluate_correct_order_bias(tmp_path):
+    """Test the correction for model order bias.
+
+    In this test, a judge that is totally biased towards model B should be corrected to be neutral.
+    Since the judge favors model B regardless of the order and the completions, the average
+    preference should be 0.5.
+    """
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/no answer",
+            model_B="Dummy/open is better than close isnt'it",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=5,
+            swap_mode="both",
+            result_folder=str(tmp_path),
+        )
+    )
+
+    avg_pref = sum(prefs) / len(prefs)
+    assert avg_pref == 0.5
+
+
+def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path):
     captured = {}
 
     def fake_make_model(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            batch=lambda inputs, **_: ["score A: 0 score B: 10"] * len(inputs)
-        )
+        captured["make_model"] = kwargs
+
+        class FakeJudge:
+            def batch(self, inputs, **_kwargs):
+                return ["score A: 0 score B: 10"] * len(inputs)
+
+        return FakeJudge()
 
     monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
-    cfg.judge.model = "VLLM/judge"
-    cfg.judge.max_model_len = 65536
-    cfg.model.engine_kwargs = {"tensor_parallel_size": 1}
-    cfg.judge.engine_kwargs = {"tensor_parallel_size": 4}
-    prefs = run_pairwise(cfg)
+
+    prefs = run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/no answer",
+            model_B="Dummy/open is better than close isnt'it",
+            judge_model="VLLM/score A: 0 score B: 10",
+            n_instructions=2,
+            truncate_judge_input_chars=12,
+            max_judge_model_len=65536,
+            engine_kwargs={"tensor_parallel_size": 1},
+            judge_engine_kwargs={"tensor_parallel_size": 4},
+            result_folder=str(tmp_path),
+        )
+    )
 
     assert len(prefs) == 2
-    assert captured["max_model_len"] == 65536
-    assert captured["tensor_parallel_size"] == 4
+    assert captured["make_model"]["max_model_len"] == 65536
+    assert captured["make_model"]["tensor_parallel_size"] == 4
 
 
-def test_run_writes_roundtrippable_config(cfg, tmp_path):
+def test_run_writes_roundtrippable_config(tmp_path):
     from judgearena.config import load_config
 
-    run_pairwise(cfg)
+    run_pairwise(
+        _cfg(
+            task="alpaca-eval",
+            model_A="Dummy/no answer",
+            model_B="Dummy/x",
+            judge_model="Dummy/score A: 0 score B: 10",
+            n_instructions=2,
+            result_folder=str(tmp_path),
+        )
+    )
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
     reloaded = load_config(written[0])
