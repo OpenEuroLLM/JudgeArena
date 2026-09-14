@@ -18,7 +18,7 @@ from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.config import RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
-from judgearena.models import make_model
+from judgearena.models import DummyModel, make_model
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec
 
@@ -660,6 +660,62 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     assert 0 < total_en < total_all
 
 
+@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
+@pytest.mark.parametrize(
+    ("preset", "parser_name", "invalid_output", "default_temperature"),
+    [
+        ("default", "score", "no scores here", 0.3),
+        (
+            "meta-eval-pair-score",
+            "meta-eval-score",
+            "Score_A: 6\nScore_B: 8.5",
+            0.5,
+        ),
+    ],
+)
+def test_run_elo_temperature_preserves_selected_parser(
+    monkeypatch,
+    tmp_path,
+    swap_mode,
+    preset,
+    parser_name,
+    invalid_output,
+    default_temperature,
+):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    valid_output = "Score_A: 6\nScore_B: 8"
+    parser = JUDGE_PARSERS[parser_name]
+    monkeypatch.setattr(
+        DummyModel,
+        "batch",
+        lambda self, inputs, **kwargs: [valid_output, invalid_output],
+    )
+    cfg = _default_args(
+        result_folder=str(tmp_path),
+        n_instructions=2,
+        n_bootstraps=0,
+        swap_mode=swap_mode,
+    )
+    cfg.judge.prompt_preset = preset
+    cfg.elo.soft_elo_temperature = 0.8
+
+    result = run_elo_with_task(cfg)
+
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    expected_pref = 1 / (1 + math.exp(-0.8 * 2))
+    expected = [expected_pref, float("nan")]
+    if swap_mode == "both":
+        expected += [1 - expected_pref, float("nan")]
+    assert battles["pref"].tolist() == pytest.approx(expected, nan_ok=True)
+    assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
+    assert _pairwise_metric(result)["num_missing"] == len(expected) // 2
+    assert parser.temperature == default_temperature
+    assert parser(valid_output) == pytest.approx(
+        1 / (1 + math.exp(-default_temperature * 2))
+    )
+
+
 def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     """Regression: the calibration path constructs its own judge model and once
     crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
@@ -682,6 +738,10 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     )
 
     assert captured["n_pairs"] >= 10
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    assert battles["pref"].tolist() == pytest.approx(
+        [1 / (1 + math.exp(-0.42 * 10))] * len(battles)
+    )
 
 
 def test_extract_turn_text_tolerates_moderated_turns():
