@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 # Re-exported for existing callers; implementations live with the presets.
 from judgearena.prompts.parsing import (  # noqa: E402
     JudgeParser,
-    PairScore,
+    PairScore,  # noqa: F401
     ParsedPreference,
     resolve_judge_parser,
 )
@@ -291,7 +291,11 @@ def judge_and_parse_prefs(
                already combined for swap_mode="both"
     """
     if parse is None:
-        parse = PairScore()
+        parse = resolve_judge_prompts(
+            prompt_preset=prompt_preset,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+        ).parser
 
     if swap_mode == "both":
         logger.info(
