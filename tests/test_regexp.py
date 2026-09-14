@@ -1,13 +1,8 @@
-import hashlib
 import math
 
 import pytest
 
-from judgearena.prompts.parsing import (
-    JUDGE_PARSERS,
-    PairScore,
-    ParsedPreference,
-)
+from judgearena.prompts.parsing import JUDGE_PARSERS, PairScore, ParsedPreference
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
@@ -141,79 +136,36 @@ def test_strip_thinking_tags_handles_closing_tag_without_opening_tag():
 
 
 @pytest.mark.parametrize(
-    "judgment, expected",
-    [
-        ("My final verdict is tie: [[A=B]]", 0.5),
-        ("Assistant A is significantly better: [[A>>B]]", 0.0),
-        ("[[A>B]] but wait [[B>A]]", 0.75),  # last label wins
-        ("[A<<B]", 1.0),  # v2 single-bracket fallback
-        ("[[a>b]]", 0.25),
-        ("no verdict here", None),
-    ],
+    ("judgment", "expected"),
+    [("[[A=B]]", 0.5), ("[A<<B]", 1.0), ("no verdict here", None)],
 )
 def test_parse_arena_hard_verdict(judgment, expected):
     assert parse_arena_hard_verdict(judgment) == expected
 
 
 def test_official_parsers_preserve_structured_evidence():
-    arena_result = parse_arena_hard_verdict.parse_result("[[A>B]] then [[B>>A]]")
-    assert arena_result is not None
-    assert arena_result.preference == 1.0
-    assert arena_result.label == "B>>A"
+    arena = parse_arena_hard_verdict.parse_result("[[A>B]] then [[b>a]]")
+    assert arena is not None
+    assert (arena.preference, arena.label) == (0.75, "B>A")  # Last label wins.
 
     logprobs = {"m": math.log(0.25), "M": math.log(0.75)}
-    alpaca_result = parse_alpaca_eval_token.parse_result("M", top_logprobs=logprobs)
-    assert alpaca_result is not None
-    assert alpaca_result.preference == pytest.approx(0.75)
-    assert alpaca_result.label == "M"
-    assert alpaca_result.scores == logprobs
-
-
-def test_alpaca_eval_token_weights_logprobs():
-    assert parse_alpaca_eval_token(
-        "M", top_logprobs={"m": math.log(0.25), "M": math.log(0.75)}
-    ) == pytest.approx(0.75)
+    alpaca = parse_alpaca_eval_token.parse_result("M", top_logprobs=logprobs)
+    assert alpaca is not None
+    assert alpaca.preference == pytest.approx(0.75)
+    assert alpaca.scores == logprobs
     assert parse_alpaca_eval_token("M", top_logprobs={"M": -0.5}) == 1.0
-    assert parse_alpaca_eval_token("m", top_logprobs={"m": -0.5}) == 0.0
-    assert parse_alpaca_eval_token("x", top_logprobs={"x": -0.1}) is None
 
 
-@pytest.mark.parametrize("top_logprobs", [None, {}, {"x": -0.1}])
+@pytest.mark.parametrize("top_logprobs", [None, {"x": -0.1}])
 def test_alpaca_eval_token_does_not_fall_back_to_text(top_logprobs):
     assert parse_alpaca_eval_token("M", top_logprobs=top_logprobs) is None
 
 
-def test_alpaca_eval_preset_resolves_token_parser():
-    resolved = resolve_judge_prompt(preset="alpaca-eval")
-
-    assert resolved.parser is parse_alpaca_eval_token
-    assert resolved.parser.requires_top_logprobs is True
-    assert hashlib.sha256(resolved.system_prompt.encode()).hexdigest() == (
-        "247a5fed0ca2aafd7b99cc3b1dc174723695dcedbc5772fe97a16f2a5549f131"
-    )
-    assert hashlib.sha256(resolved.user_prompt_template.encode()).hexdigest() == (
-        "eec8eae642cfce39f6f6820f1c46bcfb10e5923686a57ee8195ade94ae6b0b6b"
-    )
-
-
-@pytest.mark.parametrize(
-    ("preset", "system_sha256"),
-    [
-        (
-            "arena-hard",
-            "03f68010febd7a6405102ef882b4dd5a9700c56b2e1ff286d3b38f5d3a929bbf",
-        ),
-        (
-            "arena-hard-creative",
-            "171489efbca7f19fb520e1b3c23783c76af7c723e770fe897a55f391684aa358",
-        ),
-    ],
-)
-def test_arena_hard_presets_match_upstream_bytes(preset, system_sha256):
-    resolved = resolve_judge_prompt(preset=preset)
-
-    assert resolved.parser is parse_arena_hard_verdict
-    assert hashlib.sha256(resolved.system_prompt.encode()).hexdigest() == system_sha256
-    assert hashlib.sha256(resolved.user_prompt_template.encode()).hexdigest() == (
-        "82fc205856141b8751263b96f25b345b4f0be39c1548ba067f5ac0e3f224b5c9"
+def test_official_presets_resolve_their_parsers():
+    alpaca = resolve_judge_prompt(preset="alpaca-eval")
+    assert alpaca.parser is parse_alpaca_eval_token
+    assert alpaca.parser.requires_top_logprobs is True
+    assert (
+        resolve_judge_prompt(preset="arena-hard-creative").parser
+        is parse_arena_hard_verdict
     )

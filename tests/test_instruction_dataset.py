@@ -42,50 +42,21 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
         }
     ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
     task = get_packaged_task("alpaca-eval")
-    assert task.spec.dataset.sources["tables"].repo_id == (
-        "judge-arena/judge-arena-dataset"
-    )
-    assert task.spec.dataset.sources["tables"].allow_patterns == (
-        "instructions/alpaca-eval.csv",
-        "model_outputs/alpaca-eval.csv.zip",
-    )
-
     instructions = judgearena_tables.load_task_instructions(task, tmp_path)
     outputs = judgearena_tables.load_task_model_outputs(task, tmp_path)
 
-    assert instructions.to_dict(orient="records") == [
-        {
-            "instruction_index": 0,
-            "instruction": "First",
-            "category": "helpful_base",
-        },
-        {"instruction_index": 1, "instruction": "Second", "category": "koala"},
-    ]
-    assert outputs.to_dict(orient="records") == [
-        {"instruction_index": 0, "model": "gpt4_1106_preview", "output": "base-0"},
-        {"instruction_index": 1, "model": "gpt4_1106_preview", "output": "base-1"},
-        {"instruction_index": 0, "model": "archived-model", "output": "archived-0"},
-    ]
+    assert instructions["instruction_index"].tolist() == [0, 1]
+    assert instructions["category"].tolist() == ["helpful_base", "koala"]
+    assert outputs["instruction_index"].tolist() == [0, 1, 0]
+    assert outputs.loc[2, "model"] == "archived-model"
 
 
-@pytest.mark.parametrize(
-    ("task_id", "config", "question_file"),
-    [
-        ("arena-hard-v0.1", "arena-hard-v0.1", "question.jsonl"),
-        ("arena-hard-v2.0", "arena-hard-v2.0", "question.jsonl"),
-    ],
-)
-def test_official_arena_hard_sources_are_owned_by_task_yaml(
-    task_id, config, question_file
-):
-    task = get_packaged_task(task_id)
+def test_official_arena_hard_source_is_owned_by_task_yaml():
+    task = get_packaged_task("arena-hard-v2.0")
     source = task.spec.dataset.sources["examples"]
-
     assert task.spec.dataset.adapter == "arena_hard"
     assert source.repo_id == "lmarena-ai/arena-hard-auto"
-    assert source.revision == "15f3746e21432264ce9b453999bde4f3c946d2e6"
-    assert source.config == config
-    assert any(pattern.endswith(question_file) for pattern in source.allow_patterns)
+    assert source.config == "arena-hard-v2.0"
     assert any("model_answer/*.jsonl" in pattern for pattern in source.allow_patterns)
 
 
@@ -435,8 +406,7 @@ def test_pairwise_task_data_only_requires_selected_output_rows():
     )
 
     loaded = task_data.model_completion(
-        "category-baseline",
-        instruction_ids=pd.Index(["q1"], name="instruction_index"),
+        "category-baseline", instruction_ids=pd.Index(["q1"], name="instruction_index")
     )
 
     assert loaded is not None

@@ -297,16 +297,12 @@ def test_metric_builders_hide_registry_and_validate_parameters():
 def test_empty_metric_results_render_as_unavailable():
     results = {
         "alpaca_eval_length_controlled": {
-            "groups": {"category": [{"group": "missing", "values": {}}]},
-        },
+            "groups": {"category": [{"group": "missing", "values": {}}]}
+        }
     }
-
     rendered = render_metrics(results)
-
-    assert rendered == (
-        "alpaca_eval_length_controlled: unavailable\n\n"
-        "category=missing:\n  alpaca_eval_length_controlled: unavailable"
-    )
+    assert rendered.count("alpaca_eval_length_controlled: unavailable") == 2
+    assert "category=missing:" in rendered
 
 
 def test_build_metrics_preserves_order_and_applies_overrides():

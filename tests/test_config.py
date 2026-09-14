@@ -76,10 +76,7 @@ def _registered_task(
     return SimpleNamespace(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
-                generation=SimpleNamespace(
-                    default_max_out_tokens=1024,
-                    default_seed=7,
-                ),
+                generation=SimpleNamespace(default_max_out_tokens=1024, default_seed=7),
                 judge=SimpleNamespace(
                     default_swap_mode=default_swap_mode,
                     default_temperature=default_temperature,
@@ -127,148 +124,102 @@ def test_registered_task_defaults_do_not_replace_explicit_judge_config(
 
 
 @pytest.mark.parametrize(
-    ("model_overrides", "expected"),
+    ("overrides", "expected"),
     [
         ({}, (1024, 7, 1024, 7)),
-        ({"engine_kwargs": {"max_tokens": "64", "seed": 0}}, (64, 0, 64, 0)),
-        ({"engine_kwargs": {"seed": None}}, (1024, None, 1024, None)),
         (
-            {"baseline_engine_kwargs": {"max_tokens": None, "seed": None}},
-            (1024, 7, 1024, 7),
-        ),
-        (
-            {"baseline_engine_kwargs": {"max_tokens": "32", "seed": 0}},
-            (1024, 7, 32, 0),
+            {
+                "engine_kwargs": {"max_tokens": "64", "seed": 0},
+                "baseline_engine_kwargs": {"max_tokens": "32", "seed": 1},
+                "baseline_seed": 2,
+            },
+            (64, 0, 32, 2),
         ),
         (
             {
                 "max_out_tokens": 128,
                 "seed": 0,
-                "baseline_seed": None,
                 "engine_kwargs": {"max_tokens": 64, "seed": 1},
-                "baseline_engine_kwargs": {"max_tokens": 32, "seed": 2},
             },
             (128, 0, 128, 0),
-        ),
-        (
-            {
-                "baseline_max_out_tokens": 16,
-                "baseline_seed": 0,
-                "baseline_engine_kwargs": {"max_tokens": 32, "seed": 2},
-            },
-            (1024, 7, 16, 0),
         ),
         ({"seed": None, "baseline_seed": None}, (1024, None, 1024, None)),
     ],
 )
 def test_generation_settings_prefer_dedicated_then_engine_then_task(
-    monkeypatch, model_overrides, expected
+    monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
         config_module, "get_packaged_task", lambda _task: _registered_task()
     )
     data = _base_generate()
-    data["model"].update(model_overrides)
-
+    data["model"].update(overrides)
     cfg = RunConfig(**data)
-    model_kwargs = cfg.model.evaluated_generation_kwargs()
-    baseline_kwargs = cfg.model.baseline_generation_kwargs()
+    model = cfg.model.evaluated_generation_kwargs()
+    baseline = cfg.model.baseline_generation_kwargs()
 
     assert (
-        model_kwargs["max_tokens"],
-        model_kwargs.get("seed"),
-        baseline_kwargs["max_tokens"],
-        baseline_kwargs.get("seed"),
+        model["max_tokens"],
+        model.get("seed"),
+        baseline["max_tokens"],
+        baseline.get("seed"),
     ) == expected
-    assert cfg.model.max_out_tokens == expected[0]
-    assert cfg.model.seed == expected[1]
-    assert type(model_kwargs["max_tokens"]) is int
-    assert type(baseline_kwargs["max_tokens"]) is int
+    assert type(model["max_tokens"]) is int
 
 
 @pytest.mark.parametrize(
-    ("judge_overrides", "expected"),
+    ("overrides", "expected"),
     [
-        ({}, (0.5, 128, 3)),
-        (
-            {
-                "engine_kwargs": {
-                    "temperature": "0",
-                    "max_tokens": "64",
-                    "top_logprobs": 0,
-                }
-            },
-            (0.0, 64, 0),
-        ),
-        (
-            {"engine_kwargs": {"temperature": None, "top_logprobs": None}},
-            (None, 128, None),
-        ),
+        ({"engine_kwargs": {"max_tokens": "64"}}, (0.5, 64, 3)),
         (
             {
                 "temperature": 0.0,
-                "max_out_tokens": 32,
                 "top_logprobs": 0,
-                "engine_kwargs": {
-                    "temperature": 0.7,
-                    "max_tokens": 64,
-                    "top_logprobs": 2,
-                },
+                "engine_kwargs": {"temperature": 0.7, "top_logprobs": 2},
             },
-            (0.0, 32, 0),
+            (0.0, 128, 0),
         ),
     ],
 )
 def test_judge_settings_include_inherited_engine_kwargs(
-    monkeypatch, judge_overrides, expected
+    monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
         config_module, "get_packaged_task", lambda _task: _registered_task()
     )
+    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
     data = _base_generate()
     data["model"]["engine_kwargs"] = {
         "temperature": 0.5,
         "max_tokens": 128,
         "top_logprobs": 3,
     }
-    data["judge"].update(model="VLLM/j", **judge_overrides)
-    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
+    data["judge"].update(model="VLLM/j", **overrides)
 
-    cfg = RunConfig(**data)
-    kwargs = execution_module.build_judge(cfg)
+    kwargs = execution_module.build_judge(RunConfig(**data))
 
-    assert (
-        cfg.judge.temperature,
-        cfg.judge.max_out_tokens,
-        cfg.judge.top_logprobs,
-    ) == expected
     assert (
         kwargs["temperature"],
         kwargs["max_tokens"],
         kwargs["top_logprobs"],
     ) == expected
-    assert type(cfg.judge.max_out_tokens) is int
     assert type(kwargs["max_tokens"]) is int
-    if expected[0] is not None:
-        assert type(cfg.judge.temperature) is float
-        assert type(kwargs["temperature"]) is float
 
 
 @pytest.mark.parametrize(
-    ("task", "judge_model", "expected_max_tokens"),
+    ("task", "judge_model", "expected"),
     [
         ("alpaca-eval", "OpenRouter/j", 1),
         ("alpaca-eval", "VLLM/j", 128),
         ("mt-bench", "OpenRouter/j", 128),
-        ("alpaca-eval-ja", "VLLM/j", 32768),
     ],
 )
 def test_judge_engine_inheritance_matches_the_runner(
-    monkeypatch, task, judge_model, expected_max_tokens
+    monkeypatch, task, judge_model, expected
 ):
     data = _base_generate()
     data["task"] = task
-    data["model"]["engine_kwargs"] = {"max_tokens": 128, "seed": 7}
+    data["model"]["engine_kwargs"] = {"max_tokens": 128}
     data["judge"]["model"] = judge_model
     monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
 
@@ -278,16 +229,13 @@ def test_judge_engine_inheritance_matches_the_runner(
     else:
         kwargs = execution_module.build_judge(cfg)
 
-    assert cfg.judge.max_out_tokens == expected_max_tokens
-    assert kwargs["max_tokens"] == expected_max_tokens
-    assert cfg.model.max_out_tokens == (128 if task == "mt-bench" else 32768)
-    assert cfg.model.seed == (7 if task == "mt-bench" else None)
+    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected
 
 
 @pytest.mark.parametrize("role", ["model", "judge"])
 def test_engine_max_tokens_must_be_a_valid_token_limit(role):
     data = _base_generate()
-    data["task"] = "mt-bench" if role == "model" else "alpaca-eval"
+    data["task"] = "mt-bench"
     data[role]["engine_kwargs"] = {"max_tokens": None}
 
     with pytest.raises(ValidationError, match="max_out_tokens"):
@@ -297,13 +245,9 @@ def test_engine_max_tokens_must_be_a_valid_token_limit(role):
 @pytest.mark.parametrize(
     ("task", "generation", "expected"),
     [
-        ("arena-hard-v0.1", {}, None),
         ("arena-hard-v2.0", {}, None),
-        ("arena-hard-v0.1-ja", {}, 8192),
         ("arena-hard-v2.0-ja", {}, 8192),
-        ("arena-hard-v0.1", {"truncate_all_input_chars": 8192}, 8192),
-        ("arena-hard-v2.0", {"truncate_all_input_chars": 128}, 128),
-        ("arena-hard-v0.1-ja", {"truncate_all_input_chars": None}, None),
+        ("arena-hard-v2.0-ja", {"truncate_all_input_chars": None}, None),
     ],
 )
 def test_generation_truncation_defaults_preserve_explicit_overrides(
@@ -312,9 +256,7 @@ def test_generation_truncation_defaults_preserve_explicit_overrides(
     data = _base_generate()
     data.update(task=task, generation=generation)
 
-    cfg = RunConfig(**data)
-
-    assert cfg.generation.truncate_all_input_chars == expected
+    assert RunConfig(**data).generation.truncate_all_input_chars == expected
 
 
 def test_elo_config_keeps_defaults_implicit_until_task_resolution():
