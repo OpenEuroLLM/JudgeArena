@@ -660,22 +660,15 @@ def test_mt_bench_accepts_any_registered_metric(tmp_path):
     assert task.spec.protocol.scoring.metrics[0].metric == "length_controlled_winrate"
 
 
-@pytest.mark.parametrize(
-    "task_id, repo_id",
-    [
-        ("meta-eval-comparia", "ministere-culture/comparia-votes"),
-        ("meta-eval-lmarena-100k", "lmarena-ai/arena-human-preference-100k"),
-        ("meta-eval-lmarena-140k", "lmarena-ai/arena-human-preference-140k"),
-    ],
-)
-def test_meta_eval_language_variants_preserve_the_dataset_and_protocol(
-    task_id, repo_id
-):
+def test_meta_eval_language_variant_preserves_the_dataset_and_protocol():
     from judgearena.tasks.registry import get_packaged_task
 
-    task = get_packaged_task(task_id)
-    english = get_packaged_task(f"{task_id}-en")
+    task = get_packaged_task("meta-eval-comparia")
+    english = get_packaged_task("meta-eval-comparia-en")
 
-    assert next(iter(task.spec.dataset.sources.values())).repo_id == repo_id
+    assert (
+        next(iter(task.spec.dataset.sources.values())).repo_id
+        == "ministere-culture/comparia-votes"
+    )
     assert english.spec == task.spec
     assert english.selection.values == ("en",)

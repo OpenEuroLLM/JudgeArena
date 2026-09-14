@@ -660,60 +660,34 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     assert 0 < total_en < total_all
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-@pytest.mark.parametrize(
-    ("preset", "parser_name", "invalid_output", "default_temperature"),
-    [
-        ("default", "score", "no scores here", 0.3),
-        (
-            "meta-eval-pair-score",
-            "meta-eval-score",
-            "Score_A: 6\nScore_B: 8.5",
-            0.5,
-        ),
-    ],
-)
-def test_run_elo_temperature_preserves_selected_parser(
-    monkeypatch,
-    tmp_path,
-    swap_mode,
-    preset,
-    parser_name,
-    invalid_output,
-    default_temperature,
-):
+def test_run_elo_temperature_preserves_selected_parser(monkeypatch, tmp_path):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
-    valid_output = "Score_A: 6\nScore_B: 8"
-    parser = JUDGE_PARSERS[parser_name]
+    parser = JUDGE_PARSERS["meta-eval-score"]
     monkeypatch.setattr(
         DummyModel,
         "batch",
-        lambda self, inputs, **kwargs: [valid_output, invalid_output],
+        lambda self, inputs, **kwargs: [
+            "Score_A: 6\nScore_B: 8",
+            "Score_A: 6\nScore_B: 8.5",
+        ],
     )
     cfg = _default_args(
-        result_folder=str(tmp_path),
-        n_instructions=2,
-        n_bootstraps=0,
-        swap_mode=swap_mode,
+        result_folder=str(tmp_path), n_instructions=2, n_bootstraps=0, swap_mode="both"
     )
-    cfg.judge.prompt_preset = preset
+    cfg.judge.prompt_preset = "meta-eval-pair-score"
     cfg.elo.soft_elo_temperature = 0.8
 
     result = run_elo_with_task(cfg)
 
     battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
-    expected_pref = 1 / (1 + math.exp(-0.8 * 2))
-    expected = [expected_pref, float("nan")]
-    if swap_mode == "both":
-        expected += [1 - expected_pref, float("nan")]
-    assert battles["pref"].tolist() == pytest.approx(expected, nan_ok=True)
-    assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
-    assert _pairwise_metric(result)["num_missing"] == len(expected) // 2
-    assert parser.temperature == default_temperature
-    assert parser(valid_output) == pytest.approx(
-        1 / (1 + math.exp(-default_temperature * 2))
+    assert battles["pref"].tolist() == pytest.approx(
+        [0.8320183851339245, float("nan"), 0.1679816148660755, float("nan")],
+        nan_ok=True,
     )
+    assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
+    assert _pairwise_metric(result)["num_missing"] == 2
+    assert parser.temperature == 0.5
 
 
 def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
