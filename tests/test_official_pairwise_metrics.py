@@ -3,6 +3,7 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -90,7 +91,7 @@ def test_arena_hard_v2_rejects_uncalibrated_judge():
         arena_hard._calibration_judge("other-judge")
 
 
-def test_arena_hard_v2_matches_pinned_official_golden():
+def test_arena_hard_v2_released_population_score_regression():
     artifact = Path(arena_hard.__file__).with_name("arena_hard_v20_calibration.csv.gz")
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == (
         "83fa4e19343e119faa80fb7aaefda4916c218b071cbbccdd083c54ddda458d50"
@@ -117,8 +118,44 @@ def test_arena_hard_v2_matches_pinned_official_golden():
         arena_hard._fit_model_id(model) for model in calibration["model"]
     }
     assert result["official_population_complete"] is True
-    assert result["winrate"] == pytest.approx(0.4854, abs=0.0002)
-    assert result["score_ci_low"] < 0.48 < result["score_ci_high"]
+    # Native fitter on these JA-prepared features and the same draws:
+    # 48.0566829%, CI [45.9223182%, 50.4414114%]. This tests fitting on the
+    # selected JA population, not the native whole-leaderboard row order.
+    assert result["winrate"] == pytest.approx(0.480566829, abs=0.001)
+    assert result["score_ci_low"] == pytest.approx(0.459223182, abs=0.002)
+    assert result["score_ci_high"] == pytest.approx(0.504414114, abs=0.002)
+
+
+def test_arena_hard_fitter_matches_native_mixed_outcome_fixture():
+    # Native utils/math_utils.py at 196f6b8, evaluated with PyTorch 2.14 CPU.
+    # Two candidate models, one baseline, and four style-control columns.
+    model_features = np.tile([[1, 0, -1], [0, 1, -1]], (16, 1)).astype("float32")
+    style_features = np.random.RandomState(196).normal(size=(32, 4)).astype("float32")
+    features = np.column_stack((model_features, style_features))
+    outcomes = np.tile([0, 0.5, 1, 0, 1, 1, 0.5, 0], 4).astype("float32")
+
+    coefficients = arena_hard._logistic_coefficients(features, outcomes)
+
+    expected = [
+        1.3839725256,
+        -0.0294847824,
+        0.1455115527,
+        -0.5165163875,
+        0.2982191741,
+        0.7576940060,
+        0.6842912436,
+    ]
+    assert coefficients.dtype == np.float32
+    np.testing.assert_allclose(coefficients, expected, rtol=0, atol=1e-4)
+
+
+def test_arena_hard_fitter_preserves_native_initialization_at_stationary_point():
+    features = np.array([[1, -1], [1, -1]], dtype="float32")
+    outcomes = np.array([0, 1], dtype="float32")
+
+    coefficients = arena_hard._logistic_coefficients(features, outcomes)
+
+    np.testing.assert_array_equal(coefficients, [0.5, 0.5])
 
 
 def test_alpaca_eval_lc_synthetic_golden_runs_offline(monkeypatch):
