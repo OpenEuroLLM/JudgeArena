@@ -50,6 +50,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         raise ValueError(f"Task {cfg.task!r} does not define an ELO protocol.")
     if cfg.elo is None:
         raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
+    cfg.elo = cfg.elo.resolve(protocol.scoring)
     arena = protocol.arena
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)

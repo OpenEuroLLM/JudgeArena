@@ -5,7 +5,8 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
-from judgearena.config import RunConfig, dump_config, load_config
+from judgearena.config import EloArgs, RunConfig, dump_config, load_config
+from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
 def _base_generate() -> dict:
@@ -32,15 +33,33 @@ def test_generate_config_constructs():
     assert cfg.elo is None
 
 
-def test_removed_judge_prompt_fields_fail_loudly():
-    data = _base_generate()
-    data["judge"].update(
-        {
-            "provide_explanation": True,
-            "system_prompt_file": "system.txt",
-            "user_prompt_file": "user.txt",
-        }
+def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        "task: alpaca-eval\n"
+        "model: {name: Dummy/a, baseline: Dummy/b}\n"
+        "judge:\n"
+        "  model: Dummy/j\n"
+        "  provide_explanation: false\n"
+        "  system_prompt_file: null\n"
+        "  user_prompt_file: null\n"
     )
+
+    assert load_config(yaml_path) == RunConfig(**_base_generate())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provide_explanation", True),
+        ("system_prompt_file", "system.txt"),
+        ("user_prompt_file", "user.txt"),
+        ("prompt_presett", "default"),
+    ],
+)
+def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
+    data = _base_generate()
+    data["judge"][field] = value
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RunConfig(**data)
@@ -125,11 +144,52 @@ def test_generation_truncation_defaults_preserve_explicit_overrides(
     assert cfg.generation.truncate_all_input_chars == expected
 
 
-def test_elo_config_derives_scoring_defaults():
+def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     cfg = RunConfig(**_base_elo())
     assert cfg.elo is not None
     assert cfg.elo.soft_elo is True
     assert cfg.elo.soft_elo_temperature == 0.3
+    assert cfg.elo.model_fields_set == set()
+
+
+@pytest.mark.parametrize(
+    ("parameters", "runtime", "expected"),
+    [
+        ({}, {}, (20, None, False, 0.7)),
+        (
+            {"n_bootstraps": 2, "baseline_model": "anchor", "soft": True},
+            {},
+            (2, "anchor", True, 0.7),
+        ),
+        (
+            {"n_bootstraps": 2, "baseline_model": "anchor", "soft": True},
+            {
+                "n_bootstraps": 0,
+                "baseline_model": None,
+                "soft_elo": False,
+                "soft_elo_temperature": 0.2,
+            },
+            (0, None, False, 0.2),
+        ),
+    ],
+)
+def test_elo_resolution_prefers_runtime_then_metric_then_defaults(
+    parameters, runtime, expected
+):
+    scoring = EloScoringSpec(
+        metrics=(MetricSpec(metric="bradley_terry", parameters=parameters),),
+        default_soft=False,
+        default_temperature=0.7,
+    )
+
+    resolved = EloArgs(**runtime).resolve(scoring)
+
+    assert (
+        resolved.n_bootstraps,
+        resolved.baseline_model,
+        resolved.soft_elo,
+        resolved.soft_elo_temperature,
+    ) == expected
 
 
 def test_elo_config_allows_runtime_scoring_overrides():
