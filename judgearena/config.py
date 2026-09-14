@@ -258,6 +258,19 @@ class JudgeArgs(BaseModel):
     """Strip ``<think>`` reasoning blocks from the battle completions before
     showing them to the judge."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_unused_legacy_fields(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = values.copy()
+        if values.get("provide_explanation") is False:
+            values.pop("provide_explanation")
+        for key in ("system_prompt_file", "user_prompt_file"):
+            if values.get(key) is None:
+                values.pop(key, None)
+        return values
+
     def model_kwargs(
         self,
         *,

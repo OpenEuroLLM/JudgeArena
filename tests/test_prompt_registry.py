@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 
-from judgearena.evaluate import resolve_judge_prompts, resolve_run_judge_prompt
+from judgearena.evaluate import (
+    judge_and_parse_prefs,
+    resolve_judge_prompts,
+    resolve_run_judge_prompt,
+)
+from judgearena.models import DummyModel
 from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prompt
+from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -164,6 +170,39 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
 
     assert resolved_default.preset_name == "default"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
+
+
+@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
+@pytest.mark.parametrize(
+    ("parse", "expected"),
+    [(None, 0.8807970779778823), (PairScore(temperature=0.5), 0.7310585786300049)],
+)
+def test_judging_uses_preset_parser_unless_overridden(
+    monkeypatch, swap_mode, parse, expected
+):
+    monkeypatch.setitem(
+        PRESETS,
+        "test-score",
+        replace(PRESETS["default"], name="test-score", parser=PairScore(temperature=1)),
+    )
+
+    annotations, reversed_annotations, prefs = judge_and_parse_prefs(
+        judge_chat_model=DummyModel("Dummy/score_A: 6\nscore_B: 8"),
+        instructions=["Question"],
+        completions_A=["Answer A"],
+        completions_B=["Answer B"],
+        prompt_preset="test-score",
+        swap_mode=swap_mode,
+        parse=parse,
+    )
+
+    assert annotations[0].parsed.preference == pytest.approx(expected)
+    if swap_mode == "both":
+        assert reversed_annotations[0].parsed.preference == pytest.approx(expected)
+        assert prefs.tolist() == pytest.approx([expected, 1 - expected])
+    else:
+        assert reversed_annotations is None
+        assert prefs.tolist() == pytest.approx([expected])
 
 
 def test_every_preset_resolves_or_delegates():

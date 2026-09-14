@@ -32,15 +32,33 @@ def test_generate_config_constructs():
     assert cfg.elo is None
 
 
-def test_removed_judge_prompt_fields_fail_loudly():
-    data = _base_generate()
-    data["judge"].update(
-        {
-            "provide_explanation": True,
-            "system_prompt_file": "system.txt",
-            "user_prompt_file": "user.txt",
-        }
+def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
+    yaml_path = tmp_path / "run.yaml"
+    yaml_path.write_text(
+        "task: alpaca-eval\n"
+        "model: {name: Dummy/a, baseline: Dummy/b}\n"
+        "judge:\n"
+        "  model: Dummy/j\n"
+        "  provide_explanation: false\n"
+        "  system_prompt_file: null\n"
+        "  user_prompt_file: null\n"
     )
+
+    assert load_config(yaml_path) == RunConfig(**_base_generate())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provide_explanation", True),
+        ("system_prompt_file", "system.txt"),
+        ("user_prompt_file", "user.txt"),
+        ("prompt_presett", "default"),
+    ],
+)
+def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
+    data = _base_generate()
+    data["judge"][field] = value
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RunConfig(**data)
