@@ -224,6 +224,8 @@ class AlpacaEvalLengthControlledMetric:
             raise ValueError("gamed_weight must be a finite non-negative number.")
 
     def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
+        if not battles["pref"].notna().any():
+            return {}
         if battles["instruction_index"].duplicated().any():
             logger.warning(
                 "Battles contain duplicate instructions (swap_mode='both'?); the "

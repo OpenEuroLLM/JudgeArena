@@ -257,6 +257,28 @@ def test_run_mt_bench_rejects_random_before_preparation(monkeypatch, prompt_pres
         mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
 
+def test_run_mt_bench_rejects_logprob_parser_before_preparation(monkeypatch):
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "Dummy/model"},
+        judge={
+            "model": "Dummy/judge",
+            "prompt_preset": "alpaca-eval",
+            "top_logprobs": 5,
+        },
+    )
+
+    def unexpected_preparation(*_args, **_kwargs):
+        pytest.fail("Unsupported parser must fail before preparing the run")
+
+    monkeypatch.setattr(
+        mt_bench_runner, "prepare_run_directory", unexpected_preparation
+    )
+
+    with pytest.raises(ValueError, match="MT-Bench does not support.*logprobs"):
+        mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
+
+
 def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch, tmp_path
 ):

@@ -17,9 +17,15 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol, MetaEvalProtocol
+from judgearena.tasks.schema import (
+    EloProtocol,
+    EloScoringSpec,
+    MetaEvalProtocol,
+    MTBenchProtocol,
+)
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -258,6 +264,19 @@ class JudgeArgs(BaseModel):
     """Strip ``<think>`` reasoning blocks from the battle completions before
     showing them to the judge."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_unused_legacy_fields(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = values.copy()
+        if values.get("provide_explanation") is False:
+            values.pop("provide_explanation")
+        for key in ("system_prompt_file", "user_prompt_file"):
+            if values.get(key) is None:
+                values.pop(key, None)
+        return values
+
     def model_kwargs(
         self,
         *,
@@ -342,6 +361,26 @@ class EloArgs(BaseModel):
     calibration_size: int | None = None
     """Number of human arena battles to sample for temperature calibration.
     Defaults to all. Requires ``calibrate_temperature``."""
+
+    def resolve(self, scoring: EloScoringSpec) -> EloArgs:
+        """Resolve the actual task's scoring settings before a run."""
+        parameters = next(
+            (
+                metric.parameters
+                for metric in scoring.metrics
+                if metric.metric == "bradley_terry"
+            ),
+            {},
+        )
+        values = {
+            "soft_elo": parameters.get("soft", scoring.default_soft),
+            "soft_elo_temperature": scoring.default_temperature,
+        }
+        for key in ("n_bootstraps", "baseline_model"):
+            if key in parameters:
+                values[key] = parameters[key]
+        values.update(self.model_dump(exclude_unset=True))
+        return EloArgs.model_validate(values, strict=True)
 
 
 class MetaEvalArgs(BaseModel):
@@ -444,35 +483,53 @@ class RunConfig(BaseSettings):
             and not getattr(task_generation, "default_truncate_input", True)
         ):
             self.generation.truncate_all_input_chars = None
-        if (
-            "max_out_tokens" not in self.model.model_fields_set
-            and getattr(task_generation, "default_max_out_tokens", None) is not None
-        ):
-            self.model.max_out_tokens = task_generation.default_max_out_tokens
-        if (
-            "seed" not in self.model.model_fields_set
-            and getattr(task_generation, "default_seed", None) is not None
-        ):
-            self.model.seed = task_generation.default_seed
+        model_values = self.model.model_dump(exclude_unset=True)
+        for field, engine_key in (("max_out_tokens", "max_tokens"), ("seed", "seed")):
+            default = getattr(task_generation, f"default_{field}", None)
+            if default is None:
+                continue
+            if field not in self.model.model_fields_set:
+                model_values[field] = self.model.engine_kwargs.get(engine_key, default)
+
+            baseline_field = f"baseline_{field}"
+            if getattr(self.model, baseline_field) is not None:
+                continue
+            # Dedicated model settings still take precedence when inherited.
+            if (
+                field not in self.model.model_fields_set
+                and self.model.baseline_engine_kwargs is not None
+                and engine_key in self.model.baseline_engine_kwargs
+            ):
+                model_values[baseline_field] = self.model.baseline_engine_kwargs[
+                    engine_key
+                ]
+        self.model = ModelArgs.model_validate(model_values)
 
         task_judge = protocol.judge
-        if "swap_mode" not in self.judge.model_fields_set:
-            self.judge.swap_mode = task_judge.default_swap_mode
-        if (
-            "temperature" not in self.judge.model_fields_set
-            and task_judge.default_temperature is not None
+        judge_values = self.judge.model_dump(exclude_unset=True)
+        if "swap_mode" not in judge_values:
+            judge_values["swap_mode"] = task_judge.default_swap_mode
+        if isinstance(protocol, MTBenchProtocol):
+            judge_engine_kwargs = {
+                **self.model.engine_kwargs,
+                **self.judge.engine_kwargs,
+            }
+        else:
+            judge_engine_kwargs = build_default_judge_model_kwargs(
+                self.judge.model,
+                self.model.engine_kwargs,
+                judge_engine_kwargs_override=self.judge.engine_kwargs,
+            )
+        for field, engine_key in (
+            ("temperature", "temperature"),
+            ("max_out_tokens", "max_tokens"),
+            ("top_logprobs", "top_logprobs"),
         ):
-            self.judge.temperature = task_judge.default_temperature
-        if (
-            "max_out_tokens" not in self.judge.model_fields_set
-            and task_judge.default_max_out_tokens is not None
-        ):
-            self.judge.max_out_tokens = task_judge.default_max_out_tokens
-        if (
-            "top_logprobs" not in self.judge.model_fields_set
-            and task_judge.default_top_logprobs is not None
-        ):
-            self.judge.top_logprobs = task_judge.default_top_logprobs
+            default = getattr(task_judge, f"default_{field}")
+            if default is None or field in judge_values:
+                continue
+            judge_values[field] = judge_engine_kwargs.get(engine_key, default)
+        self.judge = JudgeArgs.model_validate(judge_values)
 
         is_elo = isinstance(protocol, EloProtocol)
         is_meta_eval = isinstance(protocol, MetaEvalProtocol)
@@ -485,10 +542,6 @@ class RunConfig(BaseSettings):
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if "soft_elo" not in self.elo.model_fields_set:
-                self.elo.soft_elo = protocol.scoring.default_soft
-            if "soft_elo_temperature" not in self.elo.model_fields_set:
-                self.elo.soft_elo_temperature = protocol.scoring.default_temperature
             if self.model.name is None:
                 raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
