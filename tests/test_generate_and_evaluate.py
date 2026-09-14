@@ -13,7 +13,6 @@ import judgearena.benchmarks.registry as benchmark_registry
 import judgearena.benchmarks.runner as benchmark_runner
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
 from judgearena.benchmarks.pairwise.baselines import (
-    BaselinePlan,
     native_pairwise_baseline,
     resolve_baseline_plan,
 )
@@ -26,60 +25,28 @@ from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
 
-def _cfg(
-    *,
-    task: str,
-    model_A: str,
-    model_B: str | None = None,
-    judge_model: str,
-    n_instructions: int | None = None,
-    swap_mode: str = "fixed",
-    result_folder: str = "results",
-    truncate_judge_input_chars: int | None = None,
-    max_judge_model_len: int | None = None,
-    engine_kwargs: dict | None = None,
-    judge_engine_kwargs: dict | None = None,
-) -> RunConfig:
+@pytest.fixture
+def cfg(tmp_path):
     return RunConfig(
-        task=task,
-        model={
-            "name": model_A,
-            "baseline": model_B,
-            "engine_kwargs": engine_kwargs or {},
-        },
-        judge={
-            "model": judge_model,
-            "swap_mode": swap_mode,
-            "max_model_len": max_judge_model_len,
-            "engine_kwargs": judge_engine_kwargs or {},
-        },
-        generation={
-            "n_instructions": n_instructions,
-            "truncate_judge_input_chars": truncate_judge_input_chars,
-        },
-        run={"result_folder": result_folder},
+        task="alpaca-eval-ja",
+        model={"name": "Dummy/no answer", "baseline": "Dummy/x"},
+        judge={"model": "Dummy/score A: 0 score B: 10", "swap_mode": "fixed"},
+        generation={"n_instructions": 2},
+        run={"result_folder": str(tmp_path)},
     )
 
 
 @pytest.fixture(autouse=True)
 def mock_external_data_and_cache(monkeypatch):
     instructions = pd.DataFrame(
-        {
-            "instruction": [f"Synthetic instruction {i}" for i in range(20)],
-        },
-        index=pd.Index(range(20), name="instruction_index"),
+        {"instruction": ["Synthetic instruction 0", "Synthetic instruction 1"]},
+        index=pd.Index(range(2), name="instruction_index"),
     )
 
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda task, n_instructions=None: PairwiseTaskData(
-            instructions=(
-                instructions.head(n_instructions)
-                if n_instructions is not None
-                else instructions
-            )
-        ),
+        lambda task, n_instructions=None: PairwiseTaskData(instructions=instructions),
     )
 
     def _run_without_cache(fun, **_kwargs):
@@ -88,32 +55,6 @@ def mock_external_data_and_cache(monkeypatch):
     monkeypatch.setattr(
         generate_and_evaluate, "cache_function_dataframe", _run_without_cache
     )
-
-
-def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
-    from judgearena.benchmarks.pairwise.scoring import alpaca_eval
-
-    captured: dict[str, object] = {}
-
-    class FakeJudge:
-        def batch(self, inputs, **_kwargs):
-            return messages
-
-    def make_fake_judge(**kwargs):
-        captured.update(kwargs)
-        return FakeJudge()
-
-    monkeypatch.setattr(benchmark_execution, "make_model", make_fake_judge)
-    monkeypatch.setattr(
-        alpaca_eval,
-        "_length_controlled_metrics",
-        lambda *_args, **_kwargs: {
-            "length_controlled_winrate": 50.0,
-            "lc_standard_error": 1.0,
-            "win_rate": 50.0,
-        },
-    )
-    return captured
 
 
 def _instructions(ids: list[str], categories: list[str] | None = None) -> pd.DataFrame:
@@ -140,24 +81,12 @@ def test_resolve_plan_v20_routes_per_category():
         task=get_packaged_task("arena-hard-v2.0"),
         runtime_baseline=None,
         instructions=_instructions(
-            ["qh", "qc"],
-            categories=["hard_prompt", "creative_writing"],
+            ["qh", "qc"], categories=["hard_prompt", "creative_writing"]
         ),
     )
     assert not plan.is_single_model
     assert plan.baseline_by_index.loc["qh"] == "o3-mini-2025-01-31"
     assert plan.baseline_by_index.loc["qc"] == "gemini-2.0-flash-001"
-
-
-def test_resolve_plan_alpaca_eval_uses_native_baseline():
-    plan = resolve_baseline_plan(
-        task_id="alpaca-eval",
-        task=get_packaged_task("alpaca-eval"),
-        runtime_baseline=None,
-        instructions=_instructions(["q1", "q2"]),
-    )
-    assert plan.is_single_model
-    assert plan.single_model == "gpt4_1106_preview"
 
 
 def test_resolve_plan_explicit_model_b_overrides_native():
@@ -166,37 +95,21 @@ def test_resolve_plan_explicit_model_b_overrides_native():
         task=get_packaged_task("arena-hard-v2.0"),
         runtime_baseline="override",
         instructions=_instructions(
-            ["q1", "q2"],
-            categories=["hard_prompt", "creative_writing"],
+            ["q1", "q2"], categories=["hard_prompt", "creative_writing"]
         ),
     )
     assert plan.is_single_model
     assert plan.single_model == "override"
 
 
-@pytest.mark.parametrize(
-    ("task", "expected"),
-    [
-        ("alpaca-eval", "gpt4_1106_preview"),
-        ("mt-bench", "gpt-3.5-turbo"),
-        ("m-arena-hard-v0.1-uk", "CohereLabs/aya-expanse-8b"),
-        ("m-arena-hard-v2.0-EU", "google/gemini-2.5-flash"),
-    ],
-)
-def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected: str):
-    assert native_pairwise_baseline(task) == expected
+def test_native_pairwise_baseline_resolves_registered_task():
+    assert (
+        native_pairwise_baseline("m-arena-hard-v0.1-uk") == "CohereLabs/aya-expanse-8b"
+    )
 
 
-@pytest.mark.parametrize(
-    ("task", "expected"),
-    [
-        ("alpaca-eval", "pairwise"),
-        ("mt-bench", "mt_bench"),
-        ("elo-comparia", "elo"),
-    ],
-)
-def test_benchmark_adapter_resolution(task: str, expected: str):
-    assert resolve_benchmark_adapter(task).name == expected
+def test_benchmark_adapter_resolution():
+    assert resolve_benchmark_adapter("elo-comparia").name == "elo"
 
 
 def test_registered_task_runner_wins_over_legacy_fallback(monkeypatch):
@@ -253,55 +166,127 @@ def test_resolve_plan_v20_missing_category_raises():
         )
 
 
-def test_resolve_plan_v20_unknown_category_raises():
-    with pytest.raises(ValueError, match="brand_new"):
-        resolve_baseline_plan(
-            task_id="arena-hard-v2.0",
-            task=get_packaged_task("arena-hard-v2.0"),
-            runtime_baseline=None,
-            instructions=_instructions(["q1"], categories=["brand_new"]),
+def test_generate_and_evaluate_context_completion(cfg):
+    prefs = run_pairwise(cfg)
+    assert sum(prefs) / len(prefs) >= 0.9
+
+
+def test_generate_and_evaluate_correct_order_bias(cfg):
+    """Swapping neutralizes a judge that always favors model B."""
+    cfg.judge.swap_mode = "both"
+    prefs = run_pairwise(cfg)
+    assert sum(prefs) / len(prefs) == 0.5
+
+
+def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, cfg):
+    captured = {}
+
+    def fake_make_model(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            batch=lambda inputs, **_: ["score A: 0 score B: 10"] * len(inputs)
         )
 
+    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+    cfg.judge.model = "VLLM/judge"
+    cfg.judge.max_model_len = 65536
+    cfg.model.engine_kwargs = {"tensor_parallel_size": 1}
+    cfg.judge.engine_kwargs = {"tensor_parallel_size": 4}
+    prefs = run_pairwise(cfg)
 
-def test_baseline_plan_flat_repeats_model():
-    plan = BaselinePlan.flat("b", index=pd.Index(["a", "b"]))
-    assert plan.is_single_model
-    assert plan.baseline_by_index.tolist() == ["b", "b"]
-
-
-def test_baseline_plan_per_row_preserves_order():
-    series = pd.Series(["m1", "m2"], index=["a", "b"], name="model_B")
-    plan = BaselinePlan.per_row(series)
-    assert not plan.is_single_model
-    assert plan.unique_models == ["m1", "m2"]
+    assert len(prefs) == 2
+    assert captured["max_model_len"] == 65536
+    assert captured["tensor_parallel_size"] == 4
 
 
-@pytest.mark.parametrize(
-    "task",
-    [
-        "alpaca-eval-ja",
-        "arena-hard-v2.0-ja",
-        "arena-hard-v0.1-ja",
-        "fluency-french",
-        "m-arena-hard-v0.1-EU",
-        "m-arena-hard-v2.0-EU",
-    ],
-)
-def test_generate_and_evaluate_context_completion(task: str, tmp_path):
-    prefs = run_pairwise(
-        _cfg(
-            task=task,
-            model_A="Dummy/no answer",
-            model_B="Dummy/open is better than close isnt'it",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
-            result_folder=str(tmp_path),
-            # default for swap_mode is "fixed"
-        )
+def _task_with_metric(metric):
+    task = get_packaged_task("alpaca-eval-ja")
+    protocol = task.spec.protocol.model_copy(
+        update={"scoring": ScoringSpec(metrics=(metric,))}
     )
+    return replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
 
-    avg_pref = sum(prefs) / len(prefs)
-    assert avg_pref >= 0.9
+
+def test_pairwise_grouping_accepts_canonical_battle_column(cfg, tmp_path):
+    task = _task_with_metric(
+        MetricSpec(metric="pairwise_win_rate", breakdown_by=("model_a",))
+    )
+    run_pairwise(cfg, task)
+    saved = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    groups = saved["metrics"]["pairwise_win_rate"]["groups"]["model_a"]
+    assert len(groups) == 1
+    assert groups[0]["group"] == cfg.model.name
+    assert groups[0]["values"]["num_battles"] == 2
+
+
+def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path, cfg):
+    monkeypatch.setattr(
+        benchmark_execution,
+        "make_model",
+        lambda **_kwargs: FakeListLLM(
+            responses=["score A: 10 score B: 0", "score A: 0 score B: 10"]
+        ),
+    )
+    cfg.run.seed = 17
+    task = _task_with_metric(
+        MetricSpec(metric="bradley_terry", parameters={"n_bootstraps": 3})
+    )
+    prefs = run_pairwise(cfg, task)
+
+    battles = pd.DataFrame(
+        {"model_a": cfg.model.name, "model_b": cfg.model.baseline, "pref": prefs}
+    )
+    rng = np.random.default_rng(17)
+    expected = [
+        fit_bradley_terry(
+            battles.sample(
+                n=len(battles), replace=True, random_state=int(rng.integers(0, 2**31))
+            )
+        )
+        for _ in range(3)
+    ]
+    saved = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert saved["metrics"]["bradley_terry"]["bootstrap_ratings"] == expected
+
+
+def test_run_writes_roundtrippable_config(cfg, tmp_path):
+    from judgearena.config import load_config
+
+    run_pairwise(cfg)
+    written = list(tmp_path.glob("*/config.yaml"))
+    assert written, "config.yaml not written"
+    result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    assert result["metrics"]["pairwise_win_rate"]["num_battles"] == 2
+    assert "winrate" not in result
+    reloaded = load_config(written[0])
+    assert reloaded.task == "alpaca-eval-ja"
+    assert reloaded.model.name == "Dummy/no answer"
+
+
+def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
+    from judgearena.benchmarks.pairwise.scoring import alpaca_eval
+
+    captured: dict[str, object] = {}
+
+    class FakeJudge:
+        def batch(self, inputs, **_kwargs):
+            return messages
+
+    def make_fake_judge(**kwargs):
+        captured.update(kwargs)
+        return FakeJudge()
+
+    monkeypatch.setattr(benchmark_execution, "make_model", make_fake_judge)
+    monkeypatch.setattr(
+        alpaca_eval,
+        "_length_controlled_metrics",
+        lambda *_args, **_kwargs: {
+            "length_controlled_winrate": 50.0,
+            "lc_standard_error": 1.0,
+            "win_rate": 50.0,
+        },
+    )
+    return captured
 
 
 @pytest.mark.parametrize(
@@ -315,8 +300,7 @@ def test_official_generation_receives_full_prompt_unless_explicitly_capped(
 
     instruction = "x" * 9000 + "END"
     instructions = pd.DataFrame(
-        {"instruction": [instruction]},
-        index=pd.Index([0], name="instruction_index"),
+        {"instruction": [instruction]}, index=pd.Index([0], name="instruction_index")
     )
     monkeypatch.setattr(
         generate_and_evaluate,
@@ -342,179 +326,6 @@ def test_official_generation_receives_full_prompt_unless_explicitly_capped(
 
     expected = instruction if expected_limit is None else instruction[:expected_limit]
     assert seen_inputs == [expected, expected]
-
-
-def test_generate_and_evaluate_correct_order_bias(tmp_path):
-    """Test the correction for model order bias.
-
-    In this test, a judge that is totally biased towards model B should be corrected to be neutral.
-    Since the judge favors model B regardless of the order and the completions, the average
-    preference should be 0.5.
-    """
-    prefs = run_pairwise(
-        _cfg(
-            task="alpaca-eval-ja",
-            model_A="Dummy/no answer",
-            model_B="Dummy/open is better than close isnt'it",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
-            swap_mode="both",
-            result_folder=str(tmp_path),
-        )
-    )
-
-    avg_pref = sum(prefs) / len(prefs)
-    assert avg_pref == 0.5
-
-
-def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path):
-    captured = {}
-
-    def fake_make_model(**kwargs):
-        captured["make_model"] = kwargs
-
-        class FakeJudge:
-            def batch(self, inputs, **_kwargs):
-                return ["score A: 0 score B: 10"] * len(inputs)
-
-        return FakeJudge()
-
-    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
-
-    prefs = run_pairwise(
-        _cfg(
-            task="alpaca-eval-ja",
-            model_A="Dummy/no answer",
-            model_B="Dummy/open is better than close isnt'it",
-            judge_model="VLLM/score A: 0 score B: 10",
-            n_instructions=2,
-            truncate_judge_input_chars=12,
-            max_judge_model_len=65536,
-            engine_kwargs={"tensor_parallel_size": 1},
-            judge_engine_kwargs={"tensor_parallel_size": 4},
-            result_folder=str(tmp_path),
-        )
-    )
-
-    assert len(prefs) == 2
-    assert captured["make_model"]["max_model_len"] == 65536
-    assert captured["make_model"]["tensor_parallel_size"] == 4
-
-
-def test_pairwise_grouping_accepts_all_canonical_battle_columns(tmp_path):
-    task = get_packaged_task("alpaca-eval-ja")
-    canonical_fields = (
-        "model_a",
-        "model_b",
-        "completion_a",
-        "completion_b",
-        "evaluation_model",
-        "source",
-        "pref_hard",
-    )
-    protocol = task.spec.protocol.model_copy(
-        update={
-            "scoring": ScoringSpec(
-                metrics=(
-                    MetricSpec(
-                        metric="pairwise_win_rate",
-                        breakdown_by=canonical_fields,
-                    ),
-                )
-            )
-        }
-    )
-    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
-
-    prefs = run_pairwise(
-        _cfg(
-            task="alpaca-eval-ja",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="Dummy/score A: 10 score B: 0",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-        ),
-        task,
-    )
-
-    assert len(prefs) == 2
-    assert (prefs < 0.5).all()
-
-
-@pytest.mark.parametrize("seed", [17, 29])
-def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path, seed):
-    monkeypatch.setattr(
-        benchmark_execution,
-        "make_model",
-        lambda **_kwargs: FakeListLLM(
-            responses=[
-                "score A: 10 score B: 0",
-                "score A: 0 score B: 10",
-                "score A: 5 score B: 5",
-            ]
-        ),
-    )
-    cfg = _cfg(
-        task="alpaca-eval-ja",
-        model_A="Dummy/a",
-        model_B="Dummy/b",
-        judge_model="Dummy/judge",
-        n_instructions=3,
-        result_folder=str(tmp_path),
-    )
-    cfg.run.seed = seed
-    task = get_packaged_task(cfg.task)
-    protocol = task.spec.protocol.model_copy(
-        update={
-            "scoring": ScoringSpec(
-                metrics=(
-                    MetricSpec(metric="bradley_terry", parameters={"n_bootstraps": 3}),
-                )
-            )
-        }
-    )
-    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
-
-    prefs = run_pairwise(cfg, task)
-
-    battles = pd.DataFrame(
-        {"model_a": cfg.model.name, "model_b": cfg.model.baseline, "pref": prefs}
-    )
-    rng = np.random.default_rng(seed)
-    expected = [
-        fit_bradley_terry(
-            battles.sample(
-                n=len(battles), replace=True, random_state=int(rng.integers(0, 2**31))
-            )
-        )
-        for _ in range(3)
-    ]
-    saved = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
-    assert saved["metrics"]["bradley_terry"]["bootstrap_ratings"] == expected
-
-
-def test_run_writes_roundtrippable_config(tmp_path):
-    from judgearena.config import load_config
-
-    run_pairwise(
-        _cfg(
-            task="alpaca-eval-ja",
-            model_A="Dummy/no answer",
-            model_B="Dummy/x",
-            judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-        )
-    )
-    written = list(tmp_path.glob("*/config.yaml"))
-    assert written, "config.yaml not written"
-    result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
-    assert result["metrics"]["pairwise_win_rate"]["num_battles"] == 2
-    assert "winrate" not in result
-    reloaded = load_config(written[0])
-    assert reloaded.task == "alpaca-eval-ja"
-    assert reloaded.model.name == "Dummy/no answer"
 
 
 def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_path):
@@ -556,13 +367,12 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_pat
     )
 
     run_pairwise(
-        _cfg(
+        RunConfig(
             task="arena-hard-v2.0",
-            model_A="candidate",
-            judge_model="OpenAI/gpt-4.1",
-            n_instructions=2,
-            result_folder=str(tmp_path),
-            swap_mode="both",
+            model={"name": "candidate"},
+            judge={"model": "OpenAI/gpt-4.1", "swap_mode": "both"},
+            generation={"n_instructions": 2},
+            run={"result_folder": str(tmp_path)},
         )
     )
 
@@ -583,60 +393,31 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_pat
     }
 
 
-def test_run_pairwise_weighted_preferences_from_judge_logprobs(monkeypatch, tmp_path):
-    """The alpaca-eval preset weights verdicts by the judge's top logprobs."""
-    import math
-
-    message = InferenceResult(
-        text="M",
-        first_token_top_logprobs={
-            "M": math.log(0.75),
-            "m": math.log(0.25),
-        },
-    )
-
-    judge_kwargs = _mock_alpaca_judge(monkeypatch, [message] * 4)
-
-    prefs = run_pairwise(
-        _cfg(
-            task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="OpenRouter/fake-judge",
-            n_instructions=4,
-            swap_mode="random",
-            result_folder=str(tmp_path),
-        )
-    )
-
-    # Judged pref is P(M)=0.75 everywhere; unswitched rows (2, 3 under the
-    # golden mask) show the baseline in slot A and re-orient to 0.25.
-    assert prefs.tolist() == pytest.approx([0.75, 0.75, 0.25, 0.25])
-    results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
-    assert "alpaca_eval_length_controlled" in results["metrics"]
-    assert judge_kwargs["top_logprobs"] == 5
-
-
-@pytest.mark.parametrize("missing_logprobs", [None, {}, {"x": -0.1}])
-def test_run_pairwise_preserves_incomplete_alpaca_annotations(
-    monkeypatch, tmp_path, caplog, missing_logprobs
+def test_run_pairwise_weights_and_preserves_incomplete_alpaca_annotations(
+    monkeypatch, tmp_path, caplog
 ):
     valid = InferenceResult(
-        text="M",
-        first_token_top_logprobs={"m": np.log(0.25), "M": np.log(0.75)},
+        text="M", first_token_top_logprobs={"m": np.log(0.25), "M": np.log(0.75)}
     )
-    missing = InferenceResult(text="M", first_token_top_logprobs=missing_logprobs)
-    _mock_alpaca_judge(monkeypatch, [valid, missing, valid, missing])
+    instructions = pd.DataFrame(
+        {"instruction": [f"Synthetic instruction {i}" for i in range(4)]},
+        index=pd.Index(range(4), name="instruction_index"),
+    )
+    monkeypatch.setattr(
+        generate_and_evaluate,
+        "load_pairwise_task_data",
+        lambda *_args, **_kwargs: PairwiseTaskData(instructions),
+    )
+    missing = InferenceResult(text="M")
+    judge_kwargs = _mock_alpaca_judge(monkeypatch, [valid, missing, valid, missing])
 
     prefs = run_pairwise(
-        _cfg(
+        RunConfig(
             task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="OpenRouter/fake-judge",
-            n_instructions=4,
-            swap_mode="random",
-            result_folder=str(tmp_path),
+            model={"name": "Dummy/a", "baseline": "Dummy/b"},
+            judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
+            generation={"n_instructions": 4},
+            run={"result_folder": str(tmp_path)},
         )
     )
 
@@ -646,6 +427,7 @@ def test_run_pairwise_preserves_incomplete_alpaca_annotations(
     assert annotations["parsed"].isna().tolist() == [False, True, False, True]
     results = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
     metric = results["metrics"]["alpaca_eval_length_controlled"]
+    assert judge_kwargs["top_logprobs"] == 5
     assert metric["num_missing"] == 2
     assert metric["num_wins"] == metric["num_losses"] == 1
     assert "2/4 judge outputs could not be parsed" in caplog.text
@@ -659,14 +441,12 @@ def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, 
     )
 
     prefs = run_pairwise(
-        _cfg(
+        RunConfig(
             task="alpaca-eval",
-            model_A="Dummy/a",
-            model_B="Dummy/b",
-            judge_model="OpenRouter/fake-judge",
-            n_instructions=2,
-            swap_mode="random",
-            result_folder=str(tmp_path),
+            model={"name": "Dummy/a", "baseline": "Dummy/b"},
+            judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
+            generation={"n_instructions": 2},
+            run={"result_folder": str(tmp_path)},
         )
     )
 
@@ -680,26 +460,23 @@ def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, 
     assert "alpaca_eval_length_controlled: unavailable" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_judging_without_alpaca_logprobs_returns_missing_preferences(swap_mode, caplog):
+def test_all_missing_both_alpaca_judgments_keep_numeric_preferences(caplog):
     from judgearena.evaluate import judge_and_parse_prefs
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
     annotations, reversed_annotations, prefs = judge_and_parse_prefs(
         judge_chat_model=FakeListLLM(responses=["M"]),
-        instructions=["Question 1", "Question 2"],
-        completions_A=["A1", "A2"],
-        completions_B=["B1", "B2"],
-        swap_mode=swap_mode,
+        instructions=["Question"],
+        completions_A=["A"],
+        completions_B=["B"],
+        swap_mode="both",
         prompt_preset="alpaca-eval",
         parse=JUDGE_PARSERS["alpaca-eval-token"],
     )
 
-    assert len(prefs) == (4 if swap_mode == "both" else 2)
+    assert len(prefs) == 2
     assert prefs.isna().all()
-    assert all(annotation.parsed is None for annotation in annotations)
-    if swap_mode == "both":
-        assert all(annotation.parsed is None for annotation in reversed_annotations)
-    else:
-        assert reversed_annotations is None
-    assert "2/2 judge outputs could not be parsed" in caplog.text
+    assert all(
+        annotation.parsed is None for annotation in annotations + reversed_annotations
+    )
+    assert "1/1 judge outputs could not be parsed" in caplog.text

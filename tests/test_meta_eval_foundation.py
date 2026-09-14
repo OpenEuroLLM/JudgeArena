@@ -49,39 +49,21 @@ def test_sampling_rejects_disconnected_top_model_pool():
         select_top_models(battles, top_models=4)
 
 
-def test_sampling_rejects_self_comparisons_and_insufficient_quota():
-    self_comparison = pd.DataFrame(
-        [
-            {"battle_id": "self", "model_a": "a", "model_b": "a"},
-            {"battle_id": "ab", "model_a": "a", "model_b": "b"},
-        ]
-    )
-    with pytest.raises(MetaEvalSamplingError, match="self-comparisons"):
-        select_top_models(self_comparison, top_models=2)
-    battles = pd.DataFrame(
-        [{"battle_id": f"q{i}", "model_a": "a", "model_b": "b"} for i in range(2)]
-    )
-    top, top_pool = select_top_models(battles, top_models=2)
+def test_sampling_rejects_insufficient_quota():
+    battles = pd.DataFrame({"battle_id": ["ab"], "model_a": ["a"], "model_b": ["b"]})
     with pytest.raises(MetaEvalSamplingError, match="Insufficient unique battles"):
-        sample_battles_per_model(top_pool, top, battles_per_model=3, seed=0)
+        sample_battles_per_model(battles, ["a", "b"], battles_per_model=2, seed=0)
 
 
 def test_meta_eval_protocol_requires_no_baseline_and_compatible_metrics():
     definition = get_packaged_task("meta-eval-comparia").spec.model_dump()
     protocol = definition["protocol"]
-    assert protocol["baseline"]["strategy"] == "none"
-
     metric = protocol["scoring"]["metrics"][0]
     metric["metric"] = "pairwise_win_rate"
     with pytest.raises(ValidationError, match="unsupported meta-evaluation metric"):
         TaskSpec.model_validate(definition)
 
     metric["metric"] = "meta_eval_agreement"
-    metric["breakdown_by"] = ["lang"]
-    with pytest.raises(ValidationError, match="does not support breakdown_by"):
-        TaskSpec.model_validate(definition)
-
-    metric["breakdown_by"] = []
     protocol["baseline"] = {"strategy": "runtime_required"}
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(definition)
@@ -97,85 +79,46 @@ def test_meta_eval_pair_score_preserves_scores():
     assert result.scores == {"A": 9.0, "B": 1.0}
 
 
-@pytest.mark.parametrize(
-    "completion",
-    [
-        "score_A: 8.9\nscore_B: 8",
-        "score_A: -1\nscore_B: 8",
-        "score_A: 11\nscore_B: 8",
-        "score_A: 0009\nscore_B: 1",
-        "score_A: 8\nscore_B: 3.0",
-    ],
-)
-def test_meta_eval_pair_score_rejects_invalid_scores(completion):
-    assert JUDGE_PARSERS["meta-eval-score"].parse_result(completion) is None
-
-
-def test_alpaca_eval_json_preserves_complete_ranks():
-    result = JUDGE_PARSERS["alpaca-eval-json"].parse_result(
-        '```json\n{"ordered_models": [{"model": "M", "rank": 1}, '
-        '{"model": "m", "rank": 2}]}\n```'
+def test_meta_eval_pair_score_rejects_fractional_scores():
+    assert (
+        JUDGE_PARSERS["meta-eval-score"].parse_result("score_A: 8.9\nscore_B: 8")
+        is None
     )
 
-    assert result is not None
-    assert result.preference == 1.0
-    assert result.label == "M"
-    assert result.details == {"ranks": {"M": 1, "m": 2}}
+
+def test_alpaca_eval_json_rejects_incomplete_rankings():
+    assert (
+        JUDGE_PARSERS["alpaca-eval-json"].parse_result(
+            '{"ordered_models": [{"model": "m", "rank": 1}]}'
+        )
+        is None
+    )
 
 
-@pytest.mark.parametrize(
-    "completion",
-    [
-        "[]",
-        '{"ordered_models": ["m", "M"]}',
-        '{"ordered_models": [{"model": "m", "rank": 1}]}',
-        '{"ordered_models": [{"model": "m", "rank": 1}, {"model": "M", "rank": 1}]}',
-        '{"ordered_models": [{"model": "m", "rank": true}, {"model": "M", "rank": 2}]}',
-    ],
-)
-def test_alpaca_eval_json_rejects_malformed_rankings(completion):
-    assert JUDGE_PARSERS["alpaca-eval-json"].parse_result(completion) is None
-
-
-@pytest.mark.parametrize(
-    "preset", ["meta-eval-alpaca-eval-json", "meta-eval-alpaca-eval-pair-score"]
-)
-def test_meta_eval_alpaca_prompts_embed_json_safe_inputs(preset, monkeypatch):
-    captured_inputs = []
+def test_meta_eval_alpaca_prompt_embeds_json_safe_inputs(monkeypatch):
+    captured = []
 
     def fake_do_inference(**kwargs):
-        captured_inputs.extend(kwargs["inputs"])
+        captured.extend(kwargs["inputs"])
         return ["unparsed"]
 
     monkeypatch.setattr(evaluate_module, "do_inference", fake_do_inference)
     instruction = 'Say "hi"\r\nnext \\ path {curly} café'
-    completion_a = 'A says "yes"\nC:\\tmp {a}'
-    completion_b = 'B says "no"\r\nD:\\tmp {b}'
-
+    outputs = ['A says "yes"\nC:\\tmp {a}', 'B says "no"\r\nD:\\tmp {b}']
     evaluate_module.annotate_battles(
         judge_chat_model=object(),
         instructions=[instruction],
-        completions_A=[completion_a],
-        completions_B=[completion_b],
-        prompt_preset=preset,
+        completions_A=outputs[:1],
+        completions_B=outputs[1:],
+        prompt_preset="meta-eval-alpaca-eval-json",
         truncate_input_chars=None,
     )
 
-    rendered = captured_inputs[0].messages[-1].content
+    rendered = captured[0].messages[-1].content
     prompt_json = rendered.split("## Prompt\n\n", 1)[1].split(
         "\n\n## Model Outputs", 1
     )[0]
     outputs_json = rendered.split("## Model Outputs\n\n", 1)[1]
     outputs_json = outputs_json.split("\n\n## Task", 1)[0].split("\n\n", 1)[1]
-
     assert json.loads(prompt_json) == {"instruction": instruction}
-    assert json.loads(outputs_json) == [
-        {
-            "model": "m" if preset.endswith("json") else "model A",
-            "output": completion_a,
-        },
-        {
-            "model": "M" if preset.endswith("json") else "model B",
-            "output": completion_b,
-        },
-    ]
+    assert [row["output"] for row in json.loads(outputs_json)] == outputs

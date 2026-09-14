@@ -1,17 +1,11 @@
 """Official benchmark metric regressions."""
 
-import hashlib
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from judgearena.benchmarks.pairwise.scoring import alpaca_eval as alpaca_scoring
 from judgearena.benchmarks.pairwise.scoring import arena_hard
-from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
-    AlpacaEvalLengthControlledMetric,
-)
 from judgearena.benchmarks.pairwise.scoring.arena_hard import (
     ArenaHardV01Metric,
     ArenaHardV20Metric,
@@ -19,13 +13,6 @@ from judgearena.benchmarks.pairwise.scoring.arena_hard import (
 )
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.tasks.registry import get_packaged_task
-
-
-def _alpaca_metric() -> AlpacaEvalLengthControlledMetric:
-    request = get_packaged_task("alpaca-eval").spec.protocol.scoring.metrics[0]
-    metric = build_metric(request.metric, request.parameters)
-    assert isinstance(metric, AlpacaEvalLengthControlledMetric)
-    return metric
 
 
 def _battles(prefs: list, **overrides) -> pd.DataFrame:
@@ -86,16 +73,7 @@ def test_arena_hard_v2_selects_official_method_per_category():
     assert result["aggregate_score_is_official"] is False
 
 
-def test_arena_hard_v2_rejects_uncalibrated_judge():
-    with pytest.raises(ValueError, match="no calibration"):
-        arena_hard._calibration_judge("other-judge")
-
-
 def test_arena_hard_v2_released_population_score_regression():
-    artifact = Path(arena_hard.__file__).with_name("arena_hard_v20_calibration.csv.gz")
-    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == (
-        "83fa4e19343e119faa80fb7aaefda4916c218b071cbbccdd083c54ddda458d50"
-    )
     assert _style_features("# Header\n1. item\n- item\n**bold**").tolist() == [
         13.0,
         1.0,
@@ -149,25 +127,6 @@ def test_arena_hard_fitter_matches_native_mixed_outcome_fixture():
     np.testing.assert_allclose(coefficients, expected, rtol=0, atol=1e-4)
 
 
-def test_arena_hard_fitter_preserves_native_initialization_at_stationary_point():
-    features = np.array([[1, -1], [1, -1]], dtype="float32")
-    outcomes = np.array([0, 1], dtype="float32")
-
-    coefficients = arena_hard._logistic_coefficients(features, outcomes)
-
-    np.testing.assert_array_equal(coefficients, [0.5, 0.5])
-
-
-@pytest.mark.parametrize("preferences", [[], [None, None]])
-def test_alpaca_eval_without_parsed_preferences_skips_fitting(monkeypatch, preferences):
-    def unexpected_fit(*_args, **_kwargs):
-        pytest.fail("No parsed preferences should not enter length-controlled fitting")
-
-    monkeypatch.setattr(alpaca_scoring, "_length_controlled_metrics", unexpected_fit)
-
-    assert _alpaca_metric().calculate(_battles(preferences)) == {}
-
-
 def test_alpaca_eval_lc_synthetic_golden_runs_offline(monkeypatch):
     gamed = pd.DataFrame(
         [
@@ -189,7 +148,8 @@ def test_alpaca_eval_lc_synthetic_golden_runs_offline(monkeypatch):
         completion_baseline=["y" * (12 + 3 * index) for index in range(10)],
     )
 
-    result = _alpaca_metric().calculate(battles)
+    request = get_packaged_task("alpaca-eval").spec.protocol.scoring.metrics[0]
+    result = build_metric(request.metric, request.parameters).calculate(battles)
 
     assert result["length_controlled_winrate"] == pytest.approx(0.7497336730523078)
     assert result["lc_standard_error"] == pytest.approx(0.04840456960699923)

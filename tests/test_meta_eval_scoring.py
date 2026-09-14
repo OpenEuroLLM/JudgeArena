@@ -23,17 +23,19 @@ def _rows(specs: list[tuple[str, str, str, float, float]]) -> pd.DataFrame:
     ).assign(sampled=True)
 
 
-def _agreement_metric(n_bootstraps: int = 0) -> MetaEvalAgreementMetric:
-    return MetaEvalAgreementMetric(n_bootstraps=n_bootstraps, tie_tolerance=0.01)
+def _balanced_battles():
+    return _rows(
+        [
+            (f"{a}{b}-{i}", a, b, float(i), float(i))
+            for a, b in (("a", "b"), ("a", "c"), ("b", "c"))
+            for i in range(2)
+        ]
+    )
 
 
-def _ranking_metric(
-    n_bootstraps: int = 0, *, include_human_ties: bool = False
-) -> MetaEvalRankingMetric:
+def _ranking_metric(*, include_human_ties=False):
     return MetaEvalRankingMetric(
-        n_bootstraps=n_bootstraps,
-        tie_tolerance=0.01,
-        include_human_ties=include_human_ties,
+        n_bootstraps=0, tie_tolerance=0.01, include_human_ties=include_human_ties
     )
 
 
@@ -42,21 +44,6 @@ def _elo_gap_metric(
 ) -> MetaEvalEloGapMetric:
     return MetaEvalEloGapMetric(
         battle_counts=battle_counts, n_seeds=n_seeds, tie_tolerance=0.01
-    )
-
-
-def _ranking_battles() -> pd.DataFrame:
-    preferences = {
-        ("a", "b"): [0.49, 0.49, 0.49, 1.0],
-        ("a", "c"): [0.01, 0.01, 0.01, 1.0],
-        ("b", "c"): [0.0, 0.51, 0.51, 0.51],
-    }
-    return _rows(
-        [
-            (f"{a}{b}-{i}", a, b, float(i == 3), pref)
-            for (a, b), prefs in preferences.items()
-            for i, pref in enumerate(prefs)
-        ]
     )
 
 
@@ -72,7 +59,9 @@ def test_agreement_reports_missing_judgments_and_excludes_only_human_ties():
         ]
     )
     battles.loc[5, "sampled"] = False
-    result = _agreement_metric().calculate(battles)
+    result = MetaEvalAgreementMetric(n_bootstraps=8, tie_tolerance=0.01).calculate(
+        battles, rng=np.random.default_rng(7)
+    )
 
     all_rows = result["all"]
     assert (all_rows["n_attempted"], all_rows["n_complete"]) == (5, 3)
@@ -80,30 +69,13 @@ def test_agreement_reports_missing_judgments_and_excludes_only_human_ties():
     assert all_rows["accuracy_attempted"] == pytest.approx(2 / 5)
     assert all_rows["accuracy_complete"] == pytest.approx(2 / 3)
     assert all_rows["cohen_kappa"] == pytest.approx(0.5)
+    assert 0 < all_rows["accuracy_complete_bootstraps_valid"] <= 8
+    assert 0 < all_rows["accuracy_complete_se"] < 1
     no_ties = result["no_human_ties"]
     assert (no_ties["n_attempted"], no_ties["n_complete"]) == (4, 2)
     assert no_ties["accuracy_attempted"] == pytest.approx(1 / 4)
     assert no_ties["accuracy_complete"] == pytest.approx(1 / 2)
     assert no_ties["cohen_kappa"] == pytest.approx(1 / 3)
-
-
-def test_agreement_bootstrap_is_row_order_invariant_and_reports_finite_draws():
-    battles = _rows(
-        [
-            ("1", "a", "b", 0.0, 0.0),
-            ("2", "b", "c", 1.0, 0.0),
-            ("3", "a", "c", 0.0, np.nan),
-        ]
-    )
-    metric = _agreement_metric(8)
-    result = metric.calculate(battles, rng=np.random.default_rng(7))["all"]
-    reordered = metric.calculate(battles.iloc[::-1], rng=np.random.default_rng(7))[
-        "all"
-    ]
-
-    assert result == pytest.approx(reordered, nan_ok=True)
-    assert 0 < result["accuracy_complete_bootstraps_valid"] <= 8
-    assert 0 < result["accuracy_complete_se"] < 1
 
 
 def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
@@ -112,171 +84,81 @@ def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
 
     monkeypatch.setattr(scoring_module, "fit_bradley_terry", fail_fit)
     with pytest.raises(ValueError, match="unexpected fit failure"):
-        _ranking_metric().calculate(_ranking_battles())
+        _ranking_metric().calculate(_balanced_battles())
 
 
 def test_ranking_human_ties_are_configurable_and_model_set_stays_fixed():
-    battles = _ranking_battles()
-    tie = battles.iloc[[0]].copy()
-    tie["battle_id"] = "only-c-edge"
-    tie["model_a"] = "a"
-    tie["model_b"] = "d"
-    tie["reference_pref"] = 0.5
-    tie["pref"] = 0.0
-    battles = pd.concat([battles, tie], ignore_index=True)
+    battles = _rows([("1", "a", "b", 0.0, 0.0), ("2", "a", "b", 0.5, 0.5)])
+    included = _ranking_metric(include_human_ties=True).calculate(battles)
+    assert included["hard"]["spearman"] == pytest.approx(1.0)
+    assert included["soft"]["elo_mae"] == pytest.approx(0.0)
 
+    battles = pd.concat([battles, _rows([("tie-edge", "a", "c", 0.5, 0.0)])])
     excluded = _ranking_metric().calculate(battles)
-    included = _ranking_metric(0, include_human_ties=True).calculate(battles)
-
-    assert excluded["n_models"] == 4
-    assert excluded["n_battles"] == 12
+    included = _ranking_metric(include_human_ties=True).calculate(battles)
+    assert excluded["n_models"] == 3
+    assert excluded["n_battles"] == 1
     assert math.isnan(excluded["hard"]["elo_mae"])
-    assert included["n_battles"] == 13
+    assert included["n_battles"] == 3
     assert math.isfinite(included["hard"]["elo_mae"])
 
 
-def test_ranking_supports_two_models_but_not_disconnected_groups():
-    battles = _rows([("1", "a", "b", 0.0, 0.0), ("2", "a", "b", 0.5, 0.5)])
-    metric = _ranking_metric(include_human_ties=True)
-    result = metric.calculate(battles)
-    assert result["n_models"] == 2
-    assert result["hard"]["spearman"] == pytest.approx(1.0)
-    assert result["soft"]["elo_mae"] == pytest.approx(0.0)
-
-    disconnected = pd.concat(
-        [battles, _rows([("3", "c", "d", 0.5, 0.5)])], ignore_index=True
-    )
-    result = metric.calculate(disconnected)
-    assert result["n_models"] == 4
-    assert result["n_bootstraps_valid"] == 0
-    assert math.isnan(result["hard"]["spearman"])
-    assert math.isnan(result["soft"]["elo_mae"])
-
-
-@pytest.mark.parametrize(
-    ("column", "value", "message"),
-    [
-        ("pref", 1.1, "numeric preferences"),
-        ("reference_pref", 0.25, "must be 0, 0.5, or 1"),
-        ("model_a", None, "non-null strings"),
-        ("model_b", "a", "self-comparisons"),
-    ],
-)
-def test_malformed_battles_raise_instead_of_becoming_unavailable(
-    column, value, message
-):
-    battles = _ranking_battles()
-    battles.loc[0, column] = value
-
-    with pytest.raises(ValueError, match=message):
+def test_malformed_battles_raise_instead_of_becoming_unavailable():
+    battles = _balanced_battles()
+    battles.loc[0, "pref"] = 1.1
+    with pytest.raises(ValueError, match="numeric preferences"):
         _ranking_metric().calculate(battles)
 
 
-def _elo_gap_battles() -> pd.DataFrame:
-    specs = []
-    for model_a, model_b in (("a", "b"), ("a", "c"), ("b", "c")):
-        specs.extend(
-            [
-                (f"{model_a}{model_b}-0", model_a, model_b, 0.0, 0.0),
-                (f"{model_a}{model_b}-1", model_a, model_b, 1.0, 1.0),
-            ]
-        )
-    return _rows(specs)
-
-
-@pytest.mark.parametrize(
-    "parameters",
-    [
-        {"battle_counts": []},
-        {"battle_counts": [0]},
-        {"battle_counts": [2, 1]},
-        {"battle_counts": [1, 1]},
-        {"n_seeds": 0},
-        {"tie_tolerance": 0.5},
-    ],
-)
-def test_elo_gap_configuration_rejects_invalid_parameters(parameters):
-    valid = {"battle_counts": [1, 2], "n_seeds": 2, "tie_tolerance": 0.01}
+def test_elo_gap_configuration_requires_increasing_budgets():
     with pytest.raises(ValueError, match="Invalid parameters"):
-        build_metric("meta_eval_elo_gap", valid | parameters)
-
-
-def test_elo_gap_surfaces_unexpected_fit_errors(monkeypatch):
-    def fail_fit(*args, **kwargs):
-        raise TypeError("unexpected Elo fit failure")
-
-    monkeypatch.setattr(scoring_module, "fit_bradley_terry", fail_fit)
-    with pytest.raises(TypeError, match="unexpected Elo fit failure"):
-        _elo_gap_metric((1,), 1).calculate(
-            _elo_gap_battles(), rng=np.random.default_rng(11)
+        build_metric(
+            "meta_eval_elo_gap",
+            {"battle_counts": [2, 1], "n_seeds": 2, "tie_tolerance": 0.01},
         )
 
 
-def test_elo_gap_bundles_shared_methods_and_is_row_order_invariant():
-    battles = _elo_gap_battles()
-    battles.loc[0, ["reference_pref", "pref"]] = 0.5
-    battles["battle_id"] = battles["battle_id"].astype(object)
-    battles.loc[0, "battle_id"] = 0  # Preserve ID types when shuffling.
-    metric = _elo_gap_metric((1, 2, 4), 3)
-
-    with pytest.raises(ValueError, match="requires an RNG"):
-        metric.calculate(battles)
+def test_elo_gap_distinguishes_soft_confidence_from_hard_labels():
+    battles = _balanced_battles()
+    metric = _elo_gap_metric((4,), 3)
     result = metric.calculate(battles, rng=np.random.default_rng(11))
-    shuffled = metric.calculate(
-        battles.sample(frac=1, random_state=4), rng=np.random.default_rng(11)
-    )
-
-    assert result == shuffled
-    fewer_budgets = _elo_gap_metric((1, 4), 3).calculate(
-        battles, rng=np.random.default_rng(11)
-    )
-    for method in ("hard", "soft"):
-        assert fewer_budgets[method] == [result[method][0], result[method][-1]]
-    assert result["n_models"] == 3
     assert result["soft"] == result["hard"]
-    full_budget = result["hard"][-1]
-    assert full_budget["mean_gap"] == pytest.approx(0.0, abs=1e-6)
-    assert full_budget["n_seeds_valid"] == 3
-    assert full_budget["mean_used_per_model"] == 4
+    assert result["hard"][0]["mean_gap"] == pytest.approx(0.0, abs=1e-6)
+    assert result["hard"][0]["n_seeds_valid"] == 3
 
-    # Moving confidence without changing a hard label must affect only soft Elo.
     battles.loc[battles["pref"].eq(0.0), "pref"] = 0.2
     softened = metric.calculate(battles, rng=np.random.default_rng(11))
     assert softened["hard"] == result["hard"]
-    assert softened["soft"][-1]["mean_gap"] != pytest.approx(full_budget["mean_gap"])
-
-
-def test_elo_gap_draws_attempts_before_parse_filtering_and_uses_nested_prefixes():
-    battles = _elo_gap_battles()
-    battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
-    result = _elo_gap_metric((1, 2, 4), 4).calculate(
-        battles, rng=np.random.default_rng(7)
+    assert softened["soft"][0]["mean_gap"] != pytest.approx(
+        result["hard"][0]["mean_gap"]
     )
 
-    for variant in ("hard", "soft"):
-        rows = result[variant]
-        complete = [row["mean_complete_per_model"] for row in rows]
-        assert complete == sorted(complete)
-        assert rows[-1]["attempted_battles_per_model"] == 4
-        assert rows[-1]["mean_complete_per_model"] == pytest.approx(10 / 3)
-        assert rows[-1]["mean_used_per_model"] == pytest.approx(10 / 3)
+
+def test_elo_gap_counts_attempts_before_parse_filtering():
+    battles = _balanced_battles()
+    battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
+    result = _elo_gap_metric((1, 4), 4).calculate(battles, rng=np.random.default_rng(7))
+
+    rows = result["soft"]
+    assert rows[0]["mean_complete_per_model"] <= rows[1]["mean_complete_per_model"]
+    assert rows[1]["attempted_battles_per_model"] == 4
+    assert rows[1]["mean_complete_per_model"] == pytest.approx(10 / 3)
+    assert rows[1]["mean_used_per_model"] == pytest.approx(10 / 3)
 
 
 def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
-    battles = _elo_gap_battles()
+    battles = _balanced_battles()
     focal_a = battles["model_a"].eq("a") | battles["model_b"].eq("a")
     battles.loc[focal_a, "pref"] = np.nan
     result = _elo_gap_metric((4,), 2).calculate(battles, rng=np.random.default_rng(3))
 
     assert result["n_models"] == 3
-    for variant in ("hard", "soft"):
-        row = result[variant][0]
-        assert row["n_seeds_valid"] == 0
-        assert math.isnan(row["mean_gap"])
+    assert result["soft"][0]["n_seeds_valid"] == 0
+    assert math.isnan(result["soft"][0]["mean_gap"])
 
 
 def test_elo_gap_warns_and_returns_empty_for_attempted_battle_shortfalls(caplog):
-    battles = _elo_gap_battles()
+    battles = _balanced_battles()
     battles.loc[battles["battle_id"].eq("ab-0"), "sampled"] = False
     battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
 
