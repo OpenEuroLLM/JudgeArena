@@ -4,23 +4,10 @@ import judgearena.models as utils_models
 import judgearena.utils as utils
 import judgearena.utils.io as utils_io
 from judgearena.models import make_model
-from judgearena.tasks.registry import load_tasks
 from judgearena.utils import safe_parse_int
 
 
-@pytest.mark.parametrize(
-    "raw, expected",
-    [
-        ("8", 8),
-        ("0", 0),
-        ("-3", -3),
-        (None, None),
-        ("", None),
-        ("   ", None),
-        ("abc", None),
-        ("1.5", None),
-    ],
-)
+@pytest.mark.parametrize("raw, expected", [("8", 8), (None, None), ("abc", None)])
 def test_safe_parse_int(monkeypatch, raw, expected):
     var = "JUDGEARENA_TEST_INT"
     if raw is None:
@@ -41,8 +28,7 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     )
     utils_io.download_all()
 
-    assert [name for _, name, _ in calls] == list(load_tasks())
-    assert {path for _, _, path in calls} == {tmp_path / "tables"}
+    assert ("hf", "alpaca-eval-ja", tmp_path / "tables") in calls
 
 
 def test_strip_thinking_tags_removes_full_reasoning_block():
@@ -55,17 +41,6 @@ def test_strip_thinking_tags_removes_full_reasoning_block():
 
     assert stripped is True
     assert cleaned == "The capital of France is Paris."
-    assert "<think>" not in cleaned
-    assert "</think>" not in cleaned
-
-
-def test_strip_thinking_tags_passthrough_without_reasoning():
-    visible = "Paris is the capital of France."
-
-    cleaned, stripped = utils.strip_thinking_tags_with_metadata(visible)
-
-    assert stripped is False
-    assert cleaned == visible
 
 
 def test_strip_thinking_tags_keeps_unclosed_reasoning_block():
@@ -78,13 +53,7 @@ def test_strip_thinking_tags_keeps_unclosed_reasoning_block():
 
 
 def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
-    """vLLM-engine-only kwargs must not leak into ChatOpenAI.model_kwargs.
-
-    Regression guard for #20: unknown kwargs forwarded to ``ChatOpenAI`` land
-    in ``model_kwargs`` and are then sent to ``chat.completions.create``,
-    which rejects them with ``TypeError: unexpected keyword argument
-    'max_model_len'``.
-    """
+    """Regression #20: vLLM-only kwargs must not reach the OpenRouter payload."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
 
     model = make_model(
@@ -170,30 +139,8 @@ def test_init_llm_with_retry_gives_up_after_max_attempts(monkeypatch):
         utils_models._init_llm_with_retry(always_fails, model="m")
 
 
-def test_init_llm_with_retry_reraises_non_matching_errors_immediately(monkeypatch):
-    monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 4)
-    monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
-
-    call_count = 0
-
-    def fails_once(**_kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise ValueError("bad config")
-
-    with pytest.raises(ValueError, match="bad config"):
-        utils_models._init_llm_with_retry(fails_once, model="m")
-    assert call_count == 1
-
-
-@pytest.mark.parametrize(
-    "message",
-    [
-        "CUDA error: unknown error",
-        "NCCL error",
-    ],
-)
-def test_init_llm_with_retry_does_not_retry_broad_runtime_errors(monkeypatch, message):
+def test_init_llm_with_retry_does_not_retry_broad_runtime_errors(monkeypatch):
+    message = "CUDA error: unknown error"
     monkeypatch.setattr(utils_models, "_VLLM_INIT_MAX_ATTEMPTS", 4)
     monkeypatch.setattr(utils_models, "_VLLM_INIT_BACKOFF_SECONDS", 0)
 

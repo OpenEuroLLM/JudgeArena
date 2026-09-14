@@ -12,9 +12,7 @@ from judgearena.battles import (
 
 
 def test_battles_parquet_round_trip(tmp_path):
-    # Mirrors the persisted frame: an llm-judge row (judge_model set) and a
-    # human row (judge_model null, pref NaN for a tie). pref_hard is a derived
-    # column that the typed Battle view should drop.
+    # Human ties have no judge; derived pref_hard is not part of the typed view.
     df = pd.DataFrame(
         {
             "model_a": ["m", "gpt"],

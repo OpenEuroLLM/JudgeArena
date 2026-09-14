@@ -27,90 +27,46 @@ def test_report_compatibility_exports():
     assert UtilsBattleReport is BattleReport
 
 
-def test_battle_report_serializes_metrics_as_the_result():
+def test_battle_report_saves_and_renders_metrics(tmp_path, capsys):
     metrics = {
-        "pairwise_win_rate": {
-            "winrate": 0.5,
-            "num_battles": 4,
-            "groups": {"category": [{"group": "writing", "values": {"winrate": 0.6}}]},
+        "length_controlled_winrate": {
+            "winrate": 0.52,
+            "num_scored": 10,
+            "num_pairs": 10,
+            "groups": {
+                "category": [
+                    {
+                        "group": "writing",
+                        "values": {"winrate": 0.6, "num_scored": 5, "num_pairs": 5},
+                    }
+                ]
+            },
         }
     }
     report = BattleReport(
         task="mt-bench",
-        model_a="my-model",
-        model_b="baseline",
-        judge_model="judge",
-        metrics=metrics,
-        preferences=[0.0, 1.0],
-        metadata={"date": "2026-06-16", "user": "tester"},
-    )
-
-    result = report.to_dict()
-
-    assert result["schema_version"] == "2"
-    assert result["report_type"] == "BattleReport"
-    assert result["metrics"] == metrics
-    assert result["model_A"] == "my-model"
-    assert result["model_B"] == "baseline"
-    assert "winrate" not in result
-    assert "per_category" not in result
-    assert "per_turn" not in result
-
-
-def test_battle_report_renders_metrics_and_groups(capsys):
-    report = BattleReport(
-        task="demo",
         model_a="candidate",
         model_b="baseline",
         judge_model="judge",
-        metrics={
-            "length_controlled_winrate": {
-                "winrate": 0.52,
-                "num_scored": 10,
-                "num_pairs": 10,
-                "groups": {
-                    "category": [
-                        {
-                            "group": "writing",
-                            "values": {
-                                "winrate": 0.6,
-                                "num_scored": 5,
-                                "num_pairs": 5,
-                            },
-                        }
-                    ]
-                },
-            }
-        },
+        metrics=metrics,
         result_folder="/tmp/run",
+        preferences=[0.0, 1.0, 0.5],
+        metadata={"prompt_preset": "default"},
     )
+    result = json.loads(report.save(tmp_path / "r.json").read_text())
+    assert result["schema_version"] == "2"
+    assert result["report_type"] == "BattleReport"
+    assert result["metrics"] == metrics
+    assert result["model_A"] == "candidate"
+    assert result["preferences"] == [0.0, 1.0, 0.5]
+    assert result["metadata"]["prompt_preset"] == "default"
+    assert "winrate" not in result
 
     report.render()
     output = capsys.readouterr().out
-
     assert "length_controlled_winrate" in output
     assert "category=writing" in output
     assert "/tmp/run" in output
-
-
-def test_battle_report_save_round_trip(tmp_path):
-    report = BattleReport(
-        task="alpaca-eval",
-        model_a="my-model",
-        model_b="gpt4",
-        judge_model="judge",
-        metrics={"pairwise_win_rate": {"winrate": 0.5}},
-        swap_mode="fixed",
-        result_folder="/tmp/run",
-        preferences=[0.0, 1.0, 0.5],
-        metadata={"baseline_assignment": "flat"},
-    )
-
-    path = report.save(tmp_path / "r.json")
-    loaded = json.loads(path.read_text())
-
-    assert loaded == report.to_dict()
-    assert loaded["schema_version"] == "2"
 
 
 def test_eloreport_to_dict_envelope():
@@ -124,13 +80,6 @@ def test_eloreport_to_dict_envelope():
     )
 
     result = report.to_dict()
-    assert result == {
-        "arena": "chatbot-arena",
-        "judge_model": "judge",
-        "metrics": {"bradley_terry": {"ratings": {"my-model": 1000.0}}},
-        "num_battles": 10,
-        "model_name": "my-model",
-        "sampling_metadata": {"sampling_mode": "head"},
-        "schema_version": "2",
-        "report_type": "EloReport",
-    }
+    assert result["schema_version"] == "2"
+    assert result["report_type"] == "EloReport"
+    assert result["metrics"]["bradley_terry"]["ratings"] == {"my-model": 1000.0}

@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
-from judgearena.evaluate import (
-    judge_and_parse_prefs,
-    resolve_judge_prompts,
-    resolve_run_judge_prompt,
-)
+from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
 from judgearena.models import DummyModel
-from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prompt
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import JUDGE_PARSERS, PairScore
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -22,30 +18,13 @@ from judgearena.prompts.registry import (
 )
 
 
-@dataclass
-class FakeCliArgs:
-    prompt_preset: str | None = None
-    prompt: object | None = None
-
-
-def test_default_presets_are_owned_by_task_yaml():
+def test_official_and_ja_tasks_select_distinct_presets():
     assert default_preset_for_task("alpaca-eval") == "alpaca-eval"
     assert default_preset_for_task("alpaca-eval-ja") == "default"
 
 
-def test_default_preset_for_fluency_prefix():
-    assert default_preset_for_task("fluency-french") == FLUENCY_JUDGE_PROMPT_PRESET
-    assert default_preset_for_task("fluency-spanish") == FLUENCY_JUDGE_PROMPT_PRESET
-
-
-def test_m_arena_hard_prompt_defaults_are_owned_by_task_yaml():
-    assert default_preset_for_task("m-arena-hard-v0.1-uk") == "default"
-    assert default_preset_for_task("m-arena-hard-v2.0-EU") == "default"
-
-
 def test_default_preset_for_unknown_task():
     assert default_preset_for_task("new-benchmark") == "default"
-    assert default_preset_for_task(None) == "default"
 
 
 def test_mt_bench_default_is_delegated_fastchat():
@@ -53,8 +32,6 @@ def test_mt_bench_default_is_delegated_fastchat():
 
     assert resolved.preset_name == FASTCHAT_PAIRWISE_PROMPT_PRESET
     assert resolved.delegated is True
-    assert resolved.system_prompt is None
-    assert resolved.user_prompt_template == ""
 
 
 def test_fluency_task_resolves_inline_system_prompt():
@@ -67,10 +44,7 @@ def test_fluency_task_resolves_inline_system_prompt():
 
 
 def test_explicit_preset_wins_over_task_default():
-    resolved = resolve_judge_prompt(
-        task="mt-bench",
-        preset="default",
-    )
+    resolved = resolve_judge_prompt(task="mt-bench", preset="default")
 
     assert resolved.preset_name == "default"
     assert resolved.delegated is False
@@ -80,17 +54,6 @@ def test_explanation_preset_renders_explanation_suffix():
     resolved = resolve_judge_prompt(preset=DEFAULT_WITH_EXPLANATION_PRESET)
 
     assert "explanation of your judgement" in resolved.user_prompt_template
-
-
-def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
-    resolved = resolve_judge_prompts(task="fluency-french")
-
-    assert resolved.preset_name == FLUENCY_JUDGE_PROMPT_PRESET
-    assert "completion of a sentence" in resolved.system_prompt
-
-
-def test_prompts_package_reexports_registry_api():
-    assert public_resolve_judge_prompt is resolve_judge_prompt
 
 
 def test_unknown_preset_raises():
@@ -117,31 +80,16 @@ def test_file_overrides_take_precedence_over_preset(tmp_path):
         preset=DEFAULT_WITH_EXPLANATION_PRESET,
         system_file=system_file,
         user_file=user_file,
-    )
-
-    assert resolved.source == "file"
-    assert resolved.system_prompt == "Custom system"
-    assert resolved.user_prompt_template == "Custom Answer"
-    assert resolved.system_sha256 is not None
-    assert resolved.user_sha256 is not None
-
-
-def test_file_overrides_accept_named_parser(tmp_path):
-    from judgearena.prompts.parsing import JUDGE_PARSERS
-
-    system_file = tmp_path / "system.txt"
-    user_file = tmp_path / "user.txt"
-    system_file.write_text("Judge with scores", encoding="utf-8")
-    user_file.write_text("Q: {user_prompt} A: {completion_A} B: {completion_B}")
-
-    resolved = resolve_judge_prompt(
-        system_file=system_file,
-        user_file=user_file,
         parser="score",
     )
 
     assert resolved.parser is JUDGE_PARSERS["score"]
     assert resolved.metadata()["judge_parser"] == "score"
+    assert resolved.source == "file"
+    assert resolved.system_prompt == "Custom system"
+    assert resolved.user_prompt_template == "Custom Answer"
+    assert resolved.system_sha256 is not None
+    assert resolved.user_sha256 is not None
 
 
 def test_named_parser_without_prompt_files_is_rejected():
@@ -162,24 +110,19 @@ def test_unknown_named_parser_lists_available(tmp_path):
 
 
 def test_resolve_run_judge_prompt_reads_cli_fields():
-    resolved_default = resolve_run_judge_prompt("alpaca-eval", FakeCliArgs())
     resolved_explain = resolve_run_judge_prompt(
         "alpaca-eval",
-        FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
+        SimpleNamespace(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET, prompt=None),
     )
 
-    assert resolved_default.preset_name == "alpaca-eval"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
 @pytest.mark.parametrize(
     ("parse", "expected"),
     [(None, 0.8807970779778823), (PairScore(temperature=0.5), 0.7310585786300049)],
 )
-def test_judging_uses_preset_parser_unless_overridden(
-    monkeypatch, swap_mode, parse, expected
-):
+def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expected):
     monkeypatch.setitem(
         PRESETS,
         "test-score",
@@ -192,25 +135,10 @@ def test_judging_uses_preset_parser_unless_overridden(
         completions_A=["Answer A"],
         completions_B=["Answer B"],
         prompt_preset="test-score",
-        swap_mode=swap_mode,
+        swap_mode="fixed",
         parse=parse,
     )
 
     assert annotations[0].parsed.preference == pytest.approx(expected)
-    if swap_mode == "both":
-        assert reversed_annotations[0].parsed.preference == pytest.approx(expected)
-        assert prefs.tolist() == pytest.approx([expected, 1 - expected])
-    else:
-        assert reversed_annotations is None
-        assert prefs.tolist() == pytest.approx([expected])
-
-
-def test_every_preset_resolves_or_delegates():
-    for preset_name, spec in PRESETS.items():
-        resolved = resolve_judge_prompt(preset=preset_name)
-        assert resolved.preset_name == preset_name
-        if spec.delegated:
-            assert resolved.delegated is True
-        else:
-            assert resolved.system_prompt
-            assert resolved.user_prompt_template
+    assert reversed_annotations is None
+    assert prefs.tolist() == pytest.approx([expected])

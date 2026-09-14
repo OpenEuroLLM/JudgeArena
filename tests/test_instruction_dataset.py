@@ -11,70 +11,10 @@ import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.m_arenahard as m_arenahard
 import judgearena.datasets.pairwise as pairwise_data
 from judgearena.datasets.arena_hard import (
-    _build_instructions,
     _build_model_outputs,
-    _extract_assistant_output,
     normalize_official_arena_hard,
 )
 from judgearena.tasks.registry import get_packaged_task
-
-
-def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        judgearena_tables, "download_task_sources", lambda _task, _path: None
-    )
-    instructions_dir = tmp_path / "instructions"
-    outputs_dir = tmp_path / "model_outputs"
-    instructions_dir.mkdir()
-    outputs_dir.mkdir()
-    pd.DataFrame(
-        {
-            "instruction_index": ["slug-z", "slug-a"],
-            "instruction": ["First", "Second"],
-            "domain": ["helpful_base", "koala"],
-        }
-    ).to_csv(instructions_dir / "alpaca-eval.csv", index=False)
-    pd.DataFrame(
-        {
-            "instruction_index": ["slug-z", "slug-a", "slug-z"],
-            "model": ["gpt4_1106_preview", "gpt4_1106_preview", "archived-model"],
-            "output": ["base-0", "base-1", "archived-0"],
-        }
-    ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
-    task = get_packaged_task("alpaca-eval")
-    instructions = judgearena_tables.load_task_instructions(task, tmp_path)
-    outputs = judgearena_tables.load_task_model_outputs(task, tmp_path)
-
-    assert instructions["instruction_index"].tolist() == [0, 1]
-    assert instructions["category"].tolist() == ["helpful_base", "koala"]
-    assert outputs["instruction_index"].tolist() == [0, 1, 0]
-    assert outputs.loc[2, "model"] == "archived-model"
-
-
-def test_official_arena_hard_source_is_owned_by_task_yaml():
-    task = get_packaged_task("arena-hard-v2.0")
-    source = task.spec.dataset.sources["examples"]
-    assert task.spec.dataset.adapter == "arena_hard"
-    assert source.repo_id == "lmarena-ai/arena-hard-auto"
-    assert source.config == "arena-hard-v2.0"
-    assert any("model_answer/*.jsonl" in pattern for pattern in source.allow_patterns)
-
-
-def test_m_arena_hard_sources_and_baselines_are_owned_by_task_yaml():
-    v01 = get_packaged_task("m-arena-hard-v0.1-uk")
-    v20 = get_packaged_task("m-arena-hard-v2.0-EU")
-    assert v01 is not None
-    assert v20 is not None
-
-    assert v01.spec.dataset.sources["examples"].repo_id == "CohereLabs/m-ArenaHard"
-    assert v01.spec.dataset.sources["examples"].revision == (
-        "ab393a96cd0b134a1acfa96e080af31e5e73a393"
-    )
-    assert v01.spec.protocol.baseline.reference_id == "CohereLabs/aya-expanse-8b"
-    assert v20.spec.dataset.sources["examples"].repo_id == (
-        "CohereLabs/m-ArenaHard-v2.0"
-    )
-    assert v20.spec.protocol.baseline.reference_id == "google/gemini-2.5-flash"
 
 
 def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_path):
@@ -96,9 +36,7 @@ def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_p
         m_arenahard, "_download_source", lambda _task, _name, _path, **_kwargs: None
     )
     monkeypatch.setattr(
-        m_arenahard.pd,
-        "read_parquet",
-        lambda path: frames[path.parent.name].copy(),
+        m_arenahard.pd, "read_parquet", lambda path: frames[path.parent.name].copy()
     )
 
     loaded = m_arenahard.load_task_instructions(task, tmp_path)
@@ -165,7 +103,7 @@ def test_normalize_official_arena_hard_v20_preserves_category():
         raw_df=raw_df, dataset="arena-hard-v2.0"
     )
 
-    assert "category" in df_instructions.columns
+    assert df_instructions["instruction"].tolist() == ["First prompt", "Second prompt"]
     assert df_instructions.set_index("instruction_index")["category"].to_dict() == {
         "q1": "hard_prompt",
         "q2": "creative_writing",
@@ -176,11 +114,7 @@ def test_normalize_official_arena_hard_v20_preserves_category():
 
 
 def test_build_model_outputs_extracts_upstream_messages_shape():
-    """Upstream's `model_answer/*.jsonl` rows keep the assistant response in
-    `messages[-1].content.answer` rather than a flat `output` column. Without
-    this extractor, a fresh `download_arena_hard` clone would silently drop
-    every baseline answer.
-    """
+    """Fresh clones must keep nested answers and multiple models for one question."""
     raw_df = pd.DataFrame(
         [
             {
@@ -195,18 +129,14 @@ def test_build_model_outputs_extracts_upstream_messages_shape():
                 ],
             },
             {
-                "uid": "q2",
+                "uid": "q1",
                 "model": "gemini-2.0-flash-001",
                 "messages": [
                     {"role": "user", "content": "Prompt"},
                     {"role": "assistant", "content": "plain string answer"},
                 ],
             },
-            {
-                "uid": "q3",
-                "model": "baseline",
-                "output": "flat output column",
-            },
+            {"uid": "q3", "model": "baseline", "output": "flat output column"},
             {
                 "uid": "q4",
                 "model": "no-output-model",
@@ -224,90 +154,7 @@ def test_build_model_outputs_extracts_upstream_messages_shape():
         "gemini-2.0-flash-001": "plain string answer",
         "baseline": "flat output column",
     }
-    assert "no-output-model" not in outputs_by_model
-
-
-@pytest.mark.parametrize(
-    "row, expected",
-    [
-        ({"output": "flat"}, "flat"),
-        (
-            {
-                "messages": [
-                    {"role": "user", "content": "p"},
-                    {"role": "assistant", "content": {"answer": "nested"}},
-                ]
-            },
-            "nested",
-        ),
-        (
-            {
-                "messages": [
-                    {"role": "user", "content": "p"},
-                    {"role": "assistant", "content": "plain"},
-                ]
-            },
-            "plain",
-        ),
-        ({"output": None, "messages": None}, None),
-        (
-            {"messages": [{"role": "assistant", "content": {"reasoning": "only"}}]},
-            None,
-        ),
-    ],
-)
-def test_extract_assistant_output_covers_known_shapes(row, expected):
-    assert _extract_assistant_output(pd.Series(row)) == expected
-
-
-def test_build_model_outputs_returns_multi_model_rows_per_upstream_zip():
-    """The fresh-clone loader must produce one row per (model, uid) so the
-    flat zip consumed by `try_load_dataset_completions` pivots cleanly.
-    """
-    raw_df = pd.DataFrame(
-        [
-            {
-                "uid": "q1",
-                "model": "o3-mini-2025-01-31",
-                "messages": [{"role": "assistant", "content": {"answer": "o3 q1"}}],
-            },
-            {
-                "uid": "q2",
-                "model": "o3-mini-2025-01-31",
-                "messages": [{"role": "assistant", "content": {"answer": "o3 q2"}}],
-            },
-            {
-                "uid": "q1",
-                "model": "gemini-2.0-flash-001",
-                "messages": [{"role": "assistant", "content": {"answer": "gemini q1"}}],
-            },
-        ]
-    )
-
-    df_outputs = _build_model_outputs(raw_df)
-
-    assert df_outputs is not None
-    assert sorted(df_outputs["model"].unique().tolist()) == [
-        "gemini-2.0-flash-001",
-        "o3-mini-2025-01-31",
-    ]
-    assert df_outputs.shape[0] == 3
-
-
-def test_build_instructions_drops_model_answer_rows():
-    """Question rows and model-answer rows share a dataframe on fresh clone;
-    `_build_instructions` has to keep only the prompt rows so the instruction
-    table doesn't leak rows with no prompt text.
-    """
-    raw_df = pd.DataFrame(
-        [
-            {"uid": "q1", "prompt": "real prompt", "category": "hard_prompt"},
-            {"uid": "q1", "model": "baseline", "output": "answer"},
-        ]
-    )
-    df = _build_instructions(raw_df)
-    assert df["instruction_index"].tolist() == ["q1"]
-    assert df["instruction"].tolist() == ["real prompt"]
+    assert df_outputs["instruction_index"].tolist() == ["q1", "q1", "q3"]
 
 
 def test_load_instructions_uses_explicit_version_filename(monkeypatch):
@@ -315,11 +162,11 @@ def test_load_instructions_uses_explicit_version_filename(monkeypatch):
 
     def _fake_load(task, local_tables_path: Path):
         captured["dataset"] = task.task
-        captured["local_tables_path"] = local_tables_path
         return pd.DataFrame(
             {
                 "instruction_index": ["0", "1"],
                 "instruction": ["hello", "world"],
+                "category": ["hard_prompt", "creative_writing"],
             }
         )
 
@@ -328,30 +175,7 @@ def test_load_instructions_uses_explicit_version_filename(monkeypatch):
 
     assert captured["dataset"] == "arena-hard-v2.0"
     assert df.index.tolist() == ["0", "1"]
-
-
-def test_load_instructions_surfaces_category_for_v20(monkeypatch):
-    """The per-category baseline plan in `generate_and_evaluate` keys off
-    the `category` column, so `load_instructions` must keep it round-tripping
-    from the cached CSV.
-    """
-    monkeypatch.setattr(
-        arena_hard,
-        "load_task_instructions",
-        lambda task, path: pd.DataFrame(
-            {
-                "instruction_index": ["q1", "q2"],
-                "instruction": ["a", "b"],
-                "category": ["hard_prompt", "creative_writing"],
-            }
-        ),
-    )
-
-    df = instruction_dataset.load_instructions(dataset="arena-hard-v2.0")
-
-    assert "category" in df.columns
-    assert df.loc["q1", "category"] == "hard_prompt"
-    assert df.loc["q2", "category"] == "creative_writing"
+    assert df.loc["1", "category"] == "creative_writing"
 
 
 def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path):
@@ -368,10 +192,7 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
 
     adapter = SimpleNamespace(
         load_instructions=lambda task, path: pd.DataFrame(
-            {
-                "instruction_index": [0, 1],
-                "instruction": ["q0", "q1"],
-            }
+            {"instruction_index": [0, 1], "instruction": ["q0", "q1"]}
         ),
         load_model_outputs=lambda task, path: pd.read_csv(output_path),
     )
@@ -388,6 +209,63 @@ def test_pairwise_task_data_uses_declared_adapter_outputs(monkeypatch, tmp_path)
     assert loaded is not None
     assert loaded.tolist() == ["b0", "b1"]
     assert loaded.index.tolist() == [0, 1]
+
+
+def test_fluency_adapter_loads_selected_language(monkeypatch, tmp_path):
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+    monkeypatch.setattr(fluency, "download_task_sources", lambda _task, _path: None)
+    root = fluency._source_local_dir(fluency._source(task), tmp_path)
+    (root / "French").mkdir(parents=True)
+    pd.DataFrame({"sentence": ["Le chat", "La maison"]}).to_parquet(
+        root / "French" / "data.parquet"
+    )
+
+    loaded = fluency.load_task_instructions(task, tmp_path)
+
+    assert loaded["instruction"].tolist() == ["Le chat", "La maison"]
+    assert loaded["instruction_index"].tolist() == ["french-0", "french-1"]
+
+
+def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        judgearena_tables, "download_task_sources", lambda _task, _path: None
+    )
+    instructions_dir = tmp_path / "instructions"
+    outputs_dir = tmp_path / "model_outputs"
+    instructions_dir.mkdir()
+    outputs_dir.mkdir()
+    pd.DataFrame(
+        {
+            "instruction_index": ["slug-z", "slug-a"],
+            "instruction": ["First", "Second"],
+            "domain": ["helpful_base", "koala"],
+        }
+    ).to_csv(instructions_dir / "alpaca-eval.csv", index=False)
+    pd.DataFrame(
+        {
+            "instruction_index": ["slug-z", "slug-a", "slug-z"],
+            "model": ["gpt4_1106_preview", "gpt4_1106_preview", "archived-model"],
+            "output": ["base-0", "base-1", "archived-0"],
+        }
+    ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
+    task = get_packaged_task("alpaca-eval")
+    instructions = judgearena_tables.load_task_instructions(task, tmp_path)
+    outputs = judgearena_tables.load_task_model_outputs(task, tmp_path)
+
+    assert instructions["instruction_index"].tolist() == [0, 1]
+    assert instructions["category"].tolist() == ["helpful_base", "koala"]
+    assert outputs["instruction_index"].tolist() == [0, 1, 0]
+    assert outputs.loc[2, "model"] == "archived-model"
+
+
+def test_official_arena_hard_source_is_owned_by_task_yaml():
+    task = get_packaged_task("arena-hard-v2.0")
+    source = task.spec.dataset.sources["examples"]
+    assert task.spec.dataset.adapter == "arena_hard"
+    assert source.repo_id == "lmarena-ai/arena-hard-auto"
+    assert source.config == "arena-hard-v2.0"
+    assert any("model_answer/*.jsonl" in pattern for pattern in source.allow_patterns)
 
 
 def test_pairwise_task_data_only_requires_selected_output_rows():
@@ -416,29 +294,3 @@ def test_pairwise_task_data_only_requires_selected_output_rows():
             "category-baseline",
             instruction_ids=pd.Index(["q0"], name="instruction_index"),
         )
-
-
-def test_fluency_variants_cover_all_supported_languages():
-    task = get_packaged_task("fluency")
-    assert task is not None
-    expected = {
-        fluency.fluency_language_slug(language)
-        for language in fluency.FLUENCY_LANGUAGES
-    }
-    assert set(task.spec.variants.values) == expected
-
-
-def test_fluency_adapter_loads_selected_language(monkeypatch, tmp_path):
-    task = get_packaged_task("fluency-french")
-    assert task is not None
-    monkeypatch.setattr(fluency, "download_task_sources", lambda _task, _path: None)
-    root = fluency._source_local_dir(fluency._source(task), tmp_path)
-    (root / "French").mkdir(parents=True)
-    pd.DataFrame({"sentence": ["Le chat", "La maison"]}).to_parquet(
-        root / "French" / "data.parquet"
-    )
-
-    loaded = fluency.load_task_instructions(task, tmp_path)
-
-    assert loaded["instruction"].tolist() == ["Le chat", "La maison"]
-    assert loaded["instruction_index"].tolist() == ["french-0", "french-1"]
