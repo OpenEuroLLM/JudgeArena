@@ -1,4 +1,3 @@
-import math
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -300,7 +299,7 @@ def test_judge_and_parse_prefs_none_prefs_swap_mode_both():
         swap_mode="both",
     )
     # All prefs should be NaN (unparseable → nan), not raise
-    assert all(math.isnan(p) for p in prefs)
+    assert prefs.isna().tolist() == [True, True]
 
 
 def test_arena_anchor_battles_filters_and_preserves_index():
