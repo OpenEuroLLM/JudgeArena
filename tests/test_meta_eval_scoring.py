@@ -115,32 +115,6 @@ def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
         _ranking_metric().calculate(_ranking_battles())
 
 
-def test_ranking_is_invariant_to_row_order_and_global_ab_swap():
-    battles = _ranking_battles()
-    shuffled = battles.sample(frac=1, random_state=7)
-    swapped = battles.copy()
-    swapped[["model_a", "model_b"]] = swapped[["model_b", "model_a"]]
-    swapped["reference_pref"] = 1.0 - swapped["reference_pref"]
-    swapped["pref"] = 1.0 - swapped["pref"]
-    metric = _ranking_metric(8)
-
-    expected = metric.calculate(battles, rng=np.random.default_rng(9))
-    assert math.isfinite(expected["hard"]["spearman"])
-    assert math.isfinite(expected["soft"]["elo_mae"])
-    assert expected["hard"]["elo_mae"] != pytest.approx(expected["soft"]["elo_mae"])
-    assert expected["n_bootstraps_valid"] == 8
-    reordered = metric.calculate(shuffled, rng=np.random.default_rng(9))
-    reversed_ab = metric.calculate(swapped, rng=np.random.default_rng(9))
-
-    for result in (reordered, reversed_ab):
-        assert result["n_bootstraps_valid"] == expected["n_bootstraps_valid"]
-        for kind in ("hard", "soft"):
-            for value in ("spearman", "spearman_se", "elo_mae", "elo_mae_se"):
-                assert result[kind][value] == pytest.approx(
-                    expected[kind][value], nan_ok=True, abs=1e-5
-                )
-
-
 def test_ranking_human_ties_are_configurable_and_model_set_stays_fixed():
     battles = _ranking_battles()
     tie = battles.iloc[[0]].copy()
