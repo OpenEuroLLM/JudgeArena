@@ -18,7 +18,7 @@ from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.config import RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
-from judgearena.models import make_model
+from judgearena.models import DummyModel, make_model
 from judgearena.prompts.parsing import JudgeParser, ParsedPreference
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec
@@ -676,15 +676,19 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
 
     assert captured["n_pairs"] >= 10
     assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    assert battles["pref"].tolist() == pytest.approx(
+        [1 / (1 + math.exp(-0.42 * 10))] * len(battles)
+    )
 
 
-def test_extract_instruction_text_tolerates_moderated_turns():
-    from judgearena.arenas_utils import _extract_instruction_text
+def test_extract_turn_text_tolerates_moderated_turns():
+    from judgearena.arenas_utils import extract_turn_text
 
-    assert _extract_instruction_text({"content": None}) == ""
-    assert _extract_instruction_text({"content": "plain"}) == "plain"
+    assert extract_turn_text({"content": None}) == ""
+    assert extract_turn_text({"content": "plain"}) == "plain"
     assert (
-        _extract_instruction_text(
+        extract_turn_text(
             {"content": [{"type": "text", "text": None}, {"type": "image"}, None]}
         )
         == ""
@@ -737,3 +741,32 @@ def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(
     monkeypatch.setattr(estimate_elo_ratings, "prefs_to_battle_results", capture_prefs)
     run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert captured_prefs and set(captured_prefs) == {0.75}
+
+
+def test_run_elo_temperature_preserves_selected_parser(monkeypatch, tmp_path):
+    from judgearena.prompts.parsing import JUDGE_PARSERS
+
+    parser = JUDGE_PARSERS["meta-eval-score"]
+    monkeypatch.setattr(
+        DummyModel,
+        "batch",
+        lambda self, inputs, **kwargs: [
+            "Score_A: 6\nScore_B: 8",
+            "Score_A: 6\nScore_B: 8.5",
+        ],
+    )
+    cfg = _default_args(result_folder=str(tmp_path), n_instructions=2, swap_mode="both")
+    cfg.elo.n_bootstraps = 0
+    cfg.judge.prompt_preset = "meta-eval-pair-score"
+    cfg.elo.soft_elo_temperature = 0.8
+
+    result = run_elo_with_task(cfg)
+
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    assert battles["pref"].tolist() == pytest.approx(
+        [0.8320183851339245, float("nan"), 0.1679816148660755, float("nan")],
+        nan_ok=True,
+    )
+    assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
+    assert _pairwise_metric(result)["num_missing"] == 2
+    assert parser.temperature == 0.5

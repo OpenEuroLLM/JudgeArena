@@ -553,3 +553,25 @@ def test_build_run_config_elo_defaults():
     )
     assert cfg.elo is not None
     assert cfg.elo.soft_elo is True
+
+
+@pytest.mark.parametrize(
+    "update, message",
+    [
+        ({"model": {"name": "Dummy/m"}}, "model.name"),
+        ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
+    ],
+)
+def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):
+    with pytest.raises(ValidationError, match=message):
+        RunConfig(
+            **({"task": "meta-eval-comparia", "judge": {"model": "Dummy/j"}} | update)
+        )
+
+
+def test_meta_eval_block_is_rejected_for_non_meta_task():
+    data = _base_generate()
+    data["meta_eval"] = {"top_models": 4}
+
+    with pytest.raises(ValidationError, match="only valid for meta-evaluation"):
+        RunConfig(**data)

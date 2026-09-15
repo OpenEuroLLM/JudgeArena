@@ -88,3 +88,28 @@ class EloReport(Report):
         print(f"\n=== Results for {self.model_name} ===")
         print(f"Arena: {self.arena} | Judge: {self.judge_model}")
         print(render_metrics(self.metrics))
+
+
+class MetaEvalReport(Report):
+    """Configured metrics and run context for judge meta-evaluation."""
+
+    task: str
+    arena: str
+    judge_model: str
+    prompt_preset: str
+    languages: list[str]
+    top_models: list[str]
+    n_sampled_battles: int
+    swap_mode: str
+    metrics: dict[str, dict[str, object]]
+
+    def render(self) -> None:
+        from judgearena.benchmarks.scoring import render_metrics
+
+        print(f"\n=== Meta-eval: {self.task} ===")
+        print(f"Arena: {self.arena} | Judge: {self.judge_model}")
+        print(
+            f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
+            f"Swap mode: {self.swap_mode}"
+        )
+        print(render_metrics(self.metrics))

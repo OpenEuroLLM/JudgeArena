@@ -21,6 +21,7 @@ from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
     EloProtocol,
+    MetaEvalProtocol,
     MTBenchProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
@@ -316,9 +317,9 @@ def _discover_tasks(
 
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
-    is_elo = isinstance(spec.protocol, EloProtocol)
+    is_battle_backed = isinstance(spec.protocol, (EloProtocol, MetaEvalProtocol))
     dataset_names = (
-        adapters.battle_datasets if is_elo else adapters.instruction_datasets
+        adapters.battle_datasets if is_battle_backed else adapters.instruction_datasets
     )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),

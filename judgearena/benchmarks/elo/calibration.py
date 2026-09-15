@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 
-from judgearena.arenas_utils import _extract_instruction_text
+from judgearena.arenas_utils import extract_turn_text
 from judgearena.benchmarks.elo.rating import winner_to_pref
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.log import get_logger
@@ -91,15 +91,15 @@ def calibrate_pairscore_temperature(
         random_state=int(rng.integers(0, 2**31)),
     )
     instructions = [
-        _extract_instruction_text(source_battles.loc[index, "conversation_a"][0])
+        extract_turn_text(source_battles.loc[index, "conversation_a"][0])
         for index in calibration_battles.index
     ]
     completions_a = [
-        _extract_instruction_text(source_battles.loc[index, "conversation_a"][1])
+        extract_turn_text(source_battles.loc[index, "conversation_a"][1])
         for index in calibration_battles.index
     ]
     completions_b = [
-        _extract_instruction_text(source_battles.loc[index, "conversation_b"][1])
+        extract_turn_text(source_battles.loc[index, "conversation_b"][1])
         for index in calibration_battles.index
     ]
 

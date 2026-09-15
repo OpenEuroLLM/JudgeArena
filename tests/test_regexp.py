@@ -164,3 +164,12 @@ def test_official_presets_resolve_their_parsers():
         resolve_judge_prompt(preset="arena-hard-creative").parser
         is parse_arena_hard_verdict
     )
+
+
+def test_score_parser_temperature_override_is_local_to_the_call():
+    parser = JUDGE_PARSERS["meta-eval-score"]
+    text = "score_A: 6\nscore_B: 8"
+
+    assert parser.parse_result(text, temperature=0.0).preference == 0.5
+    assert parser.temperature == 0.5
+    assert parser(text) == pytest.approx(0.7310585786300049)

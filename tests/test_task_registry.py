@@ -586,3 +586,17 @@ def test_mt_bench_preserves_registered_metric_parameters(tmp_path):
     metric = task.spec.model_dump(mode="json")["protocol"]["scoring"]["metrics"][0]
     assert metric["metric"] == "bradley_terry"
     assert metric["parameters"] == {"n_bootstraps": 2}
+
+
+def test_meta_eval_language_variant_preserves_the_dataset_and_protocol():
+    from judgearena.tasks.registry import get_packaged_task
+
+    task = get_packaged_task("meta-eval-comparia")
+    english = get_packaged_task("meta-eval-comparia-en")
+
+    assert (
+        next(iter(task.spec.dataset.sources.values())).repo_id
+        == "ministere-culture/comparia-votes"
+    )
+    assert english.spec == task.spec
+    assert english.selection.values == ("en",)

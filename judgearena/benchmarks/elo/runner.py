@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from judgearena.arenas_utils import _extract_instruction_text
+from judgearena.arenas_utils import extract_turn_text
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
     write_run_metadata_safely,
 )
 from judgearena.battles import Leaderboard, RatingEntry, write_battles
+from judgearena.benchmarks.arena import resolve_task_languages
 from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
@@ -59,22 +60,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     logger.info("Step 1: Loading battles from %s", arena)
     df_arena_all = load_battles(task)
 
-    # Filter by language: a task variant (e.g. elo-lmarena-140k-en) preselects
-    # languages; elo.languages narrows further within that selection.
-    selected_languages = list(cfg.elo.languages or [])
-    if task.selection is not None:
-        variant_languages = list(task.selection.values)
-        if selected_languages:
-            selected_languages = [
-                lang for lang in selected_languages if lang in set(variant_languages)
-            ]
-            if not selected_languages:
-                raise ValueError(
-                    f"elo.languages {cfg.elo.languages} has no overlap with the "
-                    f"languages of task {cfg.task!r} ({variant_languages})."
-                )
-        else:
-            selected_languages = variant_languages
+    # A task variant preselects languages; elo.languages may narrow it further.
+    selected_languages = resolve_task_languages(
+        task, cfg.elo.languages, setting="elo.languages"
+    )
 
     df_battles = df_arena_all
     if selected_languages:
@@ -116,7 +105,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
         [
-            _extract_instruction_text(row["conversation_a"][0])
+            extract_turn_text(row["conversation_a"][0])
             for _, row in df_battles.iterrows()
         ],
         name="instruction",
@@ -189,9 +178,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
 
     opponent_completions = [
         (
-            _extract_instruction_text(row["conversation_a"][1])
+            extract_turn_text(row["conversation_a"][1])
             if use_model_a_as_opponent[i]
-            else _extract_instruction_text(row["conversation_b"][1])
+            else extract_turn_text(row["conversation_b"][1])
         )
         for i, (_, row) in enumerate(df_battles.iterrows())
     ]
@@ -321,22 +310,21 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         default_temperature=cfg.elo.soft_elo_temperature,
     )
 
-    # Build the score parser used for the main evaluation run.
-    score_parser = PairScore(
-        temperature=calibrated_temperature
-        if calibrated_temperature is not None
-        else cfg.elo.soft_elo_temperature
-    )
-
-    # The prefs cached in df_judge were parsed at the default T=0.3, and the
-    # judge cache key ignores temperature, so they cannot reflect
-    # --soft-elo-temperature (or a calibrated T*).  Re-parse from the stored
-    # judge completions with this run's score_parser so the soft-ELO bootstrap
-    # uses the requested temperature.
+    # Reparse cached responses at this run's temperature, keeping the selected
+    # parser's validation rules.
     if cfg.elo.soft_elo and isinstance(resolved_prompt.parser, PairScore):
-        new_prefs_ab = pd.Series(
-            [score_parser.parse_model_raw(c) for c in df_judge["judge_completion"]]
-        ).apply(lambda x: float("nan") if x is None else x)
+        temperature = (
+            calibrated_temperature
+            if calibrated_temperature is not None
+            else cfg.elo.soft_elo_temperature
+        )
+        reparsed_prefs: list[float] = []
+        for completion in df_judge["judge_completion"]:
+            parsed = resolved_prompt.parser.parse_result(
+                completion, temperature=temperature
+            )
+            reparsed_prefs.append(float("nan") if parsed is None else parsed.preference)
+        new_prefs_ab = pd.Series(reparsed_prefs, dtype=float)
 
         if cfg.judge.swap_mode == "both":
             # df_judge stores AB then BA completions; re-orient the halves the
