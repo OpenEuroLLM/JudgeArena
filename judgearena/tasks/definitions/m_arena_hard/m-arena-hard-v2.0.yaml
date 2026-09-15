@@ -16,7 +16,5 @@ protocol:
   baseline:
     strategy: task_default
     reference_id: google/gemini-2.5-flash
-    allow_runtime_override: true
-
 metadata:
   reference_implementation: https://huggingface.co/datasets/CohereLabs/m-ArenaHard-v2.0

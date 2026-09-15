@@ -598,3 +598,26 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
         "coding",
         "arena-hard-200",
     )
+
+
+@pytest.mark.parametrize("prompt_preset", [FASTCHAT_PAIRWISE_PROMPT_PRESET, "default"])
+def test_run_mt_bench_rejects_random_before_preparation(monkeypatch, prompt_preset):
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "Dummy/model"},
+        judge={
+            "model": "Dummy/judge",
+            "prompt_preset": prompt_preset,
+            "swap_mode": "random",
+        },
+    )
+
+    def unexpected_preparation(*_args, **_kwargs):
+        pytest.fail("Unsupported swap mode must fail before preparing the run")
+
+    monkeypatch.setattr(
+        mt_bench_runner, "prepare_run_directory", unexpected_preparation
+    )
+
+    with pytest.raises(ValueError, match="MT-Bench supports only.*got 'random'"):
+        mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))

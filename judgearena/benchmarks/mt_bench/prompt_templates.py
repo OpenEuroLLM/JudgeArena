@@ -12,7 +12,7 @@ _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 def load_mt_bench_prompt_text(filename: str) -> str:
     return (
         files(_PROMPT_PACKAGE)
-        .joinpath("mt_bench", filename)
+        .joinpath("templates", "mt_bench", filename)
         .read_text(encoding="utf-8")
     )
 
