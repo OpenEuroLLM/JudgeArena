@@ -133,6 +133,21 @@ judgearena \
 
 While any key in `--model.engine_kwargs` is forwarded to the underlying engine (e.g. `vllm.LLM`, `LlamaCpp`, `ChatOpenAI`), existing dedicated flags such as `--model.max_model_len` and `--model.chat_template` have higher precedence.
 
+### Inference Cache
+
+Set `--run.store_root ./cache` to reuse raw completions and judgements by
+rendered input and resolved model settings.
+
+Sharing is explicit and separate from benchmark execution:
+
+```bash
+judgearena-cache --action fetch --store_root ./cache \
+  --hf_repo organization/cache-dataset --kind completions --task alpaca-eval
+
+judgearena-cache --action push --store_root ./cache \
+  --hf_repo organization/cache-dataset --kind judgements --task alpaca-eval
+```
+
 ## 🎨 Model Specification
 
 Models are specified using the format: `{LangChain Backend}/{Model Path}`
