@@ -126,6 +126,7 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
         "meta-eval-lmarena-100k",
         "meta-eval-lmarena-140k",
         "mt-bench",
+        "mt-bench-101",
     ]
     assert all(path == tables_dir for _, path in hf_datasets)
 
