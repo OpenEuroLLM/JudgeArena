@@ -72,7 +72,8 @@ protocol:
     default_prompt_preset: fluency
     default_swap_mode: fixed
   scoring:
-    adapter: pairwise_win_rate
+    metrics:
+      - metric: pairwise_win_rate
 
 metadata:
   reference_implementation: https://huggingface.co/datasets/geoalgo/multilingual-fluency

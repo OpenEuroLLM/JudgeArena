@@ -142,7 +142,9 @@ def prefs_to_battle_results(
     for pref, is_pos_a, opponent in zip(
         prefs, our_model_is_position_a, opponent_models, strict=True
     ):
-        if _is_nan_pref(pref) or pref == 0.5:
+        if _is_nan_pref(pref):
+            winner = None
+        elif pref == 0.5:
             winner = "tie"
         elif pref < 0.5:
             winner = "model_a"

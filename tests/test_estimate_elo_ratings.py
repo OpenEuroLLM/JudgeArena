@@ -1,20 +1,27 @@
 import math
+from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 
+import judgearena.benchmarks.elo.calibration as elo_calibration
 import judgearena.benchmarks.elo.runner as estimate_elo_ratings
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     fit_bradley_terry,
+    prefs_to_battle_results,
     winner_to_pref,
 )
 from judgearena.benchmarks.elo.runner import run_elo
-from judgearena.config import RunConfig
+from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
+from judgearena.config import RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import make_model
+from judgearena.prompts.parsing import JudgeParser, ParsedPreference
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]
@@ -90,7 +97,6 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
 
 def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     task = kwargs.pop("task", "elo-comparia")
-    arena = kwargs.pop("arena", None)
     model = kwargs.pop("model", "Dummy/my model")
     judge_model = kwargs.pop("judge_model", "Dummy/score A: 0 score B: 10")
     n_instructions = kwargs.pop("n_instructions", 10)
@@ -114,13 +120,65 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         judge=judge,
         generation={"n_instructions": n_instructions},
         elo={
-            "arena": arena,
             "n_bootstraps": n_bootstraps,
             "languages": languages,
             "calibrate_temperature": calibrate_temperature,
         },
         run={"result_folder": result_folder},
     )
+
+
+def test_missing_preference_remains_missing_in_hard_battles():
+    battles = prefs_to_battle_results([float("nan")], [True], ["opponent"], "candidate")
+
+    assert pd.isna(battles.loc[0, "pref"])
+    assert pd.isna(battles.loc[0, "pref_hard"])
+    assert battles.loc[0, "winner"] is None
+
+
+def test_bradley_terry_hard_mode_uses_hard_preferences():
+    battles = pd.DataFrame(
+        {
+            "model_a": ["candidate", "candidate", "opponent", "opponent"],
+            "model_b": ["opponent", "opponent", "candidate", "candidate"],
+            "pref": [0.5, 0.5, 0.5, 0.5],
+            "pref_hard": [0.0, 0.0, 1.0, 1.0],
+            "source": ["llm-judge"] * 4,
+            "evaluation_model": ["candidate"] * 4,
+        }
+    )
+
+    soft = BradleyTerryMetric(soft=True).calculate(battles)
+    hard = BradleyTerryMetric(soft=False).calculate(battles)
+
+    assert soft["ratings"]["candidate"] == pytest.approx(soft["ratings"]["opponent"])
+    assert hard["ratings"]["candidate"] > hard["ratings"]["opponent"]
+
+
+def test_bradley_terry_metric_reports_anchor_and_bootstrap_results():
+    battles = pd.DataFrame(
+        {
+            "model_a": ["anchor-a", "anchor-b", "candidate", "anchor-a"],
+            "model_b": ["anchor-b", "anchor-a", "anchor-a", "candidate"],
+            "pref": [0.0, 1.0, 0.2, 0.8],
+            "pref_hard": [0.0, 1.0, 0.0, 1.0],
+            "source": ["human", "human", "llm-judge", "llm-judge"],
+            "evaluation_model": [None, None, "candidate", "candidate"],
+        }
+    )
+    result = BradleyTerryMetric(n_bootstraps=3, baseline_model="anchor-b").calculate(
+        battles, rng=np.random.default_rng(17)
+    )
+    assert result["ratings"]["anchor-b"] == pytest.approx(1000)
+    assert set(result["human_ratings"]) == {"anchor-a", "anchor-b"}
+    assert len(result["bootstrap_ratings"]) == result["n_bootstraps"] == 3
+    assert result["evaluation_model"] == "candidate"
+    assert result["battle_counts"]["candidate"] == 2
+    assert {entry["model"] for entry in result["rating_entries"]} == {
+        "anchor-a",
+        "anchor-b",
+        "candidate",
+    }
 
 
 # --- fit_bradley_terry unit tests ---
@@ -183,21 +241,137 @@ def run_elo_with_task(cfg: RunConfig) -> dict:
     return run_elo(cfg, get_packaged_task(cfg.task))
 
 
-def test_run_elo_returns_summary(tmp_path):
+def _pairwise_metric(run_result: dict) -> dict:
+    return run_result["metrics"]["pairwise_win_rate"]
+
+
+def _rating_metric(run_result: dict) -> dict:
+    return run_result["metrics"]["bradley_terry"]
+
+
+def _num_pairwise_rows(run_result: dict) -> int:
+    metric = _pairwise_metric(run_result)
+    return (
+        metric["num_wins"]
+        + metric["num_losses"]
+        + metric["num_ties"]
+        + metric["num_missing"]
+    )
+
+
+def test_run_elo_returns_metrics(tmp_path):
     result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
-    assert set(result.keys()) >= {
+
+    assert set(result) >= {
+        "arena",
+        "judge_model",
+        "metrics",
+        "model_name",
+        "num_battles",
+        "sampling_metadata",
+        "result_path",
+    }
+    assert set(result["metrics"]) == {"pairwise_win_rate", "bradley_terry"}
+    assert set(_pairwise_metric(result)) >= {
         "num_wins",
         "num_losses",
         "num_ties",
         "winrate",
-        "bootstrap_ratings",
-        "model_name",
     }
+    assert "bootstrap_ratings" in _rating_metric(result)
+    assert "rating_entries" in _rating_metric(result)
+    assert "winrate" not in result
+    assert "bootstrap_ratings" not in result
+
+
+@pytest.mark.parametrize(
+    ("runtime", "n_bootstraps", "method", "anchor"),
+    [
+        (None, 2, "ELO", ARENA_MODELS[0]),
+        (
+            {"n_bootstraps": 0, "baseline_model": None, "soft_elo": True},
+            0,
+            "Soft-ELO",
+            None,
+        ),
+    ],
+)
+def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
+    monkeypatch, tmp_path, runtime, n_bootstraps, method, anchor
+):
+    cfg = RunConfig(
+        task="elo-comparia",
+        model={"name": "Dummy/my model"},
+        judge={"model": "Dummy/score A: 6 score B: 8"},
+        generation={"n_instructions": 10},
+        elo=runtime,
+        run={"result_folder": str(tmp_path)},
+    )
+    task = get_packaged_task(cfg.task)
+    scoring = task.spec.protocol.scoring.model_copy(
+        update={
+            "metrics": (
+                MetricSpec(
+                    metric="bradley_terry",
+                    parameters={
+                        "n_bootstraps": 2,
+                        "baseline_model": ARENA_MODELS[0],
+                        "soft": False,
+                    },
+                ),
+            ),
+            "default_temperature": 0.4,
+        }
+    )
+    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+    calibration_args = {}
+    calibrate = estimate_elo_ratings.calibrate_pairscore_temperature
+
+    def capture_calibration(*args, **kwargs):
+        calibration_args.update(kwargs)
+        return calibrate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        estimate_elo_ratings, "calibrate_pairscore_temperature", capture_calibration
+    )
+
+    result = run_elo(cfg, task)
+
+    metric = _rating_metric(result)
+    assert metric["method"] == method
+    assert metric["n_bootstraps"] == n_bootstraps
+    assert len(metric["bootstrap_ratings"]) == n_bootstraps
+    if anchor is not None:
+        assert metric["ratings"][anchor] == pytest.approx(1000)
+    else:
+        assert np.mean(list(metric["ratings"].values())) == pytest.approx(1000)
+    assert cfg.elo.baseline_model == anchor
+    assert calibration_args["soft_elo"] is (method == "Soft-ELO")
+    assert calibration_args["default_temperature"] == 0.4
+    saved = load_config(next(tmp_path.rglob("config.yaml")))
+    assert saved.elo == cfg.elo
+
+
+def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
+    cfg = _default_args(result_folder=str(tmp_path))
+    task = get_packaged_task(cfg.task)
+    scoring = task.spec.protocol.scoring.model_copy(
+        update={"metrics": (MetricSpec(metric="pairwise_win_rate"),)}
+    )
+    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+
+    result = run_elo(cfg, task)
+
+    assert set(result["metrics"]) == {"pairwise_win_rate"}
+    assert not list(tmp_path.rglob("bootstrap_ratings.csv"))
+    assert not list(tmp_path.rglob("elo_ratings.json"))
 
 
 def test_run_elo_winrate_in_valid_range(tmp_path):
     result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
-    assert 0.0 <= result["winrate"] <= 1.0
+    assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
 
 
 def test_run_elo_winrate_depends_on_judge(tmp_path):
@@ -214,7 +388,10 @@ def test_run_elo_winrate_depends_on_judge(tmp_path):
             result_folder=str(tmp_path), judge_model="Dummy/score A: 10 score B: 0"
         )
     )
-    assert result_wins["winrate"] > result_loses["winrate"]
+    assert (
+        _pairwise_metric(result_wins)["winrate"]
+        > _pairwise_metric(result_loses)["winrate"]
+    )
 
 
 def test_run_elo_language_filter_reduces_battles(tmp_path):
@@ -227,10 +404,8 @@ def test_run_elo_language_filter_reduces_battles(tmp_path):
             result_folder=str(tmp_path), n_instructions=None, languages=["en"]
         )
     )
-    total_all = (
-        result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
-    )
-    total_en = result_en["num_wins"] + result_en["num_losses"] + result_en["num_ties"]
+    total_all = _num_pairwise_rows(result_all)
+    total_en = _num_pairwise_rows(result_en)
     assert total_en < total_all
 
 
@@ -238,7 +413,9 @@ def test_run_elo_model_in_bootstrap_ratings(tmp_path):
     """Our model should appear in the bootstrap ELO leaderboard."""
     result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     model_name = result["model_name"]
-    assert all(model_name in r for r in result["bootstrap_ratings"])
+    assert all(
+        model_name in ratings for ratings in _rating_metric(result)["bootstrap_ratings"]
+    )
 
 
 def test_run_elo_n_instructions_limits_battles(tmp_path):
@@ -249,18 +426,8 @@ def test_run_elo_n_instructions_limits_battles(tmp_path):
     result_10 = run_elo_with_task(
         _default_args(result_folder=str(tmp_path), n_instructions=10)
     )
-    total_5 = (
-        result_5["num_wins"]
-        + result_5["num_losses"]
-        + result_5["num_ties"]
-        + result_5["num_missing"]
-    )
-    total_10 = (
-        result_10["num_wins"]
-        + result_10["num_losses"]
-        + result_10["num_ties"]
-        + result_10["num_missing"]
-    )
+    total_5 = _num_pairwise_rows(result_5)
+    total_10 = _num_pairwise_rows(result_10)
     assert total_5 == 5
     assert total_10 == 10
 
@@ -481,10 +648,8 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
             result_folder=str(tmp_path), task="elo-lmarena-140k", n_instructions=None
         )
     )
-    total_en = result_en["num_wins"] + result_en["num_losses"] + result_en["num_ties"]
-    total_all = (
-        result_all["num_wins"] + result_all["num_losses"] + result_all["num_ties"]
-    )
+    total_en = _num_pairwise_rows(result_en)
+    total_all = _num_pairwise_rows(result_all)
     assert 0 < total_en < total_all
 
 
@@ -498,7 +663,7 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
         captured["n_pairs"] = len(delta_s)
         return 0.42
 
-    monkeypatch.setattr(estimate_elo_ratings, "calibrate_temperature", fake_calibrate)
+    monkeypatch.setattr(elo_calibration, "fit_temperature", fake_calibrate)
     # Anchor battles require models with >= 500 appearances; the default
     # 30-battle fixture leaves the calibration pool empty.
     monkeypatch.setattr(
@@ -510,7 +675,7 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     )
 
     assert captured["n_pairs"] >= 10
-    assert 0.0 <= result["winrate"] <= 1.0
+    assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
 
 
 def test_extract_instruction_text_tolerates_moderated_turns():
@@ -541,3 +706,34 @@ def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
 
     # The default preset's registered parser instance, not a fresh fallback.
     assert captured["parse"] is JUDGE_PARSERS["score"]
+
+
+def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(
+    tmp_path, monkeypatch
+):
+    class SoftParser(JudgeParser):
+        name = "soft-parser"
+
+        def parse_result(self, judge_completion, **kwargs):
+            return ParsedPreference(0.75)
+
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "resolve_run_judge_prompt",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            parser=SoftParser(),
+            preset_name="soft-parser",
+            system_prompt="system",
+            user_prompt_template="{user_prompt} {completion_A} {completion_B}",
+        ),
+    )
+    captured_prefs = []
+    convert = estimate_elo_ratings.prefs_to_battle_results
+
+    def capture_prefs(prefs, *args, **kwargs):
+        captured_prefs.extend(prefs)
+        return convert(prefs, *args, **kwargs)
+
+    monkeypatch.setattr(estimate_elo_ratings, "prefs_to_battle_results", capture_prefs)
+    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
+    assert captured_prefs and set(captured_prefs) == {0.75}

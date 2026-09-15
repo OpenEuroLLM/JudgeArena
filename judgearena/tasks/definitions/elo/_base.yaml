@@ -19,6 +19,8 @@ protocol:
     default_prompt_preset: default
     default_swap_mode: fixed
   scoring:
-    adapter: bradley_terry
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: bradley_terry
     default_soft: true
     default_temperature: 0.3

@@ -19,7 +19,7 @@ from pydantic_settings import (
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol
+from judgearena.tasks.schema import EloProtocol, EloScoringSpec
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -356,6 +356,26 @@ class EloArgs(BaseModel):
     """Number of human arena battles to sample for temperature calibration.
     Defaults to all. Requires ``calibrate_temperature``."""
 
+    def resolve(self, scoring: EloScoringSpec) -> EloArgs:
+        """Resolve the actual task's scoring settings before a run."""
+        parameters = next(
+            (
+                metric.parameters
+                for metric in scoring.metrics
+                if metric.metric == "bradley_terry"
+            ),
+            {},
+        )
+        values = {
+            "soft_elo": parameters.get("soft", scoring.default_soft),
+            "soft_elo_temperature": scoring.default_temperature,
+        }
+        for key in ("n_bootstraps", "baseline_model"):
+            if key in parameters:
+                values[key] = parameters[key]
+        values.update(self.model_dump(exclude_unset=True))
+        return EloArgs.model_validate(values, strict=True)
+
 
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
@@ -456,10 +476,6 @@ class RunConfig(BaseSettings):
         if is_elo:
             if self.elo is None:
                 self.elo = EloArgs()
-            if "soft_elo" not in self.elo.model_fields_set:
-                self.elo.soft_elo = protocol.scoring.default_soft
-            if "soft_elo_temperature" not in self.elo.model_fields_set:
-                self.elo.soft_elo_temperature = protocol.scoring.default_temperature
             if self.model.name is None:
                 raise ValueError("model.name is required for ELO tasks.")
             if self.model.baseline is not None:
