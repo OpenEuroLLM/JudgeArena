@@ -36,7 +36,8 @@ dependencies = [
     "langchain-together>=0.3.1",
     "pandas>=2.3.2",
     "pyyaml>=6.0.2",
-    "scikit-learn>=1.8.0",
+    "scikit-learn>=1.8.0,<1.10",
+    "tiktoken>=0.7.0",
     "tqdm>=4.67.1",
     "pydantic-settings>=2.0",
     "pydantic>=2.13.4",
@@ -55,6 +56,7 @@ exclude = ["slurmpilot_scripts*"]
 "judgearena.criteria" = ["data/*.yaml"]
 "judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt"]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
+"judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 
 [dependency-groups]
 dev = [

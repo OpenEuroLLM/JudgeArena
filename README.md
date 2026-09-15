@@ -207,7 +207,7 @@ uv run judgearena \
 
 ```bash
 uv run judgearena \
-  --task alpaca-eval \
+  --task alpaca-eval-ja \
   --model.name LlamaCpp/./models/qwen2.5-0.5b-instruct-q8_0.gguf \
   --model.baseline LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
   --judge.model LlamaCpp/./models/qwen2.5-1.5b-instruct-q8_0.gguf \
@@ -246,9 +246,12 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 
 | Task                         | Description                                                                                                                                                                     |
 |------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `alpaca-eval`                | General instruction-following benchmark                                                                                                                                         |
-| `arena-hard-v2.0`            | Arena-Hard v2.0 from official `lmarena-ai/arena-hard-auto` source                                                                                                               |
-| `arena-hard-v0.1`            | Legacy Arena-Hard v0.1 from official `lmarena-ai/arena-hard-auto` source                                                                                                        |
+| `alpaca-eval`                | AlpacaEval 2.0 with official judging and length-controlled scoring, backed by the archived 177-model output table                                                               |
+| `alpaca-eval-ja`             | JudgeArena generic judging and metrics on the same AlpacaEval instructions and archived outputs                                                                                 |
+| `arena-hard-v2.0`            | Arena-Hard v2.0 with its official category-aware judging and scoring protocol                                                                                                   |
+| `arena-hard-v2.0-ja`         | JudgeArena generic judging and scoring on the same Arena-Hard v2.0 data and archived outputs                                                                                    |
+| `arena-hard-v0.1`            | Arena-Hard v0.1 with its official judging and weighted scoring protocol                                                                                                         |
+| `arena-hard-v0.1-ja`         | JudgeArena generic judging and scoring on the same Arena-Hard v0.1 data and archived outputs                                                                                    |
 | `m-arena-hard-v0.1`          | `CohereLabs/m-ArenaHard` (500 prompts, Google-Translate) across 23 languages                                                                                                    |
 | `m-arena-hard-v0.1-{lang}`   | Language-specific v0.1 slice (e.g., `ar`, `cs`, `de`, `uk`, `zh`, `pl`)                                                                                                         |
 | `m-arena-hard-v0.1-EU`       | All EU v0.1 languages combined                                                                                                                                                  |
@@ -258,10 +261,10 @@ Task names follow [LMHarness](https://github.com/EleutherAI/lm-evaluation-harnes
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
-For MT-Bench, the default pairwise baseline is `gpt-4`.
-We diverge from FastChat's own `pairwise-baseline` default (`gpt-3.5-turbo`) to keep
-a stronger reference consistent with Arena-Hard v0.1; the `gpt-4.jsonl` completions
-ship in the `lmsys/mt-bench` HF Space. Override per run with `--model.baseline`.
+For MT-Bench, the default pairwise baseline is `gpt-3.5-turbo`, matching
+FastChat's `pairwise-baseline` default. To keep the previous GPT-4 comparison,
+set `--model.baseline gpt-4`; its completions are available in the
+`lmsys/mt-bench` HF Space.
 
 For Arena-Hard, JudgeArena resolves baseline metadata by task version:
 - `arena-hard-v0.1`: `gpt-4-0314`

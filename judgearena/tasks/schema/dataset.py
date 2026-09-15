@@ -1,5 +1,7 @@
 """Common dataset contract for declarative tasks."""
 
+from typing import Literal
+
 from pydantic import Field
 
 from judgearena.tasks.schema.base import StrictFrozenModel
@@ -12,6 +14,7 @@ class DatasetFields(StrictFrozenModel):
     id: str = Field(min_length=1)
     instruction: str = Field(min_length=1)
     category: str | None = None
+    id_strategy: Literal["source", "position"] = "source"
 
 
 class DatasetSpec(StrictFrozenModel):

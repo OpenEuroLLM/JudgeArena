@@ -23,7 +23,7 @@ def test_mt_bench_sources_are_owned_by_task_yaml():
     assert benchmark.revision == "a4b674ca573c24143824ac7f60d9173e7081e37d"
     assert benchmark.allow_patterns == (
         "data/mt_bench/question.jsonl",
-        "data/mt_bench/model_answer/gpt-4.jsonl",
+        "data/mt_bench/model_answer/gpt-3.5-turbo.jsonl",
     )
     assert references.repository == "https://github.com/lm-sys/FastChat"
     assert references.revision == "587d5cfa1609a43d192cedb8441cac3c17db105d"
@@ -110,8 +110,11 @@ def test_download_all_includes_mt_bench(tmp_path, monkeypatch):
     tables_dir = tmp_path / "tables"
     assert [name for name, _ in hf_datasets] == [
         "alpaca-eval",
+        "alpaca-eval-ja",
         "arena-hard-v0.1",
+        "arena-hard-v0.1-ja",
         "arena-hard-v2.0",
+        "arena-hard-v2.0-ja",
         "elo-comparia",
         "elo-lmarena",
         "elo-lmarena-100k",
@@ -301,7 +304,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -347,7 +350,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
 
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
-    assert cfg.model.baseline == "gpt-4"
+    assert cfg.model.baseline == "gpt-3.5-turbo"
     assert captured["make_model"]["max_model_len"] == 65536
     assert captured["make_model"]["tensor_parallel_size"] == 4
     assert captured["fastchat"]["cfg"].generation.truncate_judge_input_chars == 80000
@@ -372,7 +375,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -415,7 +418,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
 
     mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))
 
-    assert cfg.model.baseline == "gpt-4"
+    assert cfg.model.baseline == "gpt-3.5-turbo"
     assert captured["make_model"]["temperature"] == 0.0
     assert captured["fastchat"]["protocol"].judge.fastchat_prompt_preset == "default"
     assert captured["fastchat"]["resolved_prompt"].preset_name == (
@@ -437,7 +440,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -561,7 +564,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
     monkeypatch.setattr(
         mt_bench_runner,
         "_generate_mt_bench_completions",
-        lambda cfg, protocol, questions_df: (
+        lambda cfg, protocol, questions_df, **_kwargs: (
             pd.DataFrame(
                 {"completion_turn_1": ["A1"], "completion_turn_2": ["A2"]},
                 index=questions_df.index,
@@ -685,3 +688,25 @@ def test_mt_bench_finalization_uses_shared_grouped_metric(monkeypatch, tmp_path)
     assert [
         (item["group"], item["values"]["winrate"]) for item in metric["groups"]["turn"]
     ] == [(1, 1.0), (2, 0.25)]
+
+
+def test_run_mt_bench_rejects_logprob_parser_before_preparation(monkeypatch):
+    cfg = RunConfig(
+        task="mt-bench",
+        model={"name": "Dummy/model"},
+        judge={
+            "model": "Dummy/judge",
+            "prompt_preset": "alpaca-eval",
+            "top_logprobs": 5,
+        },
+    )
+
+    def unexpected_preparation(*_args, **_kwargs):
+        pytest.fail("Unsupported parser must fail before preparing the run")
+
+    monkeypatch.setattr(
+        mt_bench_runner, "prepare_run_directory", unexpected_preparation
+    )
+
+    with pytest.raises(ValueError, match="MT-Bench does not support.*logprobs"):
+        mt_bench_runner.run_mt_bench_benchmark(cfg, get_packaged_task("mt-bench"))

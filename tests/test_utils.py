@@ -4,6 +4,7 @@ import judgearena.models as utils_models
 import judgearena.utils as utils
 import judgearena.utils.io as utils_io
 from judgearena.models import make_model
+from judgearena.tasks.registry import load_tasks
 from judgearena.utils import safe_parse_int
 
 
@@ -40,20 +41,8 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     )
     utils_io.download_all()
 
-    tables_dir = tmp_path / "tables"
-    assert calls == [
-        ("hf", "alpaca-eval", tables_dir),
-        ("hf", "arena-hard-v0.1", tables_dir),
-        ("hf", "arena-hard-v2.0", tables_dir),
-        ("hf", "elo-comparia", tables_dir),
-        ("hf", "elo-lmarena", tables_dir),
-        ("hf", "elo-lmarena-100k", tables_dir),
-        ("hf", "elo-lmarena-140k", tables_dir),
-        ("hf", "fluency", tables_dir),
-        ("hf", "m-arena-hard-v0.1", tables_dir),
-        ("hf", "m-arena-hard-v2.0", tables_dir),
-        ("hf", "mt-bench", tables_dir),
-    ]
+    assert [name for _, name, _ in calls] == list(load_tasks())
+    assert {path for _, _, path in calls} == {tmp_path / "tables"}
 
 
 def test_strip_thinking_tags_removes_full_reasoning_block():
@@ -108,7 +97,7 @@ def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
         enforce_eager=True,
         temperature=0.5,
         top_logprobs=5,
-        extra_body={"provider": {"require_parameters": True}},
+        extra_body={"provider": {"order": ["Google"]}},
     )
 
     payload = model._get_request_payload("test")
@@ -120,11 +109,30 @@ def test_make_model_openrouter_uses_native_max_tokens(monkeypatch):
     assert "max_completion_tokens" not in payload
     assert payload["extra_body"] == {
         "max_tokens": 16,
-        "provider": {"require_parameters": True},
+        "provider": {"order": ["Google"], "require_parameters": True},
     }
     assert payload["logprobs"] is True
     assert payload["top_logprobs"] == 5
     assert model.temperature == 0.5
+
+    ordinary = make_model("OpenRouter/test/model", max_tokens=16)
+    assert ordinary._get_request_payload("test")["extra_body"] == {"max_tokens": 16}
+
+
+def test_empty_first_token_top_logprobs_are_missing():
+    from langchain_core.messages import AIMessage
+
+    response = AIMessage(
+        content="M",
+        response_metadata={"logprobs": {"content": [{"top_logprobs": []}]}},
+    )
+
+    assert utils_models._first_token_top_logprobs(response) is None
+
+
+def test_make_model_rejects_unsupported_top_logprobs_backend():
+    with pytest.raises(ValueError, match="LlamaCpp backend does not support"):
+        make_model("LlamaCpp/model.gguf", top_logprobs=5)
 
 
 def test_init_llm_with_retry_recovers_from_transient_cuda_error(monkeypatch):

@@ -4,8 +4,12 @@ repos:
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+        # These official Arena-Hard prompts are byte-exact upstream strings.
+        exclude: ^judgearena/prompts/templates/arena-hard-(creative-system-prompt|prompt|system-prompt)\.txt$
       - id: check-yaml
       - id: check-added-large-files
+        # Reviewed compact calibration data required by Arena-Hard v2 scoring.
+        exclude: ^judgearena/benchmarks/pairwise/scoring/arena_hard_v20_calibration\.csv\.gz$
 
   - repo: local
     hooks:

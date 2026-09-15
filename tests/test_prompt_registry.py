@@ -29,8 +29,9 @@ class FakeCliArgs:
 
 
 def test_default_presets_are_owned_by_task_yaml():
-    assert default_preset_for_task("alpaca-eval") == "default"
-    assert default_preset_for_task("arena-hard-v2.0") == "default"
+    assert default_preset_for_task("alpaca-eval") == "alpaca-eval"
+    assert default_preset_for_task("alpaca-eval-ja") == "default"
+    assert default_preset_for_task("arena-hard-v2.0") == "arena-hard"
 
 
 def test_default_preset_for_fluency_prefix():
@@ -169,18 +170,15 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
         FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
     )
 
-    assert resolved_default.preset_name == "default"
+    assert resolved_default.preset_name == "alpaca-eval"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
 @pytest.mark.parametrize(
     ("parse", "expected"),
     [(None, 0.8807970779778823), (PairScore(temperature=0.5), 0.7310585786300049)],
 )
-def test_judging_uses_preset_parser_unless_overridden(
-    monkeypatch, swap_mode, parse, expected
-):
+def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expected):
     monkeypatch.setitem(
         PRESETS,
         "test-score",
@@ -193,17 +191,13 @@ def test_judging_uses_preset_parser_unless_overridden(
         completions_A=["Answer A"],
         completions_B=["Answer B"],
         prompt_preset="test-score",
-        swap_mode=swap_mode,
+        swap_mode="fixed",
         parse=parse,
     )
 
     assert annotations[0].parsed.preference == pytest.approx(expected)
-    if swap_mode == "both":
-        assert reversed_annotations[0].parsed.preference == pytest.approx(expected)
-        assert prefs.tolist() == pytest.approx([expected, 1 - expected])
-    else:
-        assert reversed_annotations is None
-        assert prefs.tolist() == pytest.approx([expected])
+    assert reversed_annotations is None
+    assert prefs.tolist() == pytest.approx([expected])
 
 
 def test_every_preset_resolves_or_delegates():

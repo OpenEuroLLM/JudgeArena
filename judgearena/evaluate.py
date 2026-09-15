@@ -286,16 +286,6 @@ def judge_and_parse_prefs(
         return float("nan") if x is None else x
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        if parse.requires_top_logprobs:
-            n_no_logprobs = sum(1 for a in ann_list if a.judge_top_logprobs is None)
-            if n_no_logprobs:
-                logger.warning(
-                    "%d/%d judge responses returned no logprobs (%s) — falling "
-                    "back to discrete token parsing for those.",
-                    n_no_logprobs,
-                    len(ann_list),
-                    label,
-                )
         results = [
             parse.parse_result(
                 annotation.judge_completion,

@@ -8,6 +8,13 @@ from typing import Protocol
 import pandas as pd
 
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
+from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
+    AlpacaEvalLengthControlledMetric,
+)
+from judgearena.benchmarks.pairwise.scoring.arena_hard import (
+    ArenaHardV01Metric,
+    ArenaHardV20Metric,
+)
 from judgearena.benchmarks.pairwise.scoring.metrics import (
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
@@ -37,6 +44,9 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,
+    "arena_hard_v01": ArenaHardV01Metric,
+    "arena_hard_v20": ArenaHardV20Metric,
+    "alpaca_eval_length_controlled": AlpacaEvalLengthControlledMetric,
 }
 
 ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric], ...]
@@ -128,9 +138,15 @@ def render_metrics(results: Mapping[str, dict[str, object]]) -> str:
     for name, result in results.items():
         metric_type = _metric_type(name)
         overall = {key: value for key, value in result.items() if key != "groups"}
-        sections.append(metric_type.render(overall))
+        sections.append(
+            metric_type.render(overall) if overall else f"{name}: unavailable"
+        )
         for field, groups in result.get("groups", {}).items():
             for group in groups:
-                rendered = metric_type.render(group["values"])
+                rendered = (
+                    metric_type.render(group["values"])
+                    if group["values"]
+                    else f"{name}: unavailable"
+                )
                 sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
     return "\n\n".join(sections)

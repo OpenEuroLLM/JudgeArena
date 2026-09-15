@@ -1,0 +1,28 @@
+I require a leaderboard for various large language models. I'll provide you with prompts given to these models and their corresponding outputs. Your task is to assess these responses, and select the model that produces the best output from a human perspective.
+
+## Instruction
+
+{{
+    "instruction": """{user_prompt}""",
+}}
+
+## Model Outputs
+
+Here are the unordered outputs from the models. Each output is associated with a specific model, identified by a unique model identifier.
+
+{{
+    {{
+        "model_identifier": "m",
+        "output": """{completion_A}"""
+    }},
+    {{
+        "model_identifier": "M",
+        "output": """{completion_B}"""
+    }}
+}}
+
+## Task
+
+Evaluate the models based on the quality and relevance of their outputs, and select the model that generated the best output. Answer by providing the model identifier of the best model. We will use your output as the name of the best model, so make sure your output only contains one of the following model identifiers and nothing else (no quotes, no spaces, no new lines, ...): m or M.
+
+## Best Model Identifier

@@ -17,9 +17,10 @@ from pydantic_settings import (
 )
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloProtocol, EloScoringSpec
+from judgearena.tasks.schema import EloProtocol, EloScoringSpec, MTBenchProtocol
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -309,8 +310,8 @@ class GenerationArgs(BaseModel):
     n_instructions: int | None = None
     """Number of instructions/battles to evaluate. Defaults to the full task."""
 
-    truncate_all_input_chars: int = 8192
-    """Character cap applied to each instruction before model generation."""
+    truncate_all_input_chars: int | None = 8192
+    """Character cap before model generation. None preserves the full instruction."""
 
     truncate_judge_input_chars: int | None = None
     """Character cap applied to judge-side inputs before evaluation. Unset
@@ -453,24 +454,59 @@ class RunConfig(BaseSettings):
             )
 
         protocol = resolved_task.spec.protocol
+        task_generation = getattr(protocol, "generation", None)
+        if (
+            "truncate_all_input_chars" not in self.generation.model_fields_set
+            and not getattr(task_generation, "default_truncate_input", True)
+        ):
+            self.generation.truncate_all_input_chars = None
+        model_values = self.model.model_dump(exclude_unset=True)
+        for field, engine_key in (("max_out_tokens", "max_tokens"), ("seed", "seed")):
+            default = getattr(task_generation, f"default_{field}", None)
+            if default is None:
+                continue
+            if field not in self.model.model_fields_set:
+                model_values[field] = self.model.engine_kwargs.get(engine_key, default)
+
+            baseline_field = f"baseline_{field}"
+            if getattr(self.model, baseline_field) is not None:
+                continue
+            # Dedicated model settings still take precedence when inherited.
+            if (
+                field not in self.model.model_fields_set
+                and self.model.baseline_engine_kwargs is not None
+                and engine_key in self.model.baseline_engine_kwargs
+            ):
+                model_values[baseline_field] = self.model.baseline_engine_kwargs[
+                    engine_key
+                ]
+        self.model = ModelArgs.model_validate(model_values)
+
         task_judge = protocol.judge
-        if "swap_mode" not in self.judge.model_fields_set:
-            self.judge.swap_mode = task_judge.default_swap_mode
-        if (
-            "temperature" not in self.judge.model_fields_set
-            and task_judge.default_temperature is not None
+        judge_values = self.judge.model_dump(exclude_unset=True)
+        if "swap_mode" not in judge_values:
+            judge_values["swap_mode"] = task_judge.default_swap_mode
+        if isinstance(protocol, MTBenchProtocol):
+            judge_engine_kwargs = {
+                **self.model.engine_kwargs,
+                **self.judge.engine_kwargs,
+            }
+        else:
+            judge_engine_kwargs = build_default_judge_model_kwargs(
+                self.judge.model,
+                self.model.engine_kwargs,
+                judge_engine_kwargs_override=self.judge.engine_kwargs,
+            )
+        for field, engine_key in (
+            ("temperature", "temperature"),
+            ("max_out_tokens", "max_tokens"),
+            ("top_logprobs", "top_logprobs"),
         ):
-            self.judge.temperature = task_judge.default_temperature
-        if (
-            "max_out_tokens" not in self.judge.model_fields_set
-            and task_judge.default_max_out_tokens is not None
-        ):
-            self.judge.max_out_tokens = task_judge.default_max_out_tokens
-        if (
-            "top_logprobs" not in self.judge.model_fields_set
-            and task_judge.default_top_logprobs is not None
-        ):
-            self.judge.top_logprobs = task_judge.default_top_logprobs
+            default = getattr(task_judge, f"default_{field}")
+            if default is None or field in judge_values:
+                continue
+            judge_values[field] = judge_engine_kwargs.get(engine_key, default)
+        self.judge = JudgeArgs.model_validate(judge_values)
 
         is_elo = isinstance(protocol, EloProtocol)
         if is_elo:

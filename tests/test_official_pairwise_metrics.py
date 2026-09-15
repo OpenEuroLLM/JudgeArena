@@ -1,0 +1,157 @@
+"""Official benchmark metric regressions."""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from judgearena.benchmarks.pairwise.scoring import alpaca_eval as alpaca_scoring
+from judgearena.benchmarks.pairwise.scoring import arena_hard
+from judgearena.benchmarks.pairwise.scoring.arena_hard import (
+    ArenaHardV01Metric,
+    ArenaHardV20Metric,
+    _style_features,
+)
+from judgearena.benchmarks.scoring import build_metric
+from judgearena.tasks.registry import get_packaged_task
+
+
+def _battles(prefs: list, **overrides) -> pd.DataFrame:
+    n = len(prefs)
+    columns = {
+        "instruction_index": [f"{i:04d}" for i in range(n)],
+        "model": "model-under-test",
+        "baseline": "baseline-model",
+        "completion_model": ["m" * (i + 1) for i in range(n)],
+        "completion_baseline": ["b" * (2 * i + 1) for i in range(n)],
+        "pref": pd.Series(prefs, dtype="float64"),
+    }
+    columns.update(overrides)
+    return pd.DataFrame(columns)
+
+
+def test_arena_hard_v01_weighting_and_bootstrap_match_official_fixture():
+    metric = ArenaHardV01Metric()
+    weighted = metric.calculate(_battles([0.0, 0.25, 0.75, None]))
+    fixture = metric.calculate(
+        _battles([0.0, 0.5, 0.75] * 10, category="arena-hard-v0.1")
+    )
+
+    assert weighted["winrate"] == pytest.approx(0.8)
+    assert (weighted["num_wins"], weighted["num_losses"]) == (2, 1)
+    assert weighted["num_missing"] == 1
+    assert fixture["winrate"] == pytest.approx(0.7)
+    assert fixture["score_ci_low"] == pytest.approx(0.6)
+    assert fixture["score_ci_high"] == pytest.approx(0.8)
+
+
+def test_arena_hard_protocols_handle_incomplete_pairs_differently():
+    battles = _battles(
+        [0.0, None, 0.25, 0.75, 0.0, 1.0],
+        instruction_index=["q0", "q0", "q1", "q1", "q1", "q1"],
+        orientation=["direct", "reversed"] * 3,
+        judge=["judge-1"] * 4 + ["judge-2"] * 2,
+        category="creative_writing",
+    )
+
+    v01 = ArenaHardV01Metric().calculate(battles)
+    v20 = ArenaHardV20Metric().calculate(battles)
+
+    assert v01["num_missing"] == 1  # v0.1 keeps each parseable judgment
+    assert v20["num_missing"] == 2  # v2 drops the incomplete judge/order pair
+    assert (v20["num_wins"], v20["num_losses"]) == (2, 2)
+
+
+def test_arena_hard_v2_selects_official_method_per_category():
+    result = ArenaHardV20Metric().calculate(
+        _battles([0.0, 1.0], category=["hard_prompt", "creative_writing"])
+    )
+
+    assert result["category_methods"] == {
+        "hard_prompt": "joint_style_controlled_bt",
+        "creative_writing": "weighted_mean",
+    }
+    assert result["aggregate_score_is_official"] is False
+
+
+def test_arena_hard_v2_released_population_score_regression():
+    assert _style_features("# Header\n1. item\n- item\n**bold**").tolist() == [
+        13.0,
+        1.0,
+        2.0,
+        1.0,
+    ]
+    population = arena_hard._load_style_calibration()
+    live = population.loc[
+        (population["judge"] == "gpt-4.1") & (population["model"] == "deepseek-r1")
+    ].copy()
+    live["judge_prompt_preset"] = "arena-hard"
+    live["judge_temperature"] = 0.0
+    live["judge_max_out_tokens"] = 16000
+
+    calibration, complete = arena_hard._select_calibration(live)
+    result = ArenaHardV20Metric().calculate(live)
+
+    assert complete is True
+    assert "deepseek-r1" not in {
+        arena_hard._fit_model_id(model) for model in calibration["model"]
+    }
+    assert result["official_population_complete"] is True
+    # Native fitter on these JA-prepared features and the same draws:
+    # 48.0566829%, CI [45.9223182%, 50.4414114%]. This tests fitting on the
+    # selected JA population, not the native whole-leaderboard row order.
+    assert result["winrate"] == pytest.approx(0.480566829, abs=0.001)
+    assert result["score_ci_low"] == pytest.approx(0.459223182, abs=0.002)
+    assert result["score_ci_high"] == pytest.approx(0.504414114, abs=0.002)
+
+
+def test_arena_hard_fitter_matches_native_mixed_outcome_fixture():
+    # Native utils/math_utils.py at 196f6b8, evaluated with PyTorch 2.14 CPU.
+    # Two candidate models, one baseline, and four style-control columns.
+    model_features = np.tile([[1, 0, -1], [0, 1, -1]], (16, 1)).astype("float32")
+    style_features = np.random.RandomState(196).normal(size=(32, 4)).astype("float32")
+    features = np.column_stack((model_features, style_features))
+    outcomes = np.tile([0, 0.5, 1, 0, 1, 1, 0.5, 0], 4).astype("float32")
+
+    coefficients = arena_hard._logistic_coefficients(features, outcomes)
+
+    expected = [
+        1.3839725256,
+        -0.0294847824,
+        0.1455115527,
+        -0.5165163875,
+        0.2982191741,
+        0.7576940060,
+        0.6842912436,
+    ]
+    assert coefficients.dtype == np.float32
+    np.testing.assert_allclose(coefficients, expected, rtol=0, atol=1e-4)
+
+
+def test_alpaca_eval_lc_synthetic_golden_runs_offline(monkeypatch):
+    gamed = pd.DataFrame(
+        [
+            {
+                "index": index,
+                "preference": (index + baseline + 1) / 12,
+                "std_delta_len": (index - 4.5) / (2 + baseline),
+                "instruction_difficulty": (index - 4.5) / 5,
+                "not_gamed_baseline": False,
+            }
+            for index in range(10)
+            for baseline in range(2)
+        ]
+    )
+    monkeypatch.setattr(alpaca_scoring, "_load_gamed_data", lambda *_args: gamed)
+    battles = _battles(
+        [0.1, 0.2, None, 0.4, 0.5, 0.6, 0.7, None, 0.9, 1.0],
+        completion_model=["x" * (20 + index**2) for index in range(10)],
+        completion_baseline=["y" * (12 + 3 * index) for index in range(10)],
+    )
+
+    request = get_packaged_task("alpaca-eval").spec.protocol.scoring.metrics[0]
+    result = build_metric(request.metric, request.parameters).calculate(battles)
+
+    assert result["length_controlled_winrate"] == pytest.approx(0.7497336730523078)
+    assert result["lc_standard_error"] == pytest.approx(0.04840456960699923)
+    assert result["raw_winrate"] == pytest.approx(0.45)
+    assert result["num_missing"] == 2

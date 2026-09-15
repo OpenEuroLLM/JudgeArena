@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
+from judgearena.benchmarks import execution as execution_module
 from judgearena.config import EloArgs, RunConfig, dump_config, load_config
 from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
@@ -53,7 +54,6 @@ def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
     [
         ("provide_explanation", True),
         ("system_prompt_file", "system.txt"),
-        ("user_prompt_file", "user.txt"),
         ("prompt_presett", "default"),
     ],
 )
@@ -75,6 +75,10 @@ def _registered_task(
     return SimpleNamespace(
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
+                generation=SimpleNamespace(
+                    default_max_out_tokens=1024,
+                    default_seed=7,
+                ),
                 judge=SimpleNamespace(
                     default_swap_mode=default_swap_mode,
                     default_temperature=default_temperature,
@@ -131,6 +135,142 @@ def test_registered_task_defaults_do_not_replace_explicit_judge_config(
         cfg.judge.max_out_tokens,
         cfg.judge.top_logprobs,
     ) == expected
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({}, (1024, 7, 1024, 7)),
+        (
+            {
+                "engine_kwargs": {"max_tokens": "64", "seed": 0},
+                "baseline_engine_kwargs": {"max_tokens": "32", "seed": 1},
+                "baseline_seed": 2,
+            },
+            (64, 0, 32, 2),
+        ),
+        (
+            {
+                "max_out_tokens": 128,
+                "seed": 0,
+                "engine_kwargs": {"max_tokens": 64, "seed": 1},
+            },
+            (128, 0, 128, 0),
+        ),
+        ({"seed": None, "baseline_seed": None}, (1024, None, 1024, None)),
+    ],
+)
+def test_generation_settings_prefer_dedicated_then_engine_then_task(
+    monkeypatch, overrides, expected
+):
+    monkeypatch.setattr(
+        config_module, "get_packaged_task", lambda _task: _registered_task()
+    )
+    data = _base_generate()
+    data["model"].update(overrides)
+    cfg = RunConfig(**data)
+    model = cfg.model.evaluated_generation_kwargs()
+    baseline = cfg.model.baseline_generation_kwargs()
+
+    assert (
+        model["max_tokens"],
+        model.get("seed"),
+        baseline["max_tokens"],
+        baseline.get("seed"),
+    ) == expected
+    assert type(model["max_tokens"]) is int
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"engine_kwargs": {"max_tokens": "64"}}, (0.5, 64, 3)),
+        (
+            {
+                "temperature": 0.0,
+                "top_logprobs": 0,
+                "engine_kwargs": {"temperature": 0.7, "top_logprobs": 2},
+            },
+            (0.0, 128, 0),
+        ),
+    ],
+)
+def test_judge_settings_include_inherited_engine_kwargs(
+    monkeypatch, overrides, expected
+):
+    monkeypatch.setattr(
+        config_module, "get_packaged_task", lambda _task: _registered_task()
+    )
+    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
+    data = _base_generate()
+    data["model"]["engine_kwargs"] = {
+        "temperature": 0.5,
+        "max_tokens": 128,
+        "top_logprobs": 3,
+    }
+    data["judge"].update(model="VLLM/j", **overrides)
+
+    kwargs = execution_module.build_judge(RunConfig(**data))
+
+    assert (
+        kwargs["temperature"],
+        kwargs["max_tokens"],
+        kwargs["top_logprobs"],
+    ) == expected
+    assert type(kwargs["max_tokens"]) is int
+
+
+@pytest.mark.parametrize(
+    ("task", "judge_model", "expected"),
+    [
+        ("alpaca-eval", "OpenRouter/j", 1),
+        ("alpaca-eval", "VLLM/j", 128),
+        ("mt-bench", "OpenRouter/j", 128),
+    ],
+)
+def test_judge_engine_inheritance_matches_the_runner(
+    monkeypatch, task, judge_model, expected
+):
+    data = _base_generate()
+    data["task"] = task
+    data["model"]["engine_kwargs"] = {"max_tokens": 128}
+    data["judge"]["model"] = judge_model
+    monkeypatch.setattr(execution_module, "make_model", lambda **kwargs: kwargs)
+
+    cfg = RunConfig(**data)
+    if task == "mt-bench":
+        kwargs = cfg.judge.model_kwargs(base_engine_kwargs=cfg.model.engine_kwargs)
+    else:
+        kwargs = execution_module.build_judge(cfg)
+
+    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected
+
+
+@pytest.mark.parametrize("role", ["model", "judge"])
+def test_engine_max_tokens_must_be_a_valid_token_limit(role):
+    data = _base_generate()
+    data["task"] = "mt-bench"
+    data[role]["engine_kwargs"] = {"max_tokens": None}
+
+    with pytest.raises(ValidationError, match="max_out_tokens"):
+        RunConfig(**data)
+
+
+@pytest.mark.parametrize(
+    ("task", "generation", "expected"),
+    [
+        ("arena-hard-v2.0", {}, None),
+        ("arena-hard-v2.0-ja", {}, 8192),
+        ("arena-hard-v2.0-ja", {"truncate_all_input_chars": None}, None),
+    ],
+)
+def test_generation_truncation_defaults_preserve_explicit_overrides(
+    task, generation, expected
+):
+    data = _base_generate()
+    data.update(task=task, generation=generation)
+
+    assert RunConfig(**data).generation.truncate_all_input_chars == expected
 
 
 def test_elo_config_keeps_defaults_implicit_until_task_resolution():

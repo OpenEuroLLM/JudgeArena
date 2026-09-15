@@ -28,7 +28,7 @@ def test_make_model_dummy_forwards_engine_kwargs():
 
 def test_model_args_evaluated_generation_kwargs_skip_unset_fields():
     cfg = RunConfig(
-        task="alpaca-eval",
+        task="alpaca-eval-ja",
         model={"name": "Dummy/a", "baseline": "Dummy/b"},
         judge={"model": "Dummy/j"},
     )
@@ -37,7 +37,7 @@ def test_model_args_evaluated_generation_kwargs_skip_unset_fields():
 
 def test_dedicated_sampling_fields_only_override_when_set():
     cfg = RunConfig(
-        task="alpaca-eval",
+        task="alpaca-eval-ja",
         model={
             "name": "Dummy/a",
             "baseline": "Dummy/b",
@@ -72,7 +72,7 @@ def test_dedicated_sampling_fields_only_override_when_set():
 
 def test_baseline_sampling_params_inherit_from_model_when_unset():
     cfg = RunConfig(
-        task="alpaca-eval",
+        task="alpaca-eval-ja",
         model={
             "name": "Dummy/a",
             "baseline": "Dummy/b",
@@ -106,7 +106,7 @@ def test_generation_cache_token_is_sensitive_to_sampling_params():
 
 def test_model_args_per_role_kwargs_are_independent():
     cfg = RunConfig(
-        task="alpaca-eval",
+        task="alpaca-eval-ja",
         model={
             "name": "Dummy/a",
             "baseline": "Dummy/b",
@@ -143,7 +143,7 @@ def test_nested_cli_sampling_flags_land_on_correct_roles():
     cfg = build_run_config(
         [
             "--task",
-            "alpaca-eval",
+            "alpaca-eval-ja",
             "--model.name",
             "Dummy/A",
             "--model.baseline",

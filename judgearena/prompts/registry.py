@@ -19,6 +19,9 @@ DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
+ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
+ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET = "arena-hard-creative"
+ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -102,6 +105,33 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+    ),
+    # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),
+    # verbatim except for placeholder names. The judge explains, then emits one
+    # graded verdict label ([[A>>B]] ... [[B>>A]]).
+    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ARENA_HARD_JUDGE_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["arena-hard-verdict"],
+        system_file="arena-hard-system-prompt.txt",
+        user_file="arena-hard-prompt.txt",
+    ),
+    # Official Arena-Hard v2.0 creative-writing variant: identical except the
+    # judge is not asked to answer the prompt itself first.
+    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["arena-hard-verdict"],
+        system_file="arena-hard-creative-system-prompt.txt",
+        user_file="arena-hard-prompt.txt",
+    ),
+    # Official AlpacaEval 2.0 annotator prompt (alpaca_eval_clf.txt), verbatim
+    # except for placeholder names and brace escaping for f-string templating.
+    # The judge answers with a single model identifier: "m" (completion_A) or
+    # "M" (completion_B).
+    ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
+        parser=JUDGE_PARSERS["alpaca-eval-token"],
+        system_file="alpaca-eval-system-prompt.txt",
+        user_file="alpaca-eval-prompt.txt",
     ),
 }
 
