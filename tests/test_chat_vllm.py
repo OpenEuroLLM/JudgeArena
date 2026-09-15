@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import judgearena.models as models
+from judgearena.usage import track_usage
 
 
 def _install_fake_vllm(monkeypatch):
@@ -33,7 +34,12 @@ def _install_fake_vllm(monkeypatch):
                 "sampling_params": sampling_params,
                 "kwargs": kwargs,
             }
-            return [SimpleNamespace(outputs=[SimpleNamespace(text="ok")])]
+            return [
+                SimpleNamespace(
+                    prompt_token_ids=[1, 2, 3],
+                    outputs=[SimpleNamespace(text="ok", token_ids=[4, 5])],
+                )
+            ]
 
     monkeypatch.setitem(
         sys.modules,
@@ -292,3 +298,12 @@ def test_is_retryable_error_retries_transient_http_codes():
 
 def test_is_retryable_error_does_not_retry_auth_failure():
     assert models._is_retryable_error(Exception("401 User not found.")) is False
+
+
+def test_chat_vllm_reports_exact_local_token_counts(monkeypatch):
+    _install_fake_vllm(monkeypatch)
+    chat_model = models.ChatVLLM(model="Qwen/Qwen3.5-9B", max_tokens=16)
+    with track_usage() as tracker:
+        models.do_inference(chat_model, ["hello"], stage="generation")
+    usage = tracker.snapshot().requests[0]
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (3, 2, 5)

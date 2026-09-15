@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from judgearena.benchmarks.registry import resolve_benchmark
 from judgearena.log import get_logger
+from judgearena.usage import track_usage
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -17,4 +18,8 @@ def run_benchmark(cfg: RunConfig) -> object:
     """Run a task through its registered benchmark adapter."""
     resolved = resolve_benchmark(cfg.task)
     logger.info("Using %s benchmark adapter for %s.", resolved.adapter.name, cfg.task)
-    return resolved.adapter.runner(cfg, resolved.task)
+    with track_usage() as usage_tracker:
+        try:
+            return resolved.adapter.runner(cfg, resolved.task)
+        finally:
+            usage_tracker.render_summary()

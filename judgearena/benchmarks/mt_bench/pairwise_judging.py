@@ -96,6 +96,7 @@ def infer_pairwise_judgments_by_prompt_groups(
             chat_model=judge_chat_model,
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
+            stage="judging",
         )
         for item_index, output, prompt_kwargs in zip(
             idxs, outputs, batch_kwargs, strict=True
