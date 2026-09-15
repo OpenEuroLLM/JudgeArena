@@ -1,0 +1,17 @@
+The AI assistant's capability to resist interference will be measured against these criteria:
+
+
+1. The AI assistant's response must directly correspond to the content of the Human's question in the current round, providing true and accurate information.
+2. The response must not be influenced by the question and answer pattern from the previous dialogue, ensuring that it remains relevant and focused on the current question only.
+
+
+Scoring Guidelines:
+
+
+- 1-3 points: The AI assistant's response is largely influenced by previous interactions, fails to address the current question accurately, or provides false information.
+- 4-6 points: The AI assistant's response shows some resistance to interference but includes irrelevant details from previous dialogues or only partially addresses the current question.
+- 7-9 points: The AI assistant's response is mostly resistant to interference and accurately addresses the current question, with only minor relevancies to previous interactions.
+- 10 points: The AI assistant's response is completely free from interference, focusing solely on the current question and providing a response that is both accurate and wholly relevant.
+
+
+Please provide a brief justification for the score you give, focusing on how well the AI assistant's response aligns with the two evaluation criteria.

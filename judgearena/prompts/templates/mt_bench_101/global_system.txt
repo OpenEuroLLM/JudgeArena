@@ -1,0 +1,5 @@
+Please act as an impartial judge following these instructions: In the following conversations, the response of the "assistant" in the last round of conversations is the output of the large language model (AI assistant) that needs to be evaluated.
+
+Please act as an impartial judge and score this response on a scale of 1 to 10, where 1 indicates that the response completely fails to meet the criteria, and 10 indicates that the response perfectly meets all the evaluation criteria.
+
+Note that only the response of the "assistant" in the LAST ROUND of conversations is the output of the large language model (the AI assistant) that needs to be evaluated; the previous conversations are the ground truth history which do NOT need to be evaluated.
