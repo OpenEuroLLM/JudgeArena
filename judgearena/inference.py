@@ -22,10 +22,9 @@ from judgearena.cache_sqlite import (
     stable_json_dumps,
     write_descriptor,
 )
+from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
-_CHAT_PROVIDERS = {"ChatOpenAI", "Dummy", "OpenRouter", "VLLM"}
-_TEXT_PROVIDERS = {"LlamaCpp", "OpenAI", "Together"}
 VLLM_EXECUTION_ONLY_KWARGS = {
     "enforce_eager",
     "gpu_memory_utilization",
@@ -33,14 +32,19 @@ VLLM_EXECUTION_ONLY_KWARGS = {
 }
 
 InputMode = Literal["chat", "text"]
+_PROVIDER_INPUT_MODES: dict[str, InputMode] = {
+    "ChatOpenAI": "chat",
+    "Dummy": "chat",
+    "LlamaCpp": "text",
+    "OpenAI": "text",
+    "OpenRouter": "chat",
+    "Together": "text",
+    "VLLM": "chat",
+}
 
 
 def provider_input_mode(provider: str) -> InputMode | None:
-    if provider in _CHAT_PROVIDERS:
-        return "chat"
-    if provider in _TEXT_PROVIDERS:
-        return "text"
-    return None
+    return _PROVIDER_INPUT_MODES.get(provider)
 
 
 def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
@@ -91,12 +95,12 @@ def build_model_descriptor(
     descriptor_kwargs = resolved_kwargs.copy()
     if provider == "VLLM":
         descriptor_kwargs["temperature"] = (
-            0.6
+            VLLM_DEFAULT_TEMPERATURE
             if descriptor_kwargs.get("temperature") is None
             else descriptor_kwargs["temperature"]
         )
         descriptor_kwargs["top_p"] = (
-            0.95
+            VLLM_DEFAULT_TOP_P
             if descriptor_kwargs.get("top_p") is None
             else descriptor_kwargs["top_p"]
         )

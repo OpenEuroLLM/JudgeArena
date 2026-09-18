@@ -17,7 +17,12 @@ from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.cache_sqlite import input_hash
-from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
+from judgearena.constants import (
+    VLLM_DEFAULT_TEMPERATURE,
+    VLLM_DEFAULT_TOP_P,
+    VLLM_REASONING_END_STR,
+    VLLM_REASONING_START_STR,
+)
 from judgearena.inference import (
     InferenceCache,
     PreparedModel,
@@ -261,8 +266,10 @@ class ChatVLLM:
 
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
-            "temperature": 0.6 if temperature is None else float(temperature),
-            "top_p": 0.95 if top_p is None else float(top_p),
+            "temperature": (
+                VLLM_DEFAULT_TEMPERATURE if temperature is None else float(temperature)
+            ),
+            "top_p": VLLM_DEFAULT_TOP_P if top_p is None else float(top_p),
         }
         if top_k is not None:
             self._sampling_params_kwargs["top_k"] = int(top_k)
@@ -894,6 +901,7 @@ def _route_sampling_params(
     return engine_kwargs
 
 
+# Prevent local-engine settings from leaking into hosted provider constructors.
 _VLLM_ONLY_KWARGS = (
     "max_model_len",
     "chat_template",
