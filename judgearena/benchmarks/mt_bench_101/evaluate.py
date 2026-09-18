@@ -14,7 +14,7 @@ from judgearena.datasets.mt_bench_101 import (
     MT_BENCH_101_TASK_TO_ABILITY,
 )
 from judgearena.models import do_inference
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import PairScore, ParsedScore
 from judgearena.utils import safe_text, strip_thinking_tags
 
 DOUBLE_BRACKET_PATTERN = re.compile(r"\[\[(\d+)\]\]")
@@ -56,12 +56,25 @@ def load_mt_bench_101_prompts() -> dict[str, object]:
     }
 
 
+class MTBench101ScoreParser:
+    """Parse the final valid double-bracketed 1-10 rating."""
+
+    name = "mt-bench-101-score"
+
+    def __call__(self, judge_completion: str) -> float | None:
+        result = self.parse_result(judge_completion)
+        return None if result is None else result.score
+
+    def parse_result(self, judge_completion: str) -> ParsedScore | None:
+        for match in reversed(list(DOUBLE_BRACKET_PATTERN.finditer(judge_completion))):
+            score = int(match.group(1))
+            if 1 <= score <= 10:
+                return ParsedScore(score=float(score), label=match.group(0))
+        return None
+
+
 def parse_mt_bench_101_rating(judge_completion: str) -> float | None:
-    for match in DOUBLE_BRACKET_PATTERN.finditer(judge_completion):
-        score = int(match.group(1))
-        if 1 <= score <= 10:
-            return float(score)
-    return None
+    return MTBench101ScoreParser()(judge_completion)
 
 
 def format_mt_bench_101_dialogue(
@@ -156,49 +169,6 @@ def judge_mt_bench_101_single(
         row["judge_completion"] = judge_completion
         row["score"] = parse_mt_bench_101_rating(judge_completion)
     return pd.DataFrame(rows)
-
-
-def compute_mt_bench_101_dialogue_scores(scored_turns: pd.DataFrame) -> pd.DataFrame:
-    grouped = scored_turns.groupby(
-        ["dialogue_uid", "dialogue_id", "task", "ability", "domain"], as_index=False
-    )["score"].min()
-    return grouped.rename(columns={"score": "dialogue_score"})
-
-
-def summarize_mt_bench_101_absolute_scores(
-    scored_turns: pd.DataFrame,
-) -> dict[str, object]:
-    dialogue_scores = compute_mt_bench_101_dialogue_scores(scored_turns)
-    per_task_series = (
-        dialogue_scores.groupby("task")["dialogue_score"].mean().sort_index()
-    )
-    per_ability_series = (
-        dialogue_scores.groupby("ability")["dialogue_score"].mean().sort_index()
-    )
-    per_domain_series = (
-        dialogue_scores.groupby("domain")["dialogue_score"].mean().sort_index()
-    )
-    overall = per_task_series.mean() if len(per_task_series) else float("nan")
-    return {
-        "num_turns": int(len(scored_turns)),
-        "num_scored_turns": int(scored_turns["score"].notna().sum()),
-        "per_task": {
-            task: float(score)
-            for task, score in per_task_series.items()
-            if pd.notna(score)
-        },
-        "per_ability": {
-            ability: float(score)
-            for ability, score in per_ability_series.items()
-            if pd.notna(score)
-        },
-        "per_domain": {
-            domain: float(score)
-            for domain, score in per_domain_series.items()
-            if pd.notna(score)
-        },
-        "overall": float(overall) if pd.notna(overall) else None,
-    }
 
 
 def derive_mt_bench_101_pairwise_preferences(

@@ -32,6 +32,15 @@ class ParsedPreference:
             raise ValueError("preference must be finite and between 0 and 1")
 
 
+@dataclass(slots=True)
+class ParsedScore:
+    """A scalar judge score plus parser-specific evidence."""
+
+    score: float
+    label: str | None = None
+    details: dict[str, object] = field(default_factory=dict)
+
+
 class JudgeParser(abc.ABC):
     """Parses judge output into a canonical preference and supporting evidence."""
 

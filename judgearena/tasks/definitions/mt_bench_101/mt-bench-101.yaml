@@ -35,6 +35,8 @@ protocol:
     metrics:
       - metric: pairwise_win_rate
         breakdown_by: [task, ability, domain]
+      - metric: mt_bench_101_absolute_score
+        breakdown_by: [task, ability, domain]
 
 metadata:
   paper: https://arxiv.org/abs/2402.14762

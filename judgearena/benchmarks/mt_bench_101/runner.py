@@ -15,7 +15,6 @@ from judgearena.benchmarks.mt_bench_101.evaluate import (
     aggregate_mt_bench_101_dialogues,
     derive_mt_bench_101_pairwise_preferences,
     judge_mt_bench_101_single,
-    summarize_mt_bench_101_absolute_scores,
 )
 from judgearena.benchmarks.mt_bench_101.generate import (
     generate_mt_bench_101_completions,
@@ -133,6 +132,8 @@ def run_mt_bench_101_benchmark(
             "model_b": cfg.model.baseline,
             "evaluation_model": cfg.model.name,
             "pref": pairwise["preference"],
+            "score_A": pairwise["score_A"],
+            "score_B": pairwise["score_B"],
             "source": "llm-judge",
         }
     )
@@ -148,8 +149,6 @@ def run_mt_bench_101_benchmark(
         metadata={
             "evaluation_mode": "single_answer_grading",
             "judge_temperature": cfg.judge.temperature,
-            "model_A_scores": summarize_mt_bench_101_absolute_scores(scored_a),
-            "model_B_scores": summarize_mt_bench_101_absolute_scores(scored_b),
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             "date": datetime.now(UTC).isoformat(),

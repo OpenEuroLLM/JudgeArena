@@ -6,13 +6,14 @@ import pytest
 import judgearena.benchmarks.mt_bench_101.runner as runner
 import judgearena.datasets.mt_bench_101 as mt_bench_101
 from judgearena.benchmarks.mt_bench_101.evaluate import (
+    MTBench101ScoreParser,
     aggregate_mt_bench_101_dialogues,
     derive_mt_bench_101_pairwise_preferences,
     judge_mt_bench_101_single,
     parse_mt_bench_101_rating,
-    summarize_mt_bench_101_absolute_scores,
 )
 from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
+from judgearena.benchmarks.scoring import build_metric
 from judgearena.config import RunConfig
 from judgearena.datasets.mt_bench_101 import expand_mt_bench_101_records
 from judgearena.models import DummyModel
@@ -100,6 +101,12 @@ def test_parse_mt_bench_101_rating():
     assert parse_mt_bench_101_rating("Reasoning...\nRating: [[7]]") == pytest.approx(
         7.0
     )
+    reasoning_output = "<think>Perhaps [[2]]...</think>\nRating: [[9]]"
+    assert parse_mt_bench_101_rating(reasoning_output) == pytest.approx(9.0)
+    assert MTBench101ScoreParser().parse_result(
+        reasoning_output
+    ).score == pytest.approx(9.0)
+    assert parse_mt_bench_101_rating("[[7]] then invalid [[11]]") == pytest.approx(7.0)
     assert parse_mt_bench_101_rating("Rating: [[0]]") is None
     assert parse_mt_bench_101_rating("Rating: [6]") is None
 
@@ -150,10 +157,10 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
         }
     )
     scored_b = scored_a.assign(score=[8.0, 1.0, 6.0])
-    absolute_a = summarize_mt_bench_101_absolute_scores(scored_a)
-    assert absolute_a["per_task"]["PI"] == pytest.approx(3.0)
     pairwise_turns = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
     pairwise = aggregate_mt_bench_101_dialogues(pairwise_turns)
+    absolute_scores = build_metric("mt_bench_101_absolute_score").calculate(pairwise)
+    assert absolute_scores["model_A_score"] == pytest.approx(3.0)
     assert len(pairwise) == 2
     assert pairwise["score_A"].tolist() == [2.0, 4.0]
     assert pairwise["score_B"].tolist() == [1.0, 6.0]
