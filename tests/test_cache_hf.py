@@ -5,8 +5,8 @@ import pandas as pd
 from huggingface_hub.errors import HfHubHTTPError
 from requests import Response
 
-import judgearena.cache_hf as cache_hf
-from judgearena.cache_sqlite import (
+import judgearena.cache.hf as cache_hf
+from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
     CompletionCache,
     cache_folder,

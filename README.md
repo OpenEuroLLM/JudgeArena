@@ -135,10 +135,19 @@ While any key in `--model.engine_kwargs` is forwarded to the underlying engine (
 
 ### Inference Cache
 
-Set `--run.store_root ./cache` to reuse raw completions and judgements by
-rendered input and resolved model settings.
+Raw completions and judgements are cached by rendered input and resolved model
+settings under `${XDG_CACHE_HOME:-~/.cache}/judgearena` by default. Override the
+location with `--run.store_root ./cache`, or disable runtime caching with
+`--run.store_root null`.
 
-Sharing is explicit and separate from benchmark execution:
+Completion and judgement databases remain in separate role/task/provider/model/
+descriptor folders for inspection, deletion, synchronization, and reduced
+contention. Operational cache open/read/write failures are logged and runtime
+inference continues without losing generated results. Descriptor validation
+errors still fail loudly.
+
+Sharing is explicit and separate from benchmark execution. These synchronization
+commands fail loudly when fetching, merging, or pushing cannot complete:
 
 ```bash
 judgearena-cache --action fetch --store_root ./cache \

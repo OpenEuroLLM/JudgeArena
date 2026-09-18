@@ -1,7 +1,7 @@
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.inference import CompletionInferenceCache
+from judgearena.cache.inference import CompletionInferenceCache
 from judgearena.models import PreparedModel, do_inference, prepare_model
 from judgearena.utils import strip_thinking_tags, truncate
 

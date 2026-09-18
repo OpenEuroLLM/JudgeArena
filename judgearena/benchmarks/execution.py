@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from judgearena.inference import CompletionInferenceCache, JudgementInferenceCache
+from judgearena.cache.inference import (
+    CompletionInferenceCache,
+    JudgementInferenceCache,
+)
 from judgearena.models import (
     build_default_judge_model_kwargs,
     is_thinking_model,

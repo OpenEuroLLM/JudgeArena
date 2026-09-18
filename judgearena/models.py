@@ -9,21 +9,22 @@ import os
 import time
 import warnings
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.cache_sqlite import input_hash
-from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
-from judgearena.inference import (
+from judgearena.cache.inference import (
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
     canonicalize_model_input,
 )
+from judgearena.cache.sqlite import input_hash
+from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
+from judgearena.inference import InferenceResult
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
@@ -480,15 +481,6 @@ class ChatVLLM:
         return await loop.run_in_executor(
             None, lambda: self.invoke(input_item, **invoke_kwargs)
         )
-
-
-@dataclass(frozen=True)
-class InferenceResult:
-    """A text completion and optional provider response details."""
-
-    text: str
-    first_token_top_logprobs: dict[str, float] | None = None
-    usage: RequestUsage | None = None
 
 
 def _first_token_top_logprobs(response) -> dict[str, float] | None:

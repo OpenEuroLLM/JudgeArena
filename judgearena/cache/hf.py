@@ -11,7 +11,7 @@ from urllib.parse import quote
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 
-from judgearena.cache_sqlite import (
+from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
     DESCRIPTOR_FILENAME,
     JUDGEMENT_DB_NAME,

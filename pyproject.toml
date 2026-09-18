@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.cli:cli"
-judgearena-cache = "judgearena.cache_hf:cli"
+judgearena-cache = "judgearena.cache.hf:cli"
 
 [project]
 name = "judgearena"

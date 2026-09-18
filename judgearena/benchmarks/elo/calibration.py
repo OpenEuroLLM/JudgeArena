@@ -10,8 +10,8 @@ from scipy.optimize import minimize_scalar
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.benchmarks.elo.rating import winner_to_pref
+from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.evaluate import judge_and_parse_prefs
-from judgearena.inference import JudgementInferenceCache
 from judgearena.log import get_logger
 from judgearena.models import prepare_model
 from judgearena.prompts.parsing import PairScore
