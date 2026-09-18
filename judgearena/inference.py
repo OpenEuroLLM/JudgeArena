@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NotRequired, TypedDict
 
 import pandas as pd
 
@@ -21,6 +21,7 @@ from judgearena.cache_sqlite import (
     stable_json_dumps,
     write_descriptor,
 )
+from judgearena.usage import RequestUsage
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 
@@ -63,11 +64,26 @@ def build_model_descriptor(
 
 
 @dataclass(frozen=True)
-class CachedInferenceResult:
-    """Provider output fields required by downstream parsing."""
+class InferenceResult:
+    """A text completion and optional provider response details."""
 
     text: str
     first_token_top_logprobs: dict[str, float] | None = None
+    usage: RequestUsage | None = None
+
+
+class CompletionCacheRowMetadata(TypedDict):
+    instruction_id: str
+
+
+class JudgementCacheRowMetadata(TypedDict):
+    instruction_id: str
+    model_a: str
+    model_b: str | None
+    orientation: NotRequired[str | None]
+
+
+CacheRowMetadata = CompletionCacheRowMetadata | JudgementCacheRowMetadata
 
 
 @dataclass
@@ -77,7 +93,7 @@ class PreparedModel:
     model_spec: str
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
-    cache: InferenceCache | None = None
+    cache: InferenceCache[Any] | None = None
     _model: Any = field(default=None, init=False, repr=False)
 
     def materialize(self) -> Any:
@@ -87,7 +103,7 @@ class PreparedModel:
 
 
 @dataclass(frozen=True)
-class InferenceCache(ABC):
+class InferenceCache[CacheRowMetadataT: CacheRowMetadata](ABC):
     """Share cache lifecycle while subclasses define role-specific rows."""
 
     store_root: Path
@@ -116,7 +132,7 @@ class InferenceCache(ABC):
         model: PreparedModel,
         input_texts: list[str],
         outputs: list[Any],
-        metadata: list[dict[str, Any]],
+        metadata: list[CacheRowMetadataT],
         indices: list[int],
     ) -> None:
         rows = [
@@ -137,16 +153,16 @@ class InferenceCache(ABC):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: CacheRowMetadataT,
     ) -> dict[str, Any]:
         """Convert one inference output to its role-specific storage row."""
 
     @abstractmethod
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
+    def cached_result(self, row: pd.Series) -> InferenceResult:
         """Restore output fields from a stored row."""
 
 
-class CompletionInferenceCache(InferenceCache):
+class CompletionInferenceCache(InferenceCache[CompletionCacheRowMetadata]):
     """Cache generated model completions."""
 
     kind = "completions"
@@ -159,7 +175,7 @@ class CompletionInferenceCache(InferenceCache):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: CompletionCacheRowMetadata,
     ) -> dict[str, Any]:
         return {
             "input_text": input_text,
@@ -169,11 +185,11 @@ class CompletionInferenceCache(InferenceCache):
             "model": model.model_spec,
         }
 
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
-        return CachedInferenceResult(text=str(row["completion"]))
+    def cached_result(self, row: pd.Series) -> InferenceResult:
+        return InferenceResult(text=str(row["completion"]))
 
 
-class JudgementInferenceCache(InferenceCache):
+class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
     """Cache raw judge completions."""
 
     kind = "judgements"
@@ -186,7 +202,7 @@ class JudgementInferenceCache(InferenceCache):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: JudgementCacheRowMetadata,
     ) -> dict[str, Any]:
         return {
             "judge_input": input_text,
@@ -200,9 +216,9 @@ class JudgementInferenceCache(InferenceCache):
             "orientation": metadata.get("orientation"),
         }
 
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
+    def cached_result(self, row: pd.Series) -> InferenceResult:
         top_logprobs = row["top_logprobs"]
-        return CachedInferenceResult(
+        return InferenceResult(
             text=str(row["judge_completion"]),
             first_token_top_logprobs=(
                 json.loads(top_logprobs) if pd.notna(top_logprobs) else None
