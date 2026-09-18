@@ -99,7 +99,7 @@ def infer_pairwise_judgments_by_prompt_groups(
             inputs=prompt_inputs,
             use_tqdm=use_tqdm,
             stage="judging",
-            cache_metadata=[
+            cache_row_metadata=[
                 {
                     "instruction_id": (
                         f"{items[item_index].question_id}:turn-{items[item_index].turn}"

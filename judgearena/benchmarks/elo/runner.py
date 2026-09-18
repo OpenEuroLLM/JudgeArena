@@ -198,7 +198,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             parse=resolved_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=use_tqdm,
-            cache_metadata=[
+            cache_row_metadata=[
                 {
                     "instruction_id": str(instructions.index[index]),
                     "model_a": (

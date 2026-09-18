@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
@@ -15,6 +18,9 @@ from judgearena.prompts.registry import (
     resolve_run_judge_prompt as _resolve_run_judge_prompt,
 )
 from judgearena.utils import strip_thinking_tags, truncate
+
+if TYPE_CHECKING:
+    from judgearena.inference import JudgementCacheRowMetadata
 
 logger = get_logger(__name__)
 
@@ -111,7 +117,7 @@ def annotate_battles(
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
-    cache_metadata: list[dict] | None = None,
+    cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -183,7 +189,7 @@ def annotate_battles(
         use_tqdm=use_tqdm,
         return_top_logprobs=collect_top_logprobs,
         stage="judging",
-        cache_metadata=cache_metadata,
+        cache_row_metadata=cache_row_metadata,
     )
     if not collect_top_logprobs:
         judge_results = [InferenceResult(text=text) for text in judge_results]
@@ -231,7 +237,7 @@ def judge_and_parse_prefs(
     truncate_input_chars: int = 8192,
     use_tqdm: bool = False,
     parse: JudgeParser | None = None,
-    cache_metadata: list[dict] | None = None,
+    cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -269,12 +275,12 @@ def judge_and_parse_prefs(
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
         collect_top_logprobs=parse.requires_top_logprobs,
-        cache_metadata=cache_metadata,
+        cache_row_metadata=cache_row_metadata,
     )
 
     annotations_reversed = None
     if swap_mode == "both":
-        reversed_cache_metadata = (
+        reversed_cache_row_metadata = (
             [
                 {
                     **metadata,
@@ -286,9 +292,9 @@ def judge_and_parse_prefs(
                         else "direct"
                     ),
                 }
-                for metadata in cache_metadata
+                for metadata in cache_row_metadata
             ]
-            if cache_metadata is not None
+            if cache_row_metadata is not None
             else None
         )
         annotations_reversed = annotate_battles(
@@ -303,7 +309,7 @@ def judge_and_parse_prefs(
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
             collect_top_logprobs=parse.requires_top_logprobs,
-            cache_metadata=reversed_cache_metadata,
+            cache_row_metadata=reversed_cache_row_metadata,
         )
 
     def _none_to_nan(x):

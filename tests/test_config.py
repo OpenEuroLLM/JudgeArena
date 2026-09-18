@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -6,7 +7,13 @@ from pydantic import ValidationError
 import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.benchmarks import execution as execution_module
-from judgearena.config import EloArgs, RunConfig, dump_config, load_config
+from judgearena.config import (
+    EloArgs,
+    RunConfig,
+    build_run_config,
+    dump_config,
+    load_config,
+)
 from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
@@ -32,6 +39,43 @@ def test_generate_config_constructs():
     assert cfg.model.name == "Dummy/a"
     assert cfg.judge.model == "Dummy/j"
     assert cfg.elo is None
+
+
+def test_store_root_defaults_to_xdg_cache_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    cfg = RunConfig(**_base_generate())
+
+    assert cfg.run.store_root == str(tmp_path / "judgearena")
+
+
+def test_store_root_defaults_to_user_cache(monkeypatch):
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    cfg = RunConfig(**_base_generate())
+
+    assert cfg.run.store_root == str(Path.home() / ".cache" / "judgearena")
+
+
+def test_store_root_null_disables_cache_from_cli():
+    cfg = build_run_config(
+        [
+            "--task",
+            "alpaca-eval",
+            "--model.name",
+            "Dummy/a",
+            "--model.baseline",
+            "Dummy/b",
+            "--judge.model",
+            "Dummy/j",
+            "--run.store_root",
+            "null",
+        ]
+    )
+
+    assert cfg.run.store_root is None
+    assert execution_module.build_completion_cache(cfg) is None
+    assert execution_module.build_judgement_cache(cfg) is None
 
 
 def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):

@@ -123,7 +123,7 @@ def calibrate_pairscore_temperature(
         prompt_preset=prompt.preset_name,
         parse=prompt.parser,
         truncate_input_chars=truncate_input_chars,
-        cache_metadata=[
+        cache_row_metadata=[
             {
                 "instruction_id": f"{arena}:{row.question_id}",
                 "model_a": row.model_a,
