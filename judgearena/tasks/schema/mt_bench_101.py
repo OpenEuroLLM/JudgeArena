@@ -13,6 +13,8 @@ from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec
 
 
 class GoldenContextGeneration(StrictFrozenModel):
+    """Generate each turn using the preceding reference dialogue as context."""
+
     mode: Literal["golden_context_chat"]
     default_max_out_tokens: int | None = Field(default=None, gt=0)
 
