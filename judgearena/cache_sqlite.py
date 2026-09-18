@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -127,29 +126,32 @@ class _SQLiteCache:
         return cursor.rowcount
 
     def merge_from(self, other_db: Path) -> int:
-        """Atomically merge another cache database using pushed_at last-write-wins."""
-        self.close()
-        frames = []
-        for db_path in (other_db, self.db_path):
-            if db_path.exists():
-                with sqlite3.connect(db_path) as conn:
-                    frames.append(pd.read_sql(f"SELECT * FROM {self.table}", conn))
-        rows = (
-            pd.concat(frames, ignore_index=True)
-            .sort_values("pushed_at", kind="stable")
-            .drop_duplicates("input_hash", keep="last")
-        )
+        """Merge another cache database in place using pushed_at last-write-wins."""
+        conn = self._connect()
+        if not other_db.exists():
+            return conn.execute(f"SELECT COUNT(*) FROM {self.table}").fetchone()[0]
 
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_db = self.db_path.with_name(f".{self.db_path.name}.{uuid.uuid4()}")
+        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({self.table})")]
+        column_list = ", ".join(columns)
+        updates = ", ".join(
+            f"{column} = excluded.{column}"
+            for column in columns
+            if column != "input_hash"
+        )
+        conn.execute("ATTACH DATABASE ? AS incoming", (str(other_db),))
         try:
-            with sqlite3.connect(temporary_db) as conn:
-                conn.execute(self.schema)
-                rows.to_sql(self.table, conn, if_exists="append", index=False)
-            os.replace(temporary_db, self.db_path)
+            with conn:
+                conn.execute(
+                    f"""
+                    INSERT INTO {self.table} ({column_list})
+                    SELECT {column_list} FROM incoming.{self.table} WHERE true
+                    ON CONFLICT(input_hash) DO UPDATE SET {updates}
+                    WHERE excluded.pushed_at > {self.table}.pushed_at
+                    """
+                )
         finally:
-            temporary_db.unlink(missing_ok=True)
-        return len(rows)
+            conn.execute("DETACH DATABASE incoming")
+        return conn.execute(f"SELECT COUNT(*) FROM {self.table}").fetchone()[0]
 
     def close(self) -> None:
         if self._conn is not None:
@@ -257,7 +259,7 @@ class JudgementCache(_SQLiteCache):
             benchmark        TEXT NOT NULL,
             instruction_id   TEXT NOT NULL,
             model_a          TEXT NOT NULL,
-            model_b          TEXT NOT NULL,
+            model_b          TEXT,
             judge            TEXT NOT NULL,
             top_logprobs      TEXT,
             -- direct/reversed relative to the source model order, when applicable
@@ -285,7 +287,7 @@ class JudgementCache(_SQLiteCache):
                 str(row["benchmark"]),
                 str(row["instruction_id"]),
                 str(row["model_a"]),
-                str(row["model_b"]),
+                None if pd.isna(row.get("model_b")) else str(row["model_b"]),
                 str(row["judge"]),
                 (
                     stable_json_dumps(row["top_logprobs"])
