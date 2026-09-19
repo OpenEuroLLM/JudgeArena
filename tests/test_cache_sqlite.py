@@ -62,6 +62,8 @@ def test_completion_cache_uses_content_key_and_last_write(tmp_path):
         cache.save(first, pushed_by="alice")
         cache.save(second, pushed_by="bob")
         result = cache.query([input_hash("rendered prompt")])
+        assert cache.query([]).empty
+        assert len(cache.query(None)) == 1
 
     assert result["completion"].tolist() == ["second"]
     assert result["pushed_by"].tolist() == ["bob"]
@@ -115,3 +117,67 @@ def test_judgement_cache_filters_and_deletes_by_candidate_model(tmp_path):
         assert json.loads(result.iloc[0]["top_logprobs"]) == {"M": -2.0, "m": -0.1}
         assert cache.delete(model="candidate") == 1
         assert cache.query()["instruction_id"].tolist() == ["1"]
+
+
+def test_judgement_cache_preserves_null_model_b(tmp_path):
+    row = pd.DataFrame(
+        [
+            {
+                "judge_input": "pointwise prompt",
+                "judge_completion": "Rating: [[8]]",
+                "benchmark": "mt-bench-101",
+                "instruction_id": "1",
+                "model_a": "candidate",
+                "model_b": None,
+                "judge": "VLLM/Qwen/Qwen3-8B",
+                "top_logprobs": None,
+                "orientation": "single",
+            }
+        ]
+    )
+
+    with JudgementCache(tmp_path / JUDGEMENT_DB_NAME) as cache:
+        cache.save(row, pushed_by="alice")
+        assert cache.query().iloc[0]["model_b"] is None
+
+
+def test_merge_from_updates_live_database_in_place(tmp_path):
+    local_path = tmp_path / "local" / COMPLETION_DB_NAME
+    incoming_path = tmp_path / "incoming" / COMPLETION_DB_NAME
+    shared = pd.DataFrame(
+        [
+            {
+                "input_text": "shared",
+                "completion": "local",
+                "benchmark": "arena-hard",
+                "instruction_id": "1",
+                "model": "VLLM/Qwen/Qwen3-8B",
+            }
+        ]
+    )
+    with CompletionCache(incoming_path) as incoming:
+        incoming.save(
+            pd.concat(
+                [
+                    shared.assign(completion="incoming"),
+                    shared.assign(
+                        input_text="new",
+                        completion="new",
+                        instruction_id="2",
+                    ),
+                ],
+                ignore_index=True,
+            ),
+            pushed_by="bob",
+        )
+        incoming._connect().execute(
+            "UPDATE completions SET pushed_at = '2030-01-01T00:00:00+00:00'"
+        )
+        incoming._connect().commit()
+
+    with CompletionCache(local_path) as cache:
+        cache.save(shared, pushed_by="alice")
+        inode = local_path.stat().st_ino
+        assert cache.merge_from(incoming_path) == 2
+        assert local_path.stat().st_ino == inode
+        assert cache.query()["completion"].tolist() == ["incoming", "new"]
