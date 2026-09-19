@@ -161,7 +161,7 @@ def annotate_sample(
         parse=parser,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
-        cache_metadata=[
+        cache_row_metadata=[
             {
                 "instruction_id": battle["battle_id"],
                 "model_a": battle["model_a"],

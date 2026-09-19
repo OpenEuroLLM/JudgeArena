@@ -46,7 +46,9 @@ def generate_instructions(
         inputs=inputs,
         use_tqdm=use_tqdm,
         stage="generation",
-        cache_metadata=[{"instruction_id": str(index)} for index in instructions.index],
+        cache_row_metadata=[
+            {"instruction_id": str(index)} for index in instructions.index
+        ],
     )
     df_outputs = pd.DataFrame(
         data={
@@ -109,7 +111,7 @@ def _infer_grouped_by_temperature(
             inputs=group_inputs,
             use_tqdm=use_tqdm,
             stage="generation",
-            cache_metadata=[
+            cache_row_metadata=[
                 {"instruction_id": instruction_ids[index]} for index in idxs
             ],
         )
@@ -189,7 +191,9 @@ def generate_multiturn(
             inputs=turn1_inputs,
             use_tqdm=use_tqdm,
             stage="generation",
-            cache_metadata=[{"instruction_id": f"{index}:turn-1"} for index in idxs],
+            cache_row_metadata=[
+                {"instruction_id": f"{index}:turn-1"} for index in idxs
+            ],
         )
 
     turn2_inputs = []
@@ -246,7 +250,9 @@ def generate_multiturn(
             inputs=turn2_inputs,
             use_tqdm=use_tqdm,
             stage="generation",
-            cache_metadata=[{"instruction_id": f"{index}:turn-2"} for index in idxs],
+            cache_row_metadata=[
+                {"instruction_id": f"{index}:turn-2"} for index in idxs
+            ],
         )
 
     return pd.DataFrame(
@@ -283,7 +289,9 @@ def generate_base(
         chat_model=chat_model,
         inputs=inputs,
         stage="generation",
-        cache_metadata=[{"instruction_id": str(index)} for index in instructions.index],
+        cache_row_metadata=[
+            {"instruction_id": str(index)} for index in instructions.index
+        ],
     )
 
     df_outputs = pd.DataFrame(

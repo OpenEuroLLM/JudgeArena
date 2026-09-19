@@ -312,7 +312,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             parse=group_prompt.parser,
             truncate_input_chars=cfg.generation.truncate_judge_input_chars,
             use_tqdm=cfg.run.use_tqdm,
-            cache_metadata=[
+            cache_row_metadata=[
                 {
                     "instruction_id": str(index),
                     "model_a": judged_model_a.loc[index],

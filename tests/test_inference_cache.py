@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -33,7 +34,7 @@ def test_full_hit_does_not_materialize_model(tmp_path, monkeypatch):
     do_inference(
         prepare_model("Dummy/test-model", cache=cache),
         ["prompt"],
-        cache_metadata=metadata,
+        cache_row_metadata=metadata,
     )
 
     def fail_if_materialized(*_args, **_kwargs):
@@ -44,7 +45,7 @@ def test_full_hit_does_not_materialize_model(tmp_path, monkeypatch):
         outputs = do_inference(
             prepare_model("Dummy/test-model", cache=cache),
             ["prompt"],
-            cache_metadata=metadata,
+            cache_row_metadata=metadata,
         )
 
     assert outputs == ["generated:prompt"]
@@ -58,7 +59,7 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
     do_inference(
         prepare_model("Dummy/test-model", cache=cache),
         ["hit"],
-        cache_metadata=[{"instruction_id": "hit"}],
+        cache_row_metadata=[{"instruction_id": "hit"}],
     )
 
     backend = EchoModel()
@@ -66,7 +67,7 @@ def test_mixed_hits_and_misses_preserve_order(tmp_path, monkeypatch):
     outputs = do_inference(
         prepare_model("Dummy/test-model", cache=cache),
         ["miss-a", "hit", "miss-b"],
-        cache_metadata=[
+        cache_row_metadata=[
             {"instruction_id": "a"},
             {"instruction_id": "hit"},
             {"instruction_id": "b"},
@@ -103,13 +104,13 @@ def test_judgement_hit_preserves_top_logprobs(tmp_path, monkeypatch):
         prepare_model("Dummy/judge", cache=cache),
         ["judge prompt"],
         return_top_logprobs=True,
-        cache_metadata=metadata,
+        cache_row_metadata=metadata,
     )
     second = do_inference(
         prepare_model("Dummy/judge", cache=cache),
         ["judge prompt"],
         return_top_logprobs=True,
-        cache_metadata=metadata,
+        cache_row_metadata=metadata,
     )
 
     assert second[0].text == first[0].text
@@ -210,3 +211,39 @@ def test_input_canonicalization_matches_provider_mode(provider, expected_type):
     )
 
     assert payload["type"] == expected_type
+
+
+def test_cache_write_failure_preserves_generated_results(tmp_path, monkeypatch):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+    backend = EchoModel()
+    monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: backend)
+
+    def fail_save(*_args, **_kwargs):
+        raise sqlite3.OperationalError("read-only")
+
+    monkeypatch.setattr(CompletionInferenceCache, "save_outputs", fail_save)
+
+    outputs = do_inference(
+        prepare_model("Dummy/test-model", cache=cache),
+        ["prompt"],
+        cache_row_metadata=[{"instruction_id": "1"}],
+    )
+
+    assert outputs == ["generated:prompt"]
+    assert backend.calls == [["prompt"]]
+
+
+def test_cache_descriptor_validation_still_fails_loudly(tmp_path, monkeypatch):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+
+    def fail_open(*_args, **_kwargs):
+        raise ValueError("descriptor mismatch")
+
+    monkeypatch.setattr(CompletionInferenceCache, "open_store", fail_open)
+
+    with pytest.raises(ValueError, match="descriptor mismatch"):
+        do_inference(
+            prepare_model("Dummy/test-model", cache=cache),
+            ["prompt"],
+            cache_row_metadata=[{"instruction_id": "1"}],
+        )

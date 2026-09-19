@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import sqlite3
 import time
 import warnings
 from collections.abc import Mapping
@@ -13,17 +14,24 @@ from dataclasses import replace
 
 from langchain_community.llms import LlamaCpp
 from langchain_openai import ChatOpenAI
+from pandas.errors import DatabaseError
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.cache.inference import (
+    CacheRowMetadata,
     InferenceCache,
     PreparedModel,
     build_model_descriptor,
     canonicalize_model_input,
 )
 from judgearena.cache.sqlite import input_hash
-from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
+from judgearena.constants import (
+    VLLM_DEFAULT_TEMPERATURE,
+    VLLM_DEFAULT_TOP_P,
+    VLLM_REASONING_END_STR,
+    VLLM_REASONING_START_STR,
+)
 from judgearena.inference import InferenceResult
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
@@ -31,6 +39,7 @@ from judgearena.utils.io import safe_parse_int
 
 logger = get_logger(__name__)
 
+_CACHE_OPERATION_ERRORS = (OSError, sqlite3.Error, DatabaseError)
 
 DEFAULT_VLLM_JUDGE_THINKING_TOKEN_BUDGET = 512
 _THINKING_MODEL_PARSER_BY_SUBSTRING = (
@@ -262,8 +271,10 @@ class ChatVLLM:
 
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
-            "temperature": 0.6 if temperature is None else float(temperature),
-            "top_p": 0.95 if top_p is None else float(top_p),
+            "temperature": (
+                VLLM_DEFAULT_TEMPERATURE if temperature is None else float(temperature)
+            ),
+            "top_p": VLLM_DEFAULT_TOP_P if top_p is None else float(top_p),
         }
         if top_k is not None:
             self._sampling_params_kwargs["top_k"] = int(top_k)
@@ -662,7 +673,7 @@ def batch_inference_once(
     return [result.text for result in results]
 
 
-def _do_inference_uncached(
+def _run_backend_inference(
     chat_model,
     inputs,
     use_tqdm: bool = False,
@@ -778,12 +789,12 @@ def do_inference(
     return_top_logprobs: bool = False,
     *,
     stage: str = "unspecified",
-    cache_metadata: list[dict] | None = None,
+    cache_row_metadata: list[CacheRowMetadata] | None = None,
 ):
     """Reuse raw provider outputs and invoke the backend only for cache misses."""
     inputs = list(inputs)
     if not isinstance(chat_model, PreparedModel):
-        return _do_inference_uncached(
+        return _run_backend_inference(
             chat_model,
             inputs,
             use_tqdm,
@@ -793,24 +804,54 @@ def do_inference(
 
     cache = chat_model.cache
     if cache is None or chat_model.descriptor is None:
-        return _do_inference_uncached(
+        return _run_backend_inference(
             chat_model.materialize(),
             inputs,
             use_tqdm,
             return_top_logprobs,
             stage=stage,
         )
-    if cache_metadata is None or len(cache_metadata) != len(inputs):
-        raise ValueError("cache_metadata must contain one row per inference input.")
+    if cache_row_metadata is None or len(cache_row_metadata) != len(inputs):
+        raise ValueError("cache_row_metadata must contain one row per inference input.")
 
     input_mode = chat_model.descriptor["input_mode"]
     input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
     input_hashes = [input_hash(input_text) for input_text in input_texts]
-    with cache.open_store(chat_model) as store:
-        cached_rows = store.query(input_hashes).set_index("input_hash")
+    try:
+        store = cache.open_store(chat_model)
+    except _CACHE_OPERATION_ERRORS as exc:
+        logger.warning(
+            "Cache open failed at %s: %s. Continuing without caching.",
+            cache.store_root,
+            exc,
+        )
+        return _run_backend_inference(
+            chat_model.materialize(),
+            inputs,
+            use_tqdm,
+            return_top_logprobs,
+            stage=stage,
+        )
+
+    try:
+        try:
+            cached_rows = store.query(input_hashes).set_index("input_hash")
+        except _CACHE_OPERATION_ERRORS as exc:
+            logger.warning(
+                "Cache read failed at %s: %s. Continuing without caching.",
+                store.db_path,
+                exc,
+            )
+            return _run_backend_inference(
+                chat_model.materialize(),
+                inputs,
+                use_tqdm,
+                return_top_logprobs,
+                stage=stage,
+            )
         results: list[InferenceResult | None] = [
             (
-                InferenceResult(**cache.cached_result(cached_rows.loc[key]).__dict__)
+                cache.cached_result(cached_rows.loc[key])
                 if key in cached_rows.index
                 else None
             )
@@ -820,7 +861,7 @@ def do_inference(
             index for index, result in enumerate(results) if result is None
         ]
         if missing_indices:
-            generated = _do_inference_uncached(
+            generated = _run_backend_inference(
                 chat_model.materialize(),
                 [inputs[index] for index in missing_indices],
                 use_tqdm,
@@ -829,14 +870,26 @@ def do_inference(
             )
             for index, result in zip(missing_indices, generated, strict=True):
                 results[index] = result
-            cache.save_outputs(
-                store,
-                chat_model,
-                input_texts,
-                generated,
-                cache_metadata,
-                missing_indices,
-            )
+            try:
+                cache.save_outputs(
+                    store,
+                    chat_model,
+                    input_texts,
+                    generated,
+                    cache_row_metadata,
+                    missing_indices,
+                )
+            except _CACHE_OPERATION_ERRORS as exc:
+                logger.warning(
+                    "Cache write failed at %s: %s. Preserving generated results.",
+                    store.db_path,
+                    exc,
+                )
+    finally:
+        try:
+            store.close()
+        except _CACHE_OPERATION_ERRORS as exc:
+            logger.warning("Cache close failed at %s: %s.", store.db_path, exc)
 
     resolved_results = [result for result in results if result is not None]
     if return_top_logprobs:
@@ -886,6 +939,7 @@ def _route_sampling_params(
     return engine_kwargs
 
 
+# Prevent local-engine settings from leaking into hosted provider constructors.
 _VLLM_ONLY_KWARGS = (
     "max_model_len",
     "chat_template",
