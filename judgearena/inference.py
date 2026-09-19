@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, NotRequired, TypedDict
 
 import pandas as pd
 
@@ -22,10 +22,10 @@ from judgearena.cache_sqlite import (
     stable_json_dumps,
     write_descriptor,
 )
+from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
+from judgearena.usage import RequestUsage
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
-_CHAT_PROVIDERS = {"ChatOpenAI", "Dummy", "OpenRouter", "VLLM"}
-_TEXT_PROVIDERS = {"LlamaCpp", "OpenAI", "Together"}
 VLLM_EXECUTION_ONLY_KWARGS = {
     "enforce_eager",
     "gpu_memory_utilization",
@@ -33,14 +33,19 @@ VLLM_EXECUTION_ONLY_KWARGS = {
 }
 
 InputMode = Literal["chat", "text"]
+_PROVIDER_INPUT_MODES: dict[str, InputMode] = {
+    "ChatOpenAI": "chat",
+    "Dummy": "chat",
+    "LlamaCpp": "text",
+    "OpenAI": "text",
+    "OpenRouter": "chat",
+    "Together": "text",
+    "VLLM": "chat",
+}
 
 
 def provider_input_mode(provider: str) -> InputMode | None:
-    if provider in _CHAT_PROVIDERS:
-        return "chat"
-    if provider in _TEXT_PROVIDERS:
-        return "text"
-    return None
+    return _PROVIDER_INPUT_MODES.get(provider)
 
 
 def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
@@ -91,12 +96,12 @@ def build_model_descriptor(
     descriptor_kwargs = resolved_kwargs.copy()
     if provider == "VLLM":
         descriptor_kwargs["temperature"] = (
-            0.6
+            VLLM_DEFAULT_TEMPERATURE
             if descriptor_kwargs.get("temperature") is None
             else descriptor_kwargs["temperature"]
         )
         descriptor_kwargs["top_p"] = (
-            0.95
+            VLLM_DEFAULT_TOP_P
             if descriptor_kwargs.get("top_p") is None
             else descriptor_kwargs["top_p"]
         )
@@ -124,11 +129,26 @@ def build_model_descriptor(
 
 
 @dataclass(frozen=True)
-class CachedInferenceResult:
-    """Provider output fields required by downstream parsing."""
+class InferenceResult:
+    """A text completion and optional provider response details."""
 
     text: str
     first_token_top_logprobs: dict[str, float] | None = None
+    usage: RequestUsage | None = None
+
+
+class CompletionCacheRowMetadata(TypedDict):
+    instruction_id: str
+
+
+class JudgementCacheRowMetadata(TypedDict):
+    instruction_id: str
+    model_a: str
+    model_b: str | None
+    orientation: NotRequired[str | None]
+
+
+CacheRowMetadata = CompletionCacheRowMetadata | JudgementCacheRowMetadata
 
 
 @dataclass
@@ -138,7 +158,7 @@ class PreparedModel:
     model_spec: str
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
-    cache: InferenceCache | None = None
+    cache: InferenceCache[Any] | None = None
     _model: Any = field(default=None, init=False, repr=False)
 
     def materialize(self) -> Any:
@@ -148,7 +168,7 @@ class PreparedModel:
 
 
 @dataclass(frozen=True)
-class InferenceCache(ABC):
+class InferenceCache[CacheRowMetadataT: CacheRowMetadata](ABC):
     """Share cache lifecycle while subclasses define role-specific rows."""
 
     store_root: Path
@@ -177,7 +197,7 @@ class InferenceCache(ABC):
         model: PreparedModel,
         input_texts: list[str],
         outputs: list[Any],
-        metadata: list[dict[str, Any]],
+        metadata: list[CacheRowMetadataT],
         indices: list[int],
     ) -> None:
         rows = [
@@ -198,16 +218,16 @@ class InferenceCache(ABC):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: CacheRowMetadataT,
     ) -> dict[str, Any]:
         """Convert one inference output to its role-specific storage row."""
 
     @abstractmethod
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
+    def cached_result(self, row: pd.Series) -> InferenceResult:
         """Restore output fields from a stored row."""
 
 
-class CompletionInferenceCache(InferenceCache):
+class CompletionInferenceCache(InferenceCache[CompletionCacheRowMetadata]):
     """Cache generated model completions."""
 
     kind = "completions"
@@ -220,7 +240,7 @@ class CompletionInferenceCache(InferenceCache):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: CompletionCacheRowMetadata,
     ) -> dict[str, Any]:
         return {
             "input_text": input_text,
@@ -230,11 +250,11 @@ class CompletionInferenceCache(InferenceCache):
             "model": model.model_spec,
         }
 
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
-        return CachedInferenceResult(text=str(row["completion"]))
+    def cached_result(self, row: pd.Series) -> InferenceResult:
+        return InferenceResult(text=str(row["completion"]))
 
 
-class JudgementInferenceCache(InferenceCache):
+class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
     """Cache raw judge completions."""
 
     kind = "judgements"
@@ -247,7 +267,7 @@ class JudgementInferenceCache(InferenceCache):
         model: PreparedModel,
         input_text: str,
         output: Any,
-        metadata: dict[str, Any],
+        metadata: JudgementCacheRowMetadata,
     ) -> dict[str, Any]:
         return {
             "judge_input": input_text,
@@ -261,9 +281,9 @@ class JudgementInferenceCache(InferenceCache):
             "orientation": metadata.get("orientation"),
         }
 
-    def cached_result(self, row: pd.Series) -> CachedInferenceResult:
+    def cached_result(self, row: pd.Series) -> InferenceResult:
         top_logprobs = row["top_logprobs"]
-        return CachedInferenceResult(
+        return InferenceResult(
             text=str(row["judge_completion"]),
             first_token_top_logprobs=(
                 json.loads(top_logprobs) if pd.notna(top_logprobs) else None
