@@ -6,6 +6,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
+from judgearena.prompts.jev import JEV_PROMPT_PRESETS
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
     JudgeParser,
@@ -51,6 +52,7 @@ class JudgePromptPreset:
     system_file: str | None = None
     user_file: str | None = None
     inline_system: str | None = None
+    inline_user: str | None = None
     delegated: bool = False
     with_explanation: bool = False
 
@@ -92,6 +94,15 @@ PRESETS: dict[str, JudgePromptPreset] = {
         system_file="system-prompt.txt",
         user_file="prompt.txt",
     ),
+    **{
+        name: JudgePromptPreset(
+            name=name,
+            parser=JUDGE_PARSERS[preset.parser],
+            inline_system=preset.system_prompt,
+            inline_user=preset.user_prompt_template,
+        )
+        for name, preset in JEV_PROMPT_PRESETS.items()
+    },
     DEFAULT_WITH_EXPLANATION_PRESET: JudgePromptPreset(
         name=DEFAULT_WITH_EXPLANATION_PRESET,
         parser=SCORE_PARSER,
@@ -271,8 +282,8 @@ def resolve_judge_prompt(
             delegated=True,
         )
 
-    if spec.user_file is None:
-        raise ValueError(f"Judge prompt preset {spec.name!r} is missing a user file.")
+    if spec.user_file is None and spec.inline_user is None:
+        raise ValueError(f"Judge prompt preset {spec.name!r} is missing a user prompt.")
 
     system_prompt = (
         spec.inline_system
@@ -280,7 +291,9 @@ def resolve_judge_prompt(
         else _load_packaged_text(spec.system_file)  # type: ignore[arg-type]
     )
     user_prompt_template = _materialize_user_template(
-        _load_packaged_text(spec.user_file),
+        spec.inline_user
+        if spec.inline_user is not None
+        else _load_packaged_text(spec.user_file),  # type: ignore[arg-type]
         multi_turn=multi_turn,
         with_explanation=spec.with_explanation,
     )

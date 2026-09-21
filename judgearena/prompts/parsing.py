@@ -354,6 +354,168 @@ class AlpacaEvalJSON(JudgeParser):
         )
 
 
+def _typesafe_probabilities(
+    value: object, *, labels: set[str]
+) -> dict[str, float] | None:
+    try:
+        probabilities = {
+            label: float(probability) for label, probability in value.items()
+        }
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if set(probabilities) != labels or any(
+        not math.isfinite(probability) or probability < 0
+        for probability in probabilities.values()
+    ):
+        return None
+    total = sum(probabilities.values())
+    # Jev rounds each displayed probability, so valid responses can total 0.99
+    # or 1.01. Normalize that presentation error before scoring.
+    if not math.isclose(total, 1.0, abs_tol=0.011):
+        return None
+    return {label: probability / total for label, probability in probabilities.items()}
+
+
+class TypeSafeChoice(JudgeParser):
+    """Parse Jev's A/B/tie probability distribution as a soft preference."""
+
+    name = "typesafe-choice"
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            probabilities = _typesafe_probabilities(
+                result["probabilities"], labels={"A", "B", "tie"}
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if probabilities is None:
+            return None
+        choice = result.get("choice")
+        if choice not in probabilities:
+            return None
+        return ParsedPreference(
+            preference=probabilities["B"] + 0.5 * probabilities["tie"],
+            label=choice,
+            scores=probabilities,
+            details={
+                key: result[key]
+                for key in ("confidence", "model", "request_id")
+                if result.get(key) is not None
+            },
+        )
+
+
+class TypeSafeComparativeScore(JudgeParser):
+    """Parse one ordered Jev Score distribution over relative preference."""
+
+    name = "typesafe-comparative-score"
+    level_labels = {str(level) for level in range(5)}
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            probabilities = _typesafe_probabilities(
+                result["probabilities"], labels=self.level_labels
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if probabilities is None:
+            return None
+        preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
+        return ParsedPreference(
+            preference=preference,
+            label=(
+                "tie"
+                if math.isclose(preference, 0.5, abs_tol=1e-12)
+                else "B"
+                if preference > 0.5
+                else "A"
+            ),
+            scores=probabilities,
+            details={
+                key: result[key]
+                for key in ("score", "confidence", "model", "request_id")
+                if result.get(key) is not None
+            },
+        )
+
+
+class TypeSafePairScore(JudgeParser):
+    """Compare two Jev Score distributions over shared quality levels."""
+
+    name = "typesafe-pair-score"
+    level_labels = {str(level) for level in range(5)}
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answers = result["answers"]
+            distributions = {
+                candidate: _typesafe_probabilities(
+                    answers[candidate]["probabilities"], labels=self.level_labels
+                )
+                for candidate in ("A", "B")
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        if any(distribution is None for distribution in distributions.values()):
+            return None
+        probabilities_a = distributions["A"]
+        probabilities_b = distributions["B"]
+        assert probabilities_a is not None and probabilities_b is not None
+        preference = 0.0
+        for level_a in range(5):
+            for level_b in range(5):
+                mass = probabilities_a[str(level_a)] * probabilities_b[str(level_b)]
+                if level_b > level_a:
+                    preference += mass
+                elif level_b == level_a:
+                    preference += 0.5 * mass
+        expected_scores = {
+            "A": sum(level * probabilities_a[str(level)] for level in range(5)),
+            "B": sum(level * probabilities_b[str(level)] for level in range(5)),
+        }
+        return ParsedPreference(
+            preference=preference,
+            label=(
+                "tie"
+                if math.isclose(preference, 0.5, abs_tol=1e-12)
+                else "B"
+                if preference > 0.5
+                else "A"
+            ),
+            scores=expected_scores,
+            details={
+                "probabilities": distributions,
+                "confidence": {
+                    candidate: answers[candidate].get("confidence")
+                    for candidate in ("A", "B")
+                },
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
 def parser_name(parse) -> str:
     """Short identifier of a parser for run metadata.
 
@@ -371,6 +533,9 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "arena-hard-verdict": ArenaHardVerdict(),
     "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
+    "typesafe-choice": TypeSafeChoice(),
+    "typesafe-comparative-score": TypeSafeComparativeScore(),
+    "typesafe-pair-score": TypeSafePairScore(),
 }
 
 

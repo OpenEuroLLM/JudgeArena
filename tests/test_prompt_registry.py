@@ -67,6 +67,28 @@ def test_fluency_task_resolves_inline_system_prompt():
     assert "{user_prompt}" in resolved.user_prompt_template
 
 
+def test_typesafe_choice_preset_uses_probability_parser():
+    resolved = resolve_judge_prompt(preset="typesafe-choice")
+
+    assert resolved.parser.name == "typesafe-choice"
+    assert "{completion_A_json}" in resolved.user_prompt_template
+    assert "score_A" not in resolved.user_prompt_template
+
+
+def test_typesafe_comparative_score_preset_uses_score_distribution_parser():
+    resolved = resolve_judge_prompt(preset="typesafe-comparative-score")
+
+    assert resolved.parser.name == "typesafe-comparative-score"
+    assert "{completion_A_json}" in resolved.user_prompt_template
+
+
+def test_typesafe_pair_score_preset_uses_score_distribution_parser():
+    resolved = resolve_judge_prompt(preset="typesafe-pair-score")
+
+    assert resolved.parser.name == "typesafe-pair-score"
+    assert "{completion_A_json}" in resolved.user_prompt_template
+
+
 def test_explicit_preset_wins_over_task_default():
     resolved = resolve_judge_prompt(
         task="mt-bench",

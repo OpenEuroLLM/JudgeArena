@@ -65,6 +65,41 @@ def test_parsed_preference_rejects_invalid_values(preference):
         ParsedPreference(preference=preference)
 
 
+def test_typesafe_choice_uses_full_probability_distribution():
+    parsed = JUDGE_PARSERS["typesafe-choice"].parse_result(
+        '{"choice":"B","confidence":0.7,"probabilities":'
+        '{"A":0.2,"B":0.6,"tie":0.2},"model":"jev-1.13.0"}'
+    )
+
+    assert parsed.preference == pytest.approx(0.7)
+    assert parsed.label == "B"
+    assert parsed.scores == {"A": 0.2, "B": 0.6, "tie": 0.2}
+    assert parsed.details == {"confidence": 0.7, "model": "jev-1.13.0"}
+
+
+def test_typesafe_choice_normalizes_rounded_probabilities():
+    parsed = JUDGE_PARSERS["typesafe-choice"].parse_result(
+        '{"choice":"B","probabilities":{"A":0.14,"B":0.7,"tie":0.15}}'
+    )
+
+    assert parsed.preference == pytest.approx((0.7 + 0.5 * 0.15) / 0.99)
+    assert sum(parsed.scores.values()) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "completion",
+    [
+        "not json",
+        '{"choice":"B","probabilities":{"A":0.2,"B":0.8}}',
+        '{"choice":"B","probabilities":{"A":0.2,"B":0.9,"tie":0.2}}',
+        '{"choice":"B","probabilities":{"A":0.13,"B":0.70,"tie":0.15}}',
+        '{"choice":"B","probabilities":{"A":0.15,"B":0.72,"tie":0.15}}',
+    ],
+)
+def test_typesafe_choice_rejects_invalid_output(completion):
+    assert JUDGE_PARSERS["typesafe-choice"].parse_result(completion) is None
+
+
 def test_regexp():
     raw_text = "Score of Assistant A: 0\nScore of Assistant B: 1\n```"
 
