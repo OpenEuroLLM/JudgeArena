@@ -10,7 +10,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from judgearena.prompts.jev import JEV_CRITERIA_SCORING, JEV_QUESTION_MODES
+from judgearena.prompts.jev import (
+    JEV_AGGREGATIONS,
+    JEV_CRITERIA_SCORING,
+    JEV_QUESTION_MODES,
+)
 from judgearena.utils import strip_thinking_tags
 
 
@@ -412,10 +416,32 @@ class TypeSafeChoice(JudgeParser):
         )
 
 
+def _aggregate_jev_questions(
+    scores: dict[str, float], *, decision_mode: str
+) -> float | None:
+    aggregation = JEV_AGGREGATIONS.get(decision_mode)
+    if aggregation is None:
+        return sum(scores.values()) / len(scores)
+    try:
+        weights = {key: float(weight) for key, weight in aggregation["weights"].items()}
+        if aggregation["method"] != "weighted_mean" or set(weights) != set(scores):
+            return None
+        weighted = [weights[key] * value for key, value in scores.items()]
+        total_weight = sum(weights.values())
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if total_weight <= 0 or any(
+        not math.isfinite(weight) or weight < 0 for weight in weights.values()
+    ):
+        return None
+    return sum(weighted) / total_weight
+
+
 class TypeSafeCriteriaChoice(JudgeParser):
     """Aggregate focused pairwise Choice distributions from Jev."""
 
     name = "typesafe-criteria-choice"
+    decision_mode = "criteria-choice"
 
     def parse_result(
         self,
@@ -426,7 +452,7 @@ class TypeSafeCriteriaChoice(JudgeParser):
         try:
             result = json.loads(judge_completion)
             answers = result["answers"]
-            expected_ids = set(JEV_QUESTION_MODES["criteria-choice"])
+            expected_ids = set(JEV_QUESTION_MODES[self.decision_mode])
         except (KeyError, TypeError, ValueError):
             return None
         if not isinstance(answers, dict) or set(answers) != expected_ids:
@@ -435,6 +461,7 @@ class TypeSafeCriteriaChoice(JudgeParser):
         distributions = {}
         confidences = {}
         selections = {}
+        criterion_preferences = {}
         scores = {}
         for answer_id in sorted(expected_ids):
             try:
@@ -448,12 +475,17 @@ class TypeSafeCriteriaChoice(JudgeParser):
             if probabilities is None or selection not in probabilities:
                 return None
             criterion_preference = probabilities["B"] + 0.5 * probabilities["tie"]
+            criterion_preferences[answer_id] = criterion_preference
             scores[f"{answer_id}_preference"] = criterion_preference
             distributions[answer_id] = probabilities
             confidences[answer_id] = answer.get("confidence")
             selections[answer_id] = selection
 
-        preference = sum(scores.values()) / len(scores)
+        preference = _aggregate_jev_questions(
+            criterion_preferences, decision_mode=self.decision_mode
+        )
+        if preference is None:
+            return None
         scores["overall"] = preference
         return ParsedPreference(
             preference=preference,
@@ -482,6 +514,7 @@ class TypeSafeCriteriaComparativeScore(JudgeParser):
     """Aggregate focused comparative Score distributions from Jev."""
 
     name = "typesafe-criteria-comparative-score"
+    decision_mode = "criteria-comparative-score"
     level_labels = {str(level) for level in range(5)}
 
     def parse_result(
@@ -493,7 +526,7 @@ class TypeSafeCriteriaComparativeScore(JudgeParser):
         try:
             result = json.loads(judge_completion)
             answers = result["answers"]
-            expected_ids = set(JEV_QUESTION_MODES["criteria-comparative-score"])
+            expected_ids = set(JEV_QUESTION_MODES[self.decision_mode])
         except (KeyError, TypeError, ValueError):
             return None
         if not isinstance(answers, dict) or set(answers) != expected_ids:
@@ -518,7 +551,9 @@ class TypeSafeCriteriaComparativeScore(JudgeParser):
             distributions[answer_id] = probabilities
             confidences[answer_id] = answer.get("confidence")
 
-        preference = sum(scores.values()) / len(scores)
+        preference = _aggregate_jev_questions(scores, decision_mode=self.decision_mode)
+        if preference is None:
+            return None
         scores["overall"] = preference
         return ParsedPreference(
             preference=preference,
@@ -540,6 +575,16 @@ class TypeSafeCriteriaComparativeScore(JudgeParser):
                 },
             },
         )
+
+
+class TypeSafeCriteriaChoiceV2(TypeSafeCriteriaChoice):
+    name = "typesafe-criteria-choice-v2"
+    decision_mode = "criteria-choice-v2"
+
+
+class TypeSafeCriteriaComparativeScoreV2(TypeSafeCriteriaComparativeScore):
+    name = "typesafe-criteria-comparative-score-v2"
+    decision_mode = "criteria-comparative-score-v2"
 
 
 class TypeSafeCriteriaScore(JudgeParser):
@@ -751,7 +796,9 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "typesafe-choice": TypeSafeChoice(),
     "typesafe-criteria-score": TypeSafeCriteriaScore(),
     "typesafe-criteria-choice": TypeSafeCriteriaChoice(),
+    "typesafe-criteria-choice-v2": TypeSafeCriteriaChoiceV2(),
     "typesafe-criteria-comparative-score": TypeSafeCriteriaComparativeScore(),
+    "typesafe-criteria-comparative-score-v2": TypeSafeCriteriaComparativeScoreV2(),
     "typesafe-comparative-score": TypeSafeComparativeScore(),
     "typesafe-pair-score": TypeSafePairScore(),
 }

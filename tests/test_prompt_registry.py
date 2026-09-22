@@ -31,7 +31,7 @@ class FakeCliArgs:
 
 def test_prompt_catalog_is_loaded_from_packaged_yaml():
     assert set(PRESETS) == set(PROMPT_PRESETS)
-    assert len(PROMPT_PRESETS) == 17
+    assert len(PROMPT_PRESETS) == 19
     assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
     assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
     assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"
@@ -96,11 +96,15 @@ def test_typesafe_criteria_score_preset_uses_criteria_parser():
 
 def test_typesafe_focused_criteria_presets_use_matching_parsers():
     choice = resolve_judge_prompt(preset="typesafe-criteria-choice")
+    choice_v2 = resolve_judge_prompt(preset="typesafe-criteria-choice-v2")
     score = resolve_judge_prompt(preset="typesafe-criteria-comparative-score")
+    score_v2 = resolve_judge_prompt(preset="typesafe-criteria-comparative-score-v2")
 
     assert choice.parser.name == "typesafe-criteria-choice"
+    assert choice_v2.parser.name == "typesafe-criteria-choice-v2"
     assert PROMPT_PRESETS["typesafe-criteria-choice"].decision_mode == "criteria-choice"
     assert score.parser.name == "typesafe-criteria-comparative-score"
+    assert score_v2.parser.name == "typesafe-criteria-comparative-score-v2"
     assert (
         PROMPT_PRESETS["typesafe-criteria-comparative-score"].decision_mode
         == "criteria-comparative-score"

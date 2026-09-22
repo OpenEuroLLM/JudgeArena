@@ -592,10 +592,14 @@ class OpenRouterJevJudge:
             result_payload = dict(answer)
         elif self.decision_mode in {
             "criteria-choice",
+            "criteria-choice-v2",
             "criteria-comparative-score",
+            "criteria-comparative-score-v2",
         }:
             answer_type = (
-                "choice" if self.decision_mode == "criteria-choice" else "score"
+                "choice"
+                if self.decision_mode in {"criteria-choice", "criteria-choice-v2"}
+                else "score"
             )
             answer_ids = set(self.questions)
             if set(answers) != answer_ids or any(

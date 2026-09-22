@@ -8,6 +8,12 @@ JEV_PROMPT_PRESETS = {
     if preset.decision_mode is not None
 }
 
+JEV_AGGREGATIONS = {
+    preset.decision_mode: preset.aggregation
+    for preset in JEV_PROMPT_PRESETS.values()
+    if preset.aggregation is not None
+}
+
 _criteria_presets = [
     preset
     for preset in JEV_PROMPT_PRESETS.values()

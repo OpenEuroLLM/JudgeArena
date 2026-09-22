@@ -9,7 +9,11 @@ import pytest
 from judgearena.config import RunConfig
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.models import do_inference, make_model
-from judgearena.prompts.jev import JEV_PROMPT_PRESETS, JEV_QUESTION_MODES
+from judgearena.prompts.jev import (
+    JEV_AGGREGATIONS,
+    JEV_PROMPT_PRESETS,
+    JEV_QUESTION_MODES,
+)
 from judgearena.prompts.parsing import JUDGE_PARSERS
 
 
@@ -170,7 +174,9 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "typesafe-comparative-score",
         "typesafe-criteria-score",
         "typesafe-criteria-choice",
+        "typesafe-criteria-choice-v2",
         "typesafe-criteria-comparative-score",
+        "typesafe-criteria-comparative-score-v2",
         "typesafe-pair-score",
         "typesafe-fluency-choice",
     }
@@ -179,7 +185,9 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "comparative-score",
         "criteria-score",
         "criteria-choice",
+        "criteria-choice-v2",
         "criteria-comparative-score",
+        "criteria-comparative-score-v2",
         "pair-score",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
@@ -201,6 +209,14 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         question["type"]
         for question in JEV_QUESTION_MODES["criteria-comparative-score"].values()
     } == {"score"}
+    assert JEV_AGGREGATIONS["criteria-choice-v2"] == {
+        "method": "weighted_mean",
+        "weights": {"task_success": 0.5, "communication": 0.5},
+    }
+    assert JEV_AGGREGATIONS["criteria-comparative-score-v2"] == {
+        "method": "weighted_mean",
+        "weights": {"task_success": 0.5, "communication": 0.5},
+    }
     pair_questions = JEV_QUESTION_MODES["pair-score"]
     assert set(pair_questions) == {"A", "B"}
     assert pair_questions["A"]["criteria"] == pair_questions["B"]["criteria"]
@@ -294,7 +310,16 @@ def test_typesafe_criteria_score_rejects_missing_criterion():
     )
 
 
-def test_openrouter_jev_criteria_choice_aggregates_focused_questions():
+@pytest.mark.parametrize(
+    ("decision_mode", "prompt_preset"),
+    [
+        ("criteria-choice", "typesafe-criteria-choice"),
+        ("criteria-choice-v2", "typesafe-criteria-choice-v2"),
+    ],
+)
+def test_openrouter_jev_criteria_choice_aggregates_focused_questions(
+    decision_mode, prompt_preset
+):
     requests = []
 
     def handler(request):
@@ -304,7 +329,7 @@ def test_openrouter_jev_criteria_choice_aggregates_focused_questions():
     transport = httpx.MockTransport(handler)
     judge = make_model(
         "OpenRouter/typesafe/jev-1.13",
-        decision_mode="criteria-choice",
+        decision_mode=decision_mode,
         client=httpx.Client(transport=transport),
         async_client=httpx.AsyncClient(transport=transport),
     )
@@ -315,7 +340,7 @@ def test_openrouter_jev_criteria_choice_aggregates_focused_questions():
         completions_A=["Response A"],
         completions_B=["Response B"],
         swap_mode="fixed",
-        prompt_preset="typesafe-criteria-choice",
+        prompt_preset=prompt_preset,
     )
 
     assert set(requests[0]["questions"]) == {"task_success", "communication"}
@@ -329,7 +354,22 @@ def test_openrouter_jev_criteria_choice_aggregates_focused_questions():
     )
 
 
-def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions():
+@pytest.mark.parametrize(
+    ("decision_mode", "prompt_preset"),
+    [
+        (
+            "criteria-comparative-score",
+            "typesafe-criteria-comparative-score",
+        ),
+        (
+            "criteria-comparative-score-v2",
+            "typesafe-criteria-comparative-score-v2",
+        ),
+    ],
+)
+def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions(
+    decision_mode, prompt_preset
+):
     requests = []
 
     def handler(request):
@@ -339,7 +379,7 @@ def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions():
     transport = httpx.MockTransport(handler)
     judge = make_model(
         "OpenRouter/typesafe/jev-1.13",
-        decision_mode="criteria-comparative-score",
+        decision_mode=decision_mode,
         client=httpx.Client(transport=transport),
         async_client=httpx.AsyncClient(transport=transport),
     )
@@ -350,7 +390,7 @@ def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions():
         completions_A=["Response A"],
         completions_B=["Response B"],
         swap_mode="fixed",
-        prompt_preset="typesafe-criteria-comparative-score",
+        prompt_preset=prompt_preset,
     )
 
     assert set(requests[0]["questions"]) == {"task_success", "communication"}
@@ -358,6 +398,23 @@ def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions():
     assert annotations[0].parsed.scores == pytest.approx(
         {"communication": 0.625, "task_success": 0.75, "overall": 0.6875}
     )
+
+
+def test_typesafe_criteria_v2_uses_yaml_aggregation(monkeypatch):
+    monkeypatch.setitem(
+        JEV_AGGREGATIONS,
+        "criteria-choice-v2",
+        {
+            "method": "weighted_mean",
+            "weights": {"task_success": 0.75, "communication": 0.25},
+        },
+    )
+
+    parsed = JUDGE_PARSERS["typesafe-criteria-choice-v2"].parse_result(
+        json.dumps({"answers": _criteria_choice_response()["answers"]})
+    )
+
+    assert parsed.preference == pytest.approx(0.8125)
 
 
 def test_openrouter_jev_criteria_score_returns_diagnostics_and_preference():
@@ -669,6 +726,13 @@ def test_openrouter_jev_selects_required_prompt_modes():
             "prompt_preset": "typesafe-criteria-score",
         },
     )
+    focused_v2_cfg = RunConfig(
+        task="meta-eval-lmarena-140k-en",
+        judge={
+            "model": "OpenRouter/typesafe/jev-1.13",
+            "prompt_preset": "typesafe-criteria-choice-v2",
+        },
+    )
     comparative_cfg = RunConfig(
         task="meta-eval-lmarena-140k-en",
         judge={
@@ -693,6 +757,7 @@ def test_openrouter_jev_selects_required_prompt_modes():
     assert cfg.judge.engine_kwargs["decision_mode"] == "choice"
     assert criteria_cfg.judge.prompt_preset == "typesafe-criteria-score"
     assert criteria_cfg.judge.engine_kwargs["decision_mode"] == "criteria-score"
+    assert focused_v2_cfg.judge.engine_kwargs["decision_mode"] == "criteria-choice-v2"
     assert comparative_cfg.judge.prompt_preset == "typesafe-comparative-score"
     assert comparative_cfg.judge.engine_kwargs["decision_mode"] == "comparative-score"
     assert score_cfg.judge.prompt_preset == "typesafe-pair-score"
