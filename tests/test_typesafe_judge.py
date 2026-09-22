@@ -48,6 +48,29 @@ def _comparative_score_response():
     }
 
 
+def _criteria_score_response():
+    answers = {}
+    for answer_id in JEV_QUESTION_MODES["criteria-score"]:
+        candidate = answer_id[0]
+        probabilities = (
+            {"0": 0, "1": 0, "2": 1, "3": 0}
+            if candidate == "A"
+            else {"0": 0, "1": 0, "2": 0.5, "3": 0.5}
+        )
+        answers[answer_id] = {
+            "type": "score",
+            "confidence": 0.75,
+            "probabilities": probabilities,
+        }
+    return {
+        "answers": answers,
+        "usage": {"input_tokens": 220, "output_tokens": 80, "cost": 0.00004},
+        "model": "typesafe/jev-1.13-20260917",
+        "provider": "TypeSafe",
+        "id": "request-criteria-score-1",
+    }
+
+
 def _score_response():
     levels = {
         "0": "fails",
@@ -99,12 +122,14 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
     assert set(JEV_PROMPT_PRESETS) == {
         "typesafe-choice",
         "typesafe-comparative-score",
+        "typesafe-criteria-score",
         "typesafe-pair-score",
         "typesafe-fluency-choice",
     }
     assert set(JEV_QUESTION_MODES) == {
         "choice",
         "comparative-score",
+        "criteria-score",
         "pair-score",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
@@ -173,6 +198,87 @@ def test_openrouter_jev_batch_retries_only_failed_520_request(monkeypatch):
 
     assert len(results) == 2
     assert attempts == {"stable": 1, "retry": 2}
+
+
+def test_typesafe_criteria_score_uses_configured_tie_tolerance():
+    answers = _criteria_score_response()["answers"]
+    for answer_id, answer in answers.items():
+        if answer_id.startswith("B_"):
+            answer["probabilities"] = {"0": 0, "1": 0, "2": 0.95, "3": 0.05}
+
+    parsed = JUDGE_PARSERS["typesafe-criteria-score"].parse_result(
+        json.dumps({"criteria": answers})
+    )
+
+    assert parsed.preference == 0.5
+    assert parsed.label == "tie"
+    assert parsed.scores["A_overall"] == pytest.approx(7.0)
+    assert parsed.scores["B_overall"] == pytest.approx(7.15)
+
+
+def test_typesafe_criteria_score_rejects_missing_criterion():
+    response = _criteria_score_response()
+    answers = response["answers"]
+    payload = {
+        "criteria": {
+            answer_id: answer
+            for answer_id, answer in answers.items()
+            if answer_id != "A_adherence"
+        }
+    }
+
+    assert (
+        JUDGE_PARSERS["typesafe-criteria-score"].parse_result(json.dumps(payload))
+        is None
+    )
+
+
+def test_openrouter_jev_criteria_score_returns_diagnostics_and_choice():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_criteria_score_response())
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="criteria-score",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    annotations, _, preferences = judge_and_parse_prefs(
+        judge_chat_model=judge,
+        instructions=["Answer the question."],
+        completions_A=["Response A"],
+        completions_B=["Response B"],
+        swap_mode="fixed",
+        prompt_preset="typesafe-criteria-score",
+    )
+
+    questions = requests[0]["questions"]
+    assert len(questions) == 12
+    assert set(questions) == {
+        f"{candidate}_{criterion}"
+        for candidate in ("A", "B")
+        for criterion in (
+            "adherence",
+            "helpfulness",
+            "factuality",
+            "completeness",
+            "clarity",
+            "fluency",
+        )
+    }
+    assert questions["A_adherence"]["type"] == "score"
+    assert len(questions["A_adherence"]["criteria"]) == 4
+    assert preferences.tolist() == pytest.approx([1.0])
+    scores = annotations[0].parsed.scores
+    assert scores["A_adherence"] == pytest.approx(7.0)
+    assert scores["B_adherence"] == pytest.approx(8.5)
+    assert scores["A_overall"] == pytest.approx(7.0)
+    assert scores["B_overall"] == pytest.approx(8.5)
 
 
 def test_openrouter_jev_comparative_score_maps_ordered_distribution():
@@ -364,6 +470,13 @@ def test_openrouter_jev_selects_required_prompt_modes():
         model={"name": "claude-2"},
         judge={"model": "OpenRouter/typesafe/jev-1.13"},
     )
+    criteria_cfg = RunConfig(
+        task="meta-eval-lmarena-140k-en",
+        judge={
+            "model": "OpenRouter/typesafe/jev-1.13",
+            "prompt_preset": "typesafe-criteria-score",
+        },
+    )
     comparative_cfg = RunConfig(
         task="meta-eval-lmarena-140k-en",
         judge={
@@ -386,6 +499,8 @@ def test_openrouter_jev_selects_required_prompt_modes():
 
     assert cfg.judge.prompt_preset == "typesafe-choice"
     assert cfg.judge.engine_kwargs["decision_mode"] == "choice"
+    assert criteria_cfg.judge.prompt_preset == "typesafe-criteria-score"
+    assert criteria_cfg.judge.engine_kwargs["decision_mode"] == "criteria-score"
     assert comparative_cfg.judge.prompt_preset == "typesafe-comparative-score"
     assert comparative_cfg.judge.engine_kwargs["decision_mode"] == "comparative-score"
     assert score_cfg.judge.prompt_preset == "typesafe-pair-score"

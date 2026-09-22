@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from judgearena.prompts.jev import JEV_CRITERIA_SCORING
 from judgearena.utils import strip_thinking_tags
 
 
@@ -411,6 +412,90 @@ class TypeSafeChoice(JudgeParser):
         )
 
 
+class TypeSafeCriteriaScore(JudgeParser):
+    """Parse self-contained Jev criterion Scores into candidate totals."""
+
+    name = "typesafe-criteria-score"
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answers = result["criteria"]
+            candidates = JEV_CRITERIA_SCORING["candidates"]
+            criteria = JEV_CRITERIA_SCORING["criteria"]
+            tie_tolerance = float(JEV_CRITERIA_SCORING["tie_tolerance"])
+            if JEV_CRITERIA_SCORING["aggregation"] != "mean":
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        expected_ids = {
+            f"{candidate}_{criterion['name']}"
+            for candidate in candidates
+            for criterion in criteria
+        }
+        if not isinstance(answers, dict) or set(answers) != expected_ids:
+            return None
+
+        scores: dict[str, float] = {}
+        distributions: dict[str, dict[str, float]] = {}
+        confidences: dict[str, float | None] = {}
+        try:
+            for criterion in criteria:
+                levels = criterion["levels"]
+                values = [float(level["value"]) for level in levels]
+                labels = {str(level) for level in range(len(values))}
+                for candidate in candidates:
+                    answer_id = f"{candidate}_{criterion['name']}"
+                    probabilities = _typesafe_probabilities(
+                        answers[answer_id]["probabilities"], labels=labels
+                    )
+                    if probabilities is None:
+                        return None
+                    scores[answer_id] = sum(
+                        value * probabilities[str(level)]
+                        for level, value in enumerate(values)
+                    )
+                    distributions[answer_id] = probabilities
+                    confidences[answer_id] = answers[answer_id].get("confidence")
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        for candidate in candidates:
+            scores[f"{candidate}_overall"] = sum(
+                scores[f"{candidate}_{criterion['name']}"] for criterion in criteria
+            ) / len(criteria)
+        difference = scores["B_overall"] - scores["A_overall"]
+        if abs(difference) <= tie_tolerance:
+            preference, label = 0.5, "tie"
+        elif difference > 0:
+            preference, label = 1.0, "B"
+        else:
+            preference, label = 0.0, "A"
+
+        return ParsedPreference(
+            preference=preference,
+            label=label,
+            scores=scores,
+            details={
+                "criterion_probabilities": distributions,
+                "criterion_confidence": confidences,
+                "score_difference": difference,
+                "tie_tolerance": tie_tolerance,
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
 class TypeSafeComparativeScore(JudgeParser):
     """Parse one ordered Jev Score distribution over relative preference."""
 
@@ -534,6 +619,7 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
     "typesafe-choice": TypeSafeChoice(),
+    "typesafe-criteria-score": TypeSafeCriteriaScore(),
     "typesafe-comparative-score": TypeSafeComparativeScore(),
     "typesafe-pair-score": TypeSafePairScore(),
 }

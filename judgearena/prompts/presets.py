@@ -18,6 +18,7 @@ class PromptPresetSpec:
     decision_mode: str | None = None
     task_kind: str | None = None
     questions: dict[str, dict] | None = None
+    criteria_scoring: dict | None = None
 
 
 def _load_preset(filename: str) -> PromptPresetSpec:
@@ -75,6 +76,7 @@ def _load_preset(filename: str) -> PromptPresetSpec:
         decision_mode=decision_mode,
         task_kind=task_kind,
         questions=questions,
+        criteria_scoring=data.get("criteria_scoring"),
     )
 
 
@@ -83,6 +85,7 @@ _PRESET_FILES = (
     "typesafe-choice.yaml",
     "typesafe-comparative-score.yaml",
     "typesafe-pair-score.yaml",
+    "typesafe-criteria-score.yaml",
     "typesafe-fluency-choice.yaml",
     "default_with_explanation.yaml",
     "fluency.yaml",
