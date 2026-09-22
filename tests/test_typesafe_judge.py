@@ -179,6 +179,7 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "typesafe-criteria-comparative-score-v2",
         "typesafe-pair-score",
         "typesafe-overall-choice-multilingual-v4",
+        "typesafe-overall-comparative-score-v5",
         "typesafe-fluency-choice",
     }
     assert set(JEV_QUESTION_MODES) == {
@@ -190,6 +191,7 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "criteria-comparative-score",
         "criteria-comparative-score-v2",
         "overall-choice-v4-multilingual",
+        "overall-comparative-score-v5",
         "pair-score",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
@@ -683,6 +685,57 @@ def test_openrouter_jev_overall_choice_preserves_four_way_answer():
     }
 
 
+def test_openrouter_jev_overall_comparative_score_preserves_distribution():
+    response = {
+        "answers": {
+            "outcome": {
+                "type": "score",
+                "score": 2.1,
+                "confidence": 0.4,
+                "probabilities": {
+                    "0": 0.05,
+                    "1": 0.15,
+                    "2": 0.5,
+                    "3": 0.15,
+                    "4": 0.15,
+                },
+            }
+        },
+        "usage": {"input_tokens": 120, "output_tokens": 8, "cost": 0.00001},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "request-overall-comparative-1",
+    }
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json=response))
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="overall-comparative-score-v5",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    payload = json.loads(judge.invoke("pair").text)
+
+    assert payload["decision_mode"] == "overall-comparative-score-v5"
+    assert payload["answers"]["outcome"]["score"] == pytest.approx(2.1)
+    assert set(payload["answers"]["outcome"]["probabilities"]) == {
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    }
+    assert payload["model"] == "typesafe/jev-1.13-20260917"
+    assert payload["request_id"] == "request-overall-comparative-1"
+
+    parsed = JUDGE_PARSERS["typesafe-overall-comparative-score-v5"].parse_result(
+        json.dumps(payload)
+    )
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.55)
+    assert parsed.label == "tie"
+    assert parsed.details["request_id"] == "request-overall-comparative-1"
+
+
 def test_openrouter_jev_async_request():
     requests = []
     judge = _judge(requests)
@@ -861,3 +914,60 @@ def test_typesafe_overall_choice_preserves_native_tie_probability():
     assert parsed.scores == pytest.approx(
         {"A": 0.20, "B": 0.25, "tie": 0.15, "both_bad": 0.40}
     )
+
+
+def test_typesafe_overall_comparative_score_preserves_center_level():
+    parsed = JUDGE_PARSERS["typesafe-overall-comparative-score-v5"].parse_result(
+        json.dumps(
+            {
+                "answers": {
+                    "outcome": {
+                        "type": "score",
+                        "score": 2.1,
+                        "confidence": 0.4,
+                        "probabilities": {
+                            "0": 0.05,
+                            "1": 0.15,
+                            "2": 0.50,
+                            "3": 0.15,
+                            "4": 0.15,
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.55)
+    assert parsed.label == "tie"
+    assert parsed.details["hard_preference_mode"] == "center_level"
+    assert parsed.scores["2"] == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize(
+    ("probabilities", "expected_preference", "expected_label"),
+    [
+        ({"0": 0.0, "1": 0.35, "2": 0.0, "3": 0.31, "4": 0.34}, 0.66, "A"),
+        ({"0": 0.0, "1": 0.4, "2": 0.0, "3": 0.4, "4": 0.2}, 0.6, "tie"),
+    ],
+)
+def test_typesafe_overall_comparative_score_uses_native_modal_hard_label(
+    probabilities, expected_preference, expected_label
+):
+    parsed = JUDGE_PARSERS["typesafe-overall-comparative-score-v5"].parse_result(
+        json.dumps(
+            {
+                "answers": {
+                    "outcome": {
+                        "type": "score",
+                        "probabilities": probabilities,
+                    }
+                }
+            }
+        )
+    )
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(expected_preference)
+    assert parsed.label == expected_label

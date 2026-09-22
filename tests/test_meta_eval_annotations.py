@@ -140,3 +140,27 @@ def test_aggregate_uses_native_hard_distribution_after_swap():
     assert battles.to_dict("records") == [
         {"battle_id": "q1", "pref": pytest.approx(0.525), "hard_pref": 1.0}
     ]
+
+
+def test_aggregate_reorients_native_directional_score_levels():
+    annotations = pd.DataFrame(
+        {
+            "battle_id": ["q1", "q1"],
+            "orientation": ["direct", "reversed"],
+            "pref": [0.425, 0.425],
+            "parsed_scores_json": [
+                json.dumps({"0": 0.1, "1": 0.5, "2": 0.1, "3": 0.2, "4": 0.1}),
+                json.dumps({"0": 0.1, "1": 0.2, "2": 0.1, "3": 0.5, "4": 0.1}),
+            ],
+            "parsed_details_json": [
+                json.dumps({"hard_preference_mode": "center_level"}),
+                json.dumps({"hard_preference_mode": "center_level"}),
+            ],
+        }
+    )
+
+    battles = aggregate_battle_preferences(annotations, swap_mode="both")
+
+    assert battles.to_dict("records") == [
+        {"battle_id": "q1", "pref": pytest.approx(0.425), "hard_pref": 0.0}
+    ]

@@ -31,7 +31,7 @@ class FakeCliArgs:
 
 def test_prompt_catalog_is_loaded_from_packaged_yaml():
     assert set(PRESETS) == set(PROMPT_PRESETS)
-    assert len(PROMPT_PRESETS) == 20
+    assert len(PROMPT_PRESETS) == 21
     assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
     assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
     assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"

@@ -484,6 +484,62 @@ class TypeSafeOverallChoice(JudgeParser):
         )
 
 
+class TypeSafeOverallComparativeScore(JudgeParser):
+    """Parse one overall five-level comparison while preserving its hard level."""
+
+    name = "typesafe-overall-comparative-score-v5"
+    level_labels = {str(level) for level in range(5)}
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answer = result["answers"]["outcome"]
+            probabilities = _typesafe_probabilities(
+                answer["probabilities"], labels=self.level_labels
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if probabilities is None:
+            return None
+        preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
+        maximum = max(probabilities.values())
+        winning_levels = {
+            int(level)
+            for level, probability in probabilities.items()
+            if probability == maximum
+        }
+        spans_both_sides = any(level < 2 for level in winning_levels) and any(
+            level > 2 for level in winning_levels
+        )
+        label = (
+            "tie"
+            if 2 in winning_levels or spans_both_sides
+            else "A"
+            if max(winning_levels) < 2
+            else "B"
+        )
+        return ParsedPreference(
+            preference=preference,
+            label=label,
+            scores=probabilities,
+            details={
+                "hard_preference_mode": "center_level",
+                "outcome_score": answer.get("score"),
+                "outcome_confidence": answer.get("confidence"),
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
 class TypeSafeCriteriaChoice(JudgeParser):
     """Aggregate focused pairwise Choice distributions from Jev."""
 
@@ -842,6 +898,7 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "alpaca-eval-token": AlpacaEvalToken(),
     "typesafe-choice": TypeSafeChoice(),
     "typesafe-overall-choice-v4": TypeSafeOverallChoice(),
+    "typesafe-overall-comparative-score-v5": TypeSafeOverallComparativeScore(),
     "typesafe-criteria-score": TypeSafeCriteriaScore(),
     "typesafe-criteria-choice": TypeSafeCriteriaChoice(),
     "typesafe-criteria-choice-v2": TypeSafeCriteriaChoiceV2(),

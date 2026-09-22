@@ -111,28 +111,70 @@ def _annotation_frame(
     return pd.DataFrame(rows)
 
 
-def _outcome_probabilities(row) -> dict[str, float] | None:
+def _hard_evidence(row) -> tuple[str, dict[str, float]] | None:
     scores = row.parsed_scores_json
     if not isinstance(scores, str):
         return None
     probabilities = json.loads(scores)
-    if set(probabilities) != {"A", "B", "tie", "both_bad"}:
-        return None
-    if row.orientation == "reversed":
-        return {
-            "A": float(probabilities["B"]),
-            "B": float(probabilities["A"]),
-            "tie": float(probabilities["tie"]),
-            "both_bad": float(probabilities["both_bad"]),
+    details = (
+        json.loads(row.parsed_details_json)
+        if isinstance(row.parsed_details_json, str)
+        else {}
+    )
+    if set(probabilities) == {"A", "B", "tie", "both_bad"}:
+        if row.orientation == "reversed":
+            probabilities = {
+                "A": probabilities["B"],
+                "B": probabilities["A"],
+                "tie": probabilities["tie"],
+                "both_bad": probabilities["both_bad"],
+            }
+        return "tie_family", {
+            label: float(probabilities[label]) for label in probabilities
         }
-    return {label: float(probabilities[label]) for label in probabilities}
+    if (
+        set(probabilities) == {str(level) for level in range(5)}
+        and details.get("hard_preference_mode") == "center_level"
+    ):
+        if row.orientation == "reversed":
+            probabilities = {
+                str(level): probabilities[str(4 - level)] for level in range(5)
+            }
+        return "center_level", {
+            label: float(probabilities[label]) for label in probabilities
+        }
+    return None
 
 
 def _aggregate_hard_preference(passes: pd.DataFrame) -> float:
     pass_rows = list(passes.itertuples())
-    distributions = [_outcome_probabilities(row) for row in pass_rows]
-    if any(distribution is None for distribution in distributions):
+    evidence = [_hard_evidence(row) for row in pass_rows]
+    if any(item is None for item in evidence):
         return float("nan")
+    modes = {item[0] for item in evidence}
+    if len(modes) != 1:
+        raise ValueError("Judge passes must use the same hard preference mode.")
+    mode = modes.pop()
+    distributions = [item[1] for item in evidence]
+    if mode == "center_level":
+        probabilities = {
+            str(level): float(
+                np.mean([distribution[str(level)] for distribution in distributions])
+            )
+            for level in range(5)
+        }
+        maximum = max(probabilities.values())
+        winners = {
+            int(level)
+            for level, probability in probabilities.items()
+            if probability == maximum
+        }
+        if 2 in winners or (
+            any(level < 2 for level in winners) and any(level > 2 for level in winners)
+        ):
+            return 0.5
+        return 0.0 if max(winners) < 2 else 1.0
+
     thresholds = {
         float(json.loads(row.parsed_details_json).get("hard_tie_threshold", 0.0))
         for row in pass_rows
@@ -166,12 +208,8 @@ def aggregate_battle_preferences(
     expected_orientations = (
         {"direct", "reversed"} if swap_mode == "both" else {"single"}
     )
-    uses_native_hard_preferences = (
-        "parsed_scores_json" in annotations
-        and annotations["parsed_scores_json"]
-        .dropna()
-        .map(lambda value: set(json.loads(value)) == {"A", "B", "tie", "both_bad"})
-        .any()
+    uses_native_hard_preferences = "parsed_scores_json" in annotations and any(
+        _hard_evidence(row) is not None for row in annotations.itertuples()
     )
     rows = []
     for battle_id, passes in annotations.groupby("battle_id", sort=False):

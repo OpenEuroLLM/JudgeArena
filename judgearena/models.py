@@ -590,6 +590,22 @@ class OpenRouterJevJudge:
                     "probabilities."
                 )
             result_payload = dict(answer)
+        elif self.decision_mode.startswith("overall-comparative-score-"):
+            answer = answers.get("outcome", {})
+            if (
+                set(answers) != {"outcome"}
+                or answer.get("type") != "score"
+                or "probabilities" not in answer
+            ):
+                raise ValueError(
+                    "OpenRouter Jev overall comparative answer must include one "
+                    "Score distribution."
+                )
+            result_payload = {
+                "type": "overall_comparative_score",
+                "decision_mode": self.decision_mode,
+                "answers": {"outcome": answer},
+            }
         elif self.decision_mode.startswith("overall-choice-"):
             answer = answers.get("outcome", {})
             if (
