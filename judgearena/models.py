@@ -10,6 +10,7 @@ import sqlite3
 import time
 import warnings
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import replace
 
 from langchain_community.llms import LlamaCpp
@@ -775,6 +776,51 @@ def _run_backend_inference(
     return [result.text for result in results]
 
 
+@contextmanager
+def _cache_store(cache, model):
+    try:
+        store = cache.open_store(model)
+    except _CACHE_OPERATION_ERRORS as exc:
+        logger.warning(
+            "Cache open failed at %s: %s. Continuing without caching.",
+            cache.store_root,
+            exc,
+        )
+        yield None
+        return
+
+    try:
+        yield store
+    finally:
+        try:
+            store.close()
+        except _CACHE_OPERATION_ERRORS as exc:
+            logger.warning("Cache close failed at %s: %s.", store.db_path, exc)
+
+
+def _read_cached_rows(store, input_hashes):
+    try:
+        return store.query(input_hashes).set_index("input_hash")
+    except _CACHE_OPERATION_ERRORS as exc:
+        logger.warning(
+            "Cache read failed at %s: %s. Continuing without caching.",
+            store.db_path,
+            exc,
+        )
+        return None
+
+
+def _save_cache_outputs(cache, store, model, input_texts, outputs, metadata, indices):
+    try:
+        cache.save_outputs(store, model, input_texts, outputs, metadata, indices)
+    except _CACHE_OPERATION_ERRORS as exc:
+        logger.warning(
+            "Cache write failed at %s: %s. Preserving generated results.",
+            store.db_path,
+            exc,
+        )
+
+
 def do_inference(
     chat_model,
     inputs,
@@ -809,31 +855,17 @@ def do_inference(
 
     input_texts = [canonicalize_chat_input(item) for item in inputs]
     input_hashes = [input_hash(input_text) for input_text in input_texts]
-    try:
-        store = cache.open_store(chat_model)
-    except _CACHE_OPERATION_ERRORS as exc:
-        logger.warning(
-            "Cache open failed at %s: %s. Continuing without caching.",
-            cache.store_root,
-            exc,
-        )
-        return _run_backend_inference(
-            chat_model.materialize(),
-            inputs,
-            use_tqdm,
-            return_top_logprobs,
-            stage=stage,
-        )
-
-    try:
-        try:
-            cached_rows = store.query(input_hashes).set_index("input_hash")
-        except _CACHE_OPERATION_ERRORS as exc:
-            logger.warning(
-                "Cache read failed at %s: %s. Continuing without caching.",
-                store.db_path,
-                exc,
+    with _cache_store(cache, chat_model) as store:
+        if store is None:
+            return _run_backend_inference(
+                chat_model.materialize(),
+                inputs,
+                use_tqdm,
+                return_top_logprobs,
+                stage=stage,
             )
+        cached_rows = _read_cached_rows(store, input_hashes)
+        if cached_rows is None:
             return _run_backend_inference(
                 chat_model.materialize(),
                 inputs,
@@ -862,26 +894,15 @@ def do_inference(
             )
             for index, result in zip(missing_indices, generated, strict=True):
                 results[index] = result
-            try:
-                cache.save_outputs(
-                    store,
-                    chat_model,
-                    input_texts,
-                    generated,
-                    cache_row_metadata,
-                    missing_indices,
-                )
-            except _CACHE_OPERATION_ERRORS as exc:
-                logger.warning(
-                    "Cache write failed at %s: %s. Preserving generated results.",
-                    store.db_path,
-                    exc,
-                )
-    finally:
-        try:
-            store.close()
-        except _CACHE_OPERATION_ERRORS as exc:
-            logger.warning("Cache close failed at %s: %s.", store.db_path, exc)
+            _save_cache_outputs(
+                cache,
+                store,
+                chat_model,
+                input_texts,
+                generated,
+                cache_row_metadata,
+                missing_indices,
+            )
 
     resolved_results = [result for result in results if result is not None]
     if return_top_logprobs:
