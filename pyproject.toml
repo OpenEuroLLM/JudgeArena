@@ -55,7 +55,7 @@ exclude = ["slurmpilot_scripts*"]
 
 [tool.setuptools.package-data]
 "judgearena.criteria" = ["data/*.yaml"]
-"judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt", "data/jev/*.yaml"]
+"judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt", "data/presets/*.yaml"]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
 "judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 
