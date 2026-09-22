@@ -16,7 +16,7 @@ from judgearena.benchmarks.elo.rating import (
 )
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
-from judgearena.cache_sqlite import JudgementCache
+from judgearena.cache.sqlite import JudgementCache
 from judgearena.config import RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import DummyModel, make_model

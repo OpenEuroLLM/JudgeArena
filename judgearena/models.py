@@ -18,21 +18,21 @@ from pandas.errors import DatabaseError
 from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from judgearena.cache_sqlite import input_hash
+from judgearena.cache.inference import (
+    CacheRowMetadata,
+    InferenceCache,
+    PreparedModel,
+    build_model_descriptor,
+    canonicalize_model_input,
+)
+from judgearena.cache.sqlite import input_hash
 from judgearena.constants import (
     VLLM_DEFAULT_TEMPERATURE,
     VLLM_DEFAULT_TOP_P,
     VLLM_REASONING_END_STR,
     VLLM_REASONING_START_STR,
 )
-from judgearena.inference import (
-    CacheRowMetadata,
-    InferenceCache,
-    InferenceResult,
-    PreparedModel,
-    build_model_descriptor,
-    canonicalize_model_input,
-)
+from judgearena.inference import InferenceResult
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int

@@ -3,7 +3,7 @@ import json
 import pandas as pd
 import pytest
 
-from judgearena.cache_sqlite import (
+from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
     JUDGEMENT_DB_NAME,
     CompletionCache,

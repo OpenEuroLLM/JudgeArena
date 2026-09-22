@@ -5,15 +5,16 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
-import judgearena.inference as inference
+import judgearena.cache.inference as inference
 import judgearena.models as models
-from judgearena.inference import (
+from judgearena.cache.inference import (
     CompletionInferenceCache,
     JudgementInferenceCache,
     canonicalize_model_input,
     provider_input_mode,
 )
-from judgearena.models import InferenceResult, do_inference, prepare_model
+from judgearena.inference import InferenceResult
+from judgearena.models import do_inference, prepare_model
 from judgearena.usage import track_usage
 
 
