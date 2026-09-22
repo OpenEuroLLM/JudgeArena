@@ -78,6 +78,24 @@ def test_agreement_reports_missing_judgments_and_excludes_only_human_ties():
     assert no_ties["cohen_kappa"] == pytest.approx(1 / 3)
 
 
+def test_agreement_uses_native_hard_preference_without_soft_thresholding():
+    battles = _rows(
+        [
+            ("1", "a", "b", 0.5, 0.61),
+            ("2", "a", "b", 1.0, 0.51),
+            ("3", "a", "b", 0.0, 0.49),
+        ]
+    )
+    battles["hard_pref"] = [0.5, 1.0, 0.0]
+
+    result = MetaEvalAgreementMetric(n_bootstraps=0, tie_tolerance=0.01).calculate(
+        battles
+    )
+
+    assert result["all"]["accuracy_complete"] == 1.0
+    assert result["all"]["cohen_kappa"] == 1.0
+
+
 def test_ranking_surfaces_unexpected_fit_errors(monkeypatch):
     def fail_fit(*args, **kwargs):
         raise ValueError("unexpected fit failure")

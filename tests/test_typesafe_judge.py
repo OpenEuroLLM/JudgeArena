@@ -178,6 +178,7 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "typesafe-criteria-comparative-score",
         "typesafe-criteria-comparative-score-v2",
         "typesafe-pair-score",
+        "typesafe-overall-choice-multilingual-v4",
         "typesafe-fluency-choice",
     }
     assert set(JEV_QUESTION_MODES) == {
@@ -188,6 +189,7 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "criteria-choice-v2",
         "criteria-comparative-score",
         "criteria-comparative-score-v2",
+        "overall-choice-v4-multilingual",
         "pair-score",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
@@ -642,6 +644,45 @@ def test_typesafe_pair_score_is_symmetric():
     assert direct.preference + swapped.preference == pytest.approx(1.0)
 
 
+def test_openrouter_jev_overall_choice_preserves_four_way_answer():
+    response = {
+        "answers": {
+            "outcome": {
+                "type": "choice",
+                "choice": "both_bad",
+                "confidence": 0.4,
+                "probabilities": {
+                    "A": 0.2,
+                    "B": 0.25,
+                    "tie": 0.15,
+                    "both_bad": 0.4,
+                },
+            }
+        },
+        "usage": {"input_tokens": 120, "output_tokens": 8, "cost": 0.00001},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "request-overall-choice-1",
+    }
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json=response))
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="overall-choice-v4-multilingual",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    payload = json.loads(judge.invoke("pair").text)
+
+    assert payload["decision_mode"] == "overall-choice-v4-multilingual"
+    assert payload["answers"]["outcome"]["choice"] == "both_bad"
+    assert set(payload["answers"]["outcome"]["probabilities"]) == {
+        "A",
+        "B",
+        "tie",
+        "both_bad",
+    }
+
+
 def test_openrouter_jev_async_request():
     requests = []
     judge = _judge(requests)
@@ -790,3 +831,33 @@ def test_openrouter_jev_rejects_incompatible_official_protocols(task, protocol):
             model={"name": "model-a"},
             judge={"model": "OpenRouter/typesafe/jev-1.13"},
         )
+
+
+def test_typesafe_overall_choice_preserves_native_tie_probability():
+    parsed = JUDGE_PARSERS["typesafe-overall-choice-v4"].parse_result(
+        json.dumps(
+            {
+                "decision_mode": "overall-choice-v4-multilingual",
+                "answers": {
+                    "outcome": {
+                        "choice": "both_bad",
+                        "probabilities": {
+                            "A": 0.20,
+                            "B": 0.25,
+                            "tie": 0.15,
+                            "both_bad": 0.40,
+                        },
+                        "confidence": 0.4,
+                    }
+                },
+            }
+        )
+    )
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.525)
+    assert parsed.label == "tie"
+    assert parsed.details["hard_tie_threshold"] == pytest.approx(0.59)
+    assert parsed.scores == pytest.approx(
+        {"A": 0.20, "B": 0.25, "tie": 0.15, "both_bad": 0.40}
+    )

@@ -76,6 +76,18 @@ def _validate_battles(battles: pd.DataFrame) -> None:
             "Meta-evaluation non-null pref values must be finite numeric preferences "
             "in [0, 1]."
         )
+    if "hard_pref" in battles and not all(
+        pd.isna(value)
+        or (
+            not isinstance(value, bool)
+            and isinstance(value, Real)
+            and float(value) in (0.0, 0.5, 1.0)
+        )
+        for value in battles["hard_pref"]
+    ):
+        raise ValueError(
+            "Meta-evaluation non-null hard_pref values must be 0, 0.5, or 1."
+        )
 
 
 def _hard_preferences(values: pd.Series, tie_tolerance: float) -> np.ndarray:
@@ -85,6 +97,19 @@ def _hard_preferences(values: pd.Series, tie_tolerance: float) -> np.ndarray:
         0,
         np.where(numeric > 0.5 + tie_tolerance, 2, 1),
     )
+
+
+def _judge_hard_preferences(rows: pd.DataFrame, tie_tolerance: float) -> np.ndarray:
+    if "hard_pref" in rows:
+        return (rows["hard_pref"].to_numpy(dtype=float) * 2).astype(int)
+    return _hard_preferences(rows["pref"], tie_tolerance)
+
+
+def _complete_judgments(rows: pd.DataFrame) -> pd.Series:
+    complete = rows["pref"].notna()
+    if "hard_pref" in rows:
+        complete &= rows["hard_pref"].notna()
+    return complete
 
 
 def _cohen_kappa(reference: np.ndarray, judge: np.ndarray) -> float:
@@ -143,16 +168,14 @@ class MetaEvalAgreementMetric:
 
     def _agreement_point(self, rows: pd.DataFrame) -> dict[str, float | int]:
         n_attempted = len(rows)
-        complete = rows["pref"].notna()
+        complete = _complete_judgments(rows)
         complete_rows = rows.loc[complete]
         n_complete = len(complete_rows)
         if n_complete:
             complete_reference = (
                 complete_rows["reference_pref"].to_numpy(dtype=float) * 2
             ).astype(int)
-            complete_judge = _hard_preferences(
-                complete_rows["pref"], self.tie_tolerance
-            )
+            complete_judge = _judge_hard_preferences(complete_rows, self.tie_tolerance)
             n_correct = int(np.count_nonzero(complete_reference == complete_judge))
             accuracy_complete = n_correct / n_complete
             kappa = _cohen_kappa(complete_reference, complete_judge)
@@ -309,7 +332,7 @@ class MetaEvalRankingMetric:
         if self.n_bootstraps and rng is None:
             raise ValueError("Bootstrapped meta-evaluation ranking requires an RNG.")
         models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
-        complete = battles["sampled"] & battles["pref"].notna()
+        complete = battles["sampled"] & _complete_judgments(battles)
         rows = battles.loc[complete].copy()
         if not self.include_human_ties:
             human_tie = rows["reference_pref"].eq(0.5)
@@ -360,7 +383,7 @@ class MetaEvalRankingMetric:
     ) -> dict[str, dict[str, float]] | None:
         fitting = rows[["model_a", "model_b"]].copy()
         fitting["human"] = rows["reference_pref"].to_numpy(dtype=float)
-        fitting["hard"] = _hard_preferences(rows["pref"], self.tie_tolerance) / 2.0
+        fitting["hard"] = _judge_hard_preferences(rows, self.tie_tolerance) / 2.0
         fitting["soft"] = rows["pref"].to_numpy(dtype=float)
         vectors = {
             name: _centered_vector(fit_bradley_terry(fitting, pref_col=name), models)
@@ -504,9 +527,9 @@ class MetaEvalEloGapMetric:
                 for focal_index, focal_model in enumerate(models):
                     selected_ids = schedules[replicate, focal_model][:battle_count]
                     selected = by_id.loc[selected_ids]
-                    complete = selected.loc[selected["pref"].notna()].copy()
+                    complete = selected.loc[_complete_judgments(selected)].copy()
                     hard_prefs = (
-                        _hard_preferences(complete["pref"], self.tie_tolerance) / 2.0
+                        _judge_hard_preferences(complete, self.tie_tolerance) / 2.0
                     )
                     complete_counts.append(len(complete))
                     human = human_by_model[focal_model]

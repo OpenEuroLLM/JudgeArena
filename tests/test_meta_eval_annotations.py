@@ -96,6 +96,7 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     assert rows.loc[0, "parsed_label"] == "M"
     assert json.loads(rows.loc[0, "parsed_details_json"]) == {"ranks": {"M": 1, "m": 2}}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
+    assert battles.columns.tolist() == ["battle_id", "pref"]
     assert battles["pref"].tolist() == [1.0]
 
 
@@ -112,3 +113,30 @@ def test_conversation_validation_requires_matching_prompts():
     sample.at[0, "conversation_b"][0]["content"] = "Different prompt"
     with pytest.raises(ValueError, match="different user prompts"):
         _battle_texts(sample)
+
+
+def test_aggregate_uses_native_hard_distribution_after_swap():
+    def scores(a, tie, both_bad, b):
+        return json.dumps({"A": a, "tie": tie, "both_bad": both_bad, "B": b})
+
+    annotations = pd.DataFrame(
+        {
+            "battle_id": ["q1", "q1"],
+            "orientation": ["direct", "reversed"],
+            "pref": [0.525, 0.525],
+            "parsed_scores_json": [
+                scores(0.2, 0.3, 0.25, 0.25),
+                scores(0.25, 0.3, 0.25, 0.2),
+            ],
+            "parsed_details_json": [
+                json.dumps({"hard_tie_threshold": 0.59}),
+                json.dumps({"hard_tie_threshold": 0.59}),
+            ],
+        }
+    )
+
+    battles = aggregate_battle_preferences(annotations, swap_mode="both")
+
+    assert battles.to_dict("records") == [
+        {"battle_id": "q1", "pref": pytest.approx(0.525), "hard_pref": 1.0}
+    ]

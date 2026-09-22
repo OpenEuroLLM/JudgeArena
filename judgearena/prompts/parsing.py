@@ -13,6 +13,7 @@ import numpy as np
 from judgearena.prompts.jev import (
     JEV_AGGREGATIONS,
     JEV_CRITERIA_SCORING,
+    JEV_HARD_TIE_THRESHOLDS,
     JEV_QUESTION_MODES,
 )
 from judgearena.utils import strip_thinking_tags
@@ -437,6 +438,52 @@ def _aggregate_jev_questions(
     return sum(weighted) / total_weight
 
 
+class TypeSafeOverallChoice(JudgeParser):
+    """Parse an overall A/B/tie/both-bad Choice from Jev."""
+
+    name = "typesafe-overall-choice-v4"
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answer = result["answers"]["outcome"]
+            probabilities = _typesafe_probabilities(
+                answer["probabilities"], labels={"A", "B", "tie", "both_bad"}
+            )
+            selection = answer["choice"]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if probabilities is None or selection not in probabilities:
+            return None
+        tie_probability = probabilities["tie"] + probabilities["both_bad"]
+        decision_mode = result.get("decision_mode")
+        hard_tie_threshold = JEV_HARD_TIE_THRESHOLDS.get(decision_mode)
+        return ParsedPreference(
+            preference=probabilities["B"] + 0.5 * tie_probability,
+            label="tie" if selection == "both_bad" else selection,
+            scores=probabilities,
+            details={
+                "outcome_selection": selection,
+                "outcome_confidence": answer.get("confidence"),
+                **(
+                    {"hard_tie_threshold": hard_tie_threshold}
+                    if hard_tie_threshold is not None
+                    else {}
+                ),
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
 class TypeSafeCriteriaChoice(JudgeParser):
     """Aggregate focused pairwise Choice distributions from Jev."""
 
@@ -794,6 +841,7 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
     "typesafe-choice": TypeSafeChoice(),
+    "typesafe-overall-choice-v4": TypeSafeOverallChoice(),
     "typesafe-criteria-score": TypeSafeCriteriaScore(),
     "typesafe-criteria-choice": TypeSafeCriteriaChoice(),
     "typesafe-criteria-choice-v2": TypeSafeCriteriaChoiceV2(),

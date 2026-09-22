@@ -20,6 +20,7 @@ class PromptPresetSpec:
     questions: dict[str, dict] | None = None
     aggregation: dict | None = None
     criteria_scoring: dict | None = None
+    hard_tie_threshold: float | None = None
 
 
 def _load_preset(filename: str) -> PromptPresetSpec:
@@ -79,6 +80,7 @@ def _load_preset(filename: str) -> PromptPresetSpec:
         questions=questions,
         aggregation=data.get("aggregation"),
         criteria_scoring=data.get("criteria_scoring"),
+        hard_tie_threshold=data.get("hard_tie_threshold"),
     )
 
 
@@ -92,6 +94,7 @@ _PRESET_FILES = (
     "typesafe-criteria-choice-v2.yaml",
     "typesafe-criteria-comparative-score.yaml",
     "typesafe-criteria-comparative-score-v2.yaml",
+    "typesafe-overall-choice-multilingual-v4.yaml",
     "typesafe-fluency-choice.yaml",
     "default_with_explanation.yaml",
     "fluency.yaml",

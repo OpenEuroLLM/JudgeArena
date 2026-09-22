@@ -111,12 +111,67 @@ def _annotation_frame(
     return pd.DataFrame(rows)
 
 
+def _outcome_probabilities(row) -> dict[str, float] | None:
+    scores = row.parsed_scores_json
+    if not isinstance(scores, str):
+        return None
+    probabilities = json.loads(scores)
+    if set(probabilities) != {"A", "B", "tie", "both_bad"}:
+        return None
+    if row.orientation == "reversed":
+        return {
+            "A": float(probabilities["B"]),
+            "B": float(probabilities["A"]),
+            "tie": float(probabilities["tie"]),
+            "both_bad": float(probabilities["both_bad"]),
+        }
+    return {label: float(probabilities[label]) for label in probabilities}
+
+
+def _aggregate_hard_preference(passes: pd.DataFrame) -> float:
+    pass_rows = list(passes.itertuples())
+    distributions = [_outcome_probabilities(row) for row in pass_rows]
+    if any(distribution is None for distribution in distributions):
+        return float("nan")
+    thresholds = {
+        float(json.loads(row.parsed_details_json).get("hard_tie_threshold", 0.0))
+        for row in pass_rows
+    }
+    if len(thresholds) != 1:
+        raise ValueError("Judge passes must use the same hard tie threshold.")
+    tie_threshold = thresholds.pop()
+    probabilities = {
+        label: float(np.mean([distribution[label] for distribution in distributions]))
+        for label in ("A", "B", "tie", "both_bad")
+    }
+    hard_probabilities = {
+        "A": probabilities["A"],
+        "tie": probabilities["tie"] + probabilities["both_bad"],
+        "B": probabilities["B"],
+    }
+    tie_is_largest = hard_probabilities["tie"] >= max(
+        hard_probabilities["A"], hard_probabilities["B"]
+    )
+    if tie_is_largest and hard_probabilities["tie"] >= tie_threshold:
+        return 0.5
+    if hard_probabilities["A"] == hard_probabilities["B"]:
+        return 0.5
+    return 0.0 if hard_probabilities["A"] > hard_probabilities["B"] else 1.0
+
+
 def aggregate_battle_preferences(
     annotations: pd.DataFrame, *, swap_mode: str
 ) -> pd.DataFrame:
     """Combine canonical judge passes into one row per physical battle."""
     expected_orientations = (
         {"direct", "reversed"} if swap_mode == "both" else {"single"}
+    )
+    uses_native_hard_preferences = (
+        "parsed_scores_json" in annotations
+        and annotations["parsed_scores_json"]
+        .dropna()
+        .map(lambda value: set(json.loads(value)) == {"A", "B", "tie", "both_bad"})
+        .any()
     )
     rows = []
     for battle_id, passes in annotations.groupby("battle_id", sort=False):
@@ -134,8 +189,14 @@ def aggregate_battle_preferences(
             if passes["pref"].notna().all()
             else float("nan")
         )
-        rows.append({"battle_id": battle_id, "pref": preference})
-    return pd.DataFrame(rows, columns=["battle_id", "pref"])
+        row = {"battle_id": battle_id, "pref": preference}
+        if uses_native_hard_preferences:
+            row["hard_pref"] = _aggregate_hard_preference(passes)
+        rows.append(row)
+    columns = ["battle_id", "pref"]
+    if uses_native_hard_preferences:
+        columns.append("hard_pref")
+    return pd.DataFrame(rows, columns=columns)
 
 
 def annotate_sample(

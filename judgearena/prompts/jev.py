@@ -14,6 +14,14 @@ JEV_AGGREGATIONS = {
     if preset.aggregation is not None
 }
 
+JEV_HARD_TIE_THRESHOLDS = {
+    preset.decision_mode: float(preset.hard_tie_threshold)
+    for preset in JEV_PROMPT_PRESETS.values()
+    if preset.hard_tie_threshold is not None
+}
+if any(not 0 <= threshold <= 1 for threshold in JEV_HARD_TIE_THRESHOLDS.values()):
+    raise ValueError("Jev hard tie thresholds must be between 0 and 1.")
+
 _criteria_presets = [
     preset
     for preset in JEV_PROMPT_PRESETS.values()

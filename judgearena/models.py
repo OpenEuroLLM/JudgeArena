@@ -590,6 +590,22 @@ class OpenRouterJevJudge:
                     "probabilities."
                 )
             result_payload = dict(answer)
+        elif self.decision_mode.startswith("overall-choice-"):
+            answer = answers.get("outcome", {})
+            if (
+                set(answers) != {"outcome"}
+                or answer.get("type") != "choice"
+                or "probabilities" not in answer
+            ):
+                raise ValueError(
+                    "OpenRouter Jev overall-choice answer must include one Choice "
+                    "distribution."
+                )
+            result_payload = {
+                "type": "overall_choice",
+                "decision_mode": self.decision_mode,
+                "answers": {"outcome": answer},
+            }
         elif self.decision_mode in {
             "criteria-choice",
             "criteria-choice-v2",
