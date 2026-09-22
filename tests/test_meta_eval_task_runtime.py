@@ -39,6 +39,18 @@ def _config(tmp_path: Path) -> RunConfig:
     )
 
 
+def _per_language_config(tmp_path: Path) -> RunConfig:
+    return RunConfig(
+        task="meta-eval-comparia",
+        judge={"model": "Dummy/judge", "swap_mode": "fixed"},
+        meta_eval={
+            "sampling": "per_language",
+            "battles_per_language": 4,
+        },
+        run={"result_folder": str(tmp_path), "no_log_file": True, "seed": 7},
+    )
+
+
 def test_prepare_arena_battles_drops_self_comparisons():
     arena = _arena().iloc[:2].copy()
     arena.loc[0, "model_b"] = arena.loc[0, "model_a"]
@@ -82,12 +94,56 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     assert battles.loc[~battles["sampled"], "pref"].isna().all()
 
     saved = json.loads(result_path.read_text())
-    agreement = saved["metrics"]["meta_eval_agreement"]["all"]
+    assert "lang" not in battles
+    assert "sampling_mode" not in saved
+    agreement_metric = saved["metrics"]["meta_eval_agreement"]
+    agreement = agreement_metric["all"]
+    assert "groups" not in agreement_metric
     assert agreement["accuracy_attempted"] == pytest.approx(1 - 1 / len(sample))
     assert saved["metrics"]["meta_eval_elo_gap"]["soft"][0]["n_seeds_valid"] == 2
     assert f"complete {len(sample) - 1}/{len(sample)}" in capsys.readouterr().out
     metadata = json.loads((result_path.parent / "run-metadata.v1.json").read_text())
     assert metadata["dataset_statistics"]["battle_id_count"] == len(sample)
+
+
+def test_per_language_meta_eval_reports_each_language(tmp_path, monkeypatch, capsys):
+    task = deepcopy(get_packaged_task("meta-eval-comparia"))
+    for request in task.spec.protocol.scoring.metrics:
+        if "n_bootstraps" in request.parameters:
+            request.parameters["n_bootstraps"] = 2
+    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _arena())
+    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+
+    def fake_annotate(sample, *_args, **_kwargs):
+        return (
+            sample[["battle_id", "reference_pref"]]
+            .rename(columns={"reference_pref": "pref"})
+            .assign(orientation="single")
+        )
+
+    monkeypatch.setattr(runner_module, "annotate_sample", fake_annotate)
+    result = runner_module.run_meta_eval(_per_language_config(tmp_path), task)
+
+    result_path = Path(result["result_path"])
+    sample = pd.read_parquet(result_path.parent / "sample.parquet")
+    battles = pd.read_parquet(result_path.parent / "battles.parquet")
+    assert sample["lang"].value_counts().to_dict() == {"en": 4, "fr": 4}
+    assert "lang" in battles
+    assert result["sampling_mode"] == "per_language"
+    assert set(result["metrics"]) == {"meta_eval_agreement"}
+    assert "top_models" not in result
+    assert len(result["represented_models"]) == 3
+    groups = result["metrics"]["meta_eval_agreement"]["groups"]["lang"]
+    assert {
+        group["group"]: group["values"]["all"]["n_attempted"] for group in groups
+    } == {
+        "en": 4,
+        "fr": 4,
+    }
+    output = capsys.readouterr().out
+    assert "Languages: 2" in output
+    assert "lang=en" in output
+    assert "lang=fr" in output
 
 
 def test_meta_eval_rejects_unknown_human_winner_before_judge_build(

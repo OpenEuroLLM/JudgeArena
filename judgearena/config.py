@@ -395,6 +395,12 @@ class MetaEvalArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    sampling: Literal["per_model", "per_language"] = "per_model"
+    """Build a connected model panel or independent language panels."""
+
+    battles_per_language: int = Field(default=100, gt=0)
+    """Unique battles sampled for each language in per-language mode."""
+
     top_models: int = Field(default=20, ge=2)
     """Number of the arena's most-battled models to include."""
 

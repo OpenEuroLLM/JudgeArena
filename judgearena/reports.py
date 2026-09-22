@@ -98,7 +98,9 @@ class MetaEvalReport(Report):
     judge_model: str
     prompt_preset: str
     languages: list[str]
-    top_models: list[str]
+    sampling_mode: str | None
+    top_models: list[str] | None
+    represented_models: list[str] | None
     n_sampled_battles: int
     swap_mode: str
     metrics: dict[str, dict[str, object]]
@@ -108,8 +110,14 @@ class MetaEvalReport(Report):
 
         print(f"\n=== Meta-eval: {self.task} ===")
         print(f"Arena: {self.arena} | Judge: {self.judge_model}")
+        scope = (
+            f"Languages: {len(self.languages)} | "
+            f"Models represented: {len(self.represented_models or [])}"
+            if self.sampling_mode == "per_language"
+            else f"Models: {len(self.top_models or [])}"
+        )
         print(
-            f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
+            f"{scope} | Sampled battles: {self.n_sampled_battles} | "
             f"Swap mode: {self.swap_mode}"
         )
         print(render_metrics(self.metrics))

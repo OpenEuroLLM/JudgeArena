@@ -162,3 +162,33 @@ def sample_battles_per_model(
     sample = working[working["battle_id"].isin(selected_ids)]
 
     return sample.drop(columns="_sample_priority").reset_index(drop=True)
+
+
+def sample_battles_per_language(
+    battles: pd.DataFrame,
+    languages: Iterable[str],
+    *,
+    battles_per_language: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Sample the same deterministic quota independently for each language."""
+    working = battles.copy()
+    working["_sample_priority"] = working["battle_id"].map(
+        lambda battle_id: _stable_priority(battle_id, seed=seed)
+    )
+    samples = []
+    shortfalls = {}
+    for language in languages:
+        candidates = working.loc[working["lang"] == language].sort_values(
+            ["_sample_priority", "battle_id"], kind="stable"
+        )
+        if len(candidates) < battles_per_language:
+            shortfalls[language] = len(candidates)
+        else:
+            samples.append(candidates.head(battles_per_language))
+    if shortfalls:
+        raise MetaEvalSamplingError(
+            "Insufficient unique battles for the requested per-language quota: "
+            f"{shortfalls}."
+        )
+    return pd.concat(samples, ignore_index=True).drop(columns="_sample_priority")
