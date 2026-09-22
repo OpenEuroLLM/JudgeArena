@@ -6,8 +6,9 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, ClassVar, NotRequired, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, TypedDict
 
 import pandas as pd
 
@@ -21,28 +22,58 @@ from judgearena.cache_sqlite import (
     stable_json_dumps,
     write_descriptor,
 )
+from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
 from judgearena.usage import RequestUsage
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
+VLLM_EXECUTION_ONLY_KWARGS = {
+    "enforce_eager",
+    "gpu_memory_utilization",
+    "tensor_parallel_size",
+}
+
+InputMode = Literal["chat", "text"]
+_PROVIDER_INPUT_MODES: dict[str, InputMode] = {
+    "ChatOpenAI": "chat",
+    "Dummy": "chat",
+    "LlamaCpp": "text",
+    "OpenAI": "text",
+    "OpenRouter": "chat",
+    "Together": "text",
+    "VLLM": "chat",
+}
 
 
-def canonicalize_chat_input(input_item: Any) -> str:
-    """Serialize a logical model input for content-addressed cache lookup."""
+def provider_input_mode(provider: str) -> InputMode | None:
+    return _PROVIDER_INPUT_MODES.get(provider)
+
+
+def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
     if isinstance(input_item, str):
-        payload = {"type": "text", "text": input_item}
-    elif hasattr(input_item, "to_messages"):
-        payload = {
-            "type": "messages",
-            "messages": [
-                {
-                    "role": _ROLE_MAP.get(message.type, message.type),
-                    "content": message.content,
-                }
-                for message in input_item.to_messages()
-            ],
-        }
+        return [{"role": "user", "content": input_item}]
+    if hasattr(input_item, "to_messages"):
+        return [
+            {
+                "role": _ROLE_MAP.get(message.type, message.type),
+                "content": message.content,
+            }
+            for message in input_item.to_messages()
+        ]
+    raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+
+
+def canonicalize_model_input(input_item: Any, input_mode: InputMode) -> str:
+    """Serialize the chat messages or flattened text sent to a provider."""
+    if input_mode == "text":
+        if isinstance(input_item, str):
+            text = input_item
+        elif hasattr(input_item, "to_string"):
+            text = input_item.to_string()
+        else:
+            raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+        payload = {"type": "text", "text": text}
     else:
-        raise TypeError(f"Unsupported inference input: {type(input_item)!r}")
+        payload = {"type": "messages", "messages": _canonical_messages(input_item)}
     return stable_json_dumps(payload)
 
 
@@ -50,17 +81,51 @@ def build_model_descriptor(
     provider: str,
     model_name: str,
     resolved_kwargs: dict[str, Any],
+    endpoint: str | None = None,
 ) -> dict[str, Any] | None:
-    """Describe output-affecting settings without constructing the backend."""
-    if provider != "Dummy":
+    """Describe output-affecting settings without constructing the backend.
+
+    Omitted hosted settings retain provider defaults. Local-engine versions are
+    part of the key. VLLM tokenizer-template changes require a distinct model
+    revision or an explicit ``chat_template``.
+    """
+    input_mode = provider_input_mode(provider)
+    if input_mode is None:
         return None
-    return {
+
+    descriptor_kwargs = resolved_kwargs.copy()
+    if provider == "VLLM":
+        descriptor_kwargs["temperature"] = (
+            VLLM_DEFAULT_TEMPERATURE
+            if descriptor_kwargs.get("temperature") is None
+            else descriptor_kwargs["temperature"]
+        )
+        descriptor_kwargs["top_p"] = (
+            VLLM_DEFAULT_TOP_P
+            if descriptor_kwargs.get("top_p") is None
+            else descriptor_kwargs["top_p"]
+        )
+        descriptor_kwargs["chat_template"] = descriptor_kwargs.get("chat_template")
+        descriptor_kwargs = {
+            key: value
+            for key, value in descriptor_kwargs.items()
+            if key not in VLLM_EXECUTION_ONLY_KWARGS
+        }
+
+    descriptor = {
         "schema_version": "judgearena-inference-cache/v1",
         "provider": provider,
         "model": model_name,
-        "input_mode": "chat",
-        "model_kwargs": resolved_kwargs,
+        "input_mode": input_mode,
+        "model_kwargs": descriptor_kwargs,
     }
+    if provider == "VLLM":
+        descriptor["backend_version"] = importlib_metadata.version("vllm")
+    elif provider == "LlamaCpp":
+        descriptor["backend_version"] = importlib_metadata.version("llama-cpp-python")
+    if endpoint is not None:
+        descriptor["endpoint"] = endpoint.rstrip("/")
+    return descriptor
 
 
 @dataclass(frozen=True)

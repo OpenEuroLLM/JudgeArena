@@ -10,7 +10,6 @@ import sqlite3
 import time
 import warnings
 from collections.abc import Mapping
-from contextlib import contextmanager
 from dataclasses import replace
 
 from langchain_community.llms import LlamaCpp
@@ -20,14 +19,19 @@ from tqdm.asyncio import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.cache_sqlite import input_hash
-from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
+from judgearena.constants import (
+    VLLM_DEFAULT_TEMPERATURE,
+    VLLM_DEFAULT_TOP_P,
+    VLLM_REASONING_END_STR,
+    VLLM_REASONING_START_STR,
+)
 from judgearena.inference import (
     CacheRowMetadata,
     InferenceCache,
     InferenceResult,
     PreparedModel,
     build_model_descriptor,
-    canonicalize_chat_input,
+    canonicalize_model_input,
 )
 from judgearena.log import get_logger
 from judgearena.usage import RequestUsage, RunUsage, record_usage
@@ -267,8 +271,10 @@ class ChatVLLM:
 
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
-            "temperature": 0.6 if temperature is None else float(temperature),
-            "top_p": 0.95 if top_p is None else float(top_p),
+            "temperature": (
+                VLLM_DEFAULT_TEMPERATURE if temperature is None else float(temperature)
+            ),
+            "top_p": VLLM_DEFAULT_TOP_P if top_p is None else float(top_p),
         }
         if top_k is not None:
             self._sampling_params_kwargs["top_k"] = int(top_k)
@@ -776,51 +782,6 @@ def _run_backend_inference(
     return [result.text for result in results]
 
 
-@contextmanager
-def _cache_store(cache, model):
-    try:
-        store = cache.open_store(model)
-    except _CACHE_OPERATION_ERRORS as exc:
-        logger.warning(
-            "Cache open failed at %s: %s. Continuing without caching.",
-            cache.store_root,
-            exc,
-        )
-        yield None
-        return
-
-    try:
-        yield store
-    finally:
-        try:
-            store.close()
-        except _CACHE_OPERATION_ERRORS as exc:
-            logger.warning("Cache close failed at %s: %s.", store.db_path, exc)
-
-
-def _read_cached_rows(store, input_hashes):
-    try:
-        return store.query(input_hashes).set_index("input_hash")
-    except _CACHE_OPERATION_ERRORS as exc:
-        logger.warning(
-            "Cache read failed at %s: %s. Continuing without caching.",
-            store.db_path,
-            exc,
-        )
-        return None
-
-
-def _save_cache_outputs(cache, store, model, input_texts, outputs, metadata, indices):
-    try:
-        cache.save_outputs(store, model, input_texts, outputs, metadata, indices)
-    except _CACHE_OPERATION_ERRORS as exc:
-        logger.warning(
-            "Cache write failed at %s: %s. Preserving generated results.",
-            store.db_path,
-            exc,
-        )
-
-
 def do_inference(
     chat_model,
     inputs,
@@ -853,19 +814,34 @@ def do_inference(
     if cache_row_metadata is None or len(cache_row_metadata) != len(inputs):
         raise ValueError("cache_row_metadata must contain one row per inference input.")
 
-    input_texts = [canonicalize_chat_input(item) for item in inputs]
+    input_mode = chat_model.descriptor["input_mode"]
+    input_texts = [canonicalize_model_input(item, input_mode) for item in inputs]
     input_hashes = [input_hash(input_text) for input_text in input_texts]
-    with _cache_store(cache, chat_model) as store:
-        if store is None:
-            return _run_backend_inference(
-                chat_model.materialize(),
-                inputs,
-                use_tqdm,
-                return_top_logprobs,
-                stage=stage,
+    try:
+        store = cache.open_store(chat_model)
+    except _CACHE_OPERATION_ERRORS as exc:
+        logger.warning(
+            "Cache open failed at %s: %s. Continuing without caching.",
+            cache.store_root,
+            exc,
+        )
+        return _run_backend_inference(
+            chat_model.materialize(),
+            inputs,
+            use_tqdm,
+            return_top_logprobs,
+            stage=stage,
+        )
+
+    try:
+        try:
+            cached_rows = store.query(input_hashes).set_index("input_hash")
+        except _CACHE_OPERATION_ERRORS as exc:
+            logger.warning(
+                "Cache read failed at %s: %s. Continuing without caching.",
+                store.db_path,
+                exc,
             )
-        cached_rows = _read_cached_rows(store, input_hashes)
-        if cached_rows is None:
             return _run_backend_inference(
                 chat_model.materialize(),
                 inputs,
@@ -894,15 +870,26 @@ def do_inference(
             )
             for index, result in zip(missing_indices, generated, strict=True):
                 results[index] = result
-            _save_cache_outputs(
-                cache,
-                store,
-                chat_model,
-                input_texts,
-                generated,
-                cache_row_metadata,
-                missing_indices,
-            )
+            try:
+                cache.save_outputs(
+                    store,
+                    chat_model,
+                    input_texts,
+                    generated,
+                    cache_row_metadata,
+                    missing_indices,
+                )
+            except _CACHE_OPERATION_ERRORS as exc:
+                logger.warning(
+                    "Cache write failed at %s: %s. Preserving generated results.",
+                    store.db_path,
+                    exc,
+                )
+    finally:
+        try:
+            store.close()
+        except _CACHE_OPERATION_ERRORS as exc:
+            logger.warning("Cache close failed at %s: %s.", store.db_path, exc)
 
     resolved_results = [result for result in results if result is not None]
     if return_top_logprobs:
@@ -952,6 +939,62 @@ def _route_sampling_params(
     return engine_kwargs
 
 
+# Prevent local-engine settings from leaking into hosted provider constructors.
+_VLLM_ONLY_KWARGS = (
+    "max_model_len",
+    "chat_template",
+    "language_model_only",
+    "gpu_memory_utilization",
+    "enforce_eager",
+    "tensor_parallel_size",
+    "quantization",
+    "kv_cache_dtype",
+    "reasoning_parser",
+    "reasoning_config",
+    "trust_remote_code",
+)
+_REMOTE_ENDPOINTS = {
+    "ChatOpenAI": "https://api.openai.com/v1",
+    "OpenAI": "https://api.openai.com/v1",
+    "OpenRouter": "https://openrouter.ai/api/v1",
+    "Together": "https://api.together.xyz/v1/completions",
+}
+
+
+def _resolve_model_config(
+    model: str,
+    max_tokens: int | None,
+    engine_kwargs: dict,
+) -> tuple[str, str, dict, dict]:
+    """Resolve shared provider and sampling inputs once."""
+    resolved_kwargs = engine_kwargs.copy()
+    resolved_kwargs["max_tokens"] = max_tokens or 8192
+    sampling = {
+        key: resolved_kwargs.pop(key, None)
+        for key in ("temperature", "top_p", "top_k", "seed", "top_logprobs")
+    }
+    provider, model_name = _split_model_spec(model)
+    if provider != "VLLM":
+        for key in _VLLM_ONLY_KWARGS:
+            resolved_kwargs.pop(key, None)
+    return provider, model_name, resolved_kwargs, sampling
+
+
+def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
+    if provider == "OpenRouter":
+        return _REMOTE_ENDPOINTS[provider]
+    for key in ("base_url", "openai_api_base", "together_api_base"):
+        if resolved_kwargs.get(key):
+            return str(resolved_kwargs[key])
+    if provider in {"ChatOpenAI", "OpenAI"}:
+        return (
+            os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or _REMOTE_ENDPOINTS[provider]
+        )
+    return _REMOTE_ENDPOINTS.get(provider)
+
+
 def prepare_model(
     model: str,
     max_tokens: int | None = 8192,
@@ -960,13 +1003,21 @@ def prepare_model(
     **engine_kwargs,
 ) -> PreparedModel:
     """Prepare cache identity without constructing the provider backend."""
-    provider, model_name = _split_model_spec(model)
-    resolved_kwargs = {**engine_kwargs, "max_tokens": max_tokens or 8192}
+    provider, model_name, resolved_kwargs, sampling = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
     descriptor = (
-        build_model_descriptor(provider, model_name, resolved_kwargs)
+        build_model_descriptor(
+            provider,
+            model_name,
+            {**resolved_kwargs, **sampling},
+            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+        )
         if cache is not None
         else None
     )
+    if cache is not None and descriptor is None:
+        logger.warning("Caching is not supported for %s; running uncached.", model)
     factory_kwargs = engine_kwargs.copy()
     return PreparedModel(
         model_spec=model,
@@ -992,40 +1043,14 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             ``top_k``, ``seed``. vLLM-only keys (``max_model_len``,
             ``chat_template``) are stripped before reaching hosted providers.
     """
-    # Avoid mutating the original engine_kwargs dictionary
-    # NOTE: this is a shallow copy since we are not modifying any
-    # mutable objects in the dictionary.
-    engine_kwargs = engine_kwargs.copy()
-
-    # Dedicated arguments like max_tokens always win over engine_kwargs.
-    engine_kwargs["max_tokens"] = max_tokens or 8192
-
-    temperature = engine_kwargs.pop("temperature", None)
-    top_p = engine_kwargs.pop("top_p", None)
-    top_k = engine_kwargs.pop("top_k", None)
-    seed = engine_kwargs.pop("seed", None)
-    top_logprobs = engine_kwargs.pop("top_logprobs", None)
-
-    model_provider, model_name = _split_model_spec(model)
-
-    # vLLM-engine-only kwargs must not leak to remote-API providers
-    # (OpenRouter, OpenAI, Together): langchain-openai forwards unknown
-    # kwargs via model_kwargs into chat.completions.create, which rejects them.
-    if model_provider != "VLLM":
-        for key in (
-            "max_model_len",
-            "chat_template",
-            "language_model_only",
-            "gpu_memory_utilization",
-            "enforce_eager",
-            "tensor_parallel_size",
-            "quantization",
-            "kv_cache_dtype",
-            "reasoning_parser",
-            "reasoning_config",
-            "trust_remote_code",
-        ):
-            engine_kwargs.pop(key, None)
+    model_provider, model_name, engine_kwargs, sampling = _resolve_model_config(
+        model, max_tokens, engine_kwargs
+    )
+    temperature = sampling["temperature"]
+    top_p = sampling["top_p"]
+    top_k = sampling["top_k"]
+    seed = sampling["seed"]
+    top_logprobs = sampling["top_logprobs"]
 
     if model_provider == "Dummy":
         if top_logprobs is not None:
