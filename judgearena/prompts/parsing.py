@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from judgearena.prompts.jev import JEV_CRITERIA_SCORING
+from judgearena.prompts.jev import JEV_CRITERIA_SCORING, JEV_QUESTION_MODES
 from judgearena.utils import strip_thinking_tags
 
 
@@ -412,6 +412,136 @@ class TypeSafeChoice(JudgeParser):
         )
 
 
+class TypeSafeCriteriaChoice(JudgeParser):
+    """Aggregate focused pairwise Choice distributions from Jev."""
+
+    name = "typesafe-criteria-choice"
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answers = result["answers"]
+            expected_ids = set(JEV_QUESTION_MODES["criteria-choice"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(answers, dict) or set(answers) != expected_ids:
+            return None
+
+        distributions = {}
+        confidences = {}
+        selections = {}
+        scores = {}
+        for answer_id in sorted(expected_ids):
+            try:
+                answer = answers[answer_id]
+                probabilities = _typesafe_probabilities(
+                    answer["probabilities"], labels={"A", "B", "tie"}
+                )
+                selection = answer["choice"]
+            except (KeyError, TypeError, ValueError):
+                return None
+            if probabilities is None or selection not in probabilities:
+                return None
+            criterion_preference = probabilities["B"] + 0.5 * probabilities["tie"]
+            scores[f"{answer_id}_preference"] = criterion_preference
+            distributions[answer_id] = probabilities
+            confidences[answer_id] = answer.get("confidence")
+            selections[answer_id] = selection
+
+        preference = sum(scores.values()) / len(scores)
+        scores["overall"] = preference
+        return ParsedPreference(
+            preference=preference,
+            label=(
+                "tie"
+                if math.isclose(preference, 0.5, abs_tol=1e-12)
+                else "B"
+                if preference > 0.5
+                else "A"
+            ),
+            scores=scores,
+            details={
+                "criterion_probabilities": distributions,
+                "criterion_confidence": confidences,
+                "criterion_selection": selections,
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
+class TypeSafeCriteriaComparativeScore(JudgeParser):
+    """Aggregate focused comparative Score distributions from Jev."""
+
+    name = "typesafe-criteria-comparative-score"
+    level_labels = {str(level) for level in range(5)}
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answers = result["answers"]
+            expected_ids = set(JEV_QUESTION_MODES["criteria-comparative-score"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(answers, dict) or set(answers) != expected_ids:
+            return None
+
+        distributions = {}
+        confidences = {}
+        scores = {}
+        for answer_id in sorted(expected_ids):
+            try:
+                answer = answers[answer_id]
+                probabilities = _typesafe_probabilities(
+                    answer["probabilities"], labels=self.level_labels
+                )
+            except (KeyError, TypeError, ValueError):
+                return None
+            if probabilities is None:
+                return None
+            scores[answer_id] = (
+                sum(level * probabilities[str(level)] for level in range(5)) / 4.0
+            )
+            distributions[answer_id] = probabilities
+            confidences[answer_id] = answer.get("confidence")
+
+        preference = sum(scores.values()) / len(scores)
+        scores["overall"] = preference
+        return ParsedPreference(
+            preference=preference,
+            label=(
+                "tie"
+                if math.isclose(preference, 0.5, abs_tol=1e-12)
+                else "B"
+                if preference > 0.5
+                else "A"
+            ),
+            scores=scores,
+            details={
+                "criterion_probabilities": distributions,
+                "criterion_confidence": confidences,
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
 class TypeSafeCriteriaScore(JudgeParser):
     """Parse self-contained Jev criterion Scores into candidate totals."""
 
@@ -620,6 +750,8 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "alpaca-eval-token": AlpacaEvalToken(),
     "typesafe-choice": TypeSafeChoice(),
     "typesafe-criteria-score": TypeSafeCriteriaScore(),
+    "typesafe-criteria-choice": TypeSafeCriteriaChoice(),
+    "typesafe-criteria-comparative-score": TypeSafeCriteriaComparativeScore(),
     "typesafe-comparative-score": TypeSafeComparativeScore(),
     "typesafe-pair-score": TypeSafePairScore(),
 }

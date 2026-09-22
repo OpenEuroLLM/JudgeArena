@@ -71,6 +71,52 @@ def _criteria_score_response():
     }
 
 
+def _criteria_choice_response():
+    answers = {
+        "task_success": {
+            "type": "choice",
+            "choice": "B",
+            "confidence": 0.8,
+            "probabilities": {"A": 0.1, "B": 0.8, "tie": 0.1},
+        },
+        "communication": {
+            "type": "choice",
+            "choice": "B",
+            "confidence": 0.6,
+            "probabilities": {"A": 0.2, "B": 0.6, "tie": 0.2},
+        },
+    }
+    return {
+        "answers": answers,
+        "usage": {"input_tokens": 170, "output_tokens": 28, "cost": 0.00002},
+        "model": "typesafe/jev-1.13-20260917",
+        "provider": "TypeSafe",
+        "id": "request-criteria-choice-1",
+    }
+
+
+def _criteria_comparative_score_response():
+    answers = {
+        "task_success": {
+            "type": "score",
+            "confidence": 0.8,
+            "probabilities": {"0": 0, "1": 0, "2": 0.2, "3": 0.6, "4": 0.2},
+        },
+        "communication": {
+            "type": "score",
+            "confidence": 0.6,
+            "probabilities": {"0": 0, "1": 0.1, "2": 0.4, "3": 0.4, "4": 0.1},
+        },
+    }
+    return {
+        "answers": answers,
+        "usage": {"input_tokens": 180, "output_tokens": 32, "cost": 0.000025},
+        "model": "typesafe/jev-1.13-20260917",
+        "provider": "TypeSafe",
+        "id": "request-criteria-comparative-score-1",
+    }
+
+
 def _score_response():
     levels = {
         "0": "fails",
@@ -123,6 +169,8 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "typesafe-choice",
         "typesafe-comparative-score",
         "typesafe-criteria-score",
+        "typesafe-criteria-choice",
+        "typesafe-criteria-comparative-score",
         "typesafe-pair-score",
         "typesafe-fluency-choice",
     }
@@ -130,6 +178,8 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
         "choice",
         "comparative-score",
         "criteria-score",
+        "criteria-choice",
+        "criteria-comparative-score",
         "pair-score",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
@@ -140,6 +190,17 @@ def test_jev_prompt_presets_load_from_packaged_yaml():
     assert "{completion_A_json}" in choice.user_prompt_template
     assert JEV_QUESTION_MODES["choice"]["preference"]["type"] == "choice"
     assert JEV_QUESTION_MODES["comparative-score"]["preference"]["type"] == "score"
+    assert set(JEV_QUESTION_MODES["criteria-choice"]) == {
+        "task_success",
+        "communication",
+    }
+    assert {
+        question["type"] for question in JEV_QUESTION_MODES["criteria-choice"].values()
+    } == {"choice"}
+    assert {
+        question["type"]
+        for question in JEV_QUESTION_MODES["criteria-comparative-score"].values()
+    } == {"score"}
     pair_questions = JEV_QUESTION_MODES["pair-score"]
     assert set(pair_questions) == {"A", "B"}
     assert pair_questions["A"]["criteria"] == pair_questions["B"]["criteria"]
@@ -233,7 +294,73 @@ def test_typesafe_criteria_score_rejects_missing_criterion():
     )
 
 
-def test_openrouter_jev_criteria_score_returns_diagnostics_and_choice():
+def test_openrouter_jev_criteria_choice_aggregates_focused_questions():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_criteria_choice_response())
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="criteria-choice",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    annotations, _, preferences = judge_and_parse_prefs(
+        judge_chat_model=judge,
+        instructions=["Answer the question."],
+        completions_A=["Response A"],
+        completions_B=["Response B"],
+        swap_mode="fixed",
+        prompt_preset="typesafe-criteria-choice",
+    )
+
+    assert set(requests[0]["questions"]) == {"task_success", "communication"}
+    assert preferences.tolist() == pytest.approx([0.775])
+    assert annotations[0].parsed.scores == pytest.approx(
+        {
+            "communication_preference": 0.7,
+            "task_success_preference": 0.85,
+            "overall": 0.775,
+        }
+    )
+
+
+def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_criteria_comparative_score_response())
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="criteria-comparative-score",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    annotations, _, preferences = judge_and_parse_prefs(
+        judge_chat_model=judge,
+        instructions=["Answer the question."],
+        completions_A=["Response A"],
+        completions_B=["Response B"],
+        swap_mode="fixed",
+        prompt_preset="typesafe-criteria-comparative-score",
+    )
+
+    assert set(requests[0]["questions"]) == {"task_success", "communication"}
+    assert preferences.tolist() == pytest.approx([0.6875])
+    assert annotations[0].parsed.scores == pytest.approx(
+        {"communication": 0.625, "task_success": 0.75, "overall": 0.6875}
+    )
+
+
+def test_openrouter_jev_criteria_score_returns_diagnostics_and_preference():
     requests = []
 
     def handler(request):
@@ -346,6 +473,71 @@ def test_openrouter_jev_pair_score_compares_two_score_distributions():
     assert preferences.tolist() == pytest.approx([0.75])
     assert annotations[0].parsed.scores == {"A": 2.0, "B": 2.5}
     assert annotations[0].parsed.details["probabilities"]["A"]["2"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("parser_name", "response", "swapped", "expected"),
+    [
+        (
+            "typesafe-criteria-choice",
+            _criteria_choice_response(),
+            {
+                "answers": {
+                    "task_success": {
+                        "type": "choice",
+                        "choice": "A",
+                        "probabilities": {"A": 0.8, "B": 0.1, "tie": 0.1},
+                    },
+                    "communication": {
+                        "type": "choice",
+                        "choice": "A",
+                        "probabilities": {"A": 0.6, "B": 0.2, "tie": 0.2},
+                    },
+                }
+            },
+            0.775,
+        ),
+        (
+            "typesafe-criteria-comparative-score",
+            _criteria_comparative_score_response(),
+            {
+                "answers": {
+                    "task_success": {
+                        "type": "score",
+                        "probabilities": {
+                            "0": 0.2,
+                            "1": 0.6,
+                            "2": 0.2,
+                            "3": 0,
+                            "4": 0,
+                        },
+                    },
+                    "communication": {
+                        "type": "score",
+                        "probabilities": {
+                            "0": 0.1,
+                            "1": 0.4,
+                            "2": 0.4,
+                            "3": 0.1,
+                            "4": 0,
+                        },
+                    },
+                }
+            },
+            0.6875,
+        ),
+    ],
+)
+def test_typesafe_focused_criteria_parsers_are_symmetric(
+    parser_name, response, swapped, expected
+):
+    parser = JUDGE_PARSERS[parser_name]
+
+    direct = parser.parse_result(json.dumps(response))
+    reversed_result = parser.parse_result(json.dumps(swapped))
+
+    assert direct.preference == pytest.approx(expected)
+    assert reversed_result.preference == pytest.approx(1 - expected)
 
 
 def test_typesafe_comparative_score_is_symmetric():

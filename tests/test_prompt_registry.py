@@ -31,7 +31,7 @@ class FakeCliArgs:
 
 def test_prompt_catalog_is_loaded_from_packaged_yaml():
     assert set(PRESETS) == set(PROMPT_PRESETS)
-    assert len(PROMPT_PRESETS) == 15
+    assert len(PROMPT_PRESETS) == 17
     assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
     assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
     assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"
@@ -92,6 +92,19 @@ def test_typesafe_criteria_score_preset_uses_criteria_parser():
 
     assert resolved.parser.name == "typesafe-criteria-score"
     assert "{completion_A_json}" in resolved.user_prompt_template
+
+
+def test_typesafe_focused_criteria_presets_use_matching_parsers():
+    choice = resolve_judge_prompt(preset="typesafe-criteria-choice")
+    score = resolve_judge_prompt(preset="typesafe-criteria-comparative-score")
+
+    assert choice.parser.name == "typesafe-criteria-choice"
+    assert PROMPT_PRESETS["typesafe-criteria-choice"].decision_mode == "criteria-choice"
+    assert score.parser.name == "typesafe-criteria-comparative-score"
+    assert (
+        PROMPT_PRESETS["typesafe-criteria-comparative-score"].decision_mode
+        == "criteria-comparative-score"
+    )
 
 
 def test_typesafe_comparative_score_preset_uses_score_distribution_parser():

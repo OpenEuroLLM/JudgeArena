@@ -86,6 +86,8 @@ _PRESET_FILES = (
     "typesafe-comparative-score.yaml",
     "typesafe-pair-score.yaml",
     "typesafe-criteria-score.yaml",
+    "typesafe-criteria-choice.yaml",
+    "typesafe-criteria-comparative-score.yaml",
     "typesafe-fluency-choice.yaml",
     "default_with_explanation.yaml",
     "fluency.yaml",

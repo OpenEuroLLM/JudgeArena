@@ -590,6 +590,29 @@ class OpenRouterJevJudge:
                     "probabilities."
                 )
             result_payload = dict(answer)
+        elif self.decision_mode in {
+            "criteria-choice",
+            "criteria-comparative-score",
+        }:
+            answer_type = (
+                "choice" if self.decision_mode == "criteria-choice" else "score"
+            )
+            answer_ids = set(self.questions)
+            if set(answers) != answer_ids or any(
+                answers[answer_id].get("type") != answer_type
+                or "probabilities" not in answers[answer_id]
+                for answer_id in answer_ids
+            ):
+                raise ValueError(
+                    f"OpenRouter Jev {self.decision_mode} answers must include "
+                    f"every {answer_type.title()} distribution."
+                )
+            result_payload = {
+                "type": self.decision_mode.replace("-", "_"),
+                "answers": {
+                    answer_id: answers[answer_id] for answer_id in sorted(answer_ids)
+                },
+            }
         elif self.decision_mode == "criteria-score":
             criterion_ids = set(self.questions)
             if set(answers) != criterion_ids or any(
