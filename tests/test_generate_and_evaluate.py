@@ -82,13 +82,6 @@ def mock_external_data_and_cache(monkeypatch):
         ),
     )
 
-    def _run_without_cache(fun, **_kwargs):
-        return fun()
-
-    monkeypatch.setattr(
-        generate_and_evaluate, "cache_function_dataframe", _run_without_cache
-    )
-
 
 def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
     from judgearena.benchmarks.pairwise.scoring import alpaca_eval
@@ -103,7 +96,7 @@ def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
         captured.update(kwargs)
         return FakeJudge()
 
-    monkeypatch.setattr(benchmark_execution, "make_model", make_fake_judge)
+    monkeypatch.setattr(benchmark_execution, "prepare_model", make_fake_judge)
     monkeypatch.setattr(
         alpaca_eval,
         "_length_controlled_metrics",
@@ -378,7 +371,7 @@ def test_generate_and_evaluate_passes_judge_side_controls(monkeypatch, tmp_path)
 
         return FakeJudge()
 
-    monkeypatch.setattr(benchmark_execution, "make_model", fake_make_model)
+    monkeypatch.setattr(benchmark_execution, "prepare_model", fake_make_model)
 
     prefs = run_pairwise(
         _cfg(
@@ -439,7 +432,7 @@ def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         benchmark_execution,
-        "make_model",
+        "prepare_model",
         lambda **_kwargs: FakeListLLM(
             responses=["score A: 10 score B: 0", "score A: 0 score B: 10"]
         ),
@@ -597,7 +590,7 @@ def test_run_pairwise_weights_and_preserves_incomplete_alpaca_annotations(
 def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         benchmark_execution,
-        "make_model",
+        "prepare_model",
         lambda **_kwargs: FakeListLLM(responses=["M"]),
     )
 

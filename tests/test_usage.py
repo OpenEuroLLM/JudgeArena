@@ -106,7 +106,13 @@ def test_failed_inference_cleans_up(monkeypatch, capsys):
 
 def test_generation_preserves_sync_async_routing(monkeypatch):
     model = FakeModel(["batch"])
-    monkeypatch.setattr(generate_module, "make_model", lambda *args, **kwargs: model)
+    prepared_kwargs = {}
+
+    def fake_prepare_model(*args, **kwargs):
+        prepared_kwargs.update(kwargs)
+        return model
+
+    monkeypatch.setattr(generate_module, "prepare_model", fake_prepare_model)
     instructions = pd.Series(["one"])
     instruction_outputs = generate_module.generate_instructions(
         instructions, "Dummy/model", use_tqdm=True
@@ -116,4 +122,4 @@ def test_generation_preserves_sync_async_routing(monkeypatch):
         instructions, "Dummy/model", max_tokens=123, use_tqdm=True
     )
     assert base_outputs["completion"].tolist() == ["batch"]
-    assert model.batch_kwargs["max_tokens"] == 123
+    assert prepared_kwargs["max_tokens"] == 123
