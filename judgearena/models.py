@@ -20,7 +20,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from judgearena.constants import VLLM_REASONING_END_STR, VLLM_REASONING_START_STR
 from judgearena.log import get_logger
-from judgearena.prompts.jev import JEV_QUESTION_MODES
+from judgearena.prompts.jev import JEV_QUESTION_MODES, JEV_VERIFICATION_QUESTIONS
 from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
 
@@ -543,6 +543,7 @@ class OpenRouterJevJudge:
             headers=headers, timeout=timeout
         )
         self.questions = JEV_QUESTION_MODES[decision_mode]
+        self.verification_questions = JEV_VERIFICATION_QUESTIONS.get(decision_mode)
 
     @staticmethod
     def _state(input_item):
@@ -572,6 +573,36 @@ class OpenRouterJevJudge:
             "questions": self.questions,
         }
 
+    @staticmethod
+    def _validate_typed_answers(
+        response: dict, questions: dict[str, dict], context: str
+    ) -> dict:
+        answers = response.get("answers")
+        if not isinstance(answers, dict) or set(answers) != set(questions):
+            raise ValueError(
+                f"{context} response does not match its configured questions."
+            )
+        for answer_id, question in questions.items():
+            answer = answers[answer_id]
+            answer_type = question["type"]
+            valid = isinstance(answer, dict) and answer.get("type") == answer_type
+            if answer_type in {"choice", "score"}:
+                valid = valid and isinstance(answer.get("probabilities"), dict)
+            elif answer_type == "noul":
+                value = answer.get("noul") if isinstance(answer, dict) else None
+                valid = (
+                    valid
+                    and isinstance(value, (int, float))
+                    and math.isfinite(value)
+                    and 0 <= value <= 1
+                )
+            if not valid:
+                raise ValueError(
+                    f"{context} answer {answer_id!r} does not match its "
+                    "configured type."
+                )
+        return answers
+
     def _result(self, response: dict, stage: str) -> InferenceResult:
         answers = response["answers"]
         if self.decision_mode == "choice":
@@ -579,14 +610,6 @@ class OpenRouterJevJudge:
             if answer.get("type") != "choice" or "probabilities" not in answer:
                 raise ValueError(
                     "OpenRouter Jev preference answer must include Choice "
-                    "probabilities."
-                )
-            result_payload = dict(answer)
-        elif self.decision_mode == "comparative-score":
-            answer = answers["preference"]
-            if answer.get("type") != "score" or "probabilities" not in answer:
-                raise ValueError(
-                    "OpenRouter Jev comparative-score answer must include Score "
                     "probabilities."
                 )
             result_payload = dict(answer)
@@ -622,63 +645,17 @@ class OpenRouterJevJudge:
                 "decision_mode": self.decision_mode,
                 "answers": {"outcome": answer},
             }
-        elif self.decision_mode in {
-            "criteria-choice",
-            "criteria-choice-v2",
-            "criteria-comparative-score",
-            "criteria-comparative-score-v2",
-        }:
-            answer_type = (
-                "choice"
-                if self.decision_mode in {"criteria-choice", "criteria-choice-v2"}
-                else "score"
-            )
-            answer_ids = set(self.questions)
-            if set(answers) != answer_ids or any(
-                answers[answer_id].get("type") != answer_type
-                or "probabilities" not in answers[answer_id]
-                for answer_id in answer_ids
-            ):
-                raise ValueError(
-                    f"OpenRouter Jev {self.decision_mode} answers must include "
-                    f"every {answer_type.title()} distribution."
-                )
-            result_payload = {
-                "type": self.decision_mode.replace("-", "_"),
-                "answers": {
-                    answer_id: answers[answer_id] for answer_id in sorted(answer_ids)
-                },
-            }
-        elif self.decision_mode == "criteria-score":
-            criterion_ids = set(self.questions)
-            if set(answers) != criterion_ids or any(
-                answers[answer_id].get("type") != "score"
-                or "probabilities" not in answers[answer_id]
-                for answer_id in criterion_ids
-            ):
-                raise ValueError(
-                    "OpenRouter Jev criteria-score answers must include every "
-                    "criterion Score distribution."
-                )
-            result_payload = {
-                "type": "criteria_score",
-                "criteria": {
-                    answer_id: answers[answer_id] for answer_id in sorted(criterion_ids)
-                },
-            }
         else:
-            if any(
-                answers.get(candidate, {}).get("type") != "score"
-                or "probabilities" not in answers.get(candidate, {})
-                for candidate in ("A", "B")
-            ):
-                raise ValueError(
-                    "OpenRouter Jev pair-score answers must include Score "
-                    "probabilities for A and B."
-                )
+            answers = self._validate_typed_answers(
+                response, self.questions, f"OpenRouter Jev {self.decision_mode}"
+            )
             result_payload = {
-                "type": "pair_score",
-                "answers": {candidate: answers[candidate] for candidate in ("A", "B")},
+                "type": "typed_answers",
+                "decision_mode": self.decision_mode,
+                "answers": {
+                    answer_id: answers[answer_id]
+                    for answer_id in sorted(self.questions)
+                },
             }
         usage = response["usage"]
         input_tokens = usage.get("input_tokens")
@@ -707,27 +684,74 @@ class OpenRouterJevJudge:
             ),
         )
 
-    def invoke(self, input_item, *, usage_stage: str = "judging", **_kwargs):
-        response = self.client.post(self.endpoint, json=self._request(input_item))
-        response.raise_for_status()
-        return self._result(response.json(), usage_stage)
+    def _verification_request(self, input_item, primary: dict) -> dict[str, object]:
+        assert self.verification_questions is not None
+        state = self._state(input_item)
+        state["primary_judgment"] = primary["answers"]["outcome"]
+        return {
+            "model": self.model,
+            "state": state,
+            "questions": self.verification_questions,
+        }
 
-    def _invoke_with_retry(
-        self,
-        input_item,
-        *,
-        usage_stage: str,
-        **kwargs,
-    ):
+    def _verified_result(
+        self, primary: dict, verification: dict, stage: str
+    ) -> InferenceResult:
+        answers = verification["answers"]
+
+        def combined_usage(key: str):
+            values = [
+                response.get("usage", {}).get(key)
+                for response in (primary, verification)
+            ]
+            return sum(values) if all(value is not None for value in values) else None
+
+        input_tokens = combined_usage("input_tokens")
+        output_tokens = combined_usage("output_tokens")
+        return InferenceResult(
+            text=json.dumps(
+                {
+                    "type": "verified_verdict",
+                    "decision_mode": self.decision_mode,
+                    "answers": {"outcome": primary["answers"]["outcome"]},
+                    "verification": {
+                        answer_id: answers[answer_id]
+                        for answer_id in sorted(self.verification_questions or {})
+                    },
+                    "model": primary["model"],
+                    "request_id": {
+                        "primary": primary.get("id"),
+                        "verification": verification.get("id"),
+                    },
+                },
+                sort_keys=True,
+            ),
+            usage=RequestUsage(
+                stage=stage,
+                model=f"OpenRouter/{primary['model']}",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=(
+                    input_tokens + output_tokens
+                    if input_tokens is not None and output_tokens is not None
+                    else None
+                ),
+                cost_usd=combined_usage("cost"),
+                request_count=2,
+            ),
+        )
+
+    def _post_with_retry(self, payload: dict[str, object]) -> dict:
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                return self.invoke(input_item, usage_stage=usage_stage, **kwargs)
+                response = self.client.post(self.endpoint, json=payload)
+                response.raise_for_status()
+                return response.json()
             except Exception as exc:
                 if not _is_retryable_jev_error(exc):
                     raise
                 if attempt == max_retries - 1:
-                    # The generic batch retry must not replay requests that succeeded.
                     raise RuntimeError(
                         f"OpenRouter Jev request failed after {max_retries} attempts."
                     ) from exc
@@ -742,29 +766,20 @@ class OpenRouterJevJudge:
                 time.sleep(delay)
         raise AssertionError("unreachable")
 
-    def batch(self, inputs, *, usage_stage: str = "judging", **kwargs):
-        with ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
-            return list(
-                executor.map(
-                    lambda input_item: self._invoke_with_retry(
-                        input_item, usage_stage=usage_stage, **kwargs
-                    ),
-                    inputs,
-                )
-            )
-
-    async def ainvoke(self, input_item, *, usage_stage: str = "judging", **_kwargs):
+    async def _apost_with_retry(self, payload: dict[str, object]) -> dict:
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                response = await self.async_client.post(
-                    self.endpoint, json=self._request(input_item)
-                )
+                response = await self.async_client.post(self.endpoint, json=payload)
                 response.raise_for_status()
-                return self._result(response.json(), usage_stage)
+                return response.json()
             except Exception as exc:
-                if not _is_retryable_jev_error(exc) or attempt == max_retries - 1:
+                if not _is_retryable_jev_error(exc):
                     raise
+                if attempt == max_retries - 1:
+                    raise RuntimeError(
+                        f"OpenRouter Jev request failed after {max_retries} attempts."
+                    ) from exc
                 delay = 2**attempt
                 logger.warning(
                     "Retrying OpenRouter Jev request after %s (%d/%d) in %ss.",
@@ -775,6 +790,51 @@ class OpenRouterJevJudge:
                 )
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
+
+    def invoke(self, input_item, *, usage_stage: str = "judging", **_kwargs):
+        primary = self._post_with_retry(self._request(input_item))
+        if self.verification_questions is None:
+            return self._result(primary, usage_stage)
+        self._validate_typed_answers(
+            primary, self.questions, "OpenRouter Jev verified primary"
+        )
+        verification = self._post_with_retry(
+            self._verification_request(input_item, primary)
+        )
+        self._validate_typed_answers(
+            verification,
+            self.verification_questions,
+            "OpenRouter Jev verification",
+        )
+        return self._verified_result(primary, verification, usage_stage)
+
+    def batch(self, inputs, *, usage_stage: str = "judging", **kwargs):
+        with ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
+            return list(
+                executor.map(
+                    lambda input_item: self.invoke(
+                        input_item, usage_stage=usage_stage, **kwargs
+                    ),
+                    inputs,
+                )
+            )
+
+    async def ainvoke(self, input_item, *, usage_stage: str = "judging", **_kwargs):
+        primary = await self._apost_with_retry(self._request(input_item))
+        if self.verification_questions is None:
+            return self._result(primary, usage_stage)
+        self._validate_typed_answers(
+            primary, self.questions, "OpenRouter Jev verified primary"
+        )
+        verification = await self._apost_with_retry(
+            self._verification_request(input_item, primary)
+        )
+        self._validate_typed_answers(
+            verification,
+            self.verification_questions,
+            "OpenRouter Jev verification",
+        )
+        return self._verified_result(primary, verification, usage_stage)
 
 
 def _first_token_top_logprobs(response) -> dict[str, float] | None:

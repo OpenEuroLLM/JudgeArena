@@ -10,12 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from judgearena.prompts.jev import (
-    JEV_AGGREGATIONS,
-    JEV_CRITERIA_SCORING,
-    JEV_HARD_TIE_THRESHOLDS,
-    JEV_QUESTION_MODES,
-)
+from judgearena.prompts.jev import JEV_HARD_TIE_THRESHOLDS
 from judgearena.utils import strip_thinking_tags
 
 
@@ -417,27 +412,6 @@ class TypeSafeChoice(JudgeParser):
         )
 
 
-def _aggregate_jev_questions(
-    scores: dict[str, float], *, decision_mode: str
-) -> float | None:
-    aggregation = JEV_AGGREGATIONS.get(decision_mode)
-    if aggregation is None:
-        return sum(scores.values()) / len(scores)
-    try:
-        weights = {key: float(weight) for key, weight in aggregation["weights"].items()}
-        if aggregation["method"] != "weighted_mean" or set(weights) != set(scores):
-            return None
-        weighted = [weights[key] * value for key, value in scores.items()]
-        total_weight = sum(weights.values())
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return None
-    if total_weight <= 0 or any(
-        not math.isfinite(weight) or weight < 0 for weight in weights.values()
-    ):
-        return None
-    return sum(weighted) / total_weight
-
-
 class TypeSafeOverallChoice(JudgeParser):
     """Parse an overall A/B/tie/both-bad Choice from Jev."""
 
@@ -484,6 +458,29 @@ class TypeSafeOverallChoice(JudgeParser):
         )
 
 
+def _overall_score_preference(
+    probabilities: dict[str, float],
+) -> tuple[float, str]:
+    preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
+    maximum = max(probabilities.values())
+    winning_levels = {
+        int(level)
+        for level, probability in probabilities.items()
+        if probability == maximum
+    }
+    spans_both_sides = any(level < 2 for level in winning_levels) and any(
+        level > 2 for level in winning_levels
+    )
+    label = (
+        "tie"
+        if 2 in winning_levels or spans_both_sides
+        else "A"
+        if max(winning_levels) < 2
+        else "B"
+    )
+    return preference, label
+
+
 class TypeSafeOverallComparativeScore(JudgeParser):
     """Parse one overall five-level comparison while preserving its hard level."""
 
@@ -506,23 +503,7 @@ class TypeSafeOverallComparativeScore(JudgeParser):
             return None
         if probabilities is None:
             return None
-        preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
-        maximum = max(probabilities.values())
-        winning_levels = {
-            int(level)
-            for level, probability in probabilities.items()
-            if probability == maximum
-        }
-        spans_both_sides = any(level < 2 for level in winning_levels) and any(
-            level > 2 for level in winning_levels
-        )
-        label = (
-            "tie"
-            if 2 in winning_levels or spans_both_sides
-            else "A"
-            if max(winning_levels) < 2
-            else "B"
-        )
+        preference, label = _overall_score_preference(probabilities)
         return ParsedPreference(
             preference=preference,
             label=label,
@@ -540,285 +521,11 @@ class TypeSafeOverallComparativeScore(JudgeParser):
         )
 
 
-class TypeSafeCriteriaChoice(JudgeParser):
-    """Aggregate focused pairwise Choice distributions from Jev."""
+class TypeSafeAbsoluteQualityScore(JudgeParser):
+    """Compare two independent ten-level absolute quality distributions."""
 
-    name = "typesafe-criteria-choice"
-    decision_mode = "criteria-choice"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            answers = result["answers"]
-            expected_ids = set(JEV_QUESTION_MODES[self.decision_mode])
-        except (KeyError, TypeError, ValueError):
-            return None
-        if not isinstance(answers, dict) or set(answers) != expected_ids:
-            return None
-
-        distributions = {}
-        confidences = {}
-        selections = {}
-        criterion_preferences = {}
-        scores = {}
-        for answer_id in sorted(expected_ids):
-            try:
-                answer = answers[answer_id]
-                probabilities = _typesafe_probabilities(
-                    answer["probabilities"], labels={"A", "B", "tie"}
-                )
-                selection = answer["choice"]
-            except (KeyError, TypeError, ValueError):
-                return None
-            if probabilities is None or selection not in probabilities:
-                return None
-            criterion_preference = probabilities["B"] + 0.5 * probabilities["tie"]
-            criterion_preferences[answer_id] = criterion_preference
-            scores[f"{answer_id}_preference"] = criterion_preference
-            distributions[answer_id] = probabilities
-            confidences[answer_id] = answer.get("confidence")
-            selections[answer_id] = selection
-
-        preference = _aggregate_jev_questions(
-            criterion_preferences, decision_mode=self.decision_mode
-        )
-        if preference is None:
-            return None
-        scores["overall"] = preference
-        return ParsedPreference(
-            preference=preference,
-            label=(
-                "tie"
-                if math.isclose(preference, 0.5, abs_tol=1e-12)
-                else "B"
-                if preference > 0.5
-                else "A"
-            ),
-            scores=scores,
-            details={
-                "criterion_probabilities": distributions,
-                "criterion_confidence": confidences,
-                "criterion_selection": selections,
-                **{
-                    key: result[key]
-                    for key in ("model", "request_id")
-                    if result.get(key) is not None
-                },
-            },
-        )
-
-
-class TypeSafeCriteriaComparativeScore(JudgeParser):
-    """Aggregate focused comparative Score distributions from Jev."""
-
-    name = "typesafe-criteria-comparative-score"
-    decision_mode = "criteria-comparative-score"
-    level_labels = {str(level) for level in range(5)}
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            answers = result["answers"]
-            expected_ids = set(JEV_QUESTION_MODES[self.decision_mode])
-        except (KeyError, TypeError, ValueError):
-            return None
-        if not isinstance(answers, dict) or set(answers) != expected_ids:
-            return None
-
-        distributions = {}
-        confidences = {}
-        scores = {}
-        for answer_id in sorted(expected_ids):
-            try:
-                answer = answers[answer_id]
-                probabilities = _typesafe_probabilities(
-                    answer["probabilities"], labels=self.level_labels
-                )
-            except (KeyError, TypeError, ValueError):
-                return None
-            if probabilities is None:
-                return None
-            scores[answer_id] = (
-                sum(level * probabilities[str(level)] for level in range(5)) / 4.0
-            )
-            distributions[answer_id] = probabilities
-            confidences[answer_id] = answer.get("confidence")
-
-        preference = _aggregate_jev_questions(scores, decision_mode=self.decision_mode)
-        if preference is None:
-            return None
-        scores["overall"] = preference
-        return ParsedPreference(
-            preference=preference,
-            label=(
-                "tie"
-                if math.isclose(preference, 0.5, abs_tol=1e-12)
-                else "B"
-                if preference > 0.5
-                else "A"
-            ),
-            scores=scores,
-            details={
-                "criterion_probabilities": distributions,
-                "criterion_confidence": confidences,
-                **{
-                    key: result[key]
-                    for key in ("model", "request_id")
-                    if result.get(key) is not None
-                },
-            },
-        )
-
-
-class TypeSafeCriteriaChoiceV2(TypeSafeCriteriaChoice):
-    name = "typesafe-criteria-choice-v2"
-    decision_mode = "criteria-choice-v2"
-
-
-class TypeSafeCriteriaComparativeScoreV2(TypeSafeCriteriaComparativeScore):
-    name = "typesafe-criteria-comparative-score-v2"
-    decision_mode = "criteria-comparative-score-v2"
-
-
-class TypeSafeCriteriaScore(JudgeParser):
-    """Parse self-contained Jev criterion Scores into candidate totals."""
-
-    name = "typesafe-criteria-score"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            answers = result["criteria"]
-            candidates = JEV_CRITERIA_SCORING["candidates"]
-            criteria = JEV_CRITERIA_SCORING["criteria"]
-            tie_tolerance = float(JEV_CRITERIA_SCORING["tie_tolerance"])
-            if JEV_CRITERIA_SCORING["aggregation"] != "mean":
-                return None
-        except (KeyError, TypeError, ValueError):
-            return None
-
-        expected_ids = {
-            f"{candidate}_{criterion['name']}"
-            for candidate in candidates
-            for criterion in criteria
-        }
-        if not isinstance(answers, dict) or set(answers) != expected_ids:
-            return None
-
-        scores: dict[str, float] = {}
-        distributions: dict[str, dict[str, float]] = {}
-        confidences: dict[str, float | None] = {}
-        try:
-            for criterion in criteria:
-                levels = criterion["levels"]
-                values = [float(level["value"]) for level in levels]
-                labels = {str(level) for level in range(len(values))}
-                for candidate in candidates:
-                    answer_id = f"{candidate}_{criterion['name']}"
-                    probabilities = _typesafe_probabilities(
-                        answers[answer_id]["probabilities"], labels=labels
-                    )
-                    if probabilities is None:
-                        return None
-                    scores[answer_id] = sum(
-                        value * probabilities[str(level)]
-                        for level, value in enumerate(values)
-                    )
-                    distributions[answer_id] = probabilities
-                    confidences[answer_id] = answers[answer_id].get("confidence")
-        except (KeyError, TypeError, ValueError):
-            return None
-
-        for candidate in candidates:
-            scores[f"{candidate}_overall"] = sum(
-                scores[f"{candidate}_{criterion['name']}"] for criterion in criteria
-            ) / len(criteria)
-        difference = scores["B_overall"] - scores["A_overall"]
-        if abs(difference) <= tie_tolerance:
-            preference, label = 0.5, "tie"
-        elif difference > 0:
-            preference, label = 1.0, "B"
-        else:
-            preference, label = 0.0, "A"
-
-        return ParsedPreference(
-            preference=preference,
-            label=label,
-            scores=scores,
-            details={
-                "criterion_probabilities": distributions,
-                "criterion_confidence": confidences,
-                "score_difference": difference,
-                "tie_tolerance": tie_tolerance,
-                **{
-                    key: result[key]
-                    for key in ("model", "request_id")
-                    if result.get(key) is not None
-                },
-            },
-        )
-
-
-class TypeSafeComparativeScore(JudgeParser):
-    """Parse one ordered Jev Score distribution over relative preference."""
-
-    name = "typesafe-comparative-score"
-    level_labels = {str(level) for level in range(5)}
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            probabilities = _typesafe_probabilities(
-                result["probabilities"], labels=self.level_labels
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-        if probabilities is None:
-            return None
-        preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
-        return ParsedPreference(
-            preference=preference,
-            label=(
-                "tie"
-                if math.isclose(preference, 0.5, abs_tol=1e-12)
-                else "B"
-                if preference > 0.5
-                else "A"
-            ),
-            scores=probabilities,
-            details={
-                key: result[key]
-                for key in ("score", "confidence", "model", "request_id")
-                if result.get(key) is not None
-            },
-        )
-
-
-class TypeSafePairScore(JudgeParser):
-    """Compare two Jev Score distributions over shared quality levels."""
-
-    name = "typesafe-pair-score"
-    level_labels = {str(level) for level in range(5)}
+    name = "typesafe-absolute-quality-score-v1"
+    level_labels = {str(level) for level in range(10)}
 
     def parse_result(
         self,
@@ -837,39 +544,181 @@ class TypeSafePairScore(JudgeParser):
             }
         except (KeyError, TypeError, ValueError):
             return None
-        if any(distribution is None for distribution in distributions.values()):
+        if set(answers) != {"A", "B"} or any(
+            distribution is None for distribution in distributions.values()
+        ):
             return None
         probabilities_a = distributions["A"]
         probabilities_b = distributions["B"]
         assert probabilities_a is not None and probabilities_b is not None
-        preference = 0.0
-        for level_a in range(5):
-            for level_b in range(5):
-                mass = probabilities_a[str(level_a)] * probabilities_b[str(level_b)]
-                if level_b > level_a:
-                    preference += mass
-                elif level_b == level_a:
-                    preference += 0.5 * mass
+        preference = sum(
+            probabilities_a[str(level_a)]
+            * probabilities_b[str(level_b)]
+            * (1.0 if level_b > level_a else 0.5 if level_b == level_a else 0.0)
+            for level_a in range(10)
+            for level_b in range(10)
+        )
         expected_scores = {
-            "A": sum(level * probabilities_a[str(level)] for level in range(5)),
-            "B": sum(level * probabilities_b[str(level)] for level in range(5)),
+            candidate: 1
+            + sum(level * distributions[candidate][str(level)] for level in range(10))
+            for candidate in ("A", "B")
         }
         return ParsedPreference(
             preference=preference,
             label=(
                 "tie"
-                if math.isclose(preference, 0.5, abs_tol=1e-12)
-                else "B"
-                if preference > 0.5
+                if math.isclose(expected_scores["A"], expected_scores["B"])
                 else "A"
+                if expected_scores["A"] > expected_scores["B"]
+                else "B"
             ),
             scores=expected_scores,
             details={
+                "hard_preference_mode": "absolute_quality",
+                "score_scale": {"minimum": 1, "maximum": 10},
                 "probabilities": distributions,
                 "confidence": {
                     candidate: answers[candidate].get("confidence")
                     for candidate in ("A", "B")
                 },
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
+class TypeSafeVerdictSignals(JudgeParser):
+    """Parse an overall verdict with reusable judgeability and Noul signals."""
+
+    name = "typesafe-verdict-signals-v1"
+    level_labels = {str(level) for level in range(5)}
+    signal_ids = {
+        f"{candidate}_{signal}"
+        for candidate in ("A", "B")
+        for signal in (
+            "fulfills_core",
+            "material_error",
+            "useful_progress",
+            "explicit_violation",
+        )
+    }
+    route_labels = {
+        "direct",
+        "external_verification",
+        "execution_required",
+        "insufficient_context",
+        "expert_review",
+    }
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            answers = result["answers"]
+            probabilities = _typesafe_probabilities(
+                answers["outcome"]["probabilities"], labels=self.level_labels
+            )
+            route_probabilities = _typesafe_probabilities(
+                answers["judgeability"]["probabilities"], labels=self.route_labels
+            )
+            route = answers["judgeability"]["choice"]
+            signals = {
+                answer_id: float(answers[answer_id]["noul"])
+                for answer_id in self.signal_ids
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (
+            set(answers) != {"outcome", "judgeability", *self.signal_ids}
+            or probabilities is None
+            or route_probabilities is None
+            or route not in self.route_labels
+            or any(not 0 <= value <= 1 for value in signals.values())
+        ):
+            return None
+        preference, label = _overall_score_preference(probabilities)
+        return ParsedPreference(
+            preference=preference,
+            label=label,
+            scores=probabilities,
+            details={
+                "hard_preference_mode": "center_level",
+                "outcome_score": answers["outcome"].get("score"),
+                "outcome_confidence": answers["outcome"].get("confidence"),
+                "judgeability": route,
+                "judgeability_probabilities": route_probabilities,
+                "judgeability_confidence": answers["judgeability"].get("confidence"),
+                "signals": signals,
+                **{
+                    key: result[key]
+                    for key in ("model", "request_id")
+                    if result.get(key) is not None
+                },
+            },
+        )
+
+
+class TypeSafeVerifiedVerdict(JudgeParser):
+    """Parse a primary verdict conditionally accepted or revised by a second Jev call."""
+
+    name = "typesafe-verified-verdict-v1"
+    level_labels = {str(level) for level in range(5)}
+    status_labels = {"accept", "revise", "escalate"}
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+    ) -> ParsedPreference | None:
+        try:
+            result = json.loads(judge_completion)
+            primary_answer = result["answers"]["outcome"]
+            verification = result["verification"]
+            status_answer = verification["status"]
+            revised_answer = verification["revised_outcome"]
+            primary = _typesafe_probabilities(
+                primary_answer["probabilities"], labels=self.level_labels
+            )
+            revised = _typesafe_probabilities(
+                revised_answer["probabilities"], labels=self.level_labels
+            )
+            status_probabilities = _typesafe_probabilities(
+                status_answer["probabilities"], labels=self.status_labels
+            )
+            status = status_answer["choice"]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (
+            set(result["answers"]) != {"outcome"}
+            or set(verification) != {"status", "revised_outcome"}
+            or primary is None
+            or revised is None
+            or status_probabilities is None
+            or status not in self.status_labels
+            or status == "escalate"
+        ):
+            return None
+        probabilities = primary if status == "accept" else revised
+        preference, label = _overall_score_preference(probabilities)
+        return ParsedPreference(
+            preference=preference,
+            label=label,
+            scores=probabilities,
+            details={
+                "hard_preference_mode": "center_level",
+                "verification_status": status,
+                "verification_probabilities": status_probabilities,
+                "verification_confidence": status_answer.get("confidence"),
+                "primary_probabilities": primary,
+                "revised_probabilities": revised,
                 **{
                     key: result[key]
                     for key in ("model", "request_id")
@@ -899,13 +748,9 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "typesafe-choice": TypeSafeChoice(),
     "typesafe-overall-choice-v4": TypeSafeOverallChoice(),
     "typesafe-overall-comparative-score-v5": TypeSafeOverallComparativeScore(),
-    "typesafe-criteria-score": TypeSafeCriteriaScore(),
-    "typesafe-criteria-choice": TypeSafeCriteriaChoice(),
-    "typesafe-criteria-choice-v2": TypeSafeCriteriaChoiceV2(),
-    "typesafe-criteria-comparative-score": TypeSafeCriteriaComparativeScore(),
-    "typesafe-criteria-comparative-score-v2": TypeSafeCriteriaComparativeScoreV2(),
-    "typesafe-comparative-score": TypeSafeComparativeScore(),
-    "typesafe-pair-score": TypeSafePairScore(),
+    "typesafe-absolute-quality-score-v1": TypeSafeAbsoluteQualityScore(),
+    "typesafe-verdict-signals-v1": TypeSafeVerdictSignals(),
+    "typesafe-verified-verdict-v1": TypeSafeVerifiedVerdict(),
 }
 
 

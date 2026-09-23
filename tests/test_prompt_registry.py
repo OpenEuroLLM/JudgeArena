@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 import pytest
+from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.evaluate import (
     judge_and_parse_prefs,
@@ -31,7 +32,7 @@ class FakeCliArgs:
 
 def test_prompt_catalog_is_loaded_from_packaged_yaml():
     assert set(PRESETS) == set(PROMPT_PRESETS)
-    assert len(PROMPT_PRESETS) == 21
+    assert len(PROMPT_PRESETS) == 17
     assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
     assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
     assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"
@@ -85,44 +86,6 @@ def test_typesafe_choice_preset_uses_probability_parser():
     assert resolved.parser.name == "typesafe-choice"
     assert "{completion_A_json}" in resolved.user_prompt_template
     assert "score_A" not in resolved.user_prompt_template
-
-
-def test_typesafe_criteria_score_preset_uses_criteria_parser():
-    resolved = resolve_judge_prompt(preset="typesafe-criteria-score")
-
-    assert resolved.parser.name == "typesafe-criteria-score"
-    assert "{completion_A_json}" in resolved.user_prompt_template
-
-
-def test_typesafe_focused_criteria_presets_use_matching_parsers():
-    choice = resolve_judge_prompt(preset="typesafe-criteria-choice")
-    choice_v2 = resolve_judge_prompt(preset="typesafe-criteria-choice-v2")
-    score = resolve_judge_prompt(preset="typesafe-criteria-comparative-score")
-    score_v2 = resolve_judge_prompt(preset="typesafe-criteria-comparative-score-v2")
-
-    assert choice.parser.name == "typesafe-criteria-choice"
-    assert choice_v2.parser.name == "typesafe-criteria-choice-v2"
-    assert PROMPT_PRESETS["typesafe-criteria-choice"].decision_mode == "criteria-choice"
-    assert score.parser.name == "typesafe-criteria-comparative-score"
-    assert score_v2.parser.name == "typesafe-criteria-comparative-score-v2"
-    assert (
-        PROMPT_PRESETS["typesafe-criteria-comparative-score"].decision_mode
-        == "criteria-comparative-score"
-    )
-
-
-def test_typesafe_comparative_score_preset_uses_score_distribution_parser():
-    resolved = resolve_judge_prompt(preset="typesafe-comparative-score")
-
-    assert resolved.parser.name == "typesafe-comparative-score"
-    assert "{completion_A_json}" in resolved.user_prompt_template
-
-
-def test_typesafe_pair_score_preset_uses_score_distribution_parser():
-    resolved = resolve_judge_prompt(preset="typesafe-pair-score")
-
-    assert resolved.parser.name == "typesafe-pair-score"
-    assert "{completion_A_json}" in resolved.user_prompt_template
 
 
 def test_explicit_preset_wins_over_task_default():
@@ -267,3 +230,29 @@ def test_every_preset_resolves_or_delegates():
         else:
             assert resolved.system_prompt
             assert resolved.user_prompt_template
+
+
+@pytest.mark.parametrize(
+    "preset",
+    [
+        "typesafe-absolute-quality-score-v1",
+        "typesafe-verdict-signals-v1",
+        "typesafe-verified-verdict-v1",
+    ],
+)
+def test_new_typesafe_presets_render_pairwise_state(preset):
+    resolved = resolve_judge_prompt(preset=preset)
+    template = ChatPromptTemplate.from_messages(
+        [
+            ("system", resolved.system_prompt),
+            ("user", resolved.user_prompt_template),
+        ]
+    )
+
+    messages = template.format_messages(
+        user_prompt_json='"question"',
+        completion_A_json='"answer A"',
+        completion_B_json='"answer B"',
+    )
+
+    assert '"user_request": "question"' in messages[-1].content

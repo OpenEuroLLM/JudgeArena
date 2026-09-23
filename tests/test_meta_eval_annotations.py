@@ -164,3 +164,45 @@ def test_aggregate_reorients_native_directional_score_levels():
     assert battles.to_dict("records") == [
         {"battle_id": "q1", "pref": pytest.approx(0.425), "hard_pref": 0.0}
     ]
+
+
+def test_aggregate_reorients_absolute_quality_distributions():
+    direct = {
+        "A": {str(level): float(level == 5) for level in range(10)},
+        "B": {
+            str(level): 0.4 if level == 5 else 0.6 if level == 6 else 0.0
+            for level in range(10)
+        },
+    }
+    reversed_distributions = {"A": direct["B"], "B": direct["A"]}
+    annotations = pd.DataFrame(
+        {
+            "battle_id": ["q1", "q1"],
+            "orientation": ["direct", "reversed"],
+            "pref": [0.8, 0.8],
+            "parsed_scores_json": [
+                json.dumps({"A": 5.0, "B": 5.6}),
+                json.dumps({"A": 5.6, "B": 5.0}),
+            ],
+            "parsed_details_json": [
+                json.dumps(
+                    {
+                        "hard_preference_mode": "absolute_quality",
+                        "probabilities": direct,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "hard_preference_mode": "absolute_quality",
+                        "probabilities": reversed_distributions,
+                    }
+                ),
+            ],
+        }
+    )
+
+    battles = aggregate_battle_preferences(annotations, swap_mode="both")
+
+    assert battles.to_dict("records") == [
+        {"battle_id": "q1", "pref": pytest.approx(0.8), "hard_pref": 1.0}
+    ]

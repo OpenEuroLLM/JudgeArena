@@ -117,3 +117,25 @@ def test_generation_preserves_sync_async_routing(monkeypatch):
     )
     assert base_outputs["completion"].tolist() == ["batch"]
     assert model.batch_kwargs["max_tokens"] == 123
+
+
+def test_aggregated_request_usage_preserves_provider_call_count():
+    with track_usage() as tracker:
+        record_usage(
+            [
+                RequestUsage(
+                    stage="judging",
+                    model="judge",
+                    input_tokens=20,
+                    output_tokens=4,
+                    cost_usd=0.003,
+                    request_count=2,
+                )
+            ]
+        )
+
+    summary = tracker.snapshot().summary()
+    assert summary["requests"] == 2
+    assert summary["requests_with_input_tokens"] == 2
+    assert summary["requests_with_cost"] == 2
+    assert summary["cost_usd"] == pytest.approx(0.003)

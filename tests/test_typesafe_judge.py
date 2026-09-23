@@ -10,9 +10,9 @@ from judgearena.config import RunConfig
 from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.models import do_inference, make_model
 from judgearena.prompts.jev import (
-    JEV_AGGREGATIONS,
     JEV_PROMPT_PRESETS,
     JEV_QUESTION_MODES,
+    JEV_VERIFICATION_QUESTIONS,
 )
 from judgearena.prompts.parsing import JUDGE_PARSERS
 
@@ -34,125 +34,6 @@ def _response():
     }
 
 
-def _comparative_score_response():
-    return {
-        "answers": {
-            "preference": {
-                "type": "score",
-                "score": 3.0,
-                "confidence": 0.4,
-                "legend": {str(level): f"level {level}" for level in range(5)},
-                "probabilities": {"0": 0, "1": 0.1, "2": 0.2, "3": 0.3, "4": 0.4},
-            }
-        },
-        "usage": {"input_tokens": 160, "output_tokens": 18, "cost": 0.000015},
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "id": "request-comparative-score-1",
-    }
-
-
-def _criteria_score_response():
-    answers = {}
-    for answer_id in JEV_QUESTION_MODES["criteria-score"]:
-        candidate = answer_id[0]
-        probabilities = (
-            {"0": 0, "1": 0, "2": 1, "3": 0}
-            if candidate == "A"
-            else {"0": 0, "1": 0, "2": 0.5, "3": 0.5}
-        )
-        answers[answer_id] = {
-            "type": "score",
-            "confidence": 0.75,
-            "probabilities": probabilities,
-        }
-    return {
-        "answers": answers,
-        "usage": {"input_tokens": 220, "output_tokens": 80, "cost": 0.00004},
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "id": "request-criteria-score-1",
-    }
-
-
-def _criteria_choice_response():
-    answers = {
-        "task_success": {
-            "type": "choice",
-            "choice": "B",
-            "confidence": 0.8,
-            "probabilities": {"A": 0.1, "B": 0.8, "tie": 0.1},
-        },
-        "communication": {
-            "type": "choice",
-            "choice": "B",
-            "confidence": 0.6,
-            "probabilities": {"A": 0.2, "B": 0.6, "tie": 0.2},
-        },
-    }
-    return {
-        "answers": answers,
-        "usage": {"input_tokens": 170, "output_tokens": 28, "cost": 0.00002},
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "id": "request-criteria-choice-1",
-    }
-
-
-def _criteria_comparative_score_response():
-    answers = {
-        "task_success": {
-            "type": "score",
-            "confidence": 0.8,
-            "probabilities": {"0": 0, "1": 0, "2": 0.2, "3": 0.6, "4": 0.2},
-        },
-        "communication": {
-            "type": "score",
-            "confidence": 0.6,
-            "probabilities": {"0": 0, "1": 0.1, "2": 0.4, "3": 0.4, "4": 0.1},
-        },
-    }
-    return {
-        "answers": answers,
-        "usage": {"input_tokens": 180, "output_tokens": 32, "cost": 0.000025},
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "id": "request-criteria-comparative-score-1",
-    }
-
-
-def _score_response():
-    levels = {
-        "0": "fails",
-        "1": "major problems",
-        "2": "partially succeeds",
-        "3": "good",
-        "4": "excellent",
-    }
-    return {
-        "answers": {
-            "A": {
-                "type": "score",
-                "score": 2.0,
-                "confidence": 1.0,
-                "legend": levels,
-                "probabilities": {"0": 0, "1": 0, "2": 1, "3": 0, "4": 0},
-            },
-            "B": {
-                "type": "score",
-                "score": 2.5,
-                "confidence": 0.5,
-                "legend": levels,
-                "probabilities": {"0": 0, "1": 0, "2": 0.5, "3": 0.5, "4": 0},
-            },
-        },
-        "usage": {"input_tokens": 180, "output_tokens": 30, "cost": 0.00002},
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "id": "request-score-1",
-    }
-
-
 def _judge(requests):
     def handler(request):
         requests.append(json.loads(request.content))
@@ -171,59 +52,40 @@ def _judge(requests):
 def test_jev_prompt_presets_load_from_packaged_yaml():
     assert set(JEV_PROMPT_PRESETS) == {
         "typesafe-choice",
-        "typesafe-comparative-score",
-        "typesafe-criteria-score",
-        "typesafe-criteria-choice",
-        "typesafe-criteria-choice-v2",
-        "typesafe-criteria-comparative-score",
-        "typesafe-criteria-comparative-score-v2",
-        "typesafe-pair-score",
+        "typesafe-fluency-choice",
         "typesafe-overall-choice-multilingual-v4",
         "typesafe-overall-comparative-score-v5",
-        "typesafe-fluency-choice",
+        "typesafe-absolute-quality-score-v1",
+        "typesafe-verdict-signals-v1",
+        "typesafe-verified-verdict-v1",
     }
     assert set(JEV_QUESTION_MODES) == {
         "choice",
-        "comparative-score",
-        "criteria-score",
-        "criteria-choice",
-        "criteria-choice-v2",
-        "criteria-comparative-score",
-        "criteria-comparative-score-v2",
         "overall-choice-v4-multilingual",
         "overall-comparative-score-v5",
-        "pair-score",
+        "absolute-quality-score-v1",
+        "verdict-signals-v1",
+        "verified-verdict-v1",
     }
     choice = JEV_PROMPT_PRESETS["typesafe-choice"]
     assert choice.parser == "typesafe-choice"
-    assert choice.decision_mode == "choice"
     assert choice.task_kind == "pairwise"
-    assert "careful human evaluator" in choice.system_prompt
-    assert "{completion_A_json}" in choice.user_prompt_template
     assert JEV_QUESTION_MODES["choice"]["preference"]["type"] == "choice"
-    assert JEV_QUESTION_MODES["comparative-score"]["preference"]["type"] == "score"
-    assert set(JEV_QUESTION_MODES["criteria-choice"]) == {
-        "task_success",
-        "communication",
-    }
-    assert {
-        question["type"] for question in JEV_QUESTION_MODES["criteria-choice"].values()
-    } == {"choice"}
     assert {
         question["type"]
-        for question in JEV_QUESTION_MODES["criteria-comparative-score"].values()
+        for question in JEV_QUESTION_MODES["absolute-quality-score-v1"].values()
     } == {"score"}
-    assert JEV_AGGREGATIONS["criteria-choice-v2"] == {
-        "method": "weighted_mean",
-        "weights": {"task_success": 0.5, "communication": 0.5},
+    signal_types = {
+        name: question["type"]
+        for name, question in JEV_QUESTION_MODES["verdict-signals-v1"].items()
     }
-    assert JEV_AGGREGATIONS["criteria-comparative-score-v2"] == {
-        "method": "weighted_mean",
-        "weights": {"task_success": 0.5, "communication": 0.5},
+    assert signal_types["outcome"] == "score"
+    assert signal_types["judgeability"] == "choice"
+    assert list(signal_types.values()).count("noul") == 8
+    assert set(JEV_VERIFICATION_QUESTIONS["verified-verdict-v1"]) == {
+        "status",
+        "revised_outcome",
     }
-    pair_questions = JEV_QUESTION_MODES["pair-score"]
-    assert set(pair_questions) == {"A", "B"}
-    assert pair_questions["A"]["criteria"] == pair_questions["B"]["criteria"]
 
 
 def test_openrouter_jev_maps_decision_response_and_usage():
@@ -279,371 +141,6 @@ def test_openrouter_jev_batch_retries_only_failed_520_request(monkeypatch):
 
     assert len(results) == 2
     assert attempts == {"stable": 1, "retry": 2}
-
-
-def test_typesafe_criteria_score_uses_configured_tie_tolerance():
-    answers = _criteria_score_response()["answers"]
-    for answer_id, answer in answers.items():
-        if answer_id.startswith("B_"):
-            answer["probabilities"] = {"0": 0, "1": 0, "2": 0.95, "3": 0.05}
-
-    parsed = JUDGE_PARSERS["typesafe-criteria-score"].parse_result(
-        json.dumps({"criteria": answers})
-    )
-
-    assert parsed.preference == 0.5
-    assert parsed.label == "tie"
-    assert parsed.scores["A_overall"] == pytest.approx(7.0)
-    assert parsed.scores["B_overall"] == pytest.approx(7.15)
-
-
-def test_typesafe_criteria_score_rejects_missing_criterion():
-    response = _criteria_score_response()
-    answers = response["answers"]
-    payload = {
-        "criteria": {
-            answer_id: answer
-            for answer_id, answer in answers.items()
-            if answer_id != "A_adherence"
-        }
-    }
-
-    assert (
-        JUDGE_PARSERS["typesafe-criteria-score"].parse_result(json.dumps(payload))
-        is None
-    )
-
-
-@pytest.mark.parametrize(
-    ("decision_mode", "prompt_preset"),
-    [
-        ("criteria-choice", "typesafe-criteria-choice"),
-        ("criteria-choice-v2", "typesafe-criteria-choice-v2"),
-    ],
-)
-def test_openrouter_jev_criteria_choice_aggregates_focused_questions(
-    decision_mode, prompt_preset
-):
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=_criteria_choice_response())
-
-    transport = httpx.MockTransport(handler)
-    judge = make_model(
-        "OpenRouter/typesafe/jev-1.13",
-        decision_mode=decision_mode,
-        client=httpx.Client(transport=transport),
-        async_client=httpx.AsyncClient(transport=transport),
-    )
-
-    annotations, _, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge,
-        instructions=["Answer the question."],
-        completions_A=["Response A"],
-        completions_B=["Response B"],
-        swap_mode="fixed",
-        prompt_preset=prompt_preset,
-    )
-
-    assert set(requests[0]["questions"]) == {"task_success", "communication"}
-    assert preferences.tolist() == pytest.approx([0.775])
-    assert annotations[0].parsed.scores == pytest.approx(
-        {
-            "communication_preference": 0.7,
-            "task_success_preference": 0.85,
-            "overall": 0.775,
-        }
-    )
-
-
-@pytest.mark.parametrize(
-    ("decision_mode", "prompt_preset"),
-    [
-        (
-            "criteria-comparative-score",
-            "typesafe-criteria-comparative-score",
-        ),
-        (
-            "criteria-comparative-score-v2",
-            "typesafe-criteria-comparative-score-v2",
-        ),
-    ],
-)
-def test_openrouter_jev_criteria_comparative_score_aggregates_dimensions(
-    decision_mode, prompt_preset
-):
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=_criteria_comparative_score_response())
-
-    transport = httpx.MockTransport(handler)
-    judge = make_model(
-        "OpenRouter/typesafe/jev-1.13",
-        decision_mode=decision_mode,
-        client=httpx.Client(transport=transport),
-        async_client=httpx.AsyncClient(transport=transport),
-    )
-
-    annotations, _, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge,
-        instructions=["Answer the question."],
-        completions_A=["Response A"],
-        completions_B=["Response B"],
-        swap_mode="fixed",
-        prompt_preset=prompt_preset,
-    )
-
-    assert set(requests[0]["questions"]) == {"task_success", "communication"}
-    assert preferences.tolist() == pytest.approx([0.6875])
-    assert annotations[0].parsed.scores == pytest.approx(
-        {"communication": 0.625, "task_success": 0.75, "overall": 0.6875}
-    )
-
-
-def test_typesafe_criteria_v2_uses_yaml_aggregation(monkeypatch):
-    monkeypatch.setitem(
-        JEV_AGGREGATIONS,
-        "criteria-choice-v2",
-        {
-            "method": "weighted_mean",
-            "weights": {"task_success": 0.75, "communication": 0.25},
-        },
-    )
-
-    parsed = JUDGE_PARSERS["typesafe-criteria-choice-v2"].parse_result(
-        json.dumps({"answers": _criteria_choice_response()["answers"]})
-    )
-
-    assert parsed.preference == pytest.approx(0.8125)
-
-
-def test_openrouter_jev_criteria_score_returns_diagnostics_and_preference():
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=_criteria_score_response())
-
-    transport = httpx.MockTransport(handler)
-    judge = make_model(
-        "OpenRouter/typesafe/jev-1.13",
-        decision_mode="criteria-score",
-        client=httpx.Client(transport=transport),
-        async_client=httpx.AsyncClient(transport=transport),
-    )
-
-    annotations, _, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge,
-        instructions=["Answer the question."],
-        completions_A=["Response A"],
-        completions_B=["Response B"],
-        swap_mode="fixed",
-        prompt_preset="typesafe-criteria-score",
-    )
-
-    questions = requests[0]["questions"]
-    assert len(questions) == 12
-    assert set(questions) == {
-        f"{candidate}_{criterion}"
-        for candidate in ("A", "B")
-        for criterion in (
-            "adherence",
-            "helpfulness",
-            "factuality",
-            "completeness",
-            "clarity",
-            "fluency",
-        )
-    }
-    assert questions["A_adherence"]["type"] == "score"
-    assert len(questions["A_adherence"]["criteria"]) == 4
-    assert preferences.tolist() == pytest.approx([1.0])
-    scores = annotations[0].parsed.scores
-    assert scores["A_adherence"] == pytest.approx(7.0)
-    assert scores["B_adherence"] == pytest.approx(8.5)
-    assert scores["A_overall"] == pytest.approx(7.0)
-    assert scores["B_overall"] == pytest.approx(8.5)
-
-
-def test_openrouter_jev_comparative_score_maps_ordered_distribution():
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=_comparative_score_response())
-
-    transport = httpx.MockTransport(handler)
-    judge = make_model(
-        "OpenRouter/typesafe/jev-1.13",
-        decision_mode="comparative-score",
-        client=httpx.Client(transport=transport),
-        async_client=httpx.AsyncClient(transport=transport),
-    )
-
-    annotations, _, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge,
-        instructions=["Answer the question."],
-        completions_A=["Response A"],
-        completions_B=["Response B"],
-        swap_mode="fixed",
-        prompt_preset="typesafe-comparative-score",
-    )
-
-    assert set(requests[0]["questions"]) == {"preference"}
-    assert requests[0]["questions"]["preference"]["type"] == "score"
-    assert len(requests[0]["questions"]["preference"]["criteria"]) == 5
-    assert preferences.tolist() == pytest.approx([0.75])
-    assert annotations[0].parsed.label == "B"
-    assert annotations[0].parsed.details["score"] == 3.0
-
-
-def test_openrouter_jev_pair_score_compares_two_score_distributions():
-    requests = []
-
-    def handler(request):
-        requests.append(json.loads(request.content))
-        return httpx.Response(200, json=_score_response())
-
-    transport = httpx.MockTransport(handler)
-    judge = make_model(
-        "OpenRouter/typesafe/jev-1.13",
-        decision_mode="pair-score",
-        client=httpx.Client(transport=transport),
-        async_client=httpx.AsyncClient(transport=transport),
-    )
-
-    annotations, _, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge,
-        instructions=["Answer the question."],
-        completions_A=["Response A"],
-        completions_B=["Response B"],
-        swap_mode="fixed",
-        prompt_preset="typesafe-pair-score",
-    )
-
-    assert set(requests[0]["questions"]) == {"A", "B"}
-    assert requests[0]["state"]["comparison"] == {
-        "user_request": "Answer the question.",
-        "response_A": "Response A",
-        "response_B": "Response B",
-    }
-    assert preferences.tolist() == pytest.approx([0.75])
-    assert annotations[0].parsed.scores == {"A": 2.0, "B": 2.5}
-    assert annotations[0].parsed.details["probabilities"]["A"]["2"] == 1.0
-
-
-@pytest.mark.parametrize(
-    ("parser_name", "response", "swapped", "expected"),
-    [
-        (
-            "typesafe-criteria-choice",
-            _criteria_choice_response(),
-            {
-                "answers": {
-                    "task_success": {
-                        "type": "choice",
-                        "choice": "A",
-                        "probabilities": {"A": 0.8, "B": 0.1, "tie": 0.1},
-                    },
-                    "communication": {
-                        "type": "choice",
-                        "choice": "A",
-                        "probabilities": {"A": 0.6, "B": 0.2, "tie": 0.2},
-                    },
-                }
-            },
-            0.775,
-        ),
-        (
-            "typesafe-criteria-comparative-score",
-            _criteria_comparative_score_response(),
-            {
-                "answers": {
-                    "task_success": {
-                        "type": "score",
-                        "probabilities": {
-                            "0": 0.2,
-                            "1": 0.6,
-                            "2": 0.2,
-                            "3": 0,
-                            "4": 0,
-                        },
-                    },
-                    "communication": {
-                        "type": "score",
-                        "probabilities": {
-                            "0": 0.1,
-                            "1": 0.4,
-                            "2": 0.4,
-                            "3": 0.1,
-                            "4": 0,
-                        },
-                    },
-                }
-            },
-            0.6875,
-        ),
-    ],
-)
-def test_typesafe_focused_criteria_parsers_are_symmetric(
-    parser_name, response, swapped, expected
-):
-    parser = JUDGE_PARSERS[parser_name]
-
-    direct = parser.parse_result(json.dumps(response))
-    reversed_result = parser.parse_result(json.dumps(swapped))
-
-    assert direct.preference == pytest.approx(expected)
-    assert reversed_result.preference == pytest.approx(1 - expected)
-
-
-def test_typesafe_comparative_score_is_symmetric():
-    parser = JUDGE_PARSERS["typesafe-comparative-score"]
-    probabilities = {"0": 0.05, "1": 0.15, "2": 0.2, "3": 0.25, "4": 0.35}
-    reversed_probabilities = {
-        str(level): probabilities[str(4 - level)] for level in range(5)
-    }
-
-    def completion(distribution):
-        return json.dumps({"probabilities": distribution})
-
-    centered = parser.parse_result(
-        completion({"0": 0.1, "1": 0.2, "2": 0.4, "3": 0.2, "4": 0.1})
-    )
-    direct = parser.parse_result(completion(probabilities))
-    swapped = parser.parse_result(completion(reversed_probabilities))
-
-    assert centered.preference == pytest.approx(0.5)
-    assert centered.label == "tie"
-    assert direct.preference + swapped.preference == pytest.approx(1.0)
-
-
-def test_typesafe_pair_score_is_symmetric():
-    parser = JUDGE_PARSERS["typesafe-pair-score"]
-    distribution_a = {"0": 0.05, "1": 0.15, "2": 0.4, "3": 0.3, "4": 0.1}
-    distribution_b = {"0": 0.0, "1": 0.1, "2": 0.2, "3": 0.4, "4": 0.3}
-
-    def completion(a, b):
-        return json.dumps(
-            {
-                "answers": {
-                    "A": {"probabilities": a},
-                    "B": {"probabilities": b},
-                }
-            }
-        )
-
-    identical = parser.parse_result(completion(distribution_a, distribution_a))
-    direct = parser.parse_result(completion(distribution_a, distribution_b))
-    swapped = parser.parse_result(completion(distribution_b, distribution_a))
-
-    assert identical.preference == pytest.approx(0.5)
-    assert identical.label == "tie"
-    assert direct.preference + swapped.preference == pytest.approx(1.0)
 
 
 def test_openrouter_jev_overall_choice_preserves_four_way_answer():
@@ -813,34 +310,20 @@ def test_openrouter_jev_selects_required_prompt_modes():
         model={"name": "claude-2"},
         judge={"model": "OpenRouter/typesafe/jev-1.13"},
     )
-    criteria_cfg = RunConfig(
-        task="meta-eval-lmarena-140k-en",
-        judge={
-            "model": "OpenRouter/typesafe/jev-1.13",
-            "prompt_preset": "typesafe-criteria-score",
-        },
-    )
-    focused_v2_cfg = RunConfig(
-        task="meta-eval-lmarena-140k-en",
-        judge={
-            "model": "OpenRouter/typesafe/jev-1.13",
-            "prompt_preset": "typesafe-criteria-choice-v2",
-        },
-    )
-    comparative_cfg = RunConfig(
-        task="meta-eval-lmarena-140k-en",
-        judge={
-            "model": "OpenRouter/typesafe/jev-1.13",
-            "prompt_preset": "typesafe-comparative-score",
-        },
-    )
-    score_cfg = RunConfig(
-        task="meta-eval-lmarena-140k-en",
-        judge={
-            "model": "OpenRouter/typesafe/jev-1.13",
-            "prompt_preset": "typesafe-pair-score",
-        },
-    )
+    configured = {
+        preset: RunConfig(
+            task="meta-eval-lmarena-140k-en",
+            judge={
+                "model": "OpenRouter/typesafe/jev-1.13",
+                "prompt_preset": preset,
+            },
+        )
+        for preset in (
+            "typesafe-absolute-quality-score-v1",
+            "typesafe-verdict-signals-v1",
+            "typesafe-verified-verdict-v1",
+        )
+    }
     fluency_cfg = RunConfig(
         task="fluency-english",
         model={"name": "model-a", "baseline": "model-b"},
@@ -849,13 +332,13 @@ def test_openrouter_jev_selects_required_prompt_modes():
 
     assert cfg.judge.prompt_preset == "typesafe-choice"
     assert cfg.judge.engine_kwargs["decision_mode"] == "choice"
-    assert criteria_cfg.judge.prompt_preset == "typesafe-criteria-score"
-    assert criteria_cfg.judge.engine_kwargs["decision_mode"] == "criteria-score"
-    assert focused_v2_cfg.judge.engine_kwargs["decision_mode"] == "criteria-choice-v2"
-    assert comparative_cfg.judge.prompt_preset == "typesafe-comparative-score"
-    assert comparative_cfg.judge.engine_kwargs["decision_mode"] == "comparative-score"
-    assert score_cfg.judge.prompt_preset == "typesafe-pair-score"
-    assert score_cfg.judge.engine_kwargs["decision_mode"] == "pair-score"
+    assert {
+        cfg.judge.engine_kwargs["decision_mode"] for cfg in configured.values()
+    } == {
+        "absolute-quality-score-v1",
+        "verdict-signals-v1",
+        "verified-verdict-v1",
+    }
     assert fluency_cfg.judge.prompt_preset == "typesafe-fluency-choice"
 
     with pytest.raises(ValueError, match="requires judge.prompt_preset"):
@@ -971,3 +454,350 @@ def test_typesafe_overall_comparative_score_uses_native_modal_hard_label(
     assert parsed is not None
     assert parsed.preference == pytest.approx(expected_preference)
     assert parsed.label == expected_label
+
+
+def _score_answer(probabilities):
+    return {
+        "type": "score",
+        "score": sum(int(level) * value for level, value in probabilities.items()),
+        "confidence": 0.7,
+        "probabilities": probabilities,
+    }
+
+
+def test_openrouter_jev_absolute_quality_score_preserves_ten_level_distributions():
+    probabilities_a = {str(level): float(level == 5) for level in range(10)}
+    probabilities_b = {
+        str(level): 0.4 if level == 5 else 0.6 if level == 6 else 0.0
+        for level in range(10)
+    }
+    response = {
+        "answers": {
+            "A": _score_answer(probabilities_a),
+            "B": _score_answer(probabilities_b),
+        },
+        "usage": {"input_tokens": 100, "output_tokens": 20, "cost": 0.001},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "absolute-1",
+    }
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json=response))
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="absolute-quality-score-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    parsed = JUDGE_PARSERS["typesafe-absolute-quality-score-v1"].parse_result(
+        judge.invoke("pair").text
+    )
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.8)
+    assert parsed.label == "B"
+    assert parsed.scores == {"A": 6.0, "B": 6.6}
+    assert parsed.details["score_scale"] == {"minimum": 1, "maximum": 10}
+    assert set(parsed.details["probabilities"]["A"]) == {
+        str(level) for level in range(10)
+    }
+
+
+def test_openrouter_jev_verdict_signals_preserves_routes_and_nouls():
+    answer_ids = JEV_QUESTION_MODES["verdict-signals-v1"]
+    answers = {
+        "outcome": _score_answer({"0": 0.0, "1": 0.1, "2": 0.2, "3": 0.6, "4": 0.1}),
+        "judgeability": {
+            "type": "choice",
+            "choice": "direct",
+            "confidence": 0.8,
+            "probabilities": {
+                "direct": 0.8,
+                "external_verification": 0.05,
+                "execution_required": 0.05,
+                "insufficient_context": 0.05,
+                "expert_review": 0.05,
+            },
+        },
+        **{
+            answer_id: {
+                "type": "noul",
+                "noul": 0.8 if answer_id.startswith("B_") else 0.2,
+            }
+            for answer_id in answer_ids
+            if answer_id not in {"outcome", "judgeability"}
+        },
+    }
+    response = {
+        "answers": answers,
+        "usage": {"input_tokens": 100, "output_tokens": 40, "cost": 0.002},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "signals-1",
+    }
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json=response))
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verdict-signals-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    parsed = JUDGE_PARSERS["typesafe-verdict-signals-v1"].parse_result(
+        judge.invoke("pair").text
+    )
+
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.675)
+    assert parsed.details["judgeability"] == "direct"
+    assert len(parsed.details["signals"]) == 8
+    assert parsed.details["signals"]["B_useful_progress"] == pytest.approx(0.8)
+
+
+def test_openrouter_jev_verified_verdict_runs_second_request_and_can_revise():
+    primary = {
+        "answers": {
+            "outcome": _score_answer({"0": 0.0, "1": 0.1, "2": 0.1, "3": 0.7, "4": 0.1})
+        },
+        "usage": {"input_tokens": 100, "output_tokens": 10, "cost": 0.001},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "primary-1",
+    }
+    verification = {
+        "answers": {
+            "status": {
+                "type": "choice",
+                "choice": "revise",
+                "confidence": 0.7,
+                "probabilities": {"accept": 0.2, "revise": 0.7, "escalate": 0.1},
+            },
+            "revised_outcome": _score_answer(
+                {"0": 0.0, "1": 0.1, "2": 0.8, "3": 0.1, "4": 0.0}
+            ),
+        },
+        "usage": {"input_tokens": 140, "output_tokens": 20, "cost": 0.002},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "verification-1",
+    }
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=primary if len(requests) == 1 else verification)
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    result = judge.invoke("pair")
+    parsed = JUDGE_PARSERS["typesafe-verified-verdict-v1"].parse_result(result.text)
+
+    assert len(requests) == 2
+    assert requests[1]["state"]["primary_judgment"] == primary["answers"]["outcome"]
+    assert set(requests[1]["questions"]) == {"status", "revised_outcome"}
+    assert result.usage.input_tokens == 240
+    assert result.usage.output_tokens == 30
+    assert result.usage.cost_usd == pytest.approx(0.003)
+    assert result.usage.request_count == 2
+    assert parsed is not None
+    assert parsed.preference == pytest.approx(0.5)
+    assert parsed.label == "tie"
+    assert parsed.details["verification_status"] == "revise"
+    assert parsed.details["request_id"] == {
+        "primary": "primary-1",
+        "verification": "verification-1",
+    }
+
+
+def test_typesafe_verified_verdict_escalates_without_a_preference():
+    payload = {
+        "answers": {
+            "outcome": _score_answer({"0": 0.0, "1": 0.0, "2": 1.0, "3": 0.0, "4": 0.0})
+        },
+        "verification": {
+            "status": {
+                "type": "choice",
+                "choice": "escalate",
+                "probabilities": {"accept": 0.1, "revise": 0.1, "escalate": 0.8},
+            },
+            "revised_outcome": _score_answer(
+                {"0": 0.0, "1": 0.0, "2": 1.0, "3": 0.0, "4": 0.0}
+            ),
+        },
+    }
+
+    assert (
+        JUDGE_PARSERS["typesafe-verified-verdict-v1"].parse_result(json.dumps(payload))
+        is None
+    )
+
+
+def _verified_primary_response(usage=None):
+    return {
+        "answers": {
+            "outcome": _score_answer({"0": 0.0, "1": 0.1, "2": 0.1, "3": 0.7, "4": 0.1})
+        },
+        "usage": usage or {},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "primary-retry",
+    }
+
+
+def _verification_response(usage=None):
+    return {
+        "answers": {
+            "status": {
+                "type": "choice",
+                "choice": "accept",
+                "probabilities": {"accept": 0.8, "revise": 0.1, "escalate": 0.1},
+            },
+            "revised_outcome": _score_answer(
+                {"0": 0.0, "1": 0.1, "2": 0.1, "3": 0.7, "4": 0.1}
+            ),
+        },
+        "usage": usage or {},
+        "model": "typesafe/jev-1.13-20260917",
+        "id": "verification-retry",
+    }
+
+
+def test_verified_verdict_retries_only_failed_verification(monkeypatch):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(200, json=_verified_primary_response())
+        if len(requests) == 2:
+            return httpx.Response(520, json={"error": "retry"})
+        return httpx.Response(200, json=_verification_response())
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr("judgearena.models.time.sleep", lambda _delay: None)
+
+    judge.batch(["pair"])
+
+    assert len(requests) == 3
+    assert set(requests[0]["questions"]) == {"outcome"}
+    assert set(requests[1]["questions"]) == {"status", "revised_outcome"}
+    assert requests[2] == requests[1]
+
+
+def test_verified_verdict_async_retries_only_failed_verification(monkeypatch):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(200, json=_verified_primary_response())
+        if len(requests) == 2:
+            return httpx.Response(520, json={"error": "retry"})
+        return httpx.Response(200, json=_verification_response())
+
+    async def no_sleep(_delay):
+        return None
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr("judgearena.models.asyncio.sleep", no_sleep)
+
+    asyncio.run(judge.ainvoke("pair"))
+
+    assert len(requests) == 3
+    assert set(requests[0]["questions"]) == {"outcome"}
+    assert set(requests[1]["questions"]) == {"status", "revised_outcome"}
+    assert requests[2] == requests[1]
+
+
+def test_verified_verdict_rejects_invalid_primary_before_verification():
+    requests = []
+    malformed = _verified_primary_response()
+    malformed["answers"]["outcome"].pop("probabilities")
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=malformed)
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    with pytest.raises(ValueError, match="verified primary"):
+        judge.invoke("pair")
+
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("primary_usage", "verification_usage"),
+    [
+        ({"input_tokens": 10, "output_tokens": 2, "cost": 0.001}, {}),
+        ({}, {}),
+    ],
+)
+def test_verified_verdict_preserves_missing_usage(primary_usage, verification_usage):
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(500, json={"unused": True})
+    )
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+
+    result = judge._verified_result(
+        _verified_primary_response(primary_usage),
+        _verification_response(verification_usage),
+        "judging",
+    )
+
+    assert result.usage.input_tokens is None
+    assert result.usage.output_tokens is None
+    assert result.usage.total_tokens is None
+    assert result.usage.cost_usd is None
+
+
+def test_verified_verdict_async_exhaustion_does_not_replay_primary(monkeypatch):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(200, json=_verified_primary_response())
+        return httpx.Response(520, json={"error": "retry"})
+
+    async def no_sleep(_delay):
+        return None
+
+    transport = httpx.MockTransport(handler)
+    judge = make_model(
+        "OpenRouter/typesafe/jev-1.13",
+        decision_mode="verified-verdict-v1",
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+    )
+    monkeypatch.setattr("judgearena.models.asyncio.sleep", no_sleep)
+
+    with pytest.raises(RuntimeError, match="failed after 5 attempts"):
+        do_inference(judge, ["pair"], use_tqdm=True)
+
+    assert len(requests) == 6
+    assert sum(set(request["questions"]) == {"outcome"} for request in requests) == 1
