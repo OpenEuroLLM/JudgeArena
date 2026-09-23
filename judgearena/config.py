@@ -410,6 +410,9 @@ class MetaEvalArgs(BaseModel):
     languages: list[str] | None = None
     """Restrict arena battles to these language codes. Defaults to all languages."""
 
+    exclude_battle_ids: list[str] = Field(default_factory=list)
+    """Explicit battle IDs to omit after deterministic sampling."""
+
 
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""

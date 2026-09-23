@@ -172,6 +172,18 @@ def run_meta_eval(
             battles_per_model=cfg.meta_eval.battles_per_model,
             seed=cfg.run.seed,
         )
+    if cfg.meta_eval.exclude_battle_ids:
+        excluded = set(cfg.meta_eval.exclude_battle_ids) & set(sample["battle_id"])
+        sample = sample.loc[~sample["battle_id"].isin(excluded)].reset_index(drop=True)
+        logger.warning(
+            "Excluded %d explicitly listed battle(s) after sampling: %s",
+            len(excluded),
+            sorted(excluded),
+        )
+        if sample.empty:
+            raise ValueError("Explicit battle exclusions removed the entire sample.")
+        if cfg.meta_eval.sampling == "per_language":
+            models = sorted(set(sample["model_a"]) | set(sample["model_b"]))
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
