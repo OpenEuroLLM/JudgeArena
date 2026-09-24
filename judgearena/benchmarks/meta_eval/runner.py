@@ -159,6 +159,7 @@ def run_meta_eval(
             languages,
             battles_per_language=cfg.meta_eval.battles_per_language,
             seed=cfg.run.seed,
+            offset=cfg.meta_eval.battle_offset_per_language,
         )
         metric_pool = arena_battles
         models = sorted(set(sample["model_a"]) | set(sample["model_b"]))

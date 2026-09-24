@@ -170,6 +170,7 @@ def sample_battles_per_language(
     *,
     battles_per_language: int,
     seed: int,
+    offset: int = 0,
 ) -> pd.DataFrame:
     """Sample the same deterministic quota independently for each language."""
     working = battles.copy()
@@ -182,10 +183,11 @@ def sample_battles_per_language(
         candidates = working.loc[working["lang"] == language].sort_values(
             ["_sample_priority", "battle_id"], kind="stable"
         )
-        if len(candidates) < battles_per_language:
-            shortfalls[language] = len(candidates)
+        stop = offset + battles_per_language
+        if len(candidates) < stop:
+            shortfalls[language] = max(0, len(candidates) - offset)
         else:
-            samples.append(candidates.head(battles_per_language))
+            samples.append(candidates.iloc[offset:stop])
     if shortfalls:
         raise MetaEvalSamplingError(
             "Insufficient unique battles for the requested per-language quota: "

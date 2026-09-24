@@ -401,6 +401,9 @@ class MetaEvalArgs(BaseModel):
     battles_per_language: int = Field(default=100, gt=0)
     """Unique battles sampled for each language in per-language mode."""
 
+    battle_offset_per_language: int = Field(default=0, ge=0)
+    """Skip this many deterministic battles per language before sampling."""
+
     top_models: int = Field(default=20, ge=2)
     """Number of the arena's most-battled models to include."""
 

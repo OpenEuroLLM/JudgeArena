@@ -64,6 +64,31 @@ def test_per_language_sampling_is_deterministic_and_balanced():
     pd.testing.assert_frame_equal(sample, shuffled)
 
 
+def test_per_language_sampling_offset_selects_next_disjoint_panel():
+    battles = pd.DataFrame(
+        [
+            {"battle_id": f"{language}-{index}", "lang": language}
+            for language in ("en", "fr")
+            for index in range(6)
+        ]
+    )
+
+    first = sample_battles_per_language(
+        battles, ["en", "fr"], battles_per_language=2, seed=7
+    )
+    second = sample_battles_per_language(
+        battles, ["en", "fr"], battles_per_language=2, seed=7, offset=2
+    )
+    combined = sample_battles_per_language(
+        battles, ["en", "fr"], battles_per_language=4, seed=7
+    )
+
+    assert set(first["battle_id"]).isdisjoint(second["battle_id"])
+    assert set(first["battle_id"]) | set(second["battle_id"]) == set(
+        combined["battle_id"]
+    )
+
+
 def test_per_language_sampling_rejects_insufficient_quota():
     battles = pd.DataFrame({"battle_id": ["en-1"], "lang": ["en"]})
 
