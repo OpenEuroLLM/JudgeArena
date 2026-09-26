@@ -64,6 +64,8 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
         gpu_memory_utilization=0.7,
     )
 
+    assert captured["sampling_kwargs"]["temperature"] == models.VLLM_DEFAULT_TEMPERATURE
+    assert captured["sampling_kwargs"]["top_p"] == models.VLLM_DEFAULT_TOP_P
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert "structured_outputs" not in captured["sampling_kwargs"]
     assert captured["reasoning_config_kwargs"] == {

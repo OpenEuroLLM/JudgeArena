@@ -162,10 +162,6 @@ def test_generate_mt_bench_completions_uses_pregenerated_baseline(monkeypatch):
     )
     generated_models = []
 
-    monkeypatch.setattr(
-        mt_bench_runner, "cache_function_dataframe", lambda fun, **_kwargs: fun()
-    )
-
     def fake_generate_multiturn(**kwargs):
         generated_models.append(kwargs["model"])
         return pd.DataFrame(
@@ -324,7 +320,7 @@ def test_run_mt_bench_resolves_native_baseline_and_judge_controls(
         captured["make_model"] = kwargs
         return object()
 
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "prepare_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
@@ -395,7 +391,7 @@ def test_run_mt_bench_defaults_to_delegated_fastchat(monkeypatch, tmp_path):
         captured["make_model"] = kwargs
         return object()
 
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "prepare_model", fake_make_model)
 
     def fake_run_mt_bench_fastchat(**kwargs):
         captured["fastchat"] = kwargs
@@ -465,7 +461,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
         return pd.Series([0.0], dtype=float)
 
     captured = {}
-    monkeypatch.setattr(mt_bench_runner, "make_model", fake_make_model)
+    monkeypatch.setattr(mt_bench_runner, "prepare_model", fake_make_model)
     monkeypatch.setattr(
         mt_bench_runner,
         "_run_mt_bench_preset",
@@ -500,9 +496,6 @@ def test_generate_mt_bench_completions_forwards_thinking_controls(monkeypatch):
     )
     captured: dict[str, dict] = {}
 
-    monkeypatch.setattr(
-        mt_bench_runner, "cache_function_dataframe", lambda fun, **_kwargs: fun()
-    )
     monkeypatch.setattr(
         mt_bench_runner,
         "load_mt_bench_model_answers",
@@ -579,7 +572,7 @@ def test_run_mt_bench_forwards_strip_thinking_to_fastchat_judge(monkeypatch, tmp
             ),
         ),
     )
-    monkeypatch.setattr(mt_bench_runner, "make_model", lambda **kwargs: object())
+    monkeypatch.setattr(mt_bench_runner, "prepare_model", lambda **kwargs: object())
     monkeypatch.setattr(
         mt_bench_runner, "_finalize_mt_bench_run", lambda **kwargs: kwargs["prefs"]
     )
