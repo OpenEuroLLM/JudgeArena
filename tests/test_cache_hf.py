@@ -2,6 +2,7 @@ import shutil
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 from huggingface_hub.errors import HfHubHTTPError
 from requests import Response
 
@@ -102,6 +103,55 @@ def test_fetch_cache_applies_task_and_model_filters(tmp_path, monkeypatch):
     assert CompletionCache(local_db).query()["completion"].tolist() == ["answer:wanted"]
 
 
+def test_fetch_cache_without_task_finds_model_across_tasks(tmp_path, monkeypatch):
+    remote_root = tmp_path / "remote"
+    wanted = [
+        _create_cache(remote_root, task, "Dummy/org/model", [task])
+        for task in ("task/one", "task-two")
+    ]
+    _create_cache(remote_root, "task/one", "Dummy/other", ["other"])
+    api = FakeHub(remote_root)
+    _stub_download(monkeypatch, remote_root)
+
+    count = cache_hf.fetch_cache(
+        tmp_path / "local",
+        "org/cache",
+        kind="completions",
+        model_spec="Dummy/org/model",
+        api=api,
+    )
+
+    outputs = [
+        CompletionCache(
+            tmp_path / "local" / folder.relative_to(remote_root) / COMPLETION_DB_NAME
+        )
+        .query()["completion"]
+        .item()
+        for folder in wanted
+    ]
+    assert count == 2
+    assert sorted(outputs) == ["answer:task-two", "answer:task/one"]
+
+
+def test_push_cache_without_task_finds_local_model_across_tasks(tmp_path):
+    local_root = tmp_path / "local"
+    remote_root = tmp_path / "remote"
+    for task in ("task/one", "task-two"):
+        _create_cache(local_root, task, "Dummy/org/model", [task])
+    _create_cache(local_root, "task/one", "Dummy/other", ["other"])
+
+    commits = cache_hf.push_cache(
+        local_root,
+        "org/cache",
+        kind="completions",
+        model_spec="Dummy/org/model",
+        api=FakeHub(remote_root),
+    )
+
+    assert len(commits) == 2
+    assert len(list(remote_root.rglob(COMPLETION_DB_NAME))) == 2
+
+
 def test_merge_cache_folder_uses_newer_row(tmp_path):
     local = _create_cache(tmp_path / "local", "task", "Dummy/model", ["same"])
     remote = _create_cache(tmp_path / "remote", "task", "Dummy/model", ["same"])
@@ -155,3 +205,65 @@ def test_push_remerges_after_parent_conflict_and_uploads_atomically(
         CompletionCache(remote / COMPLETION_DB_NAME).query()["completion"].tolist()
     )
     assert sorted(outputs) == ["answer:concurrent", "answer:local", "answer:remote"]
+
+
+def test_cli_uses_default_repo_and_all_scope(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    def fake_fetch(store_root, hf_repo, **kwargs):
+        calls.append((store_root, hf_repo, kwargs))
+        return 1
+
+    monkeypatch.setattr(cache_hf, "fetch_cache", fake_fetch)
+
+    cache_hf.cli(
+        [
+            "--action",
+            "fetch",
+            "--store_root",
+            str(tmp_path),
+            "--all",
+        ]
+    )
+
+    assert calls == [
+        (
+            tmp_path,
+            cache_hf.DEFAULT_HF_CACHE_REPO,
+            {
+                "kind": "completions",
+                "task": None,
+                "model_spec": None,
+            },
+        ),
+        (
+            tmp_path,
+            cache_hf.DEFAULT_HF_CACHE_REPO,
+            {
+                "kind": "judgements",
+                "task": None,
+                "model_spec": None,
+            },
+        ),
+    ]
+    assert capsys.readouterr().out == "Fetched 2 cache folders.\n"
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        [],
+        ["--all", "--task", "arena-hard"],
+    ],
+)
+def test_cli_requires_unambiguous_scope(tmp_path, scope):
+    with pytest.raises(SystemExit):
+        cache_hf.cli(
+            [
+                "--action",
+                "fetch",
+                "--store_root",
+                str(tmp_path),
+                *scope,
+            ]
+        )
