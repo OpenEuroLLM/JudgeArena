@@ -7,7 +7,8 @@ from typing import Any
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
-from judgearena.models import do_inference, make_model
+from judgearena.cache.inference import CompletionInferenceCache
+from judgearena.models import do_inference, prepare_model
 from judgearena.utils import truncate
 
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
@@ -62,10 +63,13 @@ def generate_mt_bench_101_completions(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    inference_cache: CompletionInferenceCache | None = None,
     **model_kwargs: Any,
 ) -> pd.DataFrame:
     """Generate MT-Bench-101 responses from golden-context eval items."""
-    chat_model = make_model(model, max_tokens=max_tokens, **model_kwargs)
+    chat_model = prepare_model(
+        model, max_tokens=max_tokens, cache=inference_cache, **model_kwargs
+    )
     inputs = [
         _build_golden_context_input(
             system_prompt=system_prompt,
@@ -80,6 +84,10 @@ def generate_mt_bench_101_completions(
         inputs=inputs,
         use_tqdm=use_tqdm,
         stage="generation",
+        cache_row_metadata=[
+            {"instruction_id": f"{row.dialogue_uid}:turn-{row.turn_index}"}
+            for row in eval_items.itertuples()
+        ],
     )
     idxs = list(eval_items.index)
     return pd.DataFrame(

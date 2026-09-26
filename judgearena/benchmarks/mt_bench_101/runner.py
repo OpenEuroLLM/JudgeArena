@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
-from judgearena.benchmarks.execution import build_generation_kwargs, build_judge
+from judgearena.benchmarks.execution import (
+    build_completion_cache,
+    build_generation_kwargs,
+    build_judge,
+)
 from judgearena.benchmarks.mt_bench_101.evaluate import (
     aggregate_mt_bench_101_dialogues,
     derive_mt_bench_101_pairwise_preferences,
@@ -24,7 +28,6 @@ from judgearena.datasets import load_instructions
 from judgearena.log import get_logger
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBench101Protocol
-from judgearena.utils import cache_function_dataframe, generation_cache_token
 
 logger = get_logger(__name__)
 
@@ -42,27 +45,20 @@ def _select_complete_dialogues(
     return eval_items.loc[eval_items["dialogue_uid"].isin(selected)]
 
 
-def _generate_cached(
+def _generate_completions(
     *,
     cfg: RunConfig,
     eval_items: pd.DataFrame,
     model_name: str,
     role: Literal["A", "B"],
 ) -> pd.DataFrame:
-    generation_kwargs = build_generation_kwargs(cfg, model_name, role=role)
-    sampling_token = generation_cache_token(generation_kwargs)
-    return cache_function_dataframe(
-        lambda: generate_mt_bench_101_completions(
-            eval_items=eval_items,
-            model=model_name,
-            truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            **generation_kwargs,
-        ),
-        ignore_cache=cfg.run.ignore_cache,
-        cache_name=(
-            f"{cfg.task}_{model_name}_{cfg.generation.n_instructions}_{sampling_token}"
-        ),
+    return generate_mt_bench_101_completions(
+        eval_items=eval_items,
+        model=model_name,
+        truncate_input_chars=cfg.generation.truncate_all_input_chars,
+        use_tqdm=cfg.run.use_tqdm,
+        inference_cache=build_completion_cache(cfg),
+        **build_generation_kwargs(cfg, model_name, role=role),
     )
 
 
@@ -96,10 +92,10 @@ def run_mt_bench_101_benchmark(
         cfg.model.name,
         cfg.model.baseline,
     )
-    completions_a = _generate_cached(
+    completions_a = _generate_completions(
         cfg=cfg, eval_items=eval_items, model_name=cfg.model.name, role="A"
     )
-    completions_b = _generate_cached(
+    completions_b = _generate_completions(
         cfg=cfg, eval_items=eval_items, model_name=cfg.model.baseline, role="B"
     )
     judge_chat_model = build_judge(cfg)
@@ -107,6 +103,7 @@ def run_mt_bench_101_benchmark(
         judge_chat_model=judge_chat_model,
         eval_items=eval_items,
         completions=completions_a,
+        evaluated_model=cfg.model.name,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
@@ -115,6 +112,7 @@ def run_mt_bench_101_benchmark(
         judge_chat_model=judge_chat_model,
         eval_items=eval_items,
         completions=completions_b,
+        evaluated_model=cfg.model.baseline,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,

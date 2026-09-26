@@ -97,6 +97,7 @@ def judge_mt_bench_101_single(
     judge_chat_model,
     eval_items: pd.DataFrame,
     completions: pd.DataFrame,
+    evaluated_model: str,
     truncate_input_chars: int | None = 8192,
     use_tqdm: bool = False,
     strip_thinking_before_judging: bool = False,
@@ -164,6 +165,14 @@ def judge_mt_bench_101_single(
         inputs=inputs,
         use_tqdm=use_tqdm,
         stage="judging",
+        cache_row_metadata=[
+            {
+                "instruction_id": f"{row['dialogue_uid']}:turn-{row['turn_index']}",
+                "model_a": evaluated_model,
+                "model_b": None,
+            }
+            for row in rows
+        ],
     )
     for row, judge_completion in zip(rows, judge_completions, strict=True):
         row["judge_completion"] = judge_completion

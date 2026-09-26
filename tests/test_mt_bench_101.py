@@ -1,10 +1,12 @@
 import json
+import re
 
 import pandas as pd
 import pytest
 
 import judgearena.benchmarks.mt_bench_101.runner as runner
 import judgearena.datasets.mt_bench_101 as mt_bench_101
+import judgearena.models as models
 from judgearena.benchmarks.mt_bench_101.evaluate import (
     MTBench101ScoreParser,
     aggregate_mt_bench_101_dialogues,
@@ -14,6 +16,12 @@ from judgearena.benchmarks.mt_bench_101.evaluate import (
 )
 from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
 from judgearena.benchmarks.scoring import build_metric
+from judgearena.cache.sqlite import (
+    COMPLETION_DB_NAME,
+    JUDGEMENT_DB_NAME,
+    CompletionCache,
+    JudgementCache,
+)
 from judgearena.config import RunConfig
 from judgearena.datasets.mt_bench_101 import expand_mt_bench_101_records
 from judgearena.models import DummyModel
@@ -133,6 +141,7 @@ def test_judge_mt_bench_101_includes_reference_block_for_mr():
         judge_chat_model=DummyModel("Dummy/Rating: [[8]]"),
         eval_items=eval_items,
         completions=completions,
+        evaluated_model="Dummy/model",
         use_tqdm=False,
         strip_thinking_before_judging=True,
     )
@@ -166,19 +175,40 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
     assert pairwise["score_B"].tolist() == [1.0, 6.0]
 
 
-def test_run_mt_bench_101_dummy(tmp_path, monkeypatch):
+def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch):
     eval_items = expand_mt_bench_101_records(
         [{"task": "PI", "id": 1, "history": [{"user": "q", "bot": "a"}]}]
     ).set_index("instruction_index")
     monkeypatch.setattr(runner, "load_instructions", lambda *_a, **_k: eval_items)
-    monkeypatch.setattr(runner, "cache_function_dataframe", lambda fun, **_k: fun())
+    store_root = tmp_path / "cache"
     cfg = RunConfig(
         task="mt-bench-101",
         model={"name": "Dummy/ok-a", "baseline": "Dummy/ok-b"},
         judge={"model": "Dummy/Rating: [[8]]"},
         generation={"n_instructions": 1},
-        run={"result_folder": str(tmp_path), "ignore_cache": True, "use_tqdm": False},
+        run={
+            "result_folder": str(tmp_path),
+            "store_root": str(store_root),
+            "use_tqdm": False,
+        },
     )
-    prefs = run_mt_bench_101_benchmark(cfg, get_packaged_task("mt-bench-101"))
-    assert len(prefs) == 1
-    assert prefs.iloc[0] == pytest.approx(0.5)
+    task = get_packaged_task("mt-bench-101")
+    prefs = run_mt_bench_101_benchmark(cfg, task)
+    assert prefs.tolist() == pytest.approx([0.5])
+
+    for kind, db_name, store_type in (
+        ("completions", COMPLETION_DB_NAME, CompletionCache),
+        ("judgements", JUDGEMENT_DB_NAME, JudgementCache),
+    ):
+        instruction_ids = []
+        for db_path in (store_root / kind / "mt-bench-101").rglob(db_name):
+            with store_type(db_path) as cache:
+                instruction_ids += cache.query()["instruction_id"].tolist()
+        assert len(instruction_ids) == 2
+        assert all(re.fullmatch(r"PI:1:turn-\d+", i) for i in instruction_ids)
+
+    def fail_if_materialized(*_args, **_kwargs):
+        raise AssertionError("cache hit materialized a model")
+
+    monkeypatch.setattr(models, "make_model", fail_if_materialized)
+    assert run_mt_bench_101_benchmark(cfg, task).tolist() == prefs.tolist()
