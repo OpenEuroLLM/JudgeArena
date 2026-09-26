@@ -307,3 +307,15 @@ def test_chat_vllm_reports_exact_local_token_counts(monkeypatch):
         models.do_inference(chat_model, ["hello"], stage="generation")
     usage = tracker.snapshot().requests[0]
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (3, 2, 5)
+
+
+def test_do_inference_keeps_chat_vllm_on_native_batch_path(monkeypatch):
+    _install_fake_vllm(monkeypatch)
+    chat_model = models.ChatVLLM(model="Qwen/Qwen3.5-9B", max_tokens=16)
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("ChatVLLM must not run concurrent ainvoke calls")
+
+    monkeypatch.setattr(chat_model, "ainvoke", fail_if_called)
+
+    assert models.do_inference(chat_model, ["hello"], use_tqdm=True) == ["ok"]

@@ -10,8 +10,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from judgearena.models import do_inference, make_model
 from judgearena.utils import truncate
 
-DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
-
 
 def _escape_template_braces(text: str) -> str:
     return text.replace("{", "{{").replace("}", "}}")
@@ -19,14 +17,14 @@ def _escape_template_braces(text: str) -> str:
 
 def _build_golden_context_input(
     *,
-    system_prompt: str,
+    system_prompt: str | None,
     golden_context: list[dict[str, str]],
     user_message: str,
     truncate_input_chars: int | None,
 ):
-    messages: list[tuple[str, str]] = [
-        ("system", _escape_template_braces(system_prompt))
-    ]
+    messages: list[tuple[str, str]] = []
+    if system_prompt is not None:
+        messages.append(("system", _escape_template_braces(system_prompt)))
     for turn in golden_context:
         messages.append(
             (
@@ -61,7 +59,7 @@ def generate_mt_bench_101_completions(
     truncate_input_chars: int | None = 8192,
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    system_prompt: str | None = None,
     **model_kwargs: Any,
 ) -> pd.DataFrame:
     """Generate MT-Bench-101 responses from golden-context eval items."""
