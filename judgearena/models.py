@@ -696,7 +696,7 @@ def _run_backend_inference(
         # "max_tokens": 100,
         **_usage_invoke_kwargs(chat_model, stage=stage),
     }
-    if use_tqdm:
+    if use_tqdm and not isinstance(chat_model, ChatVLLM):
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
         # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
