@@ -99,11 +99,15 @@ def run_mt_bench_101_benchmark(
         cfg=cfg, eval_items=eval_items, model_name=cfg.model.baseline, role="B"
     )
     judge_chat_model = build_judge(cfg)
+    judge_prompt_preset = (
+        cfg.judge.prompt_preset or protocol.judge.default_prompt_preset
+    )
     scored_a = judge_mt_bench_101_single(
         judge_chat_model=judge_chat_model,
         eval_items=eval_items,
         completions=completions_a,
         evaluated_model=cfg.model.name,
+        prompt_preset=judge_prompt_preset,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
@@ -113,6 +117,7 @@ def run_mt_bench_101_benchmark(
         eval_items=eval_items,
         completions=completions_b,
         evaluated_model=cfg.model.baseline,
+        prompt_preset=judge_prompt_preset,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
@@ -147,6 +152,7 @@ def run_mt_bench_101_benchmark(
         metadata={
             "evaluation_mode": "single_answer_grading",
             "judge_temperature": cfg.judge.temperature,
+            "judge_prompt_preset": judge_prompt_preset,
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
             "date": datetime.now(UTC).isoformat(),
@@ -188,6 +194,7 @@ def run_mt_bench_101_benchmark(
         judge_prompt_variants=[
             {
                 "task": task_name,
+                "prompt_preset": judge_prompt_preset,
                 "system_prompt": group.iloc[0]["system_prompt"],
             }
             for task_name, group in scored_a.groupby("task", sort=True)

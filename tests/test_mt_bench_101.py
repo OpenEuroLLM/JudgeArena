@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 
@@ -10,10 +11,13 @@ import judgearena.models as models
 from judgearena.benchmarks.mt_bench_101.evaluate import (
     MTBench101ScoreParser,
     aggregate_mt_bench_101_dialogues,
+    build_mt_bench_101_judge_prompt,
     derive_mt_bench_101_pairwise_preferences,
     judge_mt_bench_101_single,
+    load_mt_bench_101_prompts,
     parse_mt_bench_101_rating,
 )
+from judgearena.benchmarks.mt_bench_101.generate import _build_golden_context_input
 from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.cache.sqlite import (
@@ -25,6 +29,10 @@ from judgearena.cache.sqlite import (
 from judgearena.config import RunConfig
 from judgearena.datasets.mt_bench_101 import expand_mt_bench_101_records
 from judgearena.models import DummyModel
+from judgearena.prompts.registry import (
+    MT_BENCH_101_CLEAN_PROMPT_PRESET,
+    MT_BENCH_101_PROMPT_PRESET,
+)
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -69,6 +77,20 @@ def test_expand_mt_bench_101_unknown_task():
         expand_mt_bench_101_records([{"task": "XX", "id": 1, "history": []}])
 
 
+def test_mt_bench_101_generation_uses_only_upstream_dialogue_messages():
+    prompt = _build_golden_context_input(
+        system_prompt=None,
+        golden_context=[{"user": "u1", "bot": "b1"}],
+        user_message="u2",
+        truncate_input_chars=None,
+    )
+    assert [(message.type, message.content) for message in prompt.to_messages()] == [
+        ("human", "u1"),
+        ("ai", "b1"),
+        ("human", "u2"),
+    ]
+
+
 def test_download_mt_bench_101_uses_pinned_revision(tmp_path, monkeypatch):
     task = get_packaged_task("mt-bench-101")
     assert task is not None
@@ -110,13 +132,90 @@ def test_parse_mt_bench_101_rating():
         7.0
     )
     reasoning_output = "<think>Perhaps [[2]]...</think>\nRating: [[9]]"
-    assert parse_mt_bench_101_rating(reasoning_output) == pytest.approx(9.0)
-    assert MTBench101ScoreParser().parse_result(
+    assert parse_mt_bench_101_rating(reasoning_output) == pytest.approx(2.0)
+    assert MTBench101ScoreParser(MT_BENCH_101_CLEAN_PROMPT_PRESET).parse_result(
         reasoning_output
     ).score == pytest.approx(9.0)
     assert parse_mt_bench_101_rating("[[7]] then invalid [[11]]") == pytest.approx(7.0)
-    assert parse_mt_bench_101_rating("Rating: [[0]]") is None
-    assert parse_mt_bench_101_rating("Rating: [6]") is None
+    assert parse_mt_bench_101_rating("Rating: [[0]]") == pytest.approx(0.0)
+    assert parse_mt_bench_101_rating("Rating: [6]") == pytest.approx(6.0)
+    assert (
+        parse_mt_bench_101_rating("Rating: [6]", MT_BENCH_101_CLEAN_PROMPT_PRESET)
+        is None
+    )
+
+
+def test_mt_bench_101_default_prompt_matches_pinned_upstream():
+    prompts = load_mt_bench_101_prompts(MT_BENCH_101_PROMPT_PRESET)
+    system_prompts = json.dumps(
+        prompts["system_prompts"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    user_templates = json.dumps(
+        prompts["user_prompt_templates"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert prompts["source_revision"] == "da7b1c3a007efea1dcca985a242e13a0ba51abd1"
+    assert hashlib.sha256(system_prompts.encode()).hexdigest() == (
+        "0314a328dfe4385873170a4047b5225a039b273b14ee80c10c8233f7e94c4a40"
+    )
+    assert hashlib.sha256(user_templates.encode()).hexdigest() == (
+        "a440b1776edc1a2e4da4ed90101e66a2e7f47e143e3350a31f8ccbb8a0e7adc9"
+    )
+
+    system_prompt, user_prompt = build_mt_bench_101_judge_prompt(
+        task="SA",
+        golden_context=[{"user": "u1", "bot": "b1"}],
+        user_message="u2",
+        assistant_message="candidate",
+        reference_answer="reference",
+        prompt_preset=MT_BENCH_101_PROMPT_PRESET,
+    )
+    assert system_prompt == prompts["system_prompts"]["SA"]
+    assert user_prompt == (
+        "The dialogue need to be judged is: \n *** \n "
+        "\n\n Human: u1\n\nAssistant: b1"
+        "\n\n Human: u2\n\nAssistant:  candidate \n ***"
+    )
+    _, reference_user_prompt = build_mt_bench_101_judge_prompt(
+        task="MR",
+        golden_context=[{"user": "u1", "bot": "b1"}],
+        user_message="u2",
+        assistant_message="candidate",
+        reference_answer="reference",
+        prompt_preset=MT_BENCH_101_PROMPT_PRESET,
+    )
+    assert (
+        "[{'role': 'user', 'content': 'u1'}, "
+        "{'role': 'assistant', 'content': 'b1'}, "
+        "{'role': 'user', 'content': 'u2'}, "
+        "{'role': 'assistant', 'content': 'reference'}]"
+    ) in reference_user_prompt
+
+
+def test_mt_bench_101_clean_prompt_remains_selectable():
+    upstream = build_mt_bench_101_judge_prompt(
+        task="SA",
+        golden_context=[],
+        user_message="question",
+        assistant_message="answer",
+        reference_answer="",
+        prompt_preset=MT_BENCH_101_PROMPT_PRESET,
+    )
+    cleaned = build_mt_bench_101_judge_prompt(
+        task="SA",
+        golden_context=[],
+        user_message="question",
+        assistant_message="answer",
+        reference_answer="",
+        prompt_preset=MT_BENCH_101_CLEAN_PROMPT_PRESET,
+    )
+    assert cleaned != upstream
+    assert cleaned[0].startswith("Please act as an impartial judge following")
 
 
 def test_judge_mt_bench_101_includes_reference_block_for_mr():
@@ -173,6 +272,38 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
     assert len(pairwise) == 2
     assert pairwise["score_A"].tolist() == [2.0, 4.0]
     assert pairwise["score_B"].tolist() == [1.0, 6.0]
+
+
+def test_mt_bench_101_resolves_upstream_sampling_defaults():
+    cfg = RunConfig(
+        task="mt-bench-101",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={"model": "Dummy/judge"},
+    )
+    assert cfg.model.temperature == 0.0
+    assert cfg.model.baseline_generation_kwargs()["temperature"] == 0.0
+    assert cfg.model.max_out_tokens == 4096
+    assert cfg.judge.temperature == 0.6
+    assert cfg.judge.max_out_tokens == 4096
+
+    overridden = RunConfig(
+        task="mt-bench-101",
+        model={
+            "name": "Dummy/a",
+            "baseline": "Dummy/b",
+            "temperature": 0.2,
+            "max_out_tokens": 128,
+        },
+        judge={
+            "model": "Dummy/judge",
+            "temperature": 0.1,
+            "max_out_tokens": 64,
+        },
+    )
+    assert overridden.model.temperature == 0.2
+    assert overridden.model.max_out_tokens == 128
+    assert overridden.judge.temperature == 0.1
+    assert overridden.judge.max_out_tokens == 64
 
 
 def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch):
