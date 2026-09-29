@@ -1046,10 +1046,9 @@ def do_inference(
     if use_tqdm:
         # perform inference asynchronously to be able to update tqdm, chat_model.batch does not work as it blocks until
         # all requests are received
-        # JUDGEARENA_JUDGE_MAX_CONCURRENCY caps simultaneous in-flight ainvokes
-        # (e.g. against OpenRouter). Unset = unbounded, preserving prior behaviour.
+        # Use the backend's concurrency limit unless an explicit env override is set.
         cap = safe_parse_int("JUDGEARENA_JUDGE_MAX_CONCURRENCY")
-        cap = cap if cap and cap > 0 else None
+        cap = cap if cap and cap > 0 else getattr(chat_model, "max_concurrency", None)
 
         async def process_with_real_progress(chat_model, inputs, pbar):
             sem = asyncio.Semaphore(cap) if cap else None

@@ -122,7 +122,11 @@ def _hard_evidence(row) -> tuple[str, dict[str, float]] | None:
         if isinstance(row.parsed_details_json, str)
         else {}
     )
-    if set(probabilities) == {"A", "B", "tie", "both_bad"}:
+    if set(probabilities) in ({"A", "B", "tie"}, {"A", "B", "tie", "both_bad"}):
+        probabilities = {
+            **probabilities,
+            "both_bad": probabilities.get("both_bad", 0.0),
+        }
         if row.orientation == "reversed":
             probabilities = {
                 "A": probabilities["B"],

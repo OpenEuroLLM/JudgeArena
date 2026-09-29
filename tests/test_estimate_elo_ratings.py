@@ -259,6 +259,33 @@ def _num_pairwise_rows(run_result: dict) -> int:
     )
 
 
+def test_elo_judge_cache_changes_with_judge_swap_and_seed(monkeypatch, tmp_path):
+    names = []
+
+    def capture_cache(fun, *, cache_name, **_kwargs):
+        names.append(cache_name)
+        return fun()
+
+    monkeypatch.setattr(estimate_elo_ratings, "cache_function_dataframe", capture_cache)
+    for judge_model, swap_mode, seed in [
+        ("Dummy/score A: 0 score B: 10", "fixed", 0),
+        ("Dummy/score A: 10 score B: 0", "fixed", 0),
+        ("Dummy/score A: 10 score B: 0", "both", 0),
+        ("Dummy/score A: 10 score B: 0", "both", 1),
+    ]:
+        cfg = _default_args(
+            result_folder=str(tmp_path),
+            judge_model=judge_model,
+            swap_mode=swap_mode,
+            n_bootstraps=0,
+        )
+        cfg.run.seed = seed
+        run_elo_with_task(cfg)
+
+    assert len(set(names[::2])) == 1  # Generation remains reusable for head sampling.
+    assert len(set(names[1::2])) == 4  # Judgments track judge, swap, and seed.
+
+
 def test_run_elo_returns_metrics(tmp_path):
     result = run_elo_with_task(_default_args(result_folder=str(tmp_path)))
 

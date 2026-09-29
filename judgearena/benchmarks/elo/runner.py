@@ -36,7 +36,7 @@ from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs, make_model
 from judgearena.reports import EloReport
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
-from judgearena.utils import cache_function_dataframe
+from judgearena.utils import cache_function_dataframe, generation_cache_token
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -259,12 +259,18 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         )
         return frame
 
-    # Stripping reasoning traces changes the judged text but not the cached
-    # completions, so it must be part of the judge cache key. Only append when
-    # enabled so prior (non-stripped) runs keep their existing cache hashes.
-    judge_cache_suffix = f"judge_{cache_suffix}"
-    if cfg.judge.strip_thinking_before_judging:
-        judge_cache_suffix += "_stripthinking"
+    judge_token = generation_cache_token(
+        {
+            "judge": cfg.judge.model_dump(mode="json"),
+            "seed": cfg.run.seed,
+            "model_kwargs": judge_extra_kwargs,
+            "system_prompt": resolved_prompt.system_prompt,
+            "user_prompt_template": resolved_prompt.user_prompt_template,
+            "parser": resolved_prompt.parser.name,
+            "truncate_judge_input_chars": cfg.generation.truncate_judge_input_chars,
+        }
+    )
+    judge_cache_suffix = f"judge_{cache_suffix}_{judge_token}"
     df_judge = cache_function_dataframe(
         run_judge,
         ignore_cache=cfg.run.ignore_cache,

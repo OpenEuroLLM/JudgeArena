@@ -119,6 +119,25 @@ def test_openrouter_jev_maps_decision_response_and_usage():
     assert result.usage.cost_usd == 0.00001
 
 
+def test_openrouter_jev_async_respects_backend_concurrency(monkeypatch):
+    judge = _judge([])
+    judge.max_concurrency = 2
+    active = peak = 0
+    monkeypatch.delenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", raising=False)
+
+    async def ainvoke(_input, **_kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return "ok"
+
+    monkeypatch.setattr(judge, "ainvoke", ainvoke)
+    assert do_inference(judge, list(range(8)), use_tqdm=True) == ["ok"] * 8
+    assert peak == 2
+
+
 def test_openrouter_jev_batch_retries_only_failed_520_request(monkeypatch):
     attempts = {"stable": 0, "retry": 0}
 

@@ -74,6 +74,25 @@ It will then display the results of the battles:
 ============================================================
 ```
 
+### Jev on JudgeArena pairwise tasks
+
+Set `OPENROUTER_API_KEY` in your environment, then run a JudgeArena (`-ja`)
+task with the native System One Jev backend:
+
+```bash
+uv run judgearena \
+  --task alpaca-eval-ja \
+  --model.name claude-2 \
+  --judge.model OpenRouter/typesafe/jev-1.13 \
+  --generation.n_instructions 10
+```
+
+The default Jev preset is `typesafe-choice` (A/B/tie); use
+`--judge.prompt_preset` to choose another Jev preset. `--judge.swap_mode both`
+judges both answer orders and doubles Jev calls. Use `alpaca-eval-ja`,
+`arena-hard-v*-ja`, or `m-arena-hard-v*` for Jev. The official `alpaca-eval`,
+`arena-hard-v*`, and `mt-bench` judge protocols are not supported by Jev.
+
 ### Run from a YAML config (`--config_path`)
 
 Every option can also come from a YAML file. The CLI flags mirror the config

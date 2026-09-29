@@ -115,6 +115,27 @@ def test_conversation_validation_requires_matching_prompts():
         _battle_texts(sample)
 
 
+def test_three_way_choice_keeps_modal_tie_separate_from_soft_preference():
+    annotations = pd.DataFrame(
+        {
+            "battle_id": ["q1", "q1"],
+            "orientation": ["direct", "reversed"],
+            "pref": [0.575, 0.575],
+            "parsed_scores_json": [
+                json.dumps({"A": 0.2, "B": 0.35, "tie": 0.45}),
+                json.dumps({"A": 0.35, "B": 0.2, "tie": 0.45}),
+            ],
+            "parsed_details_json": ["{}", "{}"],
+        }
+    )
+
+    battles = aggregate_battle_preferences(annotations, swap_mode="both")
+
+    assert battles.to_dict("records") == [
+        {"battle_id": "q1", "pref": pytest.approx(0.575), "hard_pref": 0.5}
+    ]
+
+
 def test_aggregate_uses_native_hard_distribution_after_swap():
     def scores(a, tie, both_bad, b):
         return json.dumps({"A": a, "tie": tie, "both_bad": both_bad, "B": b})
