@@ -11,7 +11,6 @@ from pydantic import ValidationError
 import judgearena.evaluate as evaluate_module
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
-    sample_battles_per_language,
     sample_battles_per_model,
     select_top_models,
 )
@@ -39,61 +38,6 @@ def test_sampling_preserves_the_only_bridge_and_each_models_quota():
     assert sample["battle_id"].is_unique
     assert "bridge" in set(sample["battle_id"])
     pd.testing.assert_frame_equal(sample, shuffled)
-
-
-def test_per_language_sampling_is_deterministic_and_balanced():
-    battles = pd.DataFrame(
-        [
-            {"battle_id": f"{language}-{index}", "lang": language}
-            for language in ("en", "fr")
-            for index in range(5)
-        ]
-    )
-
-    sample = sample_battles_per_language(
-        battles, ["en", "fr"], battles_per_language=3, seed=7
-    )
-    shuffled = sample_battles_per_language(
-        battles.sample(frac=1, random_state=42),
-        ["en", "fr"],
-        battles_per_language=3,
-        seed=7,
-    )
-
-    assert sample["lang"].value_counts().to_dict() == {"en": 3, "fr": 3}
-    pd.testing.assert_frame_equal(sample, shuffled)
-
-
-def test_per_language_sampling_offset_selects_next_disjoint_panel():
-    battles = pd.DataFrame(
-        [
-            {"battle_id": f"{language}-{index}", "lang": language}
-            for language in ("en", "fr")
-            for index in range(6)
-        ]
-    )
-
-    first = sample_battles_per_language(
-        battles, ["en", "fr"], battles_per_language=2, seed=7
-    )
-    second = sample_battles_per_language(
-        battles, ["en", "fr"], battles_per_language=2, seed=7, offset=2
-    )
-    combined = sample_battles_per_language(
-        battles, ["en", "fr"], battles_per_language=4, seed=7
-    )
-
-    assert set(first["battle_id"]).isdisjoint(second["battle_id"])
-    assert set(first["battle_id"]) | set(second["battle_id"]) == set(
-        combined["battle_id"]
-    )
-
-
-def test_per_language_sampling_rejects_insufficient_quota():
-    battles = pd.DataFrame({"battle_id": ["en-1"], "lang": ["en"]})
-
-    with pytest.raises(MetaEvalSamplingError, match=".*en.*1"):
-        sample_battles_per_language(battles, ["en"], battles_per_language=2, seed=0)
 
 
 def test_sampling_rejects_disconnected_top_model_pool():

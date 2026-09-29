@@ -24,7 +24,6 @@ from judgearena.benchmarks.meta_eval.annotate import (
 )
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
-    sample_battles_per_language,
     sample_battles_per_model,
     select_top_models,
 )
@@ -125,66 +124,21 @@ def run_meta_eval(
     languages = resolve_task_languages(
         task, cfg.meta_eval.languages, setting="meta_eval.languages"
     )
-    if cfg.meta_eval.sampling == "per_language" and not languages:
-        variants = task.spec.variants
-        if variants is None or variants.selector != "language":
-            raise ValueError(
-                "Per-language meta-evaluation requires meta_eval.languages or "
-                "task language variants."
-            )
-        languages = list(variants.values)
-
     metrics = build_metrics(protocol.scoring.metrics)
-    if cfg.meta_eval.sampling == "per_language":
-        metrics = tuple(
-            (
-                request.model_copy(update={"breakdown_by": ("lang",)}),
-                metric,
-            )
-            for request, metric in metrics
-            if request.metric == "meta_eval_agreement"
-        )
-        logger.info(
-            "Per-language sampling reports agreement only; ranking metrics require "
-            "a connected model panel."
-        )
 
     logger.info("Loading human battles from %s", protocol.arena)
     arena_battles = _prepare_arena_battles(
         load_battles(task), task=cfg.task, arena=protocol.arena, languages=languages
     )
-    if cfg.meta_eval.sampling == "per_language":
-        sample = sample_battles_per_language(
-            arena_battles,
-            languages,
-            battles_per_language=cfg.meta_eval.battles_per_language,
-            seed=cfg.run.seed,
-            offset=cfg.meta_eval.battle_offset_per_language,
-        )
-        metric_pool = arena_battles
-        models = sorted(set(sample["model_a"]) | set(sample["model_b"]))
-    else:
-        models, metric_pool = select_top_models(
-            arena_battles, top_models=cfg.meta_eval.top_models
-        )
-        sample = sample_battles_per_model(
-            metric_pool,
-            models,
-            battles_per_model=cfg.meta_eval.battles_per_model,
-            seed=cfg.run.seed,
-        )
-    if cfg.meta_eval.exclude_battle_ids:
-        excluded = set(cfg.meta_eval.exclude_battle_ids) & set(sample["battle_id"])
-        sample = sample.loc[~sample["battle_id"].isin(excluded)].reset_index(drop=True)
-        logger.warning(
-            "Excluded %d explicitly listed battle(s) after sampling: %s",
-            len(excluded),
-            sorted(excluded),
-        )
-        if sample.empty:
-            raise ValueError("Explicit battle exclusions removed the entire sample.")
-        if cfg.meta_eval.sampling == "per_language":
-            models = sorted(set(sample["model_a"]) | set(sample["model_b"]))
+    top_models, top_pool = select_top_models(
+        arena_battles, top_models=cfg.meta_eval.top_models
+    )
+    sample = sample_battles_per_model(
+        top_pool,
+        top_models,
+        battles_per_model=cfg.meta_eval.battles_per_model,
+        seed=cfg.run.seed,
+    )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
@@ -195,14 +149,9 @@ def run_meta_eval(
         raise ValueError(
             f"Prompt preset {resolved_prompt.preset_name!r} has no judge parser."
         )
-    if cfg.meta_eval.sampling == "per_language":
-        logger.info(
-            "Sampled %d battles across %d languages.", len(sample), len(languages)
-        )
-    else:
-        logger.info(
-            "Sampled %d battles among the top %d models.", len(sample), len(models)
-        )
+    logger.info(
+        "Sampled %d battles among the top %d models.", len(sample), len(top_models)
+    )
     timestamp = run_started_at.strftime("%Y%m%d_%H%M%S")
     result_name = (
         f"{safe_filename(cfg.task)}-{safe_filename(cfg.judge.model)}-"
@@ -223,10 +172,9 @@ def run_meta_eval(
     judged_battles = aggregate_battle_preferences(
         annotations, swap_mode=cfg.judge.swap_mode
     )
-    metric_columns = ["battle_id", "model_a", "model_b", "reference_pref"]
-    if cfg.meta_eval.sampling == "per_language":
-        metric_columns.append("lang")
-    metric_battles = metric_pool.loc[:, metric_columns].copy()
+    metric_battles = top_pool.loc[
+        :, ("battle_id", "model_a", "model_b", "reference_pref")
+    ].copy()
     metric_battles["sampled"] = metric_battles["battle_id"].isin(
         judged_battles["battle_id"]
     )
@@ -247,13 +195,7 @@ def run_meta_eval(
         judge_model=cfg.judge.model,
         prompt_preset=resolved_prompt.preset_name,
         languages=languages,
-        sampling_mode=(
-            "per_language" if cfg.meta_eval.sampling == "per_language" else None
-        ),
-        top_models=models if cfg.meta_eval.sampling == "per_model" else None,
-        represented_models=(
-            models if cfg.meta_eval.sampling == "per_language" else None
-        ),
+        top_models=top_models,
         n_sampled_battles=len(sample),
         swap_mode=cfg.judge.swap_mode,
         metrics=metric_results,

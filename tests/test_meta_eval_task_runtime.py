@@ -39,18 +39,6 @@ def _config(tmp_path: Path) -> RunConfig:
     )
 
 
-def _per_language_config(tmp_path: Path) -> RunConfig:
-    return RunConfig(
-        task="meta-eval-comparia",
-        judge={"model": "Dummy/judge", "swap_mode": "fixed"},
-        meta_eval={
-            "sampling": "per_language",
-            "battles_per_language": 4,
-        },
-        run={"result_folder": str(tmp_path), "no_log_file": True, "seed": 7},
-    )
-
-
 def test_prepare_arena_battles_drops_self_comparisons():
     arena = _arena().iloc[:2].copy()
     arena.loc[0, "model_b"] = arena.loc[0, "model_a"]
@@ -106,46 +94,6 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     assert metadata["dataset_statistics"]["battle_id_count"] == len(sample)
 
 
-def test_per_language_meta_eval_reports_each_language(tmp_path, monkeypatch, capsys):
-    task = deepcopy(get_packaged_task("meta-eval-comparia"))
-    for request in task.spec.protocol.scoring.metrics:
-        if "n_bootstraps" in request.parameters:
-            request.parameters["n_bootstraps"] = 2
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: _arena())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-
-    def fake_annotate(sample, *_args, **_kwargs):
-        return (
-            sample[["battle_id", "reference_pref"]]
-            .rename(columns={"reference_pref": "pref"})
-            .assign(orientation="single")
-        )
-
-    monkeypatch.setattr(runner_module, "annotate_sample", fake_annotate)
-    result = runner_module.run_meta_eval(_per_language_config(tmp_path), task)
-
-    result_path = Path(result["result_path"])
-    sample = pd.read_parquet(result_path.parent / "sample.parquet")
-    battles = pd.read_parquet(result_path.parent / "battles.parquet")
-    assert sample["lang"].value_counts().to_dict() == {"en": 4, "fr": 4}
-    assert "lang" in battles
-    assert result["sampling_mode"] == "per_language"
-    assert set(result["metrics"]) == {"meta_eval_agreement"}
-    assert "top_models" not in result
-    assert len(result["represented_models"]) == 3
-    groups = result["metrics"]["meta_eval_agreement"]["groups"]["lang"]
-    assert {
-        group["group"]: group["values"]["all"]["n_attempted"] for group in groups
-    } == {
-        "en": 4,
-        "fr": 4,
-    }
-    output = capsys.readouterr().out
-    assert "Languages: 2" in output
-    assert "lang=en" in output
-    assert "lang=fr" in output
-
-
 def test_meta_eval_rejects_unknown_human_winner_before_judge_build(
     tmp_path, monkeypatch
 ):
@@ -161,46 +109,3 @@ def test_meta_eval_rejects_unknown_human_winner_before_judge_build(
 
     with pytest.raises(ValueError, match="invalid human winners.*unknown"):
         runner_module.run_meta_eval(_config(tmp_path), task)
-
-
-def test_meta_eval_applies_explicit_exclusion_after_sampling(tmp_path, monkeypatch):
-    task = deepcopy(get_packaged_task("meta-eval-comparia"))
-    for request in task.spec.protocol.scoring.metrics:
-        if "n_bootstraps" in request.parameters:
-            request.parameters["n_bootstraps"] = 2
-    arena = _arena()
-    prepared = runner_module._prepare_arena_battles(
-        arena,
-        task="meta-eval-comparia",
-        arena=task.spec.protocol.arena,
-        languages=["en", "fr"],
-    )
-    initial = runner_module.sample_battles_per_language(
-        prepared, ["en", "fr"], battles_per_language=4, seed=7
-    )
-    excluded = initial.iloc[0]["battle_id"]
-    config = _per_language_config(tmp_path)
-    config = config.model_copy(
-        update={
-            "meta_eval": config.meta_eval.model_copy(
-                update={"exclude_battle_ids": [excluded]}
-            )
-        }
-    )
-    monkeypatch.setattr(runner_module, "load_battles", lambda _task: arena)
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(
-        runner_module,
-        "annotate_sample",
-        lambda sample, *_args, **_kwargs: (
-            sample[["battle_id", "reference_pref"]]
-            .rename(columns={"reference_pref": "pref"})
-            .assign(orientation="single")
-        ),
-    )
-
-    result = runner_module.run_meta_eval(config, task)
-    sample = pd.read_parquet(Path(result["result_path"]).parent / "sample.parquet")
-
-    assert len(sample) == 7
-    assert excluded not in set(sample["battle_id"])

@@ -395,15 +395,6 @@ class MetaEvalArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    sampling: Literal["per_model", "per_language"] = "per_model"
-    """Build a connected model panel or independent language panels."""
-
-    battles_per_language: int = Field(default=100, gt=0)
-    """Unique battles sampled for each language in per-language mode."""
-
-    battle_offset_per_language: int = Field(default=0, ge=0)
-    """Skip this many deterministic battles per language before sampling."""
-
     top_models: int = Field(default=20, ge=2)
     """Number of the arena's most-battled models to include."""
 
@@ -412,9 +403,6 @@ class MetaEvalArgs(BaseModel):
 
     languages: list[str] | None = None
     """Restrict arena battles to these language codes. Defaults to all languages."""
-
-    exclude_battle_ids: list[str] = Field(default_factory=list)
-    """Explicit battle IDs to omit after deterministic sampling."""
 
 
 class RunArgs(BaseModel):
