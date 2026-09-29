@@ -11,18 +11,9 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.log import get_logger
+from judgearena.paths import data_root
 
 logger = get_logger(__name__)
-
-
-def _data_root_path() -> Path:
-    raw = os.environ.get("JUDGEARENA_DATA") or os.environ.get("OPENJURY_DATA")
-    if raw:
-        return Path(raw).expanduser()
-    return Path("~/judgearena-data/").expanduser()
-
-
-data_root = _data_root_path()
 
 
 def download_hf(name: str, local_path: Path):
@@ -37,6 +28,9 @@ def download_hf(name: str, local_path: Path):
     resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
         resolved_task, local_path
     )
+    from judgearena.benchmarks.scoring import prefetch_metrics
+
+    prefetch_metrics(resolved_task.spec.protocol.scoring.metrics)
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:

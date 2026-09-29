@@ -45,6 +45,47 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     assert {path for _, _, path in calls} == {tmp_path / "tables"}
 
 
+def test_download_hf_prefetches_task_scoring_assets(monkeypatch, tmp_path):
+    import judgearena.benchmarks.pairwise.scoring.alpaca_eval as alpaca_scoring
+    import judgearena.benchmarks.pairwise.scoring.arena_hard as arena_scoring
+    import judgearena.datasets.registry as dataset_registry
+
+    downloads = []
+    calibration = []
+    tokenizer = []
+
+    class Adapter:
+        @staticmethod
+        def download(task, path):
+            downloads.append((task.task, path))
+
+    monkeypatch.setattr(dataset_registry, "resolve_download_adapter", lambda _: Adapter)
+    monkeypatch.setattr(
+        alpaca_scoring,
+        "_load_gamed_data",
+        lambda *args: calibration.append(args),
+    )
+    monkeypatch.setattr(
+        arena_scoring, "_style_encoding", lambda: tokenizer.append(True)
+    )
+
+    utils_io.download_hf("alpaca-eval", tmp_path)
+    utils_io.download_hf("arena-hard-v2.0", tmp_path)
+
+    assert downloads == [
+        ("alpaca-eval", tmp_path),
+        ("arena-hard-v2.0", tmp_path),
+    ]
+    assert calibration == [
+        (
+            "tatsu-lab/alpaca_eval",
+            "df_gamed.csv",
+            "2edc6fad8be6b14ea7230aabfd08188da6b8b814",
+        )
+    ]
+    assert tokenizer == [True]
+
+
 def test_strip_thinking_tags_removes_full_reasoning_block():
     raw = (
         "<think>so let me think through this carefully</think>\n\n"
