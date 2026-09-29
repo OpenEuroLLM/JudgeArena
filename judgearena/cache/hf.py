@@ -41,15 +41,12 @@ def _matches_cache_folder(
     task: str | None,
     model_spec: str | None,
 ) -> bool:
-    if len(parts) != 5 or parts[0] != kind:
+    if len(parts) != 5:
         return False
-    if task is not None and unquote(parts[1]) != task:
+    folder_kind, folder_task, provider, model, _descriptor_hash = map(unquote, parts)
+    if folder_kind != kind or (task is not None and folder_task != task):
         return False
-    if model_spec is not None:
-        provider, model = model_spec.split("/", 1)
-        if (unquote(parts[2]), unquote(parts[3])) != (provider, model):
-            return False
-    return True
+    return model_spec is None or model_spec.split("/", 1) == [provider, model]
 
 
 def list_remote_cache_folders(
