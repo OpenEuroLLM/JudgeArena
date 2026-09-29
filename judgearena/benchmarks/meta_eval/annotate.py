@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -137,25 +136,6 @@ def _hard_evidence(row) -> tuple[str, dict[str, float]] | None:
         return "tie_family", {
             label: float(probabilities[label]) for label in probabilities
         }
-    if details.get("hard_preference_mode") == "absolute_quality":
-        distributions = details.get("probabilities")
-        labels = {str(level) for level in range(10)}
-        if (
-            not isinstance(distributions, dict)
-            or set(distributions) != {"A", "B"}
-            or any(
-                not isinstance(distribution, dict) or set(distribution) != labels
-                for distribution in distributions.values()
-            )
-        ):
-            return None
-        if row.orientation == "reversed":
-            distributions = {"A": distributions["B"], "B": distributions["A"]}
-        return "absolute_quality", {
-            f"{candidate}.{level}": float(distributions[candidate][str(level)])
-            for candidate in ("A", "B")
-            for level in range(10)
-        }
     if (
         set(probabilities) == {str(level) for level in range(5)}
         and details.get("hard_preference_mode") == "center_level"
@@ -180,26 +160,6 @@ def _aggregate_hard_preference(passes: pd.DataFrame) -> float:
         raise ValueError("Judge passes must use the same hard preference mode.")
     mode = modes.pop()
     distributions = [item[1] for item in evidence]
-    if mode == "absolute_quality":
-        expected = {
-            candidate: sum(
-                level
-                * float(
-                    np.mean(
-                        [
-                            distribution[f"{candidate}.{level}"]
-                            for distribution in distributions
-                        ]
-                    )
-                )
-                for level in range(10)
-            )
-            for candidate in ("A", "B")
-        }
-        if math.isclose(expected["A"], expected["B"]):
-            return 0.5
-        return 0.0 if expected["A"] > expected["B"] else 1.0
-
     if mode == "center_level":
         probabilities = {
             str(level): float(

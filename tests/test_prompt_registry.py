@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 import pytest
-from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.evaluate import (
     judge_and_parse_prefs,
@@ -32,7 +31,7 @@ class FakeCliArgs:
 
 def test_prompt_catalog_is_loaded_from_packaged_yaml():
     assert set(PRESETS) == set(PROMPT_PRESETS)
-    assert len(PROMPT_PRESETS) == 17
+    assert len(PROMPT_PRESETS) == 14
     assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
     assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
     assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"
@@ -230,29 +229,3 @@ def test_every_preset_resolves_or_delegates():
         else:
             assert resolved.system_prompt
             assert resolved.user_prompt_template
-
-
-@pytest.mark.parametrize(
-    "preset",
-    [
-        "typesafe-absolute-quality-score-v1",
-        "typesafe-verdict-signals-v1",
-        "typesafe-verified-verdict-v1",
-    ],
-)
-def test_new_typesafe_presets_render_pairwise_state(preset):
-    resolved = resolve_judge_prompt(preset=preset)
-    template = ChatPromptTemplate.from_messages(
-        [
-            ("system", resolved.system_prompt),
-            ("user", resolved.user_prompt_template),
-        ]
-    )
-
-    messages = template.format_messages(
-        user_prompt_json='"question"',
-        completion_A_json='"answer A"',
-        completion_B_json='"answer B"',
-    )
-
-    assert '"user_request": "question"' in messages[-1].content

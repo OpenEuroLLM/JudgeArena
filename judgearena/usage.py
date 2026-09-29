@@ -20,11 +20,6 @@ class RequestUsage:
     reasoning_tokens: int | None = None
     cached_tokens: int | None = None
     cost_usd: float | None = None
-    request_count: int = 1
-
-    def __post_init__(self) -> None:
-        if self.request_count < 1:
-            raise ValueError("request_count must be positive")
 
     @property
     def has_token_usage(self) -> bool:
@@ -55,29 +50,21 @@ def _summarize(requests: tuple[RequestUsage, ...]) -> dict[str, object]:
         "cached_tokens",
     )
     reported = {
-        field: sum(
-            request.request_count
-            for request in requests
-            if getattr(request, field) is not None
-        )
+        field: sum(getattr(request, field) is not None for request in requests)
         for field in token_fields
     }
     cost_values = [
         request.cost_usd for request in requests if request.cost_usd is not None
     ]
     return {
-        "requests": sum(request.request_count for request in requests),
+        "requests": len(requests),
         **{field: _sum_optional(requests, field) for field in token_fields},
         "cost_usd": sum(cost_values) if cost_values else None,
         "requests_with_any_token_usage": sum(
-            request.request_count for request in requests if request.has_token_usage
+            request.has_token_usage for request in requests
         ),
         **{f"requests_with_{field}": count for field, count in reported.items()},
-        "requests_with_cost": sum(
-            request.request_count
-            for request in requests
-            if request.cost_usd is not None
-        ),
+        "requests_with_cost": sum(request.cost_usd is not None for request in requests),
     }
 
 

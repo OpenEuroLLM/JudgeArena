@@ -18,7 +18,6 @@ class PromptPresetSpec:
     decision_mode: str | None = None
     task_kind: str | None = None
     questions: dict[str, dict] | None = None
-    verification_questions: dict[str, dict] | None = None
     hard_tie_threshold: float | None = None
 
 
@@ -55,7 +54,6 @@ def _load_preset(filename: str) -> PromptPresetSpec:
     decision_mode = data.get("decision_mode")
     task_kind = data.get("task_kind")
     questions = data.get("questions")
-    verification_questions = data.get("verification_questions")
     jev_fields = (decision_mode, task_kind, questions)
     if any(value is not None for value in jev_fields) and not (
         isinstance(decision_mode, str)
@@ -65,13 +63,6 @@ def _load_preset(filename: str) -> PromptPresetSpec:
         raise ValueError(
             f"Jev prompt preset {name!r} must define decision_mode, task_kind, "
             "and questions."
-        )
-
-    if verification_questions is not None and (
-        not isinstance(verification_questions, dict) or not verification_questions
-    ):
-        raise ValueError(
-            f"Jev prompt preset {name!r} verification_questions must define a map."
         )
 
     return PromptPresetSpec(
@@ -85,7 +76,6 @@ def _load_preset(filename: str) -> PromptPresetSpec:
         decision_mode=decision_mode,
         task_kind=task_kind,
         questions=questions,
-        verification_questions=verification_questions,
         hard_tie_threshold=data.get("hard_tie_threshold"),
     )
 
@@ -96,9 +86,6 @@ _PRESET_FILES = (
     "typesafe-fluency-choice.yaml",
     "typesafe-overall-choice-multilingual-v4.yaml",
     "typesafe-overall-comparative-score-v5.yaml",
-    "typesafe-absolute-quality-score-v1.yaml",
-    "typesafe-verdict-signals-v1.yaml",
-    "typesafe-verified-verdict-v1.yaml",
     "default_with_explanation.yaml",
     "fluency.yaml",
     "fastchat-pairwise.yaml",
