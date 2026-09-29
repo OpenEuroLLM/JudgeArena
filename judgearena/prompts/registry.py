@@ -20,6 +20,7 @@ DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
 FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
 MT_BENCH_101_PROMPT_PRESET = "mt-bench-101"
+MT_BENCH_101_CLEAN_PROMPT_PRESET = "mt-bench-101-clean"
 ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
 ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET = "arena-hard-creative"
 ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
@@ -112,6 +113,10 @@ PRESETS: dict[str, JudgePromptPreset] = {
     ),
     MT_BENCH_101_PROMPT_PRESET: JudgePromptPreset(
         name=MT_BENCH_101_PROMPT_PRESET,
+        delegated=True,
+    ),
+    MT_BENCH_101_CLEAN_PROMPT_PRESET: JudgePromptPreset(
+        name=MT_BENCH_101_CLEAN_PROMPT_PRESET,
         delegated=True,
     ),
     # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),

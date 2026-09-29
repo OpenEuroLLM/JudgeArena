@@ -26,14 +26,19 @@ protocol:
   runner: mt_bench_101
   generation:
     mode: golden_context_chat
+    default_temperature: 0.0
+    default_max_out_tokens: 4096
   baseline:
     strategy: runtime_required
   judge:
     default_prompt_preset: mt-bench-101
     default_temperature: 0.6
+    default_max_out_tokens: 4096
   scoring:
     metrics:
       - metric: pairwise_win_rate
+        breakdown_by: [task, ability, domain]
+      - metric: mt_bench_101_absolute_score
         breakdown_by: [task, ability, domain]
 
 metadata:

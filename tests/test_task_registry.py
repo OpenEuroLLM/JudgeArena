@@ -161,9 +161,12 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench_101.spec.protocol.runner == "mt_bench_101"
     assert mt_bench_101.spec.dataset.adapter == "mt_bench_101"
     assert mt_bench_101.spec.protocol.generation.mode == "golden_context_chat"
+    assert mt_bench_101.spec.protocol.generation.default_temperature == 0.0
+    assert mt_bench_101.spec.protocol.generation.default_max_out_tokens == 4096
     assert mt_bench_101.spec.protocol.baseline.strategy == "runtime_required"
     assert mt_bench_101.spec.protocol.judge.default_prompt_preset == "mt-bench-101"
     assert mt_bench_101.spec.protocol.judge.default_temperature == 0.6
+    assert mt_bench_101.spec.protocol.judge.default_max_out_tokens == 4096
     assert mt_bench_101.spec.dataset.sources["benchmark"].revision == (
         "bc18b3e2c18c99164e11528f1a79c92083db5953"
     )

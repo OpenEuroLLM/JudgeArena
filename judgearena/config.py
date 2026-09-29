@@ -490,7 +490,11 @@ class RunConfig(BaseSettings):
         ):
             self.generation.truncate_all_input_chars = None
         model_values = self.model.model_dump(exclude_unset=True)
-        for field, engine_key in (("max_out_tokens", "max_tokens"), ("seed", "seed")):
+        for field, engine_key in (
+            ("temperature", "temperature"),
+            ("max_out_tokens", "max_tokens"),
+            ("seed", "seed"),
+        ):
             default = getattr(task_generation, f"default_{field}", None)
             if default is None:
                 continue

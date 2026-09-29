@@ -16,11 +16,13 @@ class GoldenContextGeneration(StrictFrozenModel):
     """Generate each turn using the preceding reference dialogue as context."""
 
     mode: Literal["golden_context_chat"]
-    default_max_out_tokens: int | None = Field(default=None, gt=0)
+    default_temperature: float = Field(default=0.0, ge=0)
+    default_max_out_tokens: int = Field(default=4096, gt=0)
 
 
 class MTBench101JudgeSpec(PairwiseJudgeSpec):
     default_temperature: float = Field(default=0.6, ge=0)
+    default_max_out_tokens: int = Field(default=4096, gt=0)
 
 
 class MTBench101Protocol(StrictFrozenModel):
