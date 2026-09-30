@@ -77,7 +77,7 @@ def test_run_benchmark_saves_nested_usage_and_cleans_up(tmp_path, monkeypatch, c
         adapter=SimpleNamespace(name="test", runner=fake_runner), task=None
     )
     monkeypatch.setattr(benchmark_runner, "resolve_benchmark", lambda task: resolved)
-    path = benchmark_runner.run_benchmark(SimpleNamespace(task="test"))
+    path = benchmark_runner.run_benchmark(SimpleNamespace(task="test", tune_judge=None))
     usage = json.loads(path.read_text())["usage"]
     assert usage["total"]["requests"] == 2
     assert usage["total"]["cost_usd"] == pytest.approx(0.002)
@@ -99,7 +99,7 @@ def test_failed_inference_cleans_up(monkeypatch, capsys):
     )
     monkeypatch.setattr(benchmark_runner, "resolve_benchmark", lambda task: resolved)
     with pytest.raises(ValueError, match="backend failed"):
-        benchmark_runner.run_benchmark(SimpleNamespace(task="test"))
+        benchmark_runner.run_benchmark(SimpleNamespace(task="test", tune_judge=None))
     assert current_run_usage() is None
     assert "No successful model responses" in capsys.readouterr().out
 

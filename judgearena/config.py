@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -411,6 +411,37 @@ class MetaEvalArgs(BaseModel):
     """Share of arena prompts assigned to the validation partition."""
 
 
+class TuneJudgeArgs(BaseModel):
+    """Successive-halving search over judge settings on meta-eval battles."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    search_space: dict[str, list[Any]] = Field(min_length=1)
+    """Axes of the grid, keyed by dotted config path (``judge.temperature``). An
+    axis whose values are mappings of dotted overrides changes them together."""
+
+    price_per_million_tokens: dict[str, float]
+    """USD per million judge tokens for every searched ``judge.model``."""
+
+    rungs: list[int] = Field(default=[10, 30, 90], min_length=1)
+    """Validation battles per model at each successive-halving rung."""
+
+    keep_fraction: float = Field(default=1 / 3, gt=0, le=1)
+    """Share of configurations kept after each rung but the last."""
+
+    min_agreement: float | None = None
+    """Drop configurations whose human agreement does not exceed this value."""
+
+    test_battles_per_model: int | None = Field(default=None, gt=0)
+    """Test battles per model for the selected judges. Defaults to the last rung."""
+
+    @model_validator(mode="after")
+    def _validate_rungs(self) -> TuneJudgeArgs:
+        if any(n <= 0 for n in self.rungs) or self.rungs != sorted(set(self.rungs)):
+            raise ValueError("tune_judge.rungs must be positive and increasing.")
+        return self
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -466,6 +497,9 @@ class RunConfig(BaseSettings):
 
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
+
+    tune_judge: TuneJudgeArgs | None = None
+    """Tune the judge on a meta-evaluation task instead of scoring it once."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -555,6 +589,10 @@ class RunConfig(BaseSettings):
         if self.meta_eval is not None and not is_meta_eval:
             raise ValueError(
                 "meta_eval config is only valid for meta-evaluation tasks."
+            )
+        if self.tune_judge is not None and not is_meta_eval:
+            raise ValueError(
+                "tune_judge config is only valid for meta-evaluation tasks."
             )
         if is_elo:
             if self.elo is None:
