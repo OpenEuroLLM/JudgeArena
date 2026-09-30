@@ -26,7 +26,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "datasets>=4.0.0",
     "fast-langdetect>=1.0.0",
     "huggingface-hub>=0.34.4",
     "langchain-core>=0.3.27",
@@ -97,6 +96,7 @@ quote-style = "double"
 indent-style = "space"
 
 [project.optional-dependencies]
+scripts = ["datasets>=4.0.0"]
 # vLLM 0.19.1 is the pinned judge/battle runtime on this branch. Its own
 # Requires-Dist is `transformers!=5.0.*,...,!=5.5.0,>=4.56.0`, so the
 # only sub-range >=5.x that vLLM 0.19.1 accepts is >=5.5.1 — hence the
