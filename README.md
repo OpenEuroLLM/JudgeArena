@@ -332,6 +332,28 @@ judgearena \
 
 Runs save the selected sample, judge evidence, metric battles, configuration, and results under `--run.result_folder`.
 
+`--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
+
+### Tuning a judge
+
+A `tune_judge` section turns a meta-eval task into a judge configuration search, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178):
+
+- Each entry in `search_space` is a dotted config path with candidate values. An axis whose values are mappings changes several settings together, e.g. `alpaca-eval` together with `judge.top_logprobs`.
+- Every configuration runs as its own meta-eval subprocess on the validation split.
+- Successive halving: each rung in `rungs` judges more battles per model. After each rung, the configurations are ranked by a non-dominated sort on human agreement and judge cost, and the best `keep_fraction` survive.
+- Cost is judge tokens (input plus output, counted with tiktoken) times `price_per_million_tokens[judge.model]`.
+- After the last rung, the best configuration for each judge model is scored once on the held-out test split.
+
+```bash
+judgearena --config_path configs/tune_judge.yaml
+```
+
+Outputs go to `tune-<task>-<timestamp>/` under `--run.result_folder`:
+
+- `trials.parquet`: one row per trial and rung.
+- `test_results.parquet`: test-split results for the selected configurations.
+- One meta-eval run directory per trial.
+
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
