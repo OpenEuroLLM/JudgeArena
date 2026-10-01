@@ -22,12 +22,9 @@ from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.jev import JEV_PROMPT_PRESETS
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.prompts.registry import (
-    ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-    ARENA_HARD_JUDGE_PROMPT_PRESET,
-    FASTCHAT_PAIRWISE_PROMPT_PRESET,
+    DEFAULT_JUDGE_PROMPT_PRESET,
     FLUENCY_JUDGE_PROMPT_PRESET,
-    MT_BENCH_101_CLEAN_PROMPT_PRESET,
-    MT_BENCH_101_PROMPT_PRESET,
+    META_EVAL_PAIR_SCORE_PROMPT_PRESET,
 )
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
@@ -495,17 +492,17 @@ class RunConfig(BaseSettings):
         is_jev = self.judge.model.startswith("OpenRouter/typesafe/jev-")
         if is_jev:
             task_preset = protocol.judge.default_prompt_preset
-            unsupported = {
-                ALPACA_EVAL_JUDGE_PROMPT_PRESET: "official AlpacaEval",
-                ARENA_HARD_JUDGE_PROMPT_PRESET: "official Arena-Hard",
-                FASTCHAT_PAIRWISE_PROMPT_PRESET: "official MT-Bench",
-                MT_BENCH_101_PROMPT_PRESET: "official MT-Bench-101",
-                MT_BENCH_101_CLEAN_PROMPT_PRESET: "official MT-Bench-101",
-            }
-            if task_preset in unsupported:
+            if protocol.runner not in {
+                "pairwise",
+                "elo",
+                "meta_eval",
+            } or task_preset not in {
+                DEFAULT_JUDGE_PROMPT_PRESET,
+                FLUENCY_JUDGE_PROMPT_PRESET,
+                META_EVAL_PAIR_SCORE_PROMPT_PRESET,
+            }:
                 raise ValueError(
-                    f"OpenRouter Jev does not implement the {unsupported[task_preset]} "
-                    "judge protocol. Use a task with a direct pairwise Choice protocol."
+                    "OpenRouter Jev does not implement this task's judge protocol."
                 )
             task_kind = (
                 "fluency" if task_preset == FLUENCY_JUDGE_PROMPT_PRESET else "pairwise"

@@ -40,6 +40,14 @@ def _validate_configuration(n_bootstraps: int, tie_tolerance: float) -> None:
         raise ValueError("tie_tolerance must be a finite number in [0, 0.5)")
 
 
+def _is_discrete_preference(value: object) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, Real)
+        and float(value) in (0.0, 0.5, 1.0)
+    )
+
+
 def _validate_battles(battles: pd.DataFrame) -> None:
     missing = sorted(_REQUIRED_COLUMNS - set(battles.columns))
     if missing:
@@ -55,12 +63,7 @@ def _validate_battles(battles: pd.DataFrame) -> None:
         isinstance(value, (bool, np.bool_)) for value in battles["sampled"]
     ):
         raise ValueError("Meta-evaluation sampled values must be booleans.")
-    if not all(
-        not isinstance(value, bool)
-        and isinstance(value, Real)
-        and float(value) in (0.0, 0.5, 1.0)
-        for value in battles["reference_pref"]
-    ):
+    if not all(_is_discrete_preference(value) for value in battles["reference_pref"]):
         raise ValueError("Meta-evaluation reference_pref values must be 0, 0.5, or 1.")
     if not all(
         pd.isna(value)
@@ -77,12 +80,7 @@ def _validate_battles(battles: pd.DataFrame) -> None:
             "in [0, 1]."
         )
     if "hard_pref" in battles and not all(
-        pd.isna(value)
-        or (
-            not isinstance(value, bool)
-            and isinstance(value, Real)
-            and float(value) in (0.0, 0.5, 1.0)
-        )
+        pd.isna(value) or _is_discrete_preference(value)
         for value in battles["hard_pref"]
     ):
         raise ValueError(

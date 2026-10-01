@@ -326,15 +326,12 @@ def test_openrouter_jev_selects_required_prompt_modes():
 
 
 @pytest.mark.parametrize(
-    "task, protocol",
-    [
-        ("alpaca-eval", "official AlpacaEval"),
-        ("arena-hard-v2.0", "official Arena-Hard"),
-        ("mt-bench", "official MT-Bench"),
-    ],
+    "task", ["alpaca-eval", "arena-hard-v2.0", "mt-bench", "mt-bench-101"]
 )
-def test_openrouter_jev_rejects_incompatible_official_protocols(task, protocol):
-    with pytest.raises(ValueError, match=protocol):
+def test_openrouter_jev_rejects_incompatible_official_protocols(task):
+    with pytest.raises(
+        ValueError, match="does not implement this task's judge protocol"
+    ):
         RunConfig(
             task=task,
             model={"name": "model-a"},
