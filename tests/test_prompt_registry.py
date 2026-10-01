@@ -12,6 +12,7 @@ from judgearena.evaluate import (
 from judgearena.models import DummyModel
 from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prompt
 from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.presets import PROMPT_PRESETS
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -28,6 +29,17 @@ from judgearena.prompts.registry import (
 class FakeCliArgs:
     prompt_preset: str | None = None
     prompt: object | None = None
+
+
+def test_prompt_catalog_is_loaded_from_packaged_yaml():
+    assert set(PRESETS) == set(PROMPT_PRESETS)
+    assert len(PROMPT_PRESETS) == 16
+    assert PROMPT_PRESETS["alpaca-eval"].parser == "alpaca-eval-token"
+    assert PROMPT_PRESETS["fastchat-pairwise"].delegated is True
+    assert PROMPT_PRESETS["typesafe-choice"].decision_mode == "choice"
+    resolved = resolve_judge_prompt(preset="alpaca-eval")
+    assert resolved.system_path == "data/presets/alpaca-eval.yaml"
+    assert resolved.user_path == "data/presets/alpaca-eval.yaml"
 
 
 def test_default_presets_are_owned_by_task_yaml():
@@ -77,6 +89,14 @@ def test_fluency_task_resolves_inline_system_prompt():
     assert resolved.source == "preset"
     assert "completion of a sentence" in resolved.system_prompt
     assert "{user_prompt}" in resolved.user_prompt_template
+
+
+def test_typesafe_choice_preset_uses_probability_parser():
+    resolved = resolve_judge_prompt(preset="typesafe-choice")
+
+    assert resolved.parser.name == "typesafe-choice"
+    assert "{completion_A_json}" in resolved.user_prompt_template
+    assert "score_A" not in resolved.user_prompt_template
 
 
 def test_explicit_preset_wins_over_task_default():

@@ -1,0 +1,26 @@
+name: fluency
+parser: score
+system_prompt: |-
+  You are a highly efficient assistant, who evaluates and selects the best large language model based on the quality of completion of a sentence. You will see a sentence to be completed and two completions from Assistant A and Assistant B and will have to decide which one is best. Make sure to not over-confidently prefer one assistant or the other and also make sure to not bias your preference based on the ordering or on the length of the answers.
+user_prompt_template: |
+  <|User Prompt|>
+  {user_prompt}
+
+  <|The Start of Assistant A's {completion_label}|>
+  {completion_A}
+  <|The End of Assistant A's {completion_label}|>
+
+  <|The Start of Assistant B's {completion_label}|>
+  {completion_B}
+  <|The End of Assistant B's {completion_label}|>
+
+  # Your output
+
+  ## Format description
+  Your output should follow this format:
+  ```
+  score_A: <a number between 0 and 10 to indicate the quality of Assistant A's answer>
+  score_B: <a number between 0 and 10 to indicate the quality of Assistant B's answer>
+  ```
+
+  ## Your output, do not repeat the input above{explanation_suffix}

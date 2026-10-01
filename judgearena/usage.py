@@ -64,7 +64,7 @@ def _summarize(requests: tuple[RequestUsage, ...]) -> dict[str, object]:
             request.has_token_usage for request in requests
         ),
         **{f"requests_with_{field}": count for field, count in reported.items()},
-        "requests_with_cost": len(cost_values),
+        "requests_with_cost": sum(request.cost_usd is not None for request in requests),
     }
 
 

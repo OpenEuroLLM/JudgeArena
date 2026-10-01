@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path
 from typing import Literal
 
@@ -12,6 +11,7 @@ from judgearena.prompts.parsing import (
     parser_name,
     resolve_judge_parser,
 )
+from judgearena.prompts.presets import PROMPT_PRESETS
 
 PromptSource = Literal["preset", "file", "override", "delegated"]
 
@@ -28,31 +28,20 @@ META_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-pair-score"
 META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET = "meta-eval-alpaca-eval-json"
 META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-alpaca-eval-pair-score"
 
-PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
 _COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
 _EXPLANATION_SUFFIX = ", first starts with an explanation of your judgement"
 _SCORE_FENCE = "\n```"
 
-FLUENCY_SYSTEM_PROMPT = (
-    "You are a highly efficient assistant, who evaluates and selects the best "
-    "large language model based on the quality of completion of a sentence. "
-    "You will see a sentence to be completed and two completions from "
-    "Assistant A and Assistant B and will have to decide which one is best. "
-    "Make sure to not over-confidently prefer one assistant or the other and "
-    "also make sure to not bias your preference based on the ordering or on "
-    "the length of the answers."
-)
-
 
 @dataclass(frozen=True)
 class JudgePromptPreset:
     name: str
+    source_path: str | None = None
     parser: JudgeParser | None = None
     """Parser for this preset's judge-output format; None only when delegated."""
-    system_file: str | None = None
-    user_file: str | None = None
-    inline_system: str | None = None
+    system_prompt: str | None = None
+    user_prompt_template: str | None = None
     delegated: bool = False
     with_explanation: bool = False
 
@@ -85,85 +74,17 @@ class ResolvedJudgePrompt:
         }
 
 
-SCORE_PARSER = JUDGE_PARSERS["score"]
-
 PRESETS: dict[str, JudgePromptPreset] = {
-    DEFAULT_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=DEFAULT_JUDGE_PROMPT_PRESET,
-        parser=SCORE_PARSER,
-        system_file="system-prompt.txt",
-        user_file="prompt.txt",
-    ),
-    DEFAULT_WITH_EXPLANATION_PRESET: JudgePromptPreset(
-        name=DEFAULT_WITH_EXPLANATION_PRESET,
-        parser=SCORE_PARSER,
-        system_file="system-prompt.txt",
-        user_file="prompt-with-explanation.txt",
-        with_explanation=True,
-    ),
-    FLUENCY_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=FLUENCY_JUDGE_PROMPT_PRESET,
-        parser=SCORE_PARSER,
-        inline_system=FLUENCY_SYSTEM_PROMPT,
-        user_file="prompt.txt",
-    ),
-    FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
-        name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
-        delegated=True,
-    ),
-    MT_BENCH_101_PROMPT_PRESET: JudgePromptPreset(
-        name=MT_BENCH_101_PROMPT_PRESET,
-        delegated=True,
-    ),
-    MT_BENCH_101_CLEAN_PROMPT_PRESET: JudgePromptPreset(
-        name=MT_BENCH_101_CLEAN_PROMPT_PRESET,
-        delegated=True,
-    ),
-    # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),
-    # verbatim except for placeholder names. The judge explains, then emits one
-    # graded verdict label ([[A>>B]] ... [[B>>A]]).
-    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ARENA_HARD_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["arena-hard-verdict"],
-        system_file="arena-hard-system-prompt.txt",
-        user_file="arena-hard-prompt.txt",
-    ),
-    # Official Arena-Hard v2.0 creative-writing variant: identical except the
-    # judge is not asked to answer the prompt itself first.
-    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["arena-hard-verdict"],
-        system_file="arena-hard-creative-system-prompt.txt",
-        user_file="arena-hard-prompt.txt",
-    ),
-    # Official AlpacaEval 2.0 annotator prompt (alpaca_eval_clf.txt), verbatim
-    # except for placeholder names and brace escaping for f-string templating.
-    # The judge answers with a single model identifier: "m" (completion_A) or
-    # "M" (completion_B).
-    ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["alpaca-eval-token"],
-        system_file="alpaca-eval-system-prompt.txt",
-        user_file="alpaca-eval-prompt.txt",
-    ),
-    META_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
-        name=META_EVAL_PAIR_SCORE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["meta-eval-score"],
-        system_file="system-prompt.txt",
-        user_file="meta-eval-pair-score-prompt.txt",
-    ),
-    META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET: JudgePromptPreset(
-        name=META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["alpaca-eval-json"],
-        system_file="meta-eval-alpaca-eval-system-prompt.txt",
-        user_file="meta-eval-alpaca-eval-json-prompt.txt",
-    ),
-    META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
-        name=META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["meta-eval-score"],
-        system_file="meta-eval-alpaca-eval-system-prompt.txt",
-        user_file="meta-eval-alpaca-eval-pair-score-prompt.txt",
-    ),
+    name: JudgePromptPreset(
+        name=name,
+        source_path=preset.source_path,
+        parser=(JUDGE_PARSERS[preset.parser] if preset.parser is not None else None),
+        system_prompt=preset.system_prompt,
+        user_prompt_template=preset.user_prompt_template,
+        delegated=preset.delegated,
+        with_explanation=preset.with_explanation,
+    )
+    for name, preset in PROMPT_PRESETS.items()
 }
 
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
@@ -183,14 +104,6 @@ def default_preset_for_task(task: str | None) -> str:
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _load_packaged_text(filename: str) -> str:
-    return (
-        files(PROMPTS_PACKAGE)
-        .joinpath("templates", filename)
-        .read_text(encoding="utf-8")
-    )
 
 
 def _materialize_user_template(
@@ -281,16 +194,12 @@ def resolve_judge_prompt(
             delegated=True,
         )
 
-    if spec.user_file is None:
-        raise ValueError(f"Judge prompt preset {spec.name!r} is missing a user file.")
+    if spec.system_prompt is None or spec.user_prompt_template is None:
+        raise ValueError(f"Judge prompt preset {spec.name!r} is missing prompt text.")
 
-    system_prompt = (
-        spec.inline_system
-        if spec.inline_system is not None
-        else _load_packaged_text(spec.system_file)  # type: ignore[arg-type]
-    )
+    system_prompt = spec.system_prompt
     user_prompt_template = _materialize_user_template(
-        _load_packaged_text(spec.user_file),
+        spec.user_prompt_template,
         multi_turn=multi_turn,
         with_explanation=spec.with_explanation,
     )
@@ -300,8 +209,8 @@ def resolve_judge_prompt(
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
         source="preset",
-        system_path=spec.system_file,
-        user_path=spec.user_file,
+        system_path=spec.source_path,
+        user_path=spec.source_path,
         system_sha256=_sha256(system_prompt),
         user_sha256=_sha256(user_prompt_template),
     )

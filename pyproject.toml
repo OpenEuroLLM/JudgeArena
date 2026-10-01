@@ -30,6 +30,7 @@ dependencies = [
     "datasets>=4.0.0",
     "fast-langdetect>=1.0.0",
     "huggingface-hub>=0.34.4",
+    "httpx>=0.27.0",
     "langchain-core>=0.3.27",
     "langchain>=0.3.27",
     "langchain-community>=0.3.29",
@@ -57,8 +58,9 @@ exclude = ["slurmpilot_scripts*"]
 "judgearena.criteria" = ["data/*.yaml"]
 "judgearena.prompts" = [
     "templates/*.txt",
-    "templates/*/*.json",
     "templates/*/*.txt",
+    "templates/*/*.json",
+    "data/presets/*.yaml",
 ]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
 "judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
