@@ -4,6 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 judgearena = "judgearena.cli:cli"
+judgearena-cache = "judgearena.cache.hf:cli"
 
 [project]
 name = "judgearena"
@@ -55,7 +56,12 @@ exclude = ["slurmpilot_scripts*"]
 
 [tool.setuptools.package-data]
 "judgearena.criteria" = ["data/*.yaml"]
-"judgearena.prompts" = ["templates/*.txt", "templates/*/*.txt", "data/presets/*.yaml"]
+"judgearena.prompts" = [
+    "templates/*.txt",
+    "templates/*/*.txt",
+    "templates/*/*.json",
+    "data/presets/*.yaml",
+]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
 "judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 

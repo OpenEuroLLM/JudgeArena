@@ -89,6 +89,8 @@ _PRESET_FILES = (
     "default_with_explanation.yaml",
     "fluency.yaml",
     "fastchat-pairwise.yaml",
+    "mt-bench-101.yaml",
+    "mt-bench-101-clean.yaml",
     "arena-hard.yaml",
     "arena-hard-creative.yaml",
     "alpaca-eval.yaml",

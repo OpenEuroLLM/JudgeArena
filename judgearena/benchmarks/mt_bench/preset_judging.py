@@ -178,6 +178,8 @@ def judge_mt_bench_with_preset(
         items=items,
         use_tqdm=use_tqdm,
         swap_answers=False,
+        model_a=model_a,
+        model_b=model_b,
     )
 
     annotations: list[dict[str, Any]] = []
@@ -246,6 +248,8 @@ def judge_mt_bench_with_preset(
                 items=items,
                 use_tqdm=use_tqdm,
                 swap_answers=True,
+                model_a=model_a,
+                model_b=model_b,
             )
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)

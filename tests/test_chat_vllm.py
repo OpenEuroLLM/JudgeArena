@@ -64,6 +64,8 @@ def test_chat_vllm_enables_reasoning_support_for_qwen_thinking_budget(monkeypatc
         gpu_memory_utilization=0.7,
     )
 
+    assert captured["sampling_kwargs"]["temperature"] == models.VLLM_DEFAULT_TEMPERATURE
+    assert captured["sampling_kwargs"]["top_p"] == models.VLLM_DEFAULT_TOP_P
     assert captured["sampling_kwargs"]["thinking_token_budget"] == 64
     assert "structured_outputs" not in captured["sampling_kwargs"]
     assert captured["reasoning_config_kwargs"] == {
@@ -307,3 +309,15 @@ def test_chat_vllm_reports_exact_local_token_counts(monkeypatch):
         models.do_inference(chat_model, ["hello"], stage="generation")
     usage = tracker.snapshot().requests[0]
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (3, 2, 5)
+
+
+def test_do_inference_keeps_chat_vllm_on_native_batch_path(monkeypatch):
+    _install_fake_vllm(monkeypatch)
+    chat_model = models.ChatVLLM(model="Qwen/Qwen3.5-9B", max_tokens=16)
+
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("ChatVLLM must not run concurrent ainvoke calls")
+
+    monkeypatch.setattr(chat_model, "ainvoke", fail_if_called)
+
+    assert models.do_inference(chat_model, ["hello"], use_tqdm=True) == ["ok"]

@@ -22,6 +22,11 @@ from judgearena.tasks.schema.mt_bench import (
     MTBenchProtocol,
     MultiTurnGeneration,
 )
+from judgearena.tasks.schema.mt_bench_101 import (
+    GoldenContextGeneration,
+    MTBench101JudgeSpec,
+    MTBench101Protocol,
+)
 from judgearena.tasks.schema.pairwise import (
     PairwiseJudgeSpec,
     PairwiseProtocol,
@@ -55,8 +60,11 @@ __all__ = [
     "EloProtocol",
     "EloScoringSpec",
     "GitRawSource",
+    "GoldenContextGeneration",
     "HuggingFaceDatasetSource",
     "HuggingFaceSpaceSource",
+    "MTBench101JudgeSpec",
+    "MTBench101Protocol",
     "MTBenchJudgeSpec",
     "MTBenchProtocol",
     "MetaEvalProtocol",

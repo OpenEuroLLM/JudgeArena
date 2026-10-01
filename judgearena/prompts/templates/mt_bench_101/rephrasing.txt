@@ -1,0 +1,13 @@
+We aim to specifically evaluate the paraphrasing ability of the large language model (AI assistant). The criteria for evaluation are as follows:
+
+1. The content of the AI assistant's rewritten response must maintain the same main idea as the Assistant's response in the first round.
+2. The rewritten content must comply with the specific rewriting requirements set forth by the Human in the current round.
+
+Scoring Guidelines:
+
+- 1-3 points: The rewritten response significantly deviates from the original main idea or fails to meet the rewriting requirements.
+- 4-6 points: The rewritten response captures the original main idea but only partially meets the rewriting requirements or lacks fluency/coherence.
+- 7-9 points: The rewritten response maintains the original main idea and satisfies most of the rewriting requirements with minor discrepancies or stylistic issues.
+- 10 points: The rewritten response perfectly preserves the original main idea and fulfills all of the rewriting requirements set by Human, exhibiting a seamless and natural integration of the required changes.
+
+Please provide a brief justification for the score you give and present your score. Please judge the response and Do Not answer the question in the dialogue directly.
