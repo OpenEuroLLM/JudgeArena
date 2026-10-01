@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from judgearena.prompts.jev import JEV_HARD_TIE_THRESHOLDS
 from judgearena.utils import strip_thinking_tags
 
 
@@ -364,172 +363,6 @@ class AlpacaEvalJSON(JudgeParser):
         )
 
 
-def _typesafe_probabilities(
-    value: object, *, labels: set[str]
-) -> dict[str, float] | None:
-    try:
-        probabilities = {
-            label: float(probability) for label, probability in value.items()
-        }
-    except (AttributeError, TypeError, ValueError):
-        return None
-    if set(probabilities) != labels or any(
-        not math.isfinite(probability) or probability < 0
-        for probability in probabilities.values()
-    ):
-        return None
-    total = sum(probabilities.values())
-    # Jev rounds each displayed probability, so valid responses can total 0.99
-    # or 1.01. Normalize that presentation error before scoring.
-    if not math.isclose(total, 1.0, abs_tol=0.011):
-        return None
-    return {label: probability / total for label, probability in probabilities.items()}
-
-
-class TypeSafeChoice(JudgeParser):
-    """Parse Jev's A/B/tie probability distribution as a soft preference."""
-
-    name = "typesafe-choice"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            probabilities = _typesafe_probabilities(
-                result["probabilities"], labels={"A", "B", "tie"}
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-        if probabilities is None:
-            return None
-        choice = result.get("choice")
-        if choice not in probabilities:
-            return None
-        return ParsedPreference(
-            preference=probabilities["B"] + 0.5 * probabilities["tie"],
-            label=choice,
-            scores=probabilities,
-            details={
-                key: result[key]
-                for key in ("confidence", "model", "request_id")
-                if result.get(key) is not None
-            },
-        )
-
-
-class TypeSafeMultilingualChoice(JudgeParser):
-    """Parse an overall A/B/tie/both-bad Choice from Jev."""
-
-    name = "typesafe-multilingual-choice"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            answer = result["answers"]["outcome"]
-            probabilities = _typesafe_probabilities(
-                answer["probabilities"], labels={"A", "B", "tie", "both_bad"}
-            )
-            selection = answer["choice"]
-        except (KeyError, TypeError, ValueError):
-            return None
-        if probabilities is None or selection not in probabilities:
-            return None
-        tie_probability = probabilities["tie"] + probabilities["both_bad"]
-        decision_mode = result.get("decision_mode")
-        hard_tie_threshold = JEV_HARD_TIE_THRESHOLDS.get(decision_mode)
-        return ParsedPreference(
-            preference=probabilities["B"] + 0.5 * tie_probability,
-            label="tie" if selection == "both_bad" else selection,
-            scores=probabilities,
-            details={
-                "outcome_selection": selection,
-                "outcome_confidence": answer.get("confidence"),
-                **(
-                    {"hard_tie_threshold": hard_tie_threshold}
-                    if hard_tie_threshold is not None
-                    else {}
-                ),
-                **{
-                    key: result[key]
-                    for key in ("model", "request_id")
-                    if result.get(key) is not None
-                },
-            },
-        )
-
-
-def _overall_score_preference(
-    probabilities: dict[str, float],
-) -> tuple[float, str]:
-    preference = sum(level * probabilities[str(level)] for level in range(5)) / 4.0
-    maximum = max(probabilities.values())
-    winning_levels = {
-        int(level)
-        for level, probability in probabilities.items()
-        if probability == maximum
-    }
-    spans_both_sides = any(level < 2 for level in winning_levels) and any(
-        level > 2 for level in winning_levels
-    )
-    label = (
-        "tie"
-        if 2 in winning_levels or spans_both_sides
-        else "A"
-        if max(winning_levels) < 2
-        else "B"
-    )
-    return preference, label
-
-
-class TypeSafeComparativeScore(JudgeParser):
-    """Parse one overall five-level comparison while preserving its hard level."""
-
-    name = "typesafe-comparative-score"
-    level_labels = {str(level) for level in range(5)}
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        try:
-            result = json.loads(judge_completion)
-            answer = result["answers"]["outcome"]
-            probabilities = _typesafe_probabilities(
-                answer["probabilities"], labels=self.level_labels
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-        if probabilities is None:
-            return None
-        preference, label = _overall_score_preference(probabilities)
-        return ParsedPreference(
-            preference=preference,
-            label=label,
-            scores=probabilities,
-            details={
-                "hard_preference_mode": "center_level",
-                "outcome_score": answer.get("score"),
-                "outcome_confidence": answer.get("confidence"),
-                **{
-                    key: result[key]
-                    for key in ("model", "request_id")
-                    if result.get(key) is not None
-                },
-            },
-        )
-
-
 def parser_name(parse) -> str:
     """Short identifier of a parser for run metadata.
 
@@ -547,9 +380,6 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "arena-hard-verdict": ArenaHardVerdict(),
     "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
-    "typesafe-choice": TypeSafeChoice(),
-    "typesafe-multilingual-choice": TypeSafeMultilingualChoice(),
-    "typesafe-comparative-score": TypeSafeComparativeScore(),
 }
 
 

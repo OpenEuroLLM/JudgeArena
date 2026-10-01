@@ -74,24 +74,6 @@ It will then display the results of the battles:
 ============================================================
 ```
 
-### Judge prompt presets
-
-`--judge.prompt_preset` selects the judge instructions and output parser for any
-judge model. Jev presets also define the typed questions sent to System One:
-
-```bash
-uv run judgearena \
-  --task alpaca-eval-ja \
-  --model.name claude-2 \
-  --judge.model OpenRouter/typesafe/jev-1.13 \
-  --judge.prompt_preset typesafe-choice \
-  --generation.n_instructions 10
-```
-
-`typesafe-choice` is the default A/B/tie preset. For multilingual comparisons,
-use `typesafe-multilingual-choice`; for graded five-level comparisons,
-use `typesafe-comparative-score`. Select either with the same flag.
-
 ### Run from a YAML config (`--config_path`)
 
 Every option can also come from a YAML file. The CLI flags mirror the config

@@ -247,29 +247,3 @@ def test_cache_descriptor_validation_still_fails_loudly(tmp_path, monkeypatch):
             ["prompt"],
             cache_row_metadata=[{"instruction_id": "1"}],
         )
-
-
-def test_jev_cache_identity_uses_system_one_questions_not_execution_settings(tmp_path):
-    cache = JudgementInferenceCache(tmp_path, "elo-comparia")
-    model = "OpenRouter/typesafe/jev-1.13"
-    default = prepare_model(model, cache=cache).descriptor
-    same = prepare_model(
-        model,
-        cache=cache,
-        max_tokens=100,
-        temperature=0.8,
-        seed=42,
-        timeout=10,
-        max_concurrency=2,
-        decision_mode="choice",
-    ).descriptor
-    multilingual = prepare_model(
-        model, cache=cache, decision_mode="multilingual-choice"
-    ).descriptor
-    chat = prepare_model("OpenRouter/some-chat-model", cache=cache).descriptor
-
-    assert default == same
-    assert default["endpoint"] == "https://openrouter.ai/api/v1/systemone"
-    assert default["model_kwargs"]["questions"]
-    assert default != multilingual
-    assert default["endpoint"] != chat["endpoint"]
