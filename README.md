@@ -88,8 +88,9 @@ uv run judgearena \
   --generation.n_instructions 10
 ```
 
-`typesafe-choice` asks Jev to choose A, B, or tie. It is also the default Jev
-preset for pairwise tasks when `--judge.prompt_preset` is omitted.
+`typesafe-choice` is the default A/B/tie preset. For multilingual comparisons,
+use `typesafe-overall-choice-multilingual-v4`; for graded five-level comparisons,
+use `typesafe-overall-comparative-score-v5`. Select either with the same flag.
 
 ### Run from a YAML config (`--config_path`)
 
