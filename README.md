@@ -89,8 +89,8 @@ uv run judgearena \
 ```
 
 `typesafe-choice` is the default A/B/tie preset. For multilingual comparisons,
-use `typesafe-overall-choice-multilingual-v4`; for graded five-level comparisons,
-use `typesafe-overall-comparative-score-v5`. Select either with the same flag.
+use `typesafe-multilingual-choice`; for graded five-level comparisons,
+use `typesafe-comparative-score`. Select either with the same flag.
 
 ### Run from a YAML config (`--config_path`)
 

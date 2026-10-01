@@ -1,6 +1,6 @@
-name: typesafe-overall-comparative-score-v5
-parser: typesafe-overall-comparative-score-v5
-decision_mode: overall-comparative-score-v5
+name: typesafe-comparative-score
+parser: typesafe-comparative-score
+decision_mode: comparative-score
 task_kind: pairwise
 system_prompt: >-
   Compare the candidate responses by their overall practical usefulness in the language

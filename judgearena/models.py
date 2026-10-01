@@ -582,7 +582,7 @@ class OpenRouterJevJudge:
                     "probabilities."
                 )
             result_payload = dict(answer)
-        elif self.decision_mode.startswith("overall-comparative-score-"):
+        elif self.decision_mode == "comparative-score":
             answer = answers.get("outcome", {})
             if (
                 set(answers) != {"outcome"}
@@ -598,7 +598,7 @@ class OpenRouterJevJudge:
                 "decision_mode": self.decision_mode,
                 "answers": {"outcome": answer},
             }
-        elif self.decision_mode.startswith("overall-choice-"):
+        elif self.decision_mode == "multilingual-choice":
             answer = answers.get("outcome", {})
             if (
                 set(answers) != {"outcome"}

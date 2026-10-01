@@ -1,6 +1,6 @@
-name: typesafe-overall-choice-multilingual-v4
-decision_mode: overall-choice-v4-multilingual
-parser: typesafe-overall-choice-v4
+name: typesafe-multilingual-choice
+decision_mode: multilingual-choice
+parser: typesafe-multilingual-choice
 task_kind: pairwise
 hard_tie_threshold: 0.59
 user_prompt_template: |

@@ -412,10 +412,10 @@ class TypeSafeChoice(JudgeParser):
         )
 
 
-class TypeSafeOverallChoice(JudgeParser):
+class TypeSafeMultilingualChoice(JudgeParser):
     """Parse an overall A/B/tie/both-bad Choice from Jev."""
 
-    name = "typesafe-overall-choice-v4"
+    name = "typesafe-multilingual-choice"
 
     def parse_result(
         self,
@@ -481,10 +481,10 @@ def _overall_score_preference(
     return preference, label
 
 
-class TypeSafeOverallComparativeScore(JudgeParser):
+class TypeSafeComparativeScore(JudgeParser):
     """Parse one overall five-level comparison while preserving its hard level."""
 
-    name = "typesafe-overall-comparative-score-v5"
+    name = "typesafe-comparative-score"
     level_labels = {str(level) for level in range(5)}
 
     def parse_result(
@@ -539,8 +539,8 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
     "alpaca-eval-json": AlpacaEvalJSON(),
     "alpaca-eval-token": AlpacaEvalToken(),
     "typesafe-choice": TypeSafeChoice(),
-    "typesafe-overall-choice-v4": TypeSafeOverallChoice(),
-    "typesafe-overall-comparative-score-v5": TypeSafeOverallComparativeScore(),
+    "typesafe-multilingual-choice": TypeSafeMultilingualChoice(),
+    "typesafe-comparative-score": TypeSafeComparativeScore(),
 }
 
 
