@@ -19,16 +19,7 @@ from pydantic_settings import (
 
 from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
 from judgearena.models import build_default_judge_model_kwargs
-from judgearena.prompts.jev import JEV_PROMPT_PRESETS
 from judgearena.prompts.parsing import resolve_judge_parser
-from judgearena.prompts.registry import (
-    ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-    ARENA_HARD_JUDGE_PROMPT_PRESET,
-    FASTCHAT_PAIRWISE_PROMPT_PRESET,
-    FLUENCY_JUDGE_PROMPT_PRESET,
-    MT_BENCH_101_CLEAN_PROMPT_PRESET,
-    MT_BENCH_101_PROMPT_PRESET,
-)
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
     EloProtocol,
@@ -492,66 +483,6 @@ class RunConfig(BaseSettings):
             )
 
         protocol = resolved_task.spec.protocol
-        is_jev = self.judge.model.startswith("OpenRouter/typesafe/jev-")
-        if is_jev:
-            task_preset = protocol.judge.default_prompt_preset
-            unsupported = {
-                ALPACA_EVAL_JUDGE_PROMPT_PRESET: "official AlpacaEval",
-                ARENA_HARD_JUDGE_PROMPT_PRESET: "official Arena-Hard",
-                FASTCHAT_PAIRWISE_PROMPT_PRESET: "official MT-Bench",
-                MT_BENCH_101_PROMPT_PRESET: "official MT-Bench-101",
-                MT_BENCH_101_CLEAN_PROMPT_PRESET: "official MT-Bench-101",
-            }
-            if task_preset in unsupported:
-                raise ValueError(
-                    f"OpenRouter Jev does not implement the {unsupported[task_preset]} "
-                    "judge protocol. Use a task with a direct pairwise Choice protocol."
-                )
-            task_kind = (
-                "fluency" if task_preset == FLUENCY_JUDGE_PROMPT_PRESET else "pairwise"
-            )
-            preset_modes = {
-                name: preset.decision_mode
-                for name, preset in JEV_PROMPT_PRESETS.items()
-                if preset.task_kind == task_kind
-            }
-            selected_preset = self.judge.prompt_preset
-            if self.judge.prompt is None:
-                if selected_preset is None:
-                    selected_preset = next(iter(preset_modes))
-                if selected_preset not in preset_modes:
-                    raise ValueError(
-                        "OpenRouter Jev requires judge.prompt_preset to be one of "
-                        f"{sorted(preset_modes)}."
-                    )
-                decision_mode = preset_modes[selected_preset]
-            else:
-                parser_modes = {
-                    preset.parser: preset.decision_mode
-                    for preset in JEV_PROMPT_PRESETS.values()
-                }
-                if self.judge.prompt.parser not in parser_modes:
-                    raise ValueError(
-                        "OpenRouter Jev custom prompts require parser to be one of "
-                        f"{sorted(parser_modes)}."
-                    )
-                decision_mode = parser_modes[self.judge.prompt.parser]
-            configured_mode = self.judge.engine_kwargs.get("decision_mode")
-            if configured_mode is not None and configured_mode != decision_mode:
-                raise ValueError(
-                    "OpenRouter Jev decision_mode conflicts with the selected parser."
-                )
-            engine_kwargs = {
-                **self.judge.engine_kwargs,
-                "decision_mode": decision_mode,
-            }
-            update = {"engine_kwargs": engine_kwargs}
-            if self.judge.prompt is None:
-                update["prompt_preset"] = selected_preset
-            self.judge = self.judge.model_copy(update=update)
-            if self.judge.top_logprobs is not None:
-                raise ValueError("OpenRouter Jev does not support top_logprobs.")
-
         task_generation = getattr(protocol, "generation", None)
         if (
             "truncate_all_input_chars" not in self.generation.model_fields_set

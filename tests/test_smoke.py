@@ -26,11 +26,9 @@ def main() -> None:
     if not CRITERIA_BY_NAME["default"]:
         raise AssertionError("Default criteria list is empty.")
 
-    # Validates packaged prompt resources expected at runtime.
-    _assert_non_empty_text_resource("judgearena.prompts", "data/presets/default.yaml")
-    _assert_non_empty_text_resource(
-        "judgearena.prompts", "data/presets/alpaca-eval.yaml"
-    )
+    # Validates packaged text resources expected at runtime.
+    _assert_non_empty_text_resource("judgearena.prompts", "templates/prompt.txt")
+    _assert_non_empty_text_resource("judgearena.prompts", "templates/system-prompt.txt")
     _assert_non_empty_text_resource("judgearena.criteria", "data/default.yaml")
 
     print("✅ All integrity checks passed: Imports, Criteria, and Resources are valid.")
