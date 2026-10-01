@@ -129,7 +129,7 @@ def test_openrouter_jev_batch_retries_only_failed_520_request(monkeypatch):
         client=httpx.Client(transport=transport),
         async_client=httpx.AsyncClient(transport=transport),
     )
-    monkeypatch.setattr("judgearena.models.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("judgearena.openrouter_jev.time.sleep", lambda _delay: None)
 
     results = judge.batch(["stable", "retry"])
 
@@ -257,7 +257,7 @@ def test_openrouter_jev_async_inference_retries_timeout(monkeypatch):
     async def no_sleep(_delay):
         return None
 
-    monkeypatch.setattr("judgearena.models.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("judgearena.openrouter_jev.asyncio.sleep", no_sleep)
 
     results = do_inference(judge, ["retry"], use_tqdm=True)
 

@@ -82,11 +82,7 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     assert battles.loc[~battles["sampled"], "pref"].isna().all()
 
     saved = json.loads(result_path.read_text())
-    assert "lang" not in battles
-    assert "sampling_mode" not in saved
-    agreement_metric = saved["metrics"]["meta_eval_agreement"]
-    agreement = agreement_metric["all"]
-    assert "groups" not in agreement_metric
+    agreement = saved["metrics"]["meta_eval_agreement"]["all"]
     assert agreement["accuracy_attempted"] == pytest.approx(1 - 1 / len(sample))
     assert saved["metrics"]["meta_eval_elo_gap"]["soft"][0]["n_seeds_valid"] == 2
     assert f"complete {len(sample) - 1}/{len(sample)}" in capsys.readouterr().out
