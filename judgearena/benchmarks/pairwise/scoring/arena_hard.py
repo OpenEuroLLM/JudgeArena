@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+from judgearena.paths import data_root
 from judgearena.utils.eval import PrefSummary
 
 DECISIVE_WEIGHT = 3
@@ -98,21 +100,27 @@ def _validate_calibration_protocol(
     return judge_id
 
 
+@lru_cache(maxsize=1)
+def _style_encoding():
+    import tiktoken
+
+    cache_dir = os.environ.get("TIKTOKEN_CACHE_DIR") or str(
+        data_root / "tiktoken-cache"
+    )
+    os.environ["TIKTOKEN_CACHE_DIR"] = cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
+    return tiktoken.encoding_for_model("gpt-4o")
+
+
 @lru_cache(maxsize=4096)
 def _style_features(completion: str) -> np.ndarray:
     """Return Arena-Hard's token-length and Markdown style features."""
-    import tiktoken
-
     without_code = completion
     for block in _CODE_BLOCK.findall(completion):
         without_code = without_code.replace(block, "")
     return np.asarray(
         [
-            len(
-                tiktoken.encoding_for_model("gpt-4o").encode(
-                    completion, disallowed_special=()
-                )
-            ),
+            len(_style_encoding().encode(completion, disallowed_special=())),
             sum(
                 len(re.findall(rf"^#{{{level}}}\s", without_code, re.MULTILINE))
                 for level in range(1, 7)
@@ -543,6 +551,10 @@ class ArenaHardV01Metric:
 @dataclass(frozen=True, kw_only=True)
 class ArenaHardV20Metric:
     """Official Arena-Hard v2 category-scoped score."""
+
+    def prefetch(self) -> None:
+        """Cache the tokenizer used by style-controlled scoring."""
+        _style_encoding()
 
     def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
         result: dict[str, object] = {

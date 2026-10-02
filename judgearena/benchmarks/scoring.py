@@ -100,6 +100,14 @@ def build_metrics(
     return tuple(configured)
 
 
+def prefetch_metrics(requests: Sequence[MetricRequest]) -> None:
+    """Download external files required by configured metrics."""
+    for _, metric in build_metrics(requests):
+        prefetch = getattr(metric, "prefetch", None)
+        if prefetch is not None:
+            prefetch()
+
+
 def _group_value(value: object) -> object:
     if pd.isna(value):
         return None
