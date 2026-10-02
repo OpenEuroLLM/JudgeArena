@@ -6,10 +6,11 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from dataclasses import astuple, dataclass, fields
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import pandas as pd
 
@@ -32,6 +33,32 @@ def input_hash(input_text: str) -> str:
     return hashlib.sha256(input_text.encode()).hexdigest()
 
 
+@dataclass(frozen=True, order=True)
+class CacheFolder:
+    """Cache folder location relative to the store root."""
+
+    kind: CacheKind
+    task: str
+    provider: str
+    model: str
+    descriptor_hash: str
+
+    @classmethod
+    def parse(cls, relative_path: PurePath) -> CacheFolder | None:
+        parts = relative_path.parts
+        if len(parts) != len(fields(cls)):
+            return None
+        return cls(*map(unquote, parts))
+
+    @property
+    def path(self) -> PurePosixPath:
+        return PurePosixPath(*(quote(part, safe="") for part in astuple(self)))
+
+    @property
+    def model_spec(self) -> str:
+        return f"{self.provider}/{self.model}"
+
+
 def cache_folder(
     store_root: Path | str,
     kind: CacheKind,
@@ -39,25 +66,9 @@ def cache_folder(
     model_spec: str,
     descriptor: dict[str, Any],
 ) -> Path:
-    return cache_model_folder(store_root, kind, task, model_spec) / descriptor_hash(
-        descriptor
-    )
-
-
-def cache_model_folder(
-    store_root: Path | str,
-    kind: CacheKind,
-    task: str,
-    model_spec: str,
-) -> Path:
     provider, model = model_spec.split("/", 1)
-    return (
-        Path(store_root)
-        / kind
-        / quote(task, safe="")
-        / quote(provider, safe="")
-        / quote(model, safe="")
-    )
+    folder = CacheFolder(kind, task, provider, model, descriptor_hash(descriptor))
+    return Path(store_root) / folder.path
 
 
 def write_descriptor(folder: Path, descriptor: dict[str, Any]) -> Path:
