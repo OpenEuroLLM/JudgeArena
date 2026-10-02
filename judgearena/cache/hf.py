@@ -6,7 +6,6 @@ import argparse
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote
 
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
@@ -15,6 +14,7 @@ from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
     DESCRIPTOR_FILENAME,
     JUDGEMENT_DB_NAME,
+    CacheFolder,
     CacheKind,
     CompletionCache,
     JudgementCache,
@@ -34,78 +34,57 @@ _STORE_TYPES = {
 }
 
 
-def _matches_cache_folder(
-    parts: tuple[str, ...],
+def _find_cache_folders(
+    files: set[str],
     *,
-    kind: CacheKind,
+    kind: CacheKind | None,
     task: str | None,
     model_spec: str | None,
-) -> bool:
-    if len(parts) != 5:
-        return False
-    folder_kind, folder_task, provider, model, _descriptor_hash = map(unquote, parts)
-    if folder_kind != kind or (task is not None and folder_task != task):
-        return False
-    return model_spec is None or model_spec.split("/", 1) == [provider, model]
+) -> list[CacheFolder]:
+    """Find complete cache folders in relative file paths matching the filters."""
+    folders = (
+        CacheFolder.parse(PurePosixPath(file).parent)
+        for file in files
+        if PurePosixPath(file).name == DESCRIPTOR_FILENAME
+    )
+    return sorted(
+        folder
+        for folder in folders
+        if folder is not None
+        and folder.kind in _DB_NAMES
+        and kind in (None, folder.kind)
+        and task in (None, folder.task)
+        and model_spec in (None, folder.model_spec)
+        and f"{folder.path}/{_DB_NAMES[folder.kind]}" in files
+    )
 
 
 def list_remote_cache_folders(
     api: HfApi,
     hf_repo: str,
     *,
-    kind: CacheKind,
+    kind: CacheKind | None = None,
     task: str | None = None,
     model_spec: str | None = None,
     revision: str | None = None,
-) -> list[str]:
-    """List complete remote cache folders matching the supplied filters."""
-    files = set(
-        api.list_repo_files(
-            repo_id=hf_repo,
-            repo_type="dataset",
-            revision=revision,
-        )
-    )
-    db_name = _DB_NAMES[kind]
-    return sorted(
-        {
-            str(PurePosixPath(path).parent)
-            for path in files
-            if PurePosixPath(path).name == DESCRIPTOR_FILENAME
-            and _matches_cache_folder(
-                PurePosixPath(path).parent.parts,
-                kind=kind,
-                task=task,
-                model_spec=model_spec,
-            )
-            and str(PurePosixPath(path).parent / db_name) in files
-        }
-    )
+) -> list[CacheFolder]:
+    files = api.list_repo_files(repo_id=hf_repo, repo_type="dataset", revision=revision)
+    return _find_cache_folders(set(files), kind=kind, task=task, model_spec=model_spec)
 
 
 def list_local_cache_folders(
     store_root: Path,
     *,
-    kind: CacheKind,
+    kind: CacheKind | None = None,
     task: str | None = None,
     model_spec: str | None = None,
-) -> list[Path]:
-    """List complete local cache folders matching the supplied filters."""
-    base = store_root / kind
-    if not base.exists():
-        return []
-    db_name = _DB_NAMES[kind]
-    return sorted(
-        metadata.parent
-        for metadata in base.rglob(DESCRIPTOR_FILENAME)
-        if _matches_cache_folder(
-            metadata.parent.relative_to(store_root).parts,
-            kind=kind,
-            task=task,
-            model_spec=model_spec,
-        )
-        and (metadata.parent / db_name).exists()
-    )
+) -> list[CacheFolder]:
+    files = {
+        path.relative_to(store_root).as_posix()
+        for path in store_root.rglob("*")
+        if path.is_file()
+    }
+    return _find_cache_folders(files, kind=kind, task=task, model_spec=model_spec)
 
 
 def _download_cache_folder(
@@ -151,7 +130,7 @@ def fetch_cache(
     store_root: Path,
     hf_repo: str,
     *,
-    kind: CacheKind,
+    kind: CacheKind | None = None,
     task: str | None = None,
     model_spec: str | None = None,
     api: HfApi | None = None,
@@ -167,19 +146,19 @@ def fetch_cache(
         model_spec=model_spec,
         revision=revision,
     )
-    for repo_folder in folders:
+    for folder in folders:
         with tempfile.TemporaryDirectory() as temporary_dir:
             remote_folder = _download_cache_folder(
                 hf_repo,
-                repo_folder,
-                kind=kind,
+                folder.path.as_posix(),
+                kind=folder.kind,
                 revision=revision,
                 local_dir=Path(temporary_dir),
             )
             merge_cache_folder(
-                store_root / repo_folder,
+                store_root / folder.path,
                 remote_folder,
-                kind=kind,
+                kind=folder.kind,
             )
     return len(folders)
 
@@ -250,7 +229,7 @@ def push_cache(
     store_root: Path,
     hf_repo: str,
     *,
-    kind: CacheKind,
+    kind: CacheKind | None = None,
     task: str | None = None,
     model_spec: str | None = None,
     api: HfApi | None = None,
@@ -261,9 +240,9 @@ def push_cache(
     return [
         push_cache_folder(
             store_root,
-            folder,
+            store_root / folder.path,
             hf_repo,
-            kind=kind,
+            kind=folder.kind,
             api=api,
             max_retries=max_retries,
         )
@@ -305,22 +284,13 @@ def cli(argv: list[str] | None = None) -> None:
     if not args.all and not any(filters):
         parser.error("Specify a filter or use --all.")
 
-    kinds = (args.kind,) if args.kind is not None else _CACHE_KINDS
-    count = 0
-    for kind in kinds:
-        kwargs = {
-            "kind": kind,
-            "task": args.task,
-            "model_spec": args.model_spec,
-        }
-        if args.action == "fetch":
-            count += fetch_cache(args.store_root, args.hf_repo, **kwargs)
-        else:
-            count += len(
-                push_cache(
-                    args.store_root,
-                    args.hf_repo,
-                    **kwargs,
-                )
-            )
+    kwargs = {
+        "kind": args.kind,
+        "task": args.task,
+        "model_spec": args.model_spec,
+    }
+    if args.action == "fetch":
+        count = fetch_cache(args.store_root, args.hf_repo, **kwargs)
+    else:
+        count = len(push_cache(args.store_root, args.hf_repo, **kwargs))
     print(f"{args.action.capitalize()}ed {count} cache folders.")

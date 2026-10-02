@@ -1,4 +1,5 @@
 import shutil
+from pathlib import PurePosixPath
 from types import SimpleNamespace
 
 import pandas as pd
@@ -9,6 +10,7 @@ from requests import Response
 import judgearena.cache.hf as cache_hf
 from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
+    CacheFolder,
     CompletionCache,
     cache_folder,
     write_descriptor,
@@ -80,6 +82,16 @@ def _stub_download(monkeypatch, remote_root):
         return str(destination)
 
     monkeypatch.setattr(cache_hf, "hf_hub_download", download)
+
+
+def test_cache_folder_round_trips_through_its_path(tmp_path):
+    folder = cache_folder(tmp_path, "completions", "task/one", "Dummy/org/model", {})
+
+    parsed = CacheFolder.parse(folder.relative_to(tmp_path))
+
+    assert parsed.path == PurePosixPath(folder.relative_to(tmp_path).as_posix())
+    assert (parsed.task, parsed.model_spec) == ("task/one", "Dummy/org/model")
+    assert CacheFolder.parse(PurePosixPath("completions/task")) is None
 
 
 def test_fetch_cache_applies_task_and_model_filters(tmp_path, monkeypatch):
@@ -230,23 +242,10 @@ def test_cli_uses_default_repo_and_all_scope(tmp_path, monkeypatch, capsys):
         (
             tmp_path,
             cache_hf.DEFAULT_HF_CACHE_REPO,
-            {
-                "kind": "completions",
-                "task": None,
-                "model_spec": None,
-            },
-        ),
-        (
-            tmp_path,
-            cache_hf.DEFAULT_HF_CACHE_REPO,
-            {
-                "kind": "judgements",
-                "task": None,
-                "model_spec": None,
-            },
-        ),
+            {"kind": None, "task": None, "model_spec": None},
+        )
     ]
-    assert capsys.readouterr().out == "Fetched 2 cache folders.\n"
+    assert capsys.readouterr().out == "Fetched 1 cache folders.\n"
 
 
 @pytest.mark.parametrize(
