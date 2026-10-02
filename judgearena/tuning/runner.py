@@ -198,7 +198,7 @@ def run_tune_judge(
     tune_dir = prepare_run_directory(
         cfg,
         Path(cfg.run.result_folder)
-        / f"tune-{safe_filename(cfg.task)}-{started_at:%Y%m%d_%H%M%S}",
+        / f"{safe_filename(cfg.task)}-{started_at:%Y%m%d_%H%M%S}",
     )
     base = cfg.model_dump(mode="json", exclude={"tune_judge"})
     if base["judge"]["prompt"] is None and base["judge"]["prompt_preset"] is None:
