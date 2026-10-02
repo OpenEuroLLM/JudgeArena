@@ -113,3 +113,6 @@ vllm = [
     "transformers>=5.5.1,<6.0.0",
 ]
 llamacpp = ["llama-cpp-python>=0.3.0"]
+tune = [
+    "neural-pipeline-search>=0.16.0",
+]

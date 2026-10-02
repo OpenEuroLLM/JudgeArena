@@ -26,6 +26,7 @@ from judgearena.tasks.schema import (
     EloScoringSpec,
     MetaEvalProtocol,
     MTBenchProtocol,
+    TuneJudgeProtocol,
 )
 
 # Set by build_run_config() for the duration of RunConfig() construction.
@@ -411,34 +412,57 @@ class MetaEvalArgs(BaseModel):
     """Share of arena prompts assigned to the validation partition."""
 
 
+class FloatRange(BaseModel):
+    """Continuous search-space axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lower: float
+    upper: float
+    log: bool = False
+
+
 class TuneJudgeArgs(BaseModel):
-    """Successive-halving search over judge settings on meta-eval battles."""
+    """Multi-fidelity neps search over judge settings on meta-eval battles."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    search_space: dict[str, list[Any]] = Field(min_length=1)
-    """Axes of the grid, keyed by dotted config path (``judge.temperature``). An
-    axis whose values are mappings of dotted overrides changes them together."""
+    search_space: dict[str, list[Any] | FloatRange] = Field(min_length=1)
+    """Axes keyed by dotted config path (``judge.temperature``), each a list of
+    choices or a ``{lower, upper}`` range. Choices that are mappings of dotted
+    overrides change those settings together. The base config is the prior."""
 
     price_per_million_tokens: dict[str, float]
     """USD per million judge tokens for every searched ``judge.model``."""
 
-    rungs: list[int] = Field(default=[10, 30, 90], min_length=1)
-    """Validation battles per model at each successive-halving rung."""
+    algorithm: Literal["priorband", "hyperband", "mo_hyperband"] = "priorband"
+    """neps optimizer; ``mo_hyperband`` also minimizes judge cost."""
 
-    keep_fraction: float = Field(default=1 / 3, gt=0, le=1)
-    """Share of configurations kept after each rung but the last."""
+    max_evaluations: int = Field(gt=0)
+    """Validation trials to run, counting each promotion to more battles."""
 
-    min_agreement: float | None = None
-    """Drop configurations whose human agreement does not exceed this value."""
+    min_battles_per_model: int = Field(default=10, gt=0)
+    """Lowest fidelity, in validation battles per model."""
+
+    max_battles_per_model: int = 90
+    """Highest fidelity, in validation battles per model."""
+
+    eta: int = Field(default=3, ge=2)
+    """Hyperband reduction factor between fidelities."""
+
+    prior_confidence: Literal["low", "medium", "high"] = "medium"
+    """How strongly priorband trusts the base config."""
 
     test_battles_per_model: int | None = Field(default=None, gt=0)
-    """Test battles per model for the selected judges. Defaults to the last rung."""
+    """Test battles per model for the selected judges. Defaults to the highest
+    fidelity."""
 
     @model_validator(mode="after")
-    def _validate_rungs(self) -> TuneJudgeArgs:
-        if any(n <= 0 for n in self.rungs) or self.rungs != sorted(set(self.rungs)):
-            raise ValueError("tune_judge.rungs must be positive and increasing.")
+    def _validate_fidelity(self) -> TuneJudgeArgs:
+        if self.min_battles_per_model >= self.max_battles_per_model:
+            raise ValueError(
+                "tune_judge.min_battles_per_model must be below max_battles_per_model."
+            )
         return self
 
 
@@ -590,9 +614,11 @@ class RunConfig(BaseSettings):
             raise ValueError(
                 "meta_eval config is only valid for meta-evaluation tasks."
             )
-        if self.tune_judge is not None and not is_meta_eval:
+        is_tune_judge = isinstance(protocol, TuneJudgeProtocol)
+        if (self.tune_judge is not None) != is_tune_judge:
             raise ValueError(
-                "tune_judge config is only valid for meta-evaluation tasks."
+                "tune_judge config is required by, and only valid for, "
+                "tune-judge tasks."
             )
         if is_elo:
             if self.elo is None:

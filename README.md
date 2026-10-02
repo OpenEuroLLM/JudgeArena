@@ -336,13 +336,16 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 ### Tuning a judge
 
-A `tune_judge` section turns a meta-eval task into a judge configuration search, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178):
+The `tune-judge-*` tasks search judge configurations against the same human battles as their `meta-eval-*` counterparts, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). They need the `tune` extra (`pip install 'judgearena[tune]'`), which installs [neps](https://github.com/automl/neps).
 
-- Each entry in `search_space` is a dotted config path with candidate values. An axis whose values are mappings changes several settings together, e.g. `alpaca-eval` together with `judge.top_logprobs`.
-- Every configuration runs as its own meta-eval subprocess on the validation split.
-- Successive halving: each rung in `rungs` judges more battles per model. After each rung, the configurations are ranked by a non-dominated sort on human agreement and judge cost, and the best `keep_fraction` survive.
+- Each entry in `search_space` is a dotted config path with a list of choices or a `{lower, upper}` range. Choices that are mappings change several settings together, e.g. `alpaca-eval` together with `judge.top_logprobs`.
+- A neps optimizer proposes each trial. The fidelity is validation battles per model, between `min_battles_per_model` and `max_battles_per_model`.
+  - `algorithm: priorband` (the default) uses the base config as a prior, so a known-good judge setup speeds up the search.
+  - `hyperband` samples uniformly.
+  - `mo_hyperband` also minimizes judge cost.
+- Every trial runs as a meta-eval subprocess of the matching `meta-eval-*` task on the validation split, so tuning and meta-eval share the judgement cache.
 - Cost is judge tokens (input plus output, counted with tiktoken) times `price_per_million_tokens[judge.model]`.
-- After the last rung, the best configuration for each judge model is scored once on the held-out test split.
+- At the end, the best configuration for each judge model at the highest fidelity is scored once on the held-out test split.
 
 ```bash
 judgearena --config_path configs/tune_judge.yaml
@@ -350,7 +353,7 @@ judgearena --config_path configs/tune_judge.yaml
 
 Outputs go to `tune-<task>-<timestamp>/` under `--run.result_folder`:
 
-- `trials.parquet`: one row per trial and rung.
+- `trials.parquet`: one row per neps trial.
 - `test_results.parquet`: test-split results for the selected configurations.
 - One meta-eval run directory per trial.
 

@@ -1,55 +1,109 @@
-"""Expand a judge-tuning search space into concrete trial overrides."""
+"""Translate a judge-tuning search space to and from a neps search space."""
 
 from __future__ import annotations
 
 import copy
-import hashlib
-import itertools
 import json
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING, Any
+
+from judgearena.config import FloatRange, TuneJudgeArgs
+
+if TYPE_CHECKING:
+    import neps
 
 TUNER_OWNED_KEYS = frozenset(
     {"task", "meta_eval.battles_per_model", "meta_eval.split", "run.result_folder"}
 )
+FIDELITY = "battles_per_model"
 
 
-@dataclass(frozen=True)
-class Trial:
-    """One judge configuration, given as dotted ``RunConfig`` overrides."""
-
-    overrides: dict[str, object]
-
-    @property
-    def id(self) -> str:
-        payload = json.dumps(self.overrides, sort_keys=True)
-        return hashlib.sha256(payload.encode()).hexdigest()[:12]
+def choice_overrides(name: str, value: object) -> dict[str, object]:
+    """Return the dotted overrides one choice of an axis applies."""
+    return dict(value) if isinstance(value, Mapping) else {name: value}
 
 
-def expand_grid(search_space: Mapping[str, Sequence[object]]) -> list[Trial]:
-    """Return the cartesian product of the search-space axes.
+def axis_overrides(tuning: TuneJudgeArgs) -> Iterator[dict[str, object]]:
+    """Yield every choice and range bound, rejecting tuner-owned keys."""
+    for name, axis in tuning.search_space.items():
+        values = [axis.lower, axis.upper] if isinstance(axis, FloatRange) else axis
+        for value in values:
+            overrides = choice_overrides(name, value)
+            owned = sorted(
+                key
+                for key in overrides
+                if key in TUNER_OWNED_KEYS or key.startswith("tune_judge")
+            )
+            if owned:
+                raise ValueError(
+                    f"search_space must not override tuner-owned keys: {owned}"
+                )
+            yield overrides
 
-    An axis name is the dotted ``RunConfig`` path its values override. An axis
-    whose values are mappings is grouped instead: each value is a set of dotted
-    overrides that change together, and the axis name is only a label.
+
+def _lookup(values: Mapping[str, Any], path: str) -> object:
+    for key in path.split("."):
+        if not isinstance(values, Mapping) or key not in values:
+            return None
+        values = values[key]
+    return values
+
+
+def build_neps_space(
+    tuning: TuneJudgeArgs, base: Mapping[str, Any]
+) -> neps.SearchSpace:
+    """Return the neps space whose prior is the base config.
+
+    Choices are JSON-encoded override mappings so grouped settings stay one
+    categorical; the fidelity is the number of validation battles per model.
     """
-    axes = [
-        [
-            dict(value) if isinstance(value, Mapping) else {name: value}
-            for value in values
-        ]
-        for name, values in search_space.items()
-    ]
-    keys = {key for choices in axes for choice in choices for key in choice}
-    owned = sorted(
-        key for key in keys if key in TUNER_OWNED_KEYS or key.startswith("tune_judge")
+    import neps
+
+    confidence = tuning.prior_confidence
+    parameters = {}
+    for name, axis in tuning.search_space.items():
+        if isinstance(axis, FloatRange):
+            prior = _lookup(base, name)
+            inside = (
+                isinstance(prior, int | float) and axis.lower <= prior <= axis.upper
+            )
+            parameters[name] = neps.HPOFloat(
+                lower=axis.lower,
+                upper=axis.upper,
+                log=axis.log,
+                prior=prior if inside else None,
+                prior_confidence=confidence,
+            )
+            continue
+        overrides = [choice_overrides(name, value) for value in axis]
+        choices = [json.dumps(choice, sort_keys=True) for choice in overrides]
+        prior = next(
+            (
+                encoded
+                for encoded, choice in zip(choices, overrides, strict=True)
+                if all(_lookup(base, key) == value for key, value in choice.items())
+            ),
+            None,
+        )
+        parameters[name] = neps.HPOCategorical(
+            choices=choices, prior=prior, prior_confidence=confidence
+        )
+    parameters[FIDELITY] = neps.HPOInteger(
+        lower=tuning.min_battles_per_model,
+        upper=tuning.max_battles_per_model,
+        is_fidelity=True,
     )
-    if owned:
-        raise ValueError(f"search_space must not override tuner-owned keys: {owned}")
-    return [
-        Trial({key: value for choice in combo for key, value in choice.items()})
-        for combo in itertools.product(*axes)
-    ]
+    return neps.SearchSpace(parameters)
+
+
+def decode_config(config: Mapping[str, Any]) -> tuple[dict[str, object], int]:
+    """Return the dotted overrides and battles per model of a neps config."""
+    overrides: dict[str, object] = {}
+    for name, value in config.items():
+        if name == FIDELITY:
+            continue
+        overrides.update(json.loads(value) if isinstance(value, str) else {name: value})
+    return overrides, int(config[FIDELITY])
 
 
 def apply_overrides(

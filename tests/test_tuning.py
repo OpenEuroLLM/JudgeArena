@@ -5,49 +5,73 @@ from __future__ import annotations
 import json
 import subprocess
 
-import numpy as np
 import pandas as pd
 import pytest
 from pydantic import ValidationError
 
 from judgearena.config import RunConfig, load_config
+from judgearena.tasks.registry import get_packaged_task
 from judgearena.tuning.runner import run_tune_judge
-from judgearena.tuning.search_space import apply_overrides, expand_grid
-from judgearena.tuning.selection import select_survivors
+from judgearena.tuning.search_space import (
+    axis_overrides,
+    build_neps_space,
+    decode_config,
+)
+
+_SEARCH_SPACE = {
+    "judge.temperature": [0.0, 0.5, 1.0],
+    "prompt": [
+        {"judge.prompt_preset": "meta-eval-pair-score", "judge.swap_mode": "fixed"},
+        {"judge.prompt_preset": "meta-eval-pair-score", "judge.swap_mode": "both"},
+    ],
+}
 
 
-def test_expand_grid_combines_plain_and_grouped_axes():
-    trials = expand_grid(
-        {
-            "judge.temperature": [0.0, 1.0],
-            "prompt": [
-                {"judge.prompt_preset": "meta-eval-pair-score"},
-                {"judge.prompt_preset": "alpaca-eval", "judge.top_logprobs": 20},
-            ],
-        }
+def _tuning_config(tmp_path, **tune_judge):
+    return RunConfig(
+        task="tune-judge-comparia-fr",
+        judge={"model": "Dummy/judge", "temperature": 0.0},
+        run={"result_folder": str(tmp_path), "no_log_file": True},
+        tune_judge={
+            "search_space": _SEARCH_SPACE,
+            "price_per_million_tokens": {"Dummy/judge": 1.0},
+            "max_evaluations": 6,
+            "min_battles_per_model": 2,
+            "max_battles_per_model": 6,
+            **tune_judge,
+        },
     )
 
-    assert len({trial.id for trial in trials}) == 4
-    assert {
-        "judge.temperature": 1.0,
-        "judge.prompt_preset": "alpaca-eval",
-        "judge.top_logprobs": 20,
-    } in [trial.overrides for trial in trials]
-    assert apply_overrides({"judge": {"model": "m"}}, trials[0].overrides)["judge"] == {
-        "model": "m",
-        "temperature": 0.0,
-        "prompt_preset": "meta-eval-pair-score",
-    }
+
+def test_neps_space_uses_base_config_as_prior(tmp_path):
+    pytest.importorskip("neps")
+    cfg = _tuning_config(tmp_path)
+    base = cfg.model_dump(mode="json")
+    base["judge"]["prompt_preset"] = "meta-eval-pair-score"
+    space = build_neps_space(cfg.tune_judge, base)
+
+    temperature, prompt = (
+        space.searchables[k] for k in ("judge.temperature", "prompt")
+    )
+    assert json.loads(temperature.prior) == {"judge.temperature": 0.0}
+    assert json.loads(prompt.prior) == _SEARCH_SPACE["prompt"][0]
+    overrides, battles = decode_config(
+        {
+            "judge.temperature": temperature.choices[2],
+            "prompt": prompt.choices[1],
+            "battles_per_model": 6,
+        }
+    )
+    assert overrides == {"judge.temperature": 1.0, **_SEARCH_SPACE["prompt"][1]}
+    assert battles == 6
     with pytest.raises(ValueError, match="tuner-owned"):
-        expand_grid({"meta_eval.split": ["test"]})
-
-
-def test_select_survivors_sorts_pareto_fronts_by_agreement_first():
-    agreement = np.array([0.50, 0.60, 0.55, 0.40])
-    cost = np.array([1.0, 2.0, 3.0, 0.5])
-
-    assert select_survivors(agreement, cost, n_keep=2, min_agreement=0.45) == [1, 0]
-    assert select_survivors(agreement, cost, n_keep=3, min_agreement=0.45) == [1, 0, 2]
+        list(
+            axis_overrides(
+                _tuning_config(tmp_path).tune_judge.model_copy(
+                    update={"search_space": {"meta_eval.split": ["test"]}}
+                )
+            )
+        )
 
 
 def _fake_trial(config_path):
@@ -68,65 +92,47 @@ def _fake_trial(config_path):
         }
     }
     (run_dir / "results.json").write_text(json.dumps({"metrics": metrics}))
-    completion = "x " * (1 + 10 * (cfg.judge.swap_mode == "both"))
     pd.DataFrame(
-        {
-            "battle_id": ["b1"],
-            "judge_input": ["prompt"],
-            "judge_completion": [completion],
-        }
+        {"battle_id": ["b1"], "judge_input": ["prompt"], "judge_completion": ["x"]}
     ).to_parquet(run_dir / "annotations.parquet")
 
 
-def _tuning_config(tmp_path, **tune_judge):
-    return RunConfig(
-        task="meta-eval-comparia",
-        judge={"model": "Dummy/judge"},
-        run={"result_folder": str(tmp_path), "no_log_file": True},
-        tune_judge={
-            "search_space": {
-                "judge.temperature": [0.0, 0.5, 1.0],
-                "judge.swap_mode": ["fixed", "both"],
-            },
-            "rungs": [2, 4],
-            "price_per_million_tokens": {"Dummy/judge": 1.0},
-            **tune_judge,
-        },
+@pytest.mark.parametrize("algorithm", ["priorband", "mo_hyperband"])
+def test_run_tune_judge_searches_validation_and_scores_pick_on_test(
+    tmp_path, algorithm
+):
+    pytest.importorskip("neps")
+    cfg = _tuning_config(tmp_path, algorithm=algorithm)
+    test_results = run_tune_judge(
+        cfg, get_packaged_task(cfg.task), execute_trial=_fake_trial
     )
-
-
-def test_run_tune_judge_halves_on_validation_and_scores_pick_on_test(tmp_path):
-    test_results = run_tune_judge(_tuning_config(tmp_path), execute_trial=_fake_trial)
 
     (tune_dir,) = tmp_path.glob("tune-*")
     trials = pd.read_parquet(tune_dir / "trials.parquet")
-    assert trials.groupby("rung").size().tolist() == [6, 2]
-    assert (trials["status"] == "failed").sum() == 1
-    (pick,) = test_results["trial_id"]
-    pick_cfg = load_config(tune_dir / "test" / pick / "config.yaml")
-    assert pick_cfg.meta_eval.split == "test"
-    assert (pick_cfg.judge.temperature, pick_cfg.judge.swap_mode) == (0.0, "fixed")
-    for rung in trials.itertuples():
-        rung_cfg = load_config(
-            tune_dir / f"rung-{rung.rung}" / rung.trial_id / "config.yaml"
-        )
-        assert rung_cfg.meta_eval.split == "validation"
-        assert rung_cfg.tune_judge is None
+    assert len(trials) == 6
+    assert set(trials["battles_per_model"]) <= {2, 6}
+    (pick,) = test_results.itertuples()
+    pick_cfg = load_config(tune_dir / "test" / pick.config_id / "config.yaml")
+    assert (pick_cfg.task, pick_cfg.meta_eval.split) == (
+        "meta-eval-comparia-fr",
+        "test",
+    )
+    for trial_dir in (tune_dir / "trials").iterdir():
+        trial_cfg = load_config(trial_dir / "config.yaml")
+        assert trial_cfg.task == "meta-eval-comparia-fr"
+        assert trial_cfg.meta_eval.split == "validation"
+        assert trial_cfg.tune_judge is None
 
 
-def test_tune_judge_requires_prices_and_meta_eval_task(tmp_path):
+def test_tune_judge_requires_prices_and_tune_task(tmp_path):
+    cfg = _tuning_config(tmp_path, price_per_million_tokens={})
     with pytest.raises(ValueError, match="missing models"):
-        run_tune_judge(
-            _tuning_config(tmp_path, price_per_million_tokens={}),
-            execute_trial=_fake_trial,
-        )
-    with pytest.raises(ValidationError, match="only valid for meta-evaluation"):
+        run_tune_judge(cfg, get_packaged_task(cfg.task), execute_trial=_fake_trial)
+    with pytest.raises(ValidationError, match="tune-judge tasks"):
         RunConfig(
-            task="alpaca-eval",
-            model={"name": "Dummy/a"},
+            task="meta-eval-comparia-fr",
             judge={"model": "Dummy/judge"},
-            tune_judge={
-                "search_space": {"judge.temperature": [0.0]},
-                "price_per_million_tokens": {},
-            },
+            tune_judge=cfg.tune_judge.model_dump(),
         )
+    with pytest.raises(ValidationError, match="tune-judge tasks"):
+        RunConfig(task="tune-judge-comparia-fr", judge={"model": "Dummy/judge"})

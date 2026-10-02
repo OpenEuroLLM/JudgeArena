@@ -20,10 +20,6 @@ def run_benchmark(cfg: RunConfig) -> object:
     logger.info("Using %s benchmark adapter for %s.", resolved.adapter.name, cfg.task)
     with track_usage() as usage_tracker:
         try:
-            if cfg.tune_judge is not None:
-                from judgearena.tuning.runner import run_tune_judge
-
-                return run_tune_judge(cfg, resolved.task)
             return resolved.adapter.runner(cfg, resolved.task)
         finally:
             usage_tracker.render_summary()
