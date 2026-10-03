@@ -1,0 +1,38 @@
+# Example judge-tuning run (Salinas et al., ICML 2025) with neps PriorBand.
+# Run with:  pip install 'judgearena[tune]'
+#            judgearena --config_path configs/tune_judge.yaml
+# Each configuration runs as a meta-eval-lmarena-140k-en trial on the
+# validation split; the settings below (Qwen2.5-7B, meta-eval-pair-score,
+# temperature 0, fixed swap) are the prior. The best configuration per judge
+# model is then scored on the test split.
+task: tune-judge-lmarena-140k-en
+judge:
+  model: VLLM/Qwen/Qwen2.5-7B-Instruct
+  temperature: 0.0
+  max_out_tokens: 2048
+  max_model_len: 16384
+meta_eval:
+  top_models: 20
+tune_judge:
+  search_space:
+    judge.model:
+      - VLLM/Qwen/Qwen2.5-7B-Instruct
+      - VLLM/google/gemma-2-9b-it
+    # Grouped axis: settings in one entry change together.
+    prompt:
+      - {judge.prompt_preset: meta-eval-pair-score}
+      - {judge.prompt_preset: arena-hard}
+      - {judge.prompt_preset: default_with_explanation}
+      - {judge.prompt_preset: alpaca-eval, judge.top_logprobs: 20, judge.max_out_tokens: 1}
+    judge.temperature: [0.0, 0.1, 1.0]
+    judge.swap_mode: [fixed, both]
+  algorithm: priorband
+  # One hyperband iteration with eta 3 over 10-90 battles is 20 trials.
+  max_evaluations: 40
+  min_battles_per_model: 10
+  max_battles_per_model: 90
+  # USD per million tokens, from judgetuning's llm_specs.py (measured vLLM
+  # throughput). Every searched judge.model needs a price.
+  price_per_million_tokens:
+    VLLM/Qwen/Qwen2.5-7B-Instruct: 0.12
+    VLLM/google/gemma-2-9b-it: 0.14

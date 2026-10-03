@@ -332,6 +332,31 @@ judgearena \
 
 Runs save the selected sample, judge evidence, metric battles, configuration, and results under `--run.result_folder`.
 
+`--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
+
+### Tuning a judge
+
+The `tune-judge-*` tasks search judge configurations against the same human battles as their `meta-eval-*` counterparts, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). They need the `tune` extra (`pip install 'judgearena[tune]'`), which installs [neps](https://github.com/automl/neps).
+
+- Each entry in `search_space` is a dotted config path with a list of choices or a `{lower, upper}` range. Choices that are mappings change several settings together, e.g. `alpaca-eval` together with `judge.top_logprobs`.
+- A neps optimizer proposes each trial. The fidelity is validation battles per model, between `min_battles_per_model` and `max_battles_per_model`.
+  - `algorithm: priorband` (the default) uses the base config as a prior, so a known-good judge setup speeds up the search.
+  - `hyperband` samples uniformly.
+  - `mo_hyperband` also minimizes judge cost.
+- Every trial runs as a meta-eval subprocess of the matching `meta-eval-*` task on the validation split, so tuning and meta-eval share the judgement cache.
+- Cost is judge tokens (input plus output, counted with tiktoken) times `price_per_million_tokens[judge.model]`.
+- At the end, the best configuration for each judge model at the highest fidelity is scored once on the held-out test split.
+
+```bash
+judgearena --config_path configs/tune_judge.yaml
+```
+
+Outputs go to `tune-<task>-<timestamp>/` under `--run.result_folder`:
+
+- `trials.parquet`: one row per neps trial.
+- `test_results.parquet`: test-split results for the selected configurations.
+- One meta-eval run directory per trial.
+
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).

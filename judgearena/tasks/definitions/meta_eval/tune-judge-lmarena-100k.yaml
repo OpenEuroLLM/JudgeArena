@@ -1,0 +1,7 @@
+extends: _lmarena-100k.yaml
+task: tune-judge-lmarena-100k
+description: Tune judge settings on human votes from LMSYS Chatbot Arena 100k.
+
+protocol:
+  runner: tune_judge
+  meta_eval_task: meta-eval-lmarena-100k

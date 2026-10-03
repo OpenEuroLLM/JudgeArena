@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,6 +26,7 @@ from judgearena.tasks.schema import (
     EloScoringSpec,
     MetaEvalProtocol,
     MTBenchProtocol,
+    TuneJudgeProtocol,
 )
 
 # Set by build_run_config() for the duration of RunConfig() construction.
@@ -403,6 +404,67 @@ class MetaEvalArgs(BaseModel):
     languages: list[str] | None = None
     """Restrict arena battles to these language codes. Defaults to all languages."""
 
+    split: Literal["all", "validation", "test"] = "all"
+    """Prompt-hashed arena partition to sample from. Judge tuning selects on
+    ``validation`` and reports on ``test``."""
+
+    validation_fraction: float = Field(default=0.5, gt=0, lt=1)
+    """Share of arena prompts assigned to the validation partition."""
+
+
+class FloatRange(BaseModel):
+    """Continuous search-space axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lower: float
+    upper: float
+    log: bool = False
+
+
+class TuneJudgeArgs(BaseModel):
+    """Multi-fidelity neps search over judge settings on meta-eval battles."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    search_space: dict[str, list[Any] | FloatRange] = Field(min_length=1)
+    """Axes keyed by dotted config path (``judge.temperature``), each a list of
+    choices or a ``{lower, upper}`` range. Choices that are mappings of dotted
+    overrides change those settings together. The base config is the prior."""
+
+    price_per_million_tokens: dict[str, float]
+    """USD per million judge tokens for every searched ``judge.model``."""
+
+    algorithm: Literal["priorband", "hyperband", "mo_hyperband"] = "priorband"
+    """neps optimizer; ``mo_hyperband`` also minimizes judge cost."""
+
+    max_evaluations: int = Field(gt=0)
+    """Validation trials to run, counting each promotion to more battles."""
+
+    min_battles_per_model: int = Field(default=10, gt=0)
+    """Lowest fidelity, in validation battles per model."""
+
+    max_battles_per_model: int = 90
+    """Highest fidelity, in validation battles per model."""
+
+    eta: int = Field(default=3, ge=2)
+    """Hyperband reduction factor between fidelities."""
+
+    prior_confidence: Literal["low", "medium", "high"] = "medium"
+    """How strongly priorband trusts the base config."""
+
+    test_battles_per_model: int | None = Field(default=None, gt=0)
+    """Test battles per model for the selected judges. Defaults to the highest
+    fidelity."""
+
+    @model_validator(mode="after")
+    def _validate_fidelity(self) -> TuneJudgeArgs:
+        if self.min_battles_per_model >= self.max_battles_per_model:
+            raise ValueError(
+                "tune_judge.min_battles_per_model must be below max_battles_per_model."
+            )
+        return self
+
 
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
@@ -459,6 +521,9 @@ class RunConfig(BaseSettings):
 
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
+
+    tune_judge: TuneJudgeArgs | None = None
+    """Tune the judge on a meta-evaluation task instead of scoring it once."""
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
@@ -548,6 +613,12 @@ class RunConfig(BaseSettings):
         if self.meta_eval is not None and not is_meta_eval:
             raise ValueError(
                 "meta_eval config is only valid for meta-evaluation tasks."
+            )
+        is_tune_judge = isinstance(protocol, TuneJudgeProtocol)
+        if (self.tune_judge is not None) != is_tune_judge:
+            raise ValueError(
+                "tune_judge config is required by, and only valid for, "
+                "tune-judge tasks."
             )
         if is_elo:
             if self.elo is None:
