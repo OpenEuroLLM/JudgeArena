@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HF_HUB_OFFLINE
 
 from judgearena.arenas_utils import (
     KNOWN_ARENAS,
@@ -48,6 +49,7 @@ def download_task_sources(task: ResolvedTaskSpec, _local_dir: Path) -> None:
             revision=source.revision,
             allow_patterns=source.allow_patterns or None,
             force_download=False,
+            local_files_only=HF_HUB_OFFLINE,
         )
 
 

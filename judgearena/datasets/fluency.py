@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HF_HUB_OFFLINE
 
 from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
 
@@ -97,12 +98,18 @@ def download_task_sources(task: ResolvedTaskSpec, local_tables_path: Path) -> No
     if task.spec.dataset.adapter != "fluency":
         raise ValueError(f"Task {task.task!r} does not use the fluency adapter.")
     source = _source(task)
+    local_dir = _source_local_dir(source, local_tables_path)
+    if HF_HUB_OFFLINE and all(
+        any(path.is_file() for path in (local_dir / language).glob("*.parquet"))
+        for language in _selected_languages(task)
+    ):
+        return
     snapshot_download(
         repo_id=source.repo_id,
         repo_type="dataset",
         revision=source.revision,
         allow_patterns=list(source.allow_patterns) or None,
-        local_dir=_source_local_dir(source, local_tables_path),
+        local_dir=local_dir,
         force_download=False,
     )
 

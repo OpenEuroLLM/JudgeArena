@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HF_HUB_OFFLINE
 
 from judgearena.log import get_logger
 from judgearena.tasks.schema import HuggingFaceDatasetSource
@@ -31,6 +32,7 @@ def _download_arena_dataset(
         allow_patterns=source.allow_patterns or default_allow_patterns,
         force_download=False,
         revision=source.revision,
+        local_files_only=HF_HUB_OFFLINE,
     )
 
 
