@@ -7,6 +7,8 @@ import json
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import brentq
+from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 
 
@@ -82,7 +84,11 @@ def fit_against_frozen_ratings(
     scale: float = 400.0,
     base: float = 10.0,
 ) -> float:
-    """Fit one candidate while keeping all opponent ratings fixed."""
+    """Fit fixed-reference Bradley-Terry by maximum likelihood.
+
+    Only the candidate rating varies. The concave log-likelihood is maximized
+    where its derivative is zero, or at a rating bound if the optimum is outside.
+    """
     required = {"model_a", "model_b", pref_col}
     missing = required - set(battles.columns)
     if missing:
@@ -117,23 +123,15 @@ def fit_against_frozen_ratings(
 
     log_base_over_scale = np.log(base) / scale
 
-    def score(rating: float) -> float:
-        logits = (opponent_ratings - rating) * log_base_over_scale
-        win_probabilities = np.exp(-np.logaddexp(0.0, logits))
-        return float(np.sum(candidate_wins - win_probabilities))
+    def log_likelihood_derivative(rating: float) -> float:
+        win_probabilities = expit((rating - opponent_ratings) * log_base_over_scale)
+        return float(log_base_over_scale * np.sum(candidate_wins - win_probabilities))
 
-    if score(lower) <= 0:
+    if log_likelihood_derivative(lower) <= 0:
         return lower
-    if score(upper) >= 0:
+    if log_likelihood_derivative(upper) >= 0:
         return upper
-
-    for _ in range(80):
-        midpoint = (lower + upper) / 2
-        if score(midpoint) > 0:
-            lower = midpoint
-        else:
-            upper = midpoint
-    return (lower + upper) / 2
+    return brentq(log_likelihood_derivative, lower, upper)
 
 
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:

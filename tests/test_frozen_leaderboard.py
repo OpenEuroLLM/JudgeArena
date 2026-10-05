@@ -1,6 +1,7 @@
 """Focused tests for the frozen-anchor leaderboard boundary."""
 
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,7 @@ from judgearena.benchmarks.elo.leaderboard import (
     score_frozen_submission,
     write_entry,
 )
+from judgearena.benchmarks.elo.rating import fit_against_frozen_ratings
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.config import RunConfig, dump_config, load_config
 from judgearena.tasks.registry import get_packaged_task
@@ -65,6 +67,28 @@ def _battles(*, duplicate=False):
             else:
                 rows.append(row)
     return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize(
+    ("win_rate", "expected"),
+    [(0, 0), (0.5, 1000), (0.6, 1000 + 400 * math.log10(1.5)), (1, 2000)],
+)
+@pytest.mark.parametrize("candidate_is_a", [False, True])
+def test_fixed_bradley_terry_matches_known_odds_and_bounds(
+    win_rate, expected, candidate_is_a
+):
+    anchors = {"reference": 1000.0}
+    battles = pd.DataFrame(
+        {
+            "model_a": ["candidate" if candidate_is_a else "reference"],
+            "model_b": ["reference" if candidate_is_a else "candidate"],
+            "pref": [1 - win_rate if candidate_is_a else win_rate],
+        }
+    )
+    rating = fit_against_frozen_ratings(battles, "candidate", anchors)
+
+    assert rating == pytest.approx(expected, rel=0, abs=1e-7)
+    assert anchors == {"reference": 1000.0}
 
 
 def test_anchor_round_trip(tmp_path):
