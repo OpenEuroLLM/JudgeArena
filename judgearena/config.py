@@ -33,6 +33,19 @@ _ACTIVE_CONFIG_PATH: str | None = None
 _ACTIVE_CLI_ARGS: list[str] | None = None
 
 
+def _resolve_prompt_paths(data: dict, config_path: Path) -> None:
+    judge = data.get("judge")
+    prompt = judge.get("prompt") if isinstance(judge, dict) else None
+    if not isinstance(prompt, dict):
+        return
+    for field in ("system_file", "user_file"):
+        if field not in prompt:
+            continue
+        prompt_path = Path(prompt[field])
+        if not prompt_path.is_absolute():
+            prompt[field] = config_path.parent / prompt_path
+
+
 def _default_store_root() -> str:
     cache_home = Path(os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache")
     return str(cache_home.expanduser() / "judgearena")
@@ -368,6 +381,10 @@ class EloArgs(BaseModel):
     """Number of human arena battles to sample for temperature calibration.
     Defaults to all. Requires ``calibrate_temperature``."""
 
+    leaderboard_dir: Path | None = None
+    """Frozen leaderboard directory. When set, use its panel and anchors instead
+    of sampling arena battles, then add this model to its entries."""
+
     def resolve(self, scoring: EloScoringSpec) -> EloArgs:
         """Resolve the actual task's scoring settings before a run."""
         parameters = next(
@@ -596,9 +613,11 @@ class RunConfig(BaseSettings):
                 CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
             )
         if _ACTIVE_CONFIG_PATH is not None:
-            sources.append(
-                YamlConfigSettingsSource(settings_cls, yaml_file=_ACTIVE_CONFIG_PATH)
+            yaml_source = YamlConfigSettingsSource(
+                settings_cls, yaml_file=_ACTIVE_CONFIG_PATH
             )
+            _resolve_prompt_paths(yaml_source.init_kwargs, Path(_ACTIVE_CONFIG_PATH))
+            sources.append(yaml_source)
         return tuple(sources) or (init_settings,)
 
 
@@ -628,10 +647,12 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
 
 def load_config(path: str | Path) -> RunConfig:
     """Load and validate a RunConfig from a YAML file."""
-    with open(path, encoding="utf-8") as f:
+    path = Path(path)
+    with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
+    _resolve_prompt_paths(data, path)
     return RunConfig(**data)
 
 

@@ -1,0 +1,42 @@
+# Draft starter setup. Change settings before creation, not in a published version.
+name: elo-english
+version: "0.01"
+languages: [en]
+# The reference model below is included automatically.
+anchor_models:
+  - claude-opus-4-20250514
+  - mistral-medium-2505
+  - o3-2025-04-16
+  - qwen3-235b-a22b-no-thinking
+battles_per_language: 100
+# Minimum usable human battles per anchor, in EACH language.
+min_anchor_battles: 100
+
+evaluation:
+  task: elo-lmarena-140k  # Includes the pinned Hugging Face dataset revision.
+  model:
+    name: Dummy/freeze-placeholder  # Replaced on submission; not run during creation.
+    max_out_tokens: 8192
+    temperature: 0.0
+    top_p: 1.0
+    seed: 0
+  judge:
+    model: OpenRouter/google/gemma-4-31b-it
+    prompt_preset: default
+    max_out_tokens: 4096
+    temperature: 0.0
+    swap_mode: both
+  generation:
+    n_instructions: null
+    truncate_all_input_chars: null
+    truncate_judge_input_chars: null
+  elo:
+    baseline_model: gemini-2.5-flash
+    soft_elo: true
+    soft_elo_temperature: 0.3
+    calibrate_temperature: true
+    calibration_size: 200  # Total pooled human comparisons, not per language.
+    n_bootstraps: 1000
+  run:
+    seed: 0
+    result_folder: results

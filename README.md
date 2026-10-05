@@ -414,6 +414,26 @@ Datasets are stored in:
 - `$JUDGEARENA_DATA` if set; otherwise `$OPENJURY_DATA` if set (legacy)
 - `~/judgearena-data/` if neither variable is set
 
+## Leaderboards
+
+Choose a setup from [configs/leaderboards](configs/leaderboards) and edit it for your benchmark.
+
+```bash
+# Create a leaderboard.
+uv run judgearena leaderboard create configs/leaderboards/english-v0.01.yaml \
+  --output leaderboards/example
+
+# Evaluate and add a model.
+uv run judgearena leaderboard evaluate leaderboards/example \
+  --model OpenRouter/qwen/qwen3-8b
+
+# View the results.
+uv run judgearena leaderboard show leaderboards/example
+```
+
+For an existing leaderboard, use its downloaded directory with `evaluate`.
+To publish saved results, use the [HF publication tool](https://huggingface.co/spaces/kbora/judgearena-leaderboard/blob/main/README.md).
+
 ## 🛠️ Development
 
 To maintain code quality, we use **pre-commit** hooks. Run this once to set them up:

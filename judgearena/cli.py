@@ -36,6 +36,10 @@ def cli(argv: list[str] | None = None) -> None:
         from judgearena.tasks.cli import run_task_command
 
         run_task_command(args[1:])
+    elif args[:1] == ["leaderboard"]:
+        from judgearena.benchmarks.elo.cli import run_leaderboard_command
+
+        run_leaderboard_command(args[1:])
     else:
         try:
             cfg = build_run_config(args)

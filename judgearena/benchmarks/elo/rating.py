@@ -72,6 +72,70 @@ def fit_bradley_terry(
     return dict(pd.Series(ratings, index=models.index))
 
 
+def fit_against_frozen_ratings(
+    battles: pd.DataFrame,
+    candidate: str,
+    anchor_ratings: dict[str, float],
+    *,
+    pref_col: str = "pref",
+    rating_bounds: tuple[float, float] = (0.0, 2000.0),
+    scale: float = 400.0,
+    base: float = 10.0,
+) -> float:
+    """Fit one candidate while keeping all opponent ratings fixed."""
+    required = {"model_a", "model_b", pref_col}
+    missing = required - set(battles.columns)
+    if missing:
+        raise ValueError(f"Missing battle columns: {sorted(missing)}")
+    if battles.empty:
+        raise ValueError("At least one battle is required")
+    lower, upper = map(float, rating_bounds)
+    model_a = battles["model_a"].to_numpy()
+    model_b = battles["model_b"].to_numpy()
+    candidate_is_a = model_a == candidate
+    candidate_is_b = model_b == candidate
+    if not np.all(candidate_is_a ^ candidate_is_b):
+        raise ValueError("Candidate must occur exactly once in every battle")
+
+    opponents = np.where(candidate_is_a, model_b, model_a)
+    unknown = sorted({str(model) for model in opponents if model not in anchor_ratings})
+    if unknown:
+        raise ValueError(f"Unknown frozen opponents: {unknown}")
+    opponent_ratings = np.asarray(
+        [anchor_ratings[model] for model in opponents], dtype=float
+    )
+    if not np.isfinite(opponent_ratings).all():
+        raise ValueError("Frozen opponent ratings must be finite")
+
+    try:
+        prefs = battles[pref_col].to_numpy(dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Preferences must be numeric") from error
+    if not np.isfinite(prefs).all() or np.any((prefs < 0) | (prefs > 1)):
+        raise ValueError("Preferences must be finite values from zero to one")
+    candidate_wins = np.where(candidate_is_a, 1.0 - prefs, prefs)
+
+    log_base_over_scale = np.log(base) / scale
+
+    def score(rating: float) -> float:
+        logits = (opponent_ratings - rating) * log_base_over_scale
+        win_probabilities = np.exp(-np.logaddexp(0.0, logits))
+        return float(np.sum(candidate_wins - win_probabilities))
+
+    if score(lower) <= 0:
+        return lower
+    if score(upper) >= 0:
+        return upper
+
+    for _ in range(80):
+        midpoint = (lower + upper) / 2
+        if score(midpoint) > 0:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2
+
+
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:
     rows = [
         {

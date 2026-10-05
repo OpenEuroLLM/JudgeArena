@@ -460,6 +460,28 @@ def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
     assert load_config(config_path) == cfg
 
 
+def test_load_config_resolves_custom_prompt_paths_from_config_directory(tmp_path):
+    (tmp_path / "system.txt").write_text("Judge carefully.")
+    (tmp_path / "user.txt").write_text(
+        "Instruction: {user_prompt}\nA: {completion_A}\nB: {completion_B}"
+    )
+    config_path = tmp_path / "relative.yaml"
+    config_path.write_text(
+        "task: alpaca-eval\n"
+        "model:\n  name: Dummy/a\n  baseline: Dummy/b\n"
+        "judge:\n  model: Dummy/j\n  prompt:\n"
+        "    system_file: system.txt\n    user_file: user.txt\n    parser: score\n"
+    )
+
+    cfg = load_config(config_path)
+
+    assert cfg.judge.prompt.system_file == tmp_path / "system.txt"
+    assert cfg.judge.prompt.user_file == tmp_path / "user.txt"
+    cli_cfg = config_module.build_run_config(["--config_path", str(config_path)])
+    assert cli_cfg.judge.prompt.system_file == tmp_path / "system.txt"
+    assert cli_cfg.judge.prompt.user_file == tmp_path / "user.txt"
+
+
 def test_cli_yaml_equivalence_generate(tmp_path):
     from judgearena.config import build_run_config, load_config
 
