@@ -143,7 +143,10 @@ def _download_mt_bench(
 
 def download_mt_bench(local_dir: Path | None = None) -> tuple[Path, Path | None]:
     """Compatibility wrapper downloading the registered MT-Bench sources."""
-    return _download_mt_bench(_task(), local_dir or data_root / "mt-bench")
+    task = _task()
+    return _download_mt_bench(
+        task, local_dir or _task_cache_dir(task, data_root / "tables")
+    )
 
 
 def download_mt_bench_model_answer(
@@ -154,7 +157,7 @@ def download_mt_bench_model_answer(
 ) -> Path:
     """Download a cached MT-Bench model-answer file if missing."""
     resolved = task or _task()
-    root = local_dir or data_root / "mt-bench"
+    root = local_dir or _task_cache_dir(resolved, data_root / "tables")
     answer_path = root / "data" / "mt_bench" / "model_answer" / f"{model_id}.jsonl"
     if answer_path.exists():
         return answer_path
@@ -344,4 +347,5 @@ def load_task_model_outputs(
 
 def load_mt_bench() -> pd.DataFrame:
     """Compatibility wrapper loading the registered MT-Bench task."""
-    return _load_mt_bench(_task(), data_root / "mt-bench")
+    task = _task()
+    return _load_mt_bench(task, _task_cache_dir(task, data_root / "tables"))
