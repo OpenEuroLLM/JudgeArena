@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import judgearena.benchmarks.elo.calibration as elo_calibration
+import judgearena.benchmarks.elo.execution as elo_execution
 import judgearena.benchmarks.elo.runner as estimate_elo_ratings
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
@@ -121,6 +122,31 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         },
         run={"result_folder": result_folder, "store_root": store_root},
     )
+
+
+def test_shared_judging_pairs_duplicate_ids_by_position(tmp_path):
+    cfg = _default_args(result_folder=str(tmp_path))
+    panel = pd.DataFrame(
+        {
+            "instruction": ["first question", "second question"],
+            "question_id": [101, 101],
+            "opponent_model": ["opponent", "opponent"],
+            "opponent_completion": ["first opponent", "second opponent"],
+            "candidate_position": ["A", "B"],
+        },
+        index=["ComparIA:101", "ComparIA:101"],
+    )
+    completions = pd.Series(["first candidate", "second candidate"], index=panel.index)
+    prompt = estimate_elo_ratings.resolve_run_judge_prompt(cfg.task, cfg.judge)
+
+    annotations, _, _ = elo_execution.judge_candidate_battles(
+        cfg, panel, completions, prompt
+    )
+
+    assert [(a.instruction, a.completion_A, a.completion_B) for a in annotations] == [
+        ("first question", "first candidate", "first opponent"),
+        ("second question", "second opponent", "second candidate"),
+    ]
 
 
 def test_missing_preference_remains_missing_in_hard_battles():
@@ -453,7 +479,7 @@ def test_run_elo_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
         )
         return [dummy] * n, None, pd.Series([1.0] * n)
 
-    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
+    monkeypatch.setattr(elo_execution, "judge_and_parse_prefs", spy_judge)
     run_elo_with_task(_default_args(result_folder=str(tmp_path), swap_mode="both"))
     assert captured.get("swap_mode") == "both"
 
@@ -489,7 +515,7 @@ def test_run_elo_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
     """
     captured = {}
     monkeypatch.setattr(
-        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
+        elo_execution, "judge_and_parse_prefs", _spy_judge_capturing(captured)
     )
     run_elo_with_task(
         _default_args(result_folder=str(tmp_path), strip_thinking_before_judging=True)
@@ -500,7 +526,7 @@ def test_run_elo_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
 def test_run_elo_strip_thinking_defaults_off(monkeypatch, tmp_path):
     captured = {}
     monkeypatch.setattr(
-        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
+        elo_execution, "judge_and_parse_prefs", _spy_judge_capturing(captured)
     )
     run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert captured.get("strip_thinking_before_judging") is False
@@ -702,13 +728,13 @@ def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
     captured = {}
-    real = estimate_elo_ratings.judge_and_parse_prefs
+    real = elo_execution.judge_and_parse_prefs
 
     def spy(*args, **kwargs):
         captured["parse"] = kwargs.get("parse")
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy)
+    monkeypatch.setattr(elo_execution, "judge_and_parse_prefs", spy)
     run_elo_with_task(_default_args(result_folder=str(tmp_path)))
 
     # The default preset's registered parser instance, not a fresh fallback.
@@ -735,13 +761,13 @@ def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(
         ),
     )
     captured_prefs = []
-    convert = estimate_elo_ratings.prefs_to_battle_results
+    convert = elo_execution.prefs_to_battle_results
 
     def capture_prefs(prefs, *args, **kwargs):
         captured_prefs.extend(prefs)
         return convert(prefs, *args, **kwargs)
 
-    monkeypatch.setattr(estimate_elo_ratings, "prefs_to_battle_results", capture_prefs)
+    monkeypatch.setattr(elo_execution, "prefs_to_battle_results", capture_prefs)
     run_elo_with_task(_default_args(result_folder=str(tmp_path)))
     assert captured_prefs and set(captured_prefs) == {0.75}
 
