@@ -1,4 +1,9 @@
-"""Frozen-anchor leaderboard boundaries, scoring, and file assembly."""
+"""Fixed reference ratings, candidate scoring, and the local leaderboard index.
+
+Load the saved benchmark inputs and fit each candidate against unchanged references.
+Candidate entry files and ``leaderboard.json`` grow as models are added; the
+benchmark inputs do not change.
+"""
 
 from __future__ import annotations
 
@@ -173,7 +178,11 @@ def protocol_identifier(
 def load_frozen_files(
     directory: str | Path,
 ) -> tuple[AnchorSet, pd.DataFrame, RunConfig]:
-    """Load and validate the immutable config, anchor, and panel files."""
+    """Read the saved benchmark inputs and verify their shared protocol ID.
+
+    Return reference ratings, the comparison panel, and the resolved config.
+    Candidate entry files and the leaderboard index are not loaded here.
+    """
     directory = Path(directory)
     anchors = AnchorSet.load(directory / "anchors.json")
     panel = pd.read_parquet(directory / "panel.parquet")

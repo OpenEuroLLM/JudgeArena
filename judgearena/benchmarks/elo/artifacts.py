@@ -1,4 +1,9 @@
-"""Portable frozen leaderboard artifacts and submission validation."""
+"""Export leaderboard files and validate saved candidate results without inference.
+
+``FROZEN_FILES`` lists the benchmark inputs: reference ratings, comparison panel,
+config, and prompts. Submissions contain a candidate entry and scored battles.
+Export bundles both for publication; this module does not upload them.
+"""
 
 from __future__ import annotations
 
@@ -86,7 +91,10 @@ def _reject_credentials(value):
 
 
 def load_frozen_artifacts(directory: Path) -> tuple[AnchorSet, pd.DataFrame, RunConfig]:
-    """Load portable files, rejecting credentials and external prompt paths."""
+    """Load benchmark inputs with the safety checks required for portable exports.
+
+    Reject credentials and external prompt paths before loading the config.
+    """
     # Check prompt paths before config loading can read files outside the snapshot.
     data = yaml.safe_load((directory / "config.yaml").read_text())
     _reject_credentials(data)
@@ -120,7 +128,10 @@ def validate_submission(
     entry_path: str | Path,
     battles_path: str | Path | io.BytesIO,
 ) -> LeaderboardEntry:
-    """Recompute a proposed entry from its complete canonical battle artifact."""
+    """Recompute a saved candidate entry from its battles and benchmark inputs.
+
+    Check panel coverage, preferences, ratings, and intervals without model calls.
+    """
     directory = Path(directory)
     anchors, panel, cfg = load_frozen_artifacts(directory)
     entry = LeaderboardEntry.model_validate_json(Path(entry_path).read_text())

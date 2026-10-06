@@ -1,4 +1,8 @@
-"""Create, submit to, and display a frozen Elo leaderboard."""
+"""Local commands for ``judgearena leaderboard``.
+
+Create a benchmark, evaluate candidates, show results, export files, or validate
+saved submissions. Ordinary Elo runs enter through ``judgearena.cli`` instead.
+"""
 
 from __future__ import annotations
 
@@ -35,6 +39,7 @@ class LeaderboardSetup(BaseModel):
 
 
 def load_setup(path: Path) -> LeaderboardSetup:
+    """Read creation settings and the evaluation config from a YAML setup file."""
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("A leaderboard setup must contain a YAML mapping.")
@@ -44,6 +49,7 @@ def load_setup(path: Path) -> LeaderboardSetup:
 
 
 def show_leaderboard(directory: Path) -> None:
+    """Print saved reference and candidate ratings without running evaluation."""
     board = json.loads((directory / "leaderboard.json").read_text())
     rows = []
     for entry in board["entries"]:
@@ -73,6 +79,7 @@ def show_leaderboard(directory: Path) -> None:
 
 
 def run_leaderboard_command(argv: list[str]) -> None:
+    """Handle ``judgearena leaderboard`` commands; all writes are local."""
     parser = argparse.ArgumentParser(prog="judgearena leaderboard")
     commands = parser.add_subparsers(dest="command", required=True)
     create = commands.add_parser("create", help="Freeze a version from a YAML setup.")

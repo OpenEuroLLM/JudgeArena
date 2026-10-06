@@ -1,4 +1,8 @@
-"""Candidate judging and battle conversion shared by Elo flows."""
+"""Shared judging and battle conversion for ordinary and fixed-reference Elo.
+
+Accept prepared candidate/opponent pairs and return scored battle rows. The
+calling runner owns sampling, response generation, rating fits, and file output.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,11 @@ def judge_candidate_battles(
     completions: pd.Series,
     resolved_prompt: ResolvedJudgePrompt,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
-    """Judge prepared opponents in panel order, with instruction IDs in its index."""
+    """Judge prepared candidate/opponent pairs in panel order.
+
+    The panel index identifies instructions. Return direct/reversed annotation
+    lists and preferences expressed in the original A/B order.
+    """
     our_completions = completions.tolist()
     opponent_completions = panel["opponent_completion"].tolist()
     opponent_models = panel["opponent_model"].tolist()
@@ -80,7 +88,12 @@ def build_candidate_battles(
     parser: JudgeParser,
     effective_temperature: float,
 ) -> pd.DataFrame:
-    """Build canonical per-pass battles, retaining original text for focal metrics."""
+    """Convert annotations to one canonical battle row per judge pass.
+
+    For soft Elo, reparse PairScore outputs at the selected temperature. Keep
+    original response text for metrics. The frozen runner collapses answer-order pairs
+    after this step; ordinary Elo uses the per-pass rows.
+    """
     annotations, annotations_reversed, prefs = judged
     row_annotations = list(annotations)
     passes = 1

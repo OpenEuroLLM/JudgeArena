@@ -249,7 +249,7 @@ def test_anchor_counts_exclude_self_battles_and_invalid_human_labels():
     unusable = pd.concat(
         [
             _battles().assign(model_a="strong", model_b="strong"),
-            _battles().assign(winner="unknown"),
+            _battles().assign(winner="unknown", model_a=None, model_b=""),
         ],
         ignore_index=True,
     )
@@ -268,6 +268,21 @@ def test_anchor_counts_exclude_self_battles_and_invalid_human_labels():
     with pytest.raises(ValueError, match="at least 5 usable human battles"):
         freeze._fit_language_anchors(
             battles, "en", ["reference", "strong"], "reference", 5
+        )
+
+
+@pytest.mark.parametrize("column", ["model_a", "model_b"])
+@pytest.mark.parametrize("model", [None, "", " \t", 17])
+def test_anchor_fit_rejects_malformed_model_names(column, model):
+    battles = _battles(4)
+    battles[column] = battles[column].astype(object)
+    battles.loc[0, column] = model
+
+    with pytest.raises(
+        ValueError, match=f"{column} must contain non-empty model names"
+    ):
+        freeze._fit_language_anchors(
+            battles, "en", ["reference", "strong"], "reference", 4
         )
 
 

@@ -1,4 +1,9 @@
-"""Freeze a balanced multilingual panel and its human anchor ratings."""
+"""Create the fixed benchmark inputs used by a leaderboard version.
+
+Fit reference ratings from human battles, select questions and opponent answers,
+and save these with the evaluation config and judge prompts. These files stay
+unchanged when candidates are evaluated; candidate results are saved separately.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,7 @@ from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 
 
 def _connected_models(battles: pd.DataFrame, baseline_model: str) -> set[str]:
+    """Find models linked to the baseline through human comparisons."""
     adjacency: dict[str, set[str]] = {}
     for model_a, model_b in battles.loc[:, ["model_a", "model_b"]].itertuples(
         index=False, name=None
@@ -62,6 +68,7 @@ def _prepare_freeze_config(
     languages: list[str],
     battles_per_language: int,
 ) -> tuple[RunConfig, ResolvedTaskSpec, EloProtocol, str, list[str]]:
+    """Resolve creation settings, validate references, and remove per-run sampling limits."""
     if battles_per_language <= 0:
         raise ValueError("battles_per_language must be positive.")
     if not languages or len(languages) != len(set(languages)):
@@ -289,15 +296,25 @@ def _fit_language_anchors(
     baseline_model: str,
     min_anchor_battles: int,
 ) -> tuple[pd.DataFrame, dict[str, float], dict[str, int], int]:
+    """Fit reference ratings from one language's baseline-connected human battle graph.
+
+    Exclude unlabelled and self-comparison rows; reject malformed model names.
+    The fit includes connected non-reference models too. Return eligible language
+    rows for panel selection, reference ratings and counts, and the fitted row count.
+    """
     language_battles = battles.loc[battles["lang"] == language].copy()
     language_battles["pref"] = language_battles["winner"].map(winner_to_pref)
+    language_battles = language_battles.dropna(subset=["pref"])
+    for column in ("model_a", "model_b"):
+        if any(
+            not isinstance(model, str) or not model.strip()
+            for model in language_battles[column]
+        ):
+            raise ValueError(
+                f"Language {language!r}: {column} must contain non-empty model names."
+            )
     language_battles = language_battles.loc[
-        language_battles["pref"].notna()
-        & language_battles["model_a"].notna()
-        & language_battles["model_b"].notna()
-        & language_battles["model_a"].astype(str).str.strip().ne("")
-        & language_battles["model_b"].astype(str).str.strip().ne("")
-        & language_battles["model_a"].ne(language_battles["model_b"])
+        language_battles["model_a"].ne(language_battles["model_b"])
     ].reset_index(drop=True)
 
     connected = _connected_models(language_battles, baseline_model)
@@ -416,6 +433,7 @@ def _write_artifacts(
     anchors: AnchorSet,
     resolved_prompt: ResolvedJudgePrompt,
 ) -> Path:
+    """Write fixed benchmark inputs and an initial reference-only leaderboard index."""
     output_path = Path(output)
     output_path.mkdir(parents=True, exist_ok=False)
     system_name = "judge-system-prompt.txt"
@@ -464,7 +482,12 @@ def freeze_leaderboard(
     version: str = "0.01",
     min_anchor_battles: int = 1,
 ) -> Path:
-    """Create one immutable panel, anchor scale, and resolved run config."""
+    """Create and save a benchmark version for subsequent candidate evaluations.
+
+    Fit human reference ratings, select the opponent panel, and optionally
+    calibrate the judge before saving the inputs. No candidate answers are
+    generated here.
+    """
     if Path(output).exists():
         raise FileExistsError(f"Frozen leaderboard output already exists: {output}")
     if min_anchor_battles < 1:

@@ -1,3 +1,10 @@
+"""Run ordinary Elo evaluation against sampled human arena battles.
+
+Generate and judge candidate answers, then jointly fit model ratings using the
+human and judged battles. Fixed-reference leaderboard runs are delegated to
+``leaderboard_runner`` before this ordinary flow starts.
+"""
+
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING

@@ -1,4 +1,9 @@
-"""Evaluate a candidate against an immutable leaderboard panel."""
+"""Evaluate one candidate using a leaderboard's saved benchmark inputs.
+
+Generate candidate answers, judge them against the saved opponent answers, and
+fit only the candidate rating. Save its entry and battle results, then update
+the local leaderboard index without changing the reference ratings or panel.
+"""
 
 import hashlib
 import json
