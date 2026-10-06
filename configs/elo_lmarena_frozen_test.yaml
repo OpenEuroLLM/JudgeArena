@@ -1,23 +1,11 @@
-# Local multilingual frozen-leaderboard smoke test.
-# It uses a deterministic dummy judge, so it needs no model credentials.
-# Replace the judge before freezing a real leaderboard.
+# Evaluation settings for a local multilingual leaderboard smoke test.
+# The deterministic dummy judge needs no model credentials.
+# Use these settings under `evaluation` in a leaderboard setup file;
+# see configs/leaderboards/multilingual-v0.01.yaml for the setup structure.
+# Replace the dummy judge before creating a real leaderboard.
 #
-# uv run python scripts/freeze_leaderboard.py \
-#   --config configs/elo_lmarena_frozen_test.yaml \
-#   --output leaderboards/lmarena-test-v1 \
-#   --name lmarena-test-v1 \
-#   --languages en fr de es \
-#   --battles-per-language 100 \
-#   --anchor-model claude-opus-4-20250514 \
-#   --anchor-model mistral-medium-2505 \
-#   --anchor-model o3-2025-04-16 \
-#   --anchor-model qwen3-235b-a22b-no-thinking
-#
-# Submit a dummy model after freezing:
-# uv run judgearena \
-#   --config_path leaderboards/lmarena-test-v1/config.yaml \
-#   --elo.leaderboard_dir leaderboards/lmarena-test-v1 \
-#   --model.name Dummy/test-candidate
+# uv run judgearena leaderboard create SETUP.yaml --output leaderboards/lmarena-test-v1
+# uv run judgearena leaderboard evaluate leaderboards/lmarena-test-v1 --model Dummy/test-candidate
 
 task: elo-lmarena-140k
 
@@ -42,7 +30,7 @@ generation:
   truncate_all_input_chars: 8192
 
 elo:
-  # This exact arena model is the fifth anchor and is fixed at 1000 Elo.
+  # This arena model defines the reference point at 1000 Elo.
   baseline_model: gemini-2.5-flash
   languages: [en, fr, de, es]
   n_bootstraps: 20

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from judgearena.benchmarks.elo import freeze
+from judgearena.benchmarks.elo import calibration, freeze
 from judgearena.benchmarks.elo.leaderboard import (
     AnchorSet,
     comparable_config,
@@ -81,7 +81,7 @@ def test_freeze_writes_exact_deterministic_balanced_panel(monkeypatch, tmp_path)
     def fail_calibration(*_args, **_kwargs):
         raise AssertionError("fixed beta must not build a calibration judge")
 
-    monkeypatch.setattr(freeze, "build_judge", fail_calibration)
+    monkeypatch.setattr(calibration, "build_judge", fail_calibration)
 
     first = freeze.freeze_leaderboard(
         config,
@@ -155,14 +155,14 @@ def test_freeze_calibrates_beta_once_without_mutating_config(monkeypatch, tmp_pa
     original = config.model_copy(deep=True)
     monkeypatch.setattr(freeze, "load_battles", lambda _task: _battles(24))
     calibrated = {}
-    judge = freeze.judge_and_parse_prefs
+    judge = calibration.judge_and_parse_prefs
 
     def capture_judging(**kwargs):
         calibrated.update(kwargs)
         return judge(**kwargs)
 
-    monkeypatch.setattr(freeze, "judge_and_parse_prefs", capture_judging)
-    monkeypatch.setattr(freeze, "_fit_temperature", lambda *_args: 0.75)
+    monkeypatch.setattr(calibration, "judge_and_parse_prefs", capture_judging)
+    monkeypatch.setattr(calibration, "fit_temperature", lambda *_args: 0.75)
     output = freeze.freeze_leaderboard(
         config,
         tmp_path / "calibrated",
@@ -195,7 +195,7 @@ def test_freeze_calibrates_beta_once_without_mutating_config(monkeypatch, tmp_pa
 def test_freeze_rejects_nonpositive_calibrated_beta(monkeypatch, tmp_path):
     config = _write_config(tmp_path, calibrate=True)
     monkeypatch.setattr(freeze, "load_battles", lambda _task: _battles(24))
-    monkeypatch.setattr(freeze, "_fit_temperature", lambda *_args, **_kwargs: 0.0)
+    monkeypatch.setattr(calibration, "fit_temperature", lambda *_args, **_kwargs: 0.0)
 
     with pytest.raises(ValueError, match="finite positive soft-Elo beta"):
         freeze.freeze_leaderboard(
@@ -227,7 +227,7 @@ def test_freeze_preflight_precedes_calibration(
     def fail_calibration(*_args, **_kwargs):
         pytest.fail("Invalid freezes must not reach calibration")
 
-    monkeypatch.setattr(freeze, "_calibrate_soft_elo", fail_calibration)
+    monkeypatch.setattr(freeze, "calibrate_frozen_temperature", fail_calibration)
     output = tmp_path / "frozen"
     if case == "existing":
         output.mkdir()
@@ -315,7 +315,7 @@ def test_minimum_anchor_battles_is_per_language(monkeypatch, tmp_path):
     def fail_calibration(*_args, **_kwargs):
         pytest.fail("Every language must pass the minimum before calibration")
 
-    monkeypatch.setattr(freeze, "_calibrate_soft_elo", fail_calibration)
+    monkeypatch.setattr(freeze, "calibrate_frozen_temperature", fail_calibration)
     with pytest.raises(ValueError, match="Language 'fr': anchors need at least 5"):
         freeze.freeze_leaderboard(
             config,

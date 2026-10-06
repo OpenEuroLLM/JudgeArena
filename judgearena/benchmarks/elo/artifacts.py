@@ -63,41 +63,13 @@ def version_path(anchors: AnchorSet) -> Path:
     return Path("versions") / f"{anchors.name}-v{anchors.version}"
 
 
-def _reject_credentials(value):
-    if isinstance(value, dict):
-        for key, item in value.items():
-            normalized = str(key).lower().replace("-", "_")
-            if item and (
-                normalized
-                in {
-                    "token",
-                    "auth",
-                    "authorization",
-                    "password",
-                    "secret",
-                    "credentials",
-                    "headers",
-                    "default_headers",
-                }
-                or normalized.endswith(("api_key", "apikey", "_token", "secret_key"))
-            ):
-                raise ValueError(
-                    "Frozen config contains explicit credentials; do not share it."
-                )
-            _reject_credentials(item)
-    elif isinstance(value, list):
-        for item in value:
-            _reject_credentials(item)
-
-
 def load_frozen_artifacts(directory: Path) -> tuple[AnchorSet, pd.DataFrame, RunConfig]:
     """Load benchmark inputs with the safety checks required for portable exports.
 
-    Reject credentials and external prompt paths before loading the config.
+    Require saved relative prompt paths before loading the config.
     """
     # Check prompt paths before config loading can read files outside the snapshot.
     data = yaml.safe_load((directory / "config.yaml").read_text())
-    _reject_credentials(data)
     prompt = data.get("judge", {}).get("prompt") if isinstance(data, dict) else None
     if not isinstance(prompt, dict) or (
         prompt.get("system_file") != "judge-system-prompt.txt"

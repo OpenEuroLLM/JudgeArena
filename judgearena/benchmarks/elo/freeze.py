@@ -7,17 +7,14 @@ unchanged when candidates are evaluated; candidate results are saved separately.
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
-from scipy.optimize import minimize_scalar
-from scipy.special import expit
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.benchmarks.arena import resolve_task_languages
+from judgearena.benchmarks.elo.calibration import calibrate_frozen_temperature
 from judgearena.benchmarks.elo.leaderboard import (
     AnchorSet,
     comparable_config,
@@ -25,11 +22,9 @@ from judgearena.benchmarks.elo.leaderboard import (
     rebuild_leaderboard,
 )
 from judgearena.benchmarks.elo.rating import fit_bradley_terry, winner_to_pref
-from judgearena.benchmarks.execution import build_judge
 from judgearena.config import JudgePromptSpec, RunConfig, dump_config, load_config
 from judgearena.datasets import load_battles
-from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
-from judgearena.prompts.parsing import PairScore
+from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.prompts.registry import ResolvedJudgePrompt
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
@@ -109,184 +104,6 @@ def _prepare_freeze_config(
     if any(not model for model in anchors):
         raise ValueError("anchor models must be non-empty strings.")
     return cfg, task, protocol_spec, baseline_model, anchors
-
-
-def _fit_temperature(
-    delta_s: ArrayLike,
-    y: ArrayLike,
-    bounds: tuple[float, float] = (-10.0, 10.0),
-) -> float:
-    """Fit beta to mean per-pass probabilities for the usable, non-tie pairs."""
-    delta_s = np.asarray(delta_s, dtype=float)
-    if delta_s.ndim == 1:
-        delta_s = delta_s[:, None]
-    y = np.asarray(y, dtype=float)
-    if delta_s.ndim != 2 or len(delta_s) != len(y):
-        raise ValueError("Score differences and outcomes must contain the same rows.")
-    delta_s = np.where(np.isfinite(delta_s), delta_s, np.nan)
-
-    def probabilities(beta: float) -> np.ndarray:
-        return np.nanmean(expit(beta * delta_s), axis=1)
-
-    def negative_log_likelihood(beta: float) -> float:
-        predicted = np.clip(probabilities(beta), 1e-12, 1 - 1e-12)
-        return float(-np.sum(y * np.log(predicted) + (1 - y) * np.log1p(-predicted)))
-
-    lower, upper = bounds
-    probe = np.stack(
-        [
-            probabilities(lower),
-            probabilities((lower + upper) / 2),
-            probabilities(upper),
-        ]
-    )
-    if np.all(np.ptp(probe, axis=0) <= 1e-10):
-        raise ValueError("Judge scores do not identify a soft-Elo beta.")
-
-    result = minimize_scalar(
-        negative_log_likelihood,
-        bounds=bounds,
-        method="bounded",
-    )
-    return float(result.x)
-
-
-def _calibration_data(
-    annotations,
-    reversed_annotations,
-    human_winners: list[str],
-) -> tuple[list[list[float]], list[float]]:
-    """Return canonical B-minus-A score gaps and human B outcomes."""
-    score_differences: list[list[float]] = []
-    outcomes: list[float] = []
-    for index, human_winner in enumerate(human_winners):
-        human_preference = winner_to_pref(human_winner)
-        if human_preference is None or human_preference == 0.5:
-            continue
-
-        direct_scores = (
-            {}
-            if annotations[index].parsed is None
-            else annotations[index].parsed.scores
-        )
-        direct_a = direct_scores.get("A")
-        direct_b = direct_scores.get("B")
-        direct_difference = (
-            float("nan")
-            if direct_a is None or direct_b is None
-            else direct_b - direct_a
-        )
-        differences = [direct_difference]
-        if reversed_annotations is not None:
-            reversed_scores = (
-                {}
-                if reversed_annotations[index].parsed is None
-                else reversed_annotations[index].parsed.scores
-            )
-            reversed_a = reversed_scores.get("A")
-            reversed_b = reversed_scores.get("B")
-            reversed_difference = (
-                float("nan")
-                if reversed_a is None or reversed_b is None
-                else reversed_a - reversed_b
-            )
-            differences.append(reversed_difference)
-        if np.isfinite(differences).any():
-            score_differences.append(differences)
-            outcomes.append(human_preference)
-    return score_differences, outcomes
-
-
-def _calibrate_soft_elo(
-    cfg: RunConfig,
-    battles: pd.DataFrame,
-    anchors: list[str],
-    languages: list[str],
-    resolved_prompt: ResolvedJudgePrompt,
-    *,
-    arena: str,
-) -> None:
-    """Resolve one soft-Elo beta before the leaderboard is frozen."""
-    assert cfg.elo is not None
-    if not cfg.elo.soft_elo:
-        if cfg.elo.calibrate_temperature:
-            raise ValueError("soft-Elo calibration requires elo.soft_elo: true.")
-        return
-    if not cfg.elo.calibrate_temperature:
-        beta = cfg.elo.soft_elo_temperature
-        if not np.isfinite(beta) or beta <= 0:
-            raise ValueError("elo.soft_elo_temperature must be finite and positive.")
-        return
-
-    calibration_battles = battles.loc[
-        battles["lang"].isin(languages)
-        & battles["model_a"].isin(anchors)
-        & battles["model_b"].isin(anchors)
-        & battles["model_a"].ne(battles["model_b"])
-    ]
-    if not isinstance(resolved_prompt.parser, PairScore):
-        raise ValueError("Frozen soft-Elo calibration requires a PairScore parser.")
-    n_samples = (
-        min(cfg.elo.calibration_size, len(calibration_battles))
-        if cfg.elo.calibration_size is not None
-        else len(calibration_battles)
-    )
-    rng = np.random.default_rng(cfg.run.seed)
-    calibration_battles = calibration_battles.sample(
-        n=n_samples,
-        random_state=int(rng.integers(0, 2**31)),
-    )
-    annotations, reversed_annotations, _ = judge_and_parse_prefs(
-        judge_chat_model=build_judge(cfg),
-        instructions=[
-            extract_turn_text(turns[0])
-            for turns in calibration_battles["conversation_a"]
-        ],
-        completions_A=[
-            extract_turn_text(turns[1])
-            for turns in calibration_battles["conversation_a"]
-        ],
-        completions_B=[
-            extract_turn_text(turns[1])
-            for turns in calibration_battles["conversation_b"]
-        ],
-        swap_mode=cfg.judge.swap_mode,
-        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
-        parse=resolved_prompt.parser,
-        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-        cache_row_metadata=[
-            {
-                "instruction_id": f"{arena}:{row.question_id}",
-                "model_a": row.model_a,
-                "model_b": row.model_b,
-                "orientation": "direct",
-            }
-            for row in calibration_battles.itertuples()
-        ],
-    )
-    score_differences, outcomes = _calibration_data(
-        annotations, reversed_annotations, calibration_battles["winner"].tolist()
-    )
-    if len(score_differences) < 10:
-        raise ValueError(
-            "Frozen soft-Elo calibration needs at least 10 usable physical pairs; "
-            f"found {len(score_differences)}."
-        )
-    beta = _fit_temperature(score_differences, outcomes)
-    if not np.isfinite(beta) or beta <= 0:
-        raise ValueError(
-            "The frozen judge did not produce a finite positive soft-Elo beta."
-        )
-    cfg.elo = cfg.elo.model_copy(
-        update={
-            "soft_elo_temperature": beta,
-            "calibrate_temperature": False,
-            "calibration_size": None,
-        }
-    )
 
 
 def _fit_language_anchors(
@@ -525,7 +342,7 @@ def freeze_leaderboard(
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
     if resolved_prompt.parser is None:
         raise ValueError("Frozen Elo judging requires a registered prompt parser.")
-    _calibrate_soft_elo(
+    calibrate_frozen_temperature(
         cfg, battles, anchors, languages, resolved_prompt, arena=protocol_spec.arena
     )
     frozen = AnchorSet(
@@ -548,30 +365,3 @@ def freeze_leaderboard(
         bootstrap_seed=cfg.run.seed,
     )
     return _write_artifacts(output, cfg, panel, frozen, resolved_prompt)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--anchor-model", action="append", default=[])
-    parser.add_argument("--languages", nargs="+", required=True)
-    parser.add_argument("--battles-per-language", required=True, type=int)
-    parser.add_argument("--name")
-    parser.add_argument("--version", default="0.01")
-    parser.add_argument("--min-anchor-battles", type=int, default=1)
-    args = parser.parse_args()
-    freeze_leaderboard(
-        args.config,
-        args.output,
-        args.anchor_model,
-        args.languages,
-        args.battles_per_language,
-        name=args.name,
-        version=args.version,
-        min_anchor_battles=args.min_anchor_battles,
-    )
-
-
-if __name__ == "__main__":
-    main()

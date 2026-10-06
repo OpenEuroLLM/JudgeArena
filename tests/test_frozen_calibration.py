@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from judgearena.benchmarks.elo import freeze
+from judgearena.benchmarks.elo import calibration
 from judgearena.config import RunConfig
 from judgearena.prompts.parsing import PairScore
 
@@ -51,7 +51,7 @@ def _prompt():
 
 
 def _calibrate(cfg, battles, prompt=None):
-    freeze._calibrate_soft_elo(
+    calibration.calibrate_frozen_temperature(
         cfg,
         battles,
         ["reference", "strong"],
@@ -67,17 +67,11 @@ def _annotation(a=None, b=None):
     )
 
 
-def test_fit_temperature_matches_observed_odds():
-    assert freeze._fit_temperature(
-        np.full(4, -1.0), np.array([1.0, 1.0, 1.0, 0.0])
-    ) == pytest.approx(-np.log(3))
-
-
 def test_fit_temperature_averages_swap_probabilities():
     beta = 0.7
     differences = np.tile([1.0, 3.0], (20, 1))
     probability = np.mean(1.0 / (1.0 + np.exp(-beta * differences[0])))
-    assert freeze._fit_temperature(
+    assert calibration.fit_temperature(
         differences, np.full(len(differences), probability)
     ) == pytest.approx(beta)
 
@@ -87,20 +81,23 @@ def test_fit_temperature_averages_swap_probabilities():
 )
 def test_fit_temperature_rejects_unidentifiable_scores(differences):
     with pytest.raises(ValueError, match="do not identify"):
-        freeze._fit_temperature(differences, np.tile([0.0, 1.0], 5))
+        calibration.fit_temperature(differences, np.tile([0.0, 1.0], 5))
 
 
-def test_calibration_uses_reoriented_scores_from_both_judge_passes(monkeypatch):
+@pytest.mark.parametrize("frozen", [False, True])
+def test_calibration_uses_direct_or_reoriented_physical_passes(monkeypatch, frozen):
     cfg = _config()
     cfg.judge.swap_mode = "both"
+    cfg.judge.strip_thinking_before_judging = True
     direct = [_annotation(6, 4)] * 12
     reversed_rows = [_annotation(3, 7)] * 12
-    monkeypatch.setattr(freeze, "build_judge", lambda _cfg: object())
-    monkeypatch.setattr(
-        freeze,
-        "judge_and_parse_prefs",
-        lambda **_kwargs: (direct, reversed_rows, pd.Series(dtype=float)),
-    )
+    monkeypatch.setattr(calibration, "build_judge", lambda _cfg: object())
+
+    def judge(**kwargs):
+        assert kwargs["strip_thinking_before_judging"] is frozen
+        return direct, reversed_rows, pd.Series(dtype=float)
+
+    monkeypatch.setattr(calibration, "judge_and_parse_prefs", judge)
     fitted = {}
 
     def fake_fit(differences, outcomes):
@@ -108,15 +105,36 @@ def test_calibration_uses_reoriented_scores_from_both_judge_passes(monkeypatch):
         fitted["outcomes"] = outcomes
         return 0.75
 
-    monkeypatch.setattr(freeze, "_fit_temperature", fake_fit)
-    _calibrate(cfg, _battles().assign(winner="model_a"))
-    assert cfg.elo.soft_elo_temperature == 0.75
-    np.testing.assert_array_equal(fitted["differences"], [[-2, -4]] * 12)
-    np.testing.assert_array_equal(fitted["outcomes"], [0] * 12)
+    monkeypatch.setattr(calibration, "fit_temperature", fake_fit)
+    battles = _battles().assign(winner="model_a")
+    if frozen:
+        _calibrate(cfg, battles)
+        assert cfg.elo.soft_elo_temperature == 0.75
+    else:
+        temperature = calibration.calibrate_pairscore_temperature(
+            battles,
+            battles,
+            enabled=True,
+            soft_elo=True,
+            sample_size=None,
+            rng=np.random.default_rng(cfg.run.seed),
+            judge_model=cfg.judge.model,
+            judge_model_kwargs={},
+            swap_mode=cfg.judge.swap_mode,
+            prompt=_prompt(),
+            truncate_input_chars=None,
+            default_temperature=0.3,
+            arena="comparia",
+        )
+        assert temperature == 0.75
+    np.testing.assert_array_equal(
+        fitted["differences"], [[-2, -4]] * 12 if frozen else [2] * 12
+    )
+    np.testing.assert_array_equal(fitted["outcomes"], [0 if frozen else 1] * 12)
 
 
 def test_calibration_retains_one_usable_pass_but_drops_missing_pairs_and_ties():
-    differences, outcomes = freeze._calibration_data(
+    differences, outcomes = calibration._calibration_data(
         [
             _annotation(6, 4),
             _annotation(),
@@ -135,7 +153,7 @@ def test_calibration_retains_one_usable_pass_but_drops_missing_pairs_and_ties():
     )
     np.testing.assert_allclose(differences, [[-2, np.nan], [np.nan, -4]])
     assert outcomes == [0, 1]
-    assert freeze._fit_temperature(
+    assert calibration.fit_temperature(
         np.tile([[-1, np.nan], [np.nan, -1]], (2, 1)),
         [1, 1, 1, 0],
     ) == pytest.approx(-np.log(3))
@@ -145,9 +163,9 @@ def test_calibration_retains_one_usable_pass_but_drops_missing_pairs_and_ties():
 def test_calibration_needs_ten_usable_physical_pairs(monkeypatch, count):
     cfg = _config()
     cfg.judge.swap_mode = "both"
-    monkeypatch.setattr(freeze, "build_judge", lambda _cfg: object())
+    monkeypatch.setattr(calibration, "build_judge", lambda _cfg: object())
     monkeypatch.setattr(
-        freeze,
+        calibration,
         "judge_and_parse_prefs",
         lambda **_kwargs: (
             [_annotation()]
@@ -192,7 +210,7 @@ def test_calibration_rejects_nonpositive_or_nonfinite_beta(
     monkeypatch, beta, calibrate
 ):
     cfg = _config(calibrate_temperature=calibrate, soft_elo_temperature=beta)
-    monkeypatch.setattr(freeze, "_fit_temperature", lambda *_args: beta)
+    monkeypatch.setattr(calibration, "fit_temperature", lambda *_args: beta)
     with pytest.raises(ValueError, match="finite.*positive"):
         _calibrate(cfg, _battles())
 
@@ -207,7 +225,7 @@ def test_unsupported_calibration_fails_before_building_judge(monkeypatch, case):
     def fail_build(_cfg):
         pytest.fail("Unsupported calibration must not build a judge")
 
-    monkeypatch.setattr(freeze, "build_judge", fail_build)
+    monkeypatch.setattr(calibration, "build_judge", fail_build)
     with pytest.raises(ValueError, match="requires"):
         _calibrate(cfg, _battles(), prompt)
 

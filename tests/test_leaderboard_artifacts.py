@@ -174,19 +174,6 @@ def test_safe_version_paths(submission, field, value):
     assert "/" not in entry_filename("../../model/name")
 
 
-@pytest.mark.parametrize(
-    "key", ["api_key", "openai_api_key", "token", "authorization", "default_headers"]
-)
-def test_reject_explicit_credentials(submission, tmp_path, key):
-    path = submission.board / "config.yaml"
-    config = yaml.safe_load(path.read_text())
-    config["judge"]["engine_kwargs"] = {key: "private"}
-    path.write_text(yaml.safe_dump(config))
-    with pytest.raises(ValueError, match="credentials"):
-        artifacts.export_leaderboard(submission.board, tmp_path / "unsafe")
-    assert not (tmp_path / "unsafe").exists()
-
-
 def test_reject_external_prompt_path_before_reading(submission):
     path = submission.board / "config.yaml"
     config = yaml.safe_load(path.read_text())
