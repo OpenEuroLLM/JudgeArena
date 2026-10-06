@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from judgearena.config import RunConfig, build_run_config
 from judgearena.models import make_model
-from judgearena.utils import generation_cache_token
 
 
 def test_make_model_dummy_captures_temperature_and_seed():
@@ -91,17 +90,6 @@ def test_baseline_sampling_params_inherit_from_model_when_unset():
         "top_k": 40,  # inherited from model.top_k
         "seed": 7,  # inherited from model.seed
     }
-
-
-def test_generation_cache_token_is_sensitive_to_sampling_params():
-    base = {"max_tokens": 32768, "temperature": 0.0, "seed": 1}
-    same = {"seed": 1, "temperature": 0.0, "max_tokens": 32768}  # order independent
-    changed_seed = {**base, "seed": 2}
-    changed_temp = {**base, "temperature": 1.0}
-
-    assert generation_cache_token(base) == generation_cache_token(same)
-    assert generation_cache_token(base) != generation_cache_token(changed_seed)
-    assert generation_cache_token(base) != generation_cache_token(changed_temp)
 
 
 def test_model_args_per_role_kwargs_are_independent():

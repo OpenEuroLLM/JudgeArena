@@ -16,6 +16,8 @@ from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
     FLUENCY_JUDGE_PROMPT_PRESET,
+    MT_BENCH_101_CLEAN_PROMPT_PRESET,
+    MT_BENCH_101_PROMPT_PRESET,
     PRESETS,
     default_preset_for_task,
     resolve_judge_prompt,
@@ -56,6 +58,16 @@ def test_mt_bench_default_is_delegated_fastchat():
     assert resolved.delegated is True
     assert resolved.system_prompt is None
     assert resolved.user_prompt_template == ""
+
+
+def test_mt_bench_101_prompt_presets_are_delegated():
+    default = resolve_judge_prompt(task="mt-bench-101")
+    cleaned = resolve_judge_prompt(preset=MT_BENCH_101_CLEAN_PROMPT_PRESET)
+
+    assert default.preset_name == MT_BENCH_101_PROMPT_PRESET
+    assert default.delegated is True
+    assert cleaned.preset_name == MT_BENCH_101_CLEAN_PROMPT_PRESET
+    assert cleaned.delegated is True
 
 
 def test_fluency_task_resolves_inline_system_prompt():

@@ -8,3 +8,6 @@ VLLM_REASONING_START_STR = "<think>"
 VLLM_REASONING_END_STR = (
     "I have to give the solution based on the thinking directly now.</think>"
 )
+
+VLLM_DEFAULT_TEMPERATURE = 0.6
+VLLM_DEFAULT_TOP_P = 0.95

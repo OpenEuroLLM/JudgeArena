@@ -1,0 +1,13 @@
+We aim to specifically evaluate the command-following ability of the large language model (AI assistant). The criteria for evaluation are as follows:
+
+1. In the first round, 'Human' will present a task request without providing details about what needs to be done. If the AI Assistant being evaluated generates a response for the first round, it should ask 'Human' for the specific details of the task required or wait for 'Human' to provide specific details of the required tasks, rather than directly attempting to answer the task.
+2. Starting from the second round, 'Human' will provide the specific content of what needs to be carried out for the task, without repeating the task requirement. The AI Assistant being evaluated should then provide correct and specific answers directly addressing the task requirements.
+
+Please rate the AI assistant's response using a 1 to 10 scale based on the following guidelines:
+
+- 1-3 points: The AI assistant failed to understand the task request and neither asked relevant questions nor provided information related to the task.
+- 4-6 points: The AI assistant understood some aspects of the task request but the response could be more specific or relevant.
+- 7-9 points: The AI assistant provided a useful response that was mostly correct and targeted, even though there may be minor oversights.
+- 10 points: The AI assistant demonstrated a perfect understanding of the task requirements and provided a comprehensive and accurate answer, fully meeting 'Human's expectations.
+
+Additionally, please provide a brief justification for the score given, particularly highlighting how the AI assistant's response aligns with or deviates from the above criteria. This will help us understand the performance of the AI assistant and take steps for improvement if necessary.

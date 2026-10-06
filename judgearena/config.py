@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -30,6 +31,11 @@ from judgearena.tasks.schema import (
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
 _ACTIVE_CLI_ARGS: list[str] | None = None
+
+
+def _default_store_root() -> str:
+    cache_home = Path(os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return str(cache_home.expanduser() / "judgearena")
 
 
 def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
@@ -410,8 +416,8 @@ class RunArgs(BaseModel):
     """Directory where annotations, results, and the resolved ``config.yaml``
     are written (under a per-run subfolder)."""
 
-    ignore_cache: bool = False
-    """If set, ignore cached completions and regenerate them."""
+    store_root: str | None = Field(default_factory=_default_store_root)
+    """Root directory for content-addressed caches. Set to null to disable."""
 
     use_tqdm: bool = False
     """Show a tqdm progress bar (not compatible with vLLM)."""
@@ -484,7 +490,11 @@ class RunConfig(BaseSettings):
         ):
             self.generation.truncate_all_input_chars = None
         model_values = self.model.model_dump(exclude_unset=True)
-        for field, engine_key in (("max_out_tokens", "max_tokens"), ("seed", "seed")):
+        for field, engine_key in (
+            ("temperature", "temperature"),
+            ("max_out_tokens", "max_tokens"),
+            ("seed", "seed"),
+        ):
             default = getattr(task_generation, f"default_{field}", None)
             if default is None:
                 continue
