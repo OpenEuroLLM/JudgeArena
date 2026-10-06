@@ -14,7 +14,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
@@ -22,8 +22,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from judgearena.artifacts import to_jsonable
 from judgearena.benchmarks.elo.rating import fit_against_frozen_ratings
-from judgearena.config import RunConfig, load_config
 from judgearena.log import get_logger
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
 
 logger = get_logger(__name__)
 
@@ -183,6 +185,8 @@ def load_frozen_files(
     Return reference ratings, the comparison panel, and the resolved config.
     Candidate entry files and the leaderboard index are not loaded here.
     """
+    from judgearena.config import load_config
+
     directory = Path(directory)
     anchors = AnchorSet.load(directory / "anchors.json")
     panel = pd.read_parquet(directory / "panel.parquet")

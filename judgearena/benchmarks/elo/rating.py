@@ -7,8 +7,7 @@ import json
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
-from scipy.special import expit
+from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LogisticRegression
 
 
@@ -125,23 +124,24 @@ def fit_against_frozen_ratings(
     rating_origin = (lower + upper) / 2
     theta_per_elo = np.log(base) / scale
     opponent_thetas = (opponent_ratings - rating_origin) * theta_per_elo
-
-    def negative_log_likelihood(theta):
-        logits = theta[0] - opponent_thetas
-        return np.sum(np.logaddexp(0.0, logits) - candidate_wins * logits)
-
-    def gradient(theta):
-        return np.array([np.sum(expit(theta[0] - opponent_thetas) - candidate_wins)])
-
-    fit = minimize(
-        negative_log_likelihood,
-        x0=[0.0],
-        jac=gradient,
-        method="BFGS",
-        options={"gtol": 1e-11},
+    theta_bounds = (
+        (lower - rating_origin) * theta_per_elo,
+        (upper - rating_origin) * theta_per_elo,
     )
-    # For this convex, one-parameter loss, clipping preserves the bounded optimum.
-    return float(np.clip(rating_origin + fit.x[0] / theta_per_elo, lower, upper))
+
+    def negative_log_likelihood(theta: float) -> float:
+        logits = theta - opponent_thetas
+        return float(np.sum(np.logaddexp(0.0, logits) - candidate_wins * logits))
+
+    fit = minimize_scalar(
+        negative_log_likelihood,
+        bounds=theta_bounds,
+        method="bounded",
+        options={"xatol": 1e-11},
+    )
+    # Bounded search excludes endpoints, which can win even with mixed outcomes.
+    theta = min((fit.x, *theta_bounds), key=negative_log_likelihood)
+    return float(np.clip(rating_origin + theta / theta_per_elo, lower, upper))
 
 
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:

@@ -65,7 +65,7 @@ class RatingEntry:
     """One model's place on the leaderboard."""
 
     model: str
-    rating: float  # mean over bootstraps
+    rating: float  # reported estimate; ordinary Elo uses the bootstrap mean
     ci_low: float
     ci_high: float
     n_battles: int

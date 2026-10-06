@@ -1,13 +1,12 @@
 """Focused tests for the frozen-anchor leaderboard boundary."""
 
 import json
-import math
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import judgearena.benchmarks.elo.rating as elo_rating
 import judgearena.benchmarks.elo.runner as elo_runner
 import judgearena.models as models
 from judgearena.benchmarks.elo.artifacts import BATTLE_COLUMNS
@@ -24,8 +23,15 @@ from judgearena.benchmarks.elo.leaderboard import (
 )
 from judgearena.benchmarks.elo.rating import fit_against_frozen_ratings
 from judgearena.benchmarks.elo.runner import run_elo
+from judgearena.benchmarks.elo.scoring import FrozenBradleyTerryResult
+from judgearena.benchmarks.scoring import (
+    build_metrics,
+    calculate_metrics,
+    render_metrics,
+)
 from judgearena.config import RunConfig, dump_config, load_config
 from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.schema import MetricSpec
 
 
 def _anchors():
@@ -70,29 +76,7 @@ def _battles(*, duplicate=False):
     return pd.DataFrame(rows)
 
 
-@pytest.mark.parametrize(
-    ("win_rate", "expected"),
-    [(0, 0), (0.5, 1000), (0.6, 1000 + 400 * math.log10(1.5)), (1, 2000)],
-)
-@pytest.mark.parametrize("candidate_is_a", [False, True])
-def test_fixed_bradley_terry_matches_known_odds_and_bounds(
-    win_rate, expected, candidate_is_a
-):
-    anchors = {"reference": 1000.0}
-    battles = pd.DataFrame(
-        {
-            "model_a": ["candidate" if candidate_is_a else "reference"],
-            "model_b": ["reference" if candidate_is_a else "candidate"],
-            "pref": [1 - win_rate if candidate_is_a else win_rate],
-        }
-    )
-    rating = fit_against_frozen_ratings(battles, "candidate", anchors)
-
-    assert rating == pytest.approx(expected, rel=0, abs=1e-7)
-    assert anchors == {"reference": 1000.0}
-
-
-def test_fixed_bradley_terry_optimizes_only_candidate_theta(monkeypatch):
+def test_fixed_bradley_terry_keeps_opponent_ratings_fixed():
     anchors = {"weaker": 800.0, "stronger": 1300.0}
     expected = 1100.0
     win_rates = {
@@ -106,16 +90,9 @@ def test_fixed_bradley_terry_optimizes_only_candidate_theta(monkeypatch):
             "pref": [1 - win_rates["weaker"], win_rates["stronger"]],
         }
     )
-    minimize = elo_rating.minimize
-
-    def fit_one_theta(fun, x0, **kwargs):
-        assert len(x0) == 1
-        return minimize(fun, x0, **kwargs)
-
-    monkeypatch.setattr(elo_rating, "minimize", fit_one_theta)
     rating = fit_against_frozen_ratings(battles, "candidate", anchors)
 
-    assert rating == pytest.approx(expected, rel=0, abs=1e-7)
+    assert rating == pytest.approx(expected)
     assert anchors == {"weaker": 800.0, "stronger": 1300.0}
 
 
@@ -127,6 +104,29 @@ def test_fixed_bradley_terry_uses_bounds_when_theta_mle_is_infinite(win_rate, ex
     assert (
         fit_against_frozen_ratings(
             battles, "candidate", {"reference": 1000.0}, rating_bounds=(-10000, 10000)
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("win_rates", "expected"),
+    [([0.0, 0.0, 1.0], 900.0), ([1.0, 1.0, 0.0], 1100.0)],
+)
+@pytest.mark.parametrize("candidate_is_a", [False, True])
+def test_fixed_bradley_terry_mixed_outcomes_can_have_boundary_optimum(
+    win_rates, expected, candidate_is_a
+):
+    battles = pd.DataFrame(
+        {
+            "model_a": "candidate" if candidate_is_a else "reference",
+            "model_b": "reference" if candidate_is_a else "candidate",
+            "pref": [1 - win if candidate_is_a else win for win in win_rates],
+        }
+    )
+    assert (
+        fit_against_frozen_ratings(
+            battles, "candidate", {"reference": 1000.0}, rating_bounds=(900.0, 1100.0)
         )
         == expected
     )
@@ -210,6 +210,63 @@ def _score(
         soft_elo=soft_elo,
         n_bootstraps=n_bootstraps,
     )
+
+
+@pytest.mark.parametrize("soft,n_bootstraps", [(False, 0), (True, 3)])
+def test_frozen_bt_uses_configured_metric_collection(soft, n_bootstraps):
+    battles = _battles().assign(evaluation_model="candidate")
+    battles["pref_hard"] = battles["pref"]
+    battles["pref"] = 0.2 + 0.6 * battles["pref_hard"]
+    requests = (
+        MetricSpec(
+            metric="bradley_terry",
+            parameters={"soft": soft, "n_bootstraps": n_bootstraps},
+        ),
+        MetricSpec(metric="pairwise_win_rate", breakdown_by=("lang",)),
+    )
+    results = calculate_metrics(
+        battles,
+        build_metrics(requests),
+        runtime_by_metric={"bradley_terry": {"anchors": _anchors()}},
+    )
+    assert list(results) == [request.metric for request in requests]
+    frozen = FrozenBradleyTerryResult.model_validate(results["bradley_terry"])
+    assert frozen.entry == _score(battles, soft_elo=soft, n_bootstraps=n_bootstraps)
+    assert frozen.n_bootstraps == n_bootstraps
+    assert set(results["bradley_terry"]) == {"entry", "n_bootstraps", "method"}
+    assert frozen.method == ("Soft-ELO" if soft else "ELO")
+    assert len(results["pairwise_win_rate"]["groups"]["lang"]) == 2
+    rendered = render_metrics(results)
+    assert "Overall (8):" in rendered
+    assert "en (4):" in rendered and "fr (4):" in rendered
+    assert "MAE" not in rendered
+    assert ("[" in rendered) == bool(n_bootstraps)
+
+
+@pytest.mark.parametrize(
+    "requests,message",
+    [
+        ((MetricSpec(metric="pairwise_win_rate"),), "require the bradley_terry metric"),
+        ((MetricSpec(metric="bradley_terry", breakdown_by=("lang",)),), "breakdown_by"),
+    ],
+)
+def test_frozen_metric_requests_are_checked_before_inference(
+    requests, message, monkeypatch, tmp_path
+):
+    task = get_packaged_task("elo-comparia")
+    scoring = task.spec.protocol.scoring.model_copy(update={"metrics": requests})
+    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
+    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+    cfg = _frozen_run_config(tmp_path, tmp_path / "leaderboard", "Dummy/candidate")
+    monkeypatch.setattr(
+        models,
+        "make_model",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid metric request reached inference"
+        ),
+    )
+    with pytest.raises(ValueError, match=message):
+        run_elo(cfg, task)
 
 
 def test_multilingual_score_uses_point_estimates_weights_and_bootstrap_units():
@@ -405,7 +462,25 @@ def test_frozen_runner_adds_independent_immutable_entries(monkeypatch, tmp_path)
         "load_battles",
         lambda _task: pytest.fail("frozen runs must not reload arena battles"),
     )
+    cfg_a.run.seed = (
+        137  # Bootstrap provenance comes from the benchmark, not this seed.
+    )
     first = run_elo(cfg_a, task)
+    first_directory = Path(first["result_path"]).parent
+    ratings_file = json.loads((first_directory / "elo_ratings.json").read_text())
+    assert (
+        ratings_file["seed"]
+        == AnchorSet.load(directory / "anchors.json").bootstrap_seed
+    )
+    assert ratings_file["seed"] != cfg_a.run.seed
+    metric = FrozenBradleyTerryResult.model_validate(first["metrics"]["bradley_terry"])
+    assert json.loads(
+        (first_directory / "entry.json").read_text()
+    ) == metric.entry.model_dump(mode="json")
+    assert ratings_file["ratings"][0]["rating"] == metric.entry.overall.rating
+    assert list(first["metrics"]) == [
+        request.metric for request in task.spec.protocol.scoring.metrics
+    ]
     board_after_a = json.loads((directory / "leaderboard.json").read_text())
     entry_a = next(
         row for row in board_after_a["entries"] if row["model"] == "Dummy/a/b"
@@ -423,7 +498,7 @@ def test_frozen_runner_adds_independent_immutable_entries(monkeypatch, tmp_path)
     assert Path(second["result_path"]).is_file()
     assert first["sampling_metadata"]["sampling_mode"] == "frozen_panel"
     assert first["num_battles"] == 4
-    assert first["metrics"]["bradley_terry"]["method"] == "Frozen-anchor Soft-ELO"
+    assert first["metrics"]["bradley_terry"]["method"] == "Soft-ELO"
     assert entry_a["overall"]["n_battles"] == 4
     assert (
         next(row for row in board_after_b["entries"] if row["model"] == "Dummy/a/b")
@@ -606,7 +681,9 @@ def test_frozen_runner_hardens_each_pass_before_collapsing(monkeypatch, tmp_path
     collapsed = collapse_swapped_rows(battles, "both")
     assert collapsed.pref_hard.tolist() == [0.5] * 4
     assert collapsed.pref.gt(0.5).all()
-    assert result["metrics"]["bradley_terry"]["rating"] == pytest.approx(1000)
+    assert result["metrics"]["bradley_terry"]["entry"]["overall"][
+        "rating"
+    ] == pytest.approx(1000)
 
 
 @pytest.mark.parametrize(

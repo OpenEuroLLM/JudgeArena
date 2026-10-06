@@ -3,12 +3,41 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
 
 from judgearena.battles import summarize_bootstrap
+from judgearena.benchmarks.elo.leaderboard import (
+    AnchorSet,
+    LeaderboardEntry,
+    score_frozen_submission,
+)
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
+
+
+class FrozenBradleyTerryResult(BaseModel):
+    """A fixed-reference estimate, shared by metric rendering and run persistence.
+
+    The entry owns the overall and per-language estimates. Unlike ordinary Elo,
+    reference ratings are not refitted and no reference-error metric is defined.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    entry: LeaderboardEntry
+    n_bootstraps: int = Field(ge=0)
+    method: Literal["Soft-ELO", "ELO"]
+
+
+def _evaluation_model(battles: pd.DataFrame) -> str:
+    """Read the single candidate identity attached to a metric battle table."""
+    models = battles["evaluation_model"].dropna().unique()
+    if len(models) != 1:
+        raise ValueError("Bradley-Terry requires exactly one model under evaluation.")
+    return str(models[0])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -32,14 +61,35 @@ class BradleyTerryMetric:
         battles: pd.DataFrame,
         *,
         rng: np.random.Generator | None = None,
+        anchors: AnchorSet | None = None,
     ) -> dict[str, object]:
-        """Calculate Bradley-Terry ratings from battle rows."""
+        """Fit joint arena ratings, or only the candidate when anchors are supplied.
+
+        Frozen scoring uses the benchmark's languages and bootstrap seed. Both
+        paths serialize their result at this metric boundary for collection.
+        """
         required = {"model_a", "model_b", "pref"}
+        if anchors is not None:
+            required.add("evaluation_model")
         if not self.soft:
             required.add("pref_hard")
         missing = sorted(required - set(battles.columns))
         if missing:
             raise ValueError(f"Bradley-Terry battles are missing columns: {missing}.")
+        if anchors is not None:
+            entry = score_frozen_submission(
+                battles,
+                _evaluation_model(battles),
+                anchors,
+                soft_elo=self.soft,
+                n_bootstraps=self.n_bootstraps,
+            )
+            return FrozenBradleyTerryResult(
+                entry=entry,
+                n_bootstraps=self.n_bootstraps,
+                method="Soft-ELO" if self.soft else "ELO",
+            ).model_dump(mode="json")
+
         scoring_battles = battles.copy()
         if not self.soft:
             scoring_battles["pref"] = scoring_battles["pref_hard"]
@@ -56,12 +106,7 @@ class BradleyTerryMetric:
                 )
             return {"ratings": point_ratings}
 
-        evaluation_models = battles["evaluation_model"].dropna().unique()
-        if len(evaluation_models) != 1:
-            raise ValueError(
-                "Bradley-Terry requires exactly one model under evaluation."
-            )
-        evaluation_model = str(evaluation_models[0])
+        evaluation_model = _evaluation_model(battles)
         if self.n_bootstraps > 0 and rng is None:
             raise ValueError("Bootstrapped Bradley-Terry requires an RNG.")
 
@@ -145,7 +190,27 @@ class BradleyTerryMetric:
 
     @staticmethod
     def render(values: dict[str, object]) -> str:
-        """Render point or arena-anchored Bradley-Terry values."""
+        """Render the result produced by joint or fixed-reference fitting."""
+        if "entry" in values:
+            result = FrozenBradleyTerryResult.model_validate(values)
+            lines = [
+                f"bradley_terry: {result.method} ratings "
+                f"({result.n_bootstraps} bootstraps)",
+                f"Model: {result.entry.model}",
+            ]
+            for label, summary in [
+                ("Overall", result.entry.overall),
+                *result.entry.by_language.items(),
+            ]:
+                interval = (
+                    f" [{summary.ci_low:.1f}, {summary.ci_high:.1f}]"
+                    if summary.ci_low is not None
+                    else ""
+                )
+                lines.append(
+                    f"  {label} ({summary.n_battles}): {summary.rating:.1f}{interval}"
+                )
+            return "\n".join(lines)
         if "method" not in values:
             lines = ["bradley_terry ratings:"]
             ratings = values["ratings"]

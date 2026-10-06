@@ -25,14 +25,13 @@ from judgearena.benchmarks.elo.execution import (
 )
 from judgearena.benchmarks.elo.leaderboard import (
     AnchorSet,
-    LeaderboardEntry,
     collapse_swapped_rows,
     comparable_config,
     load_frozen_files,
     rebuild_leaderboard,
-    score_frozen_submission,
     write_entry,
 )
+from judgearena.benchmarks.elo.scoring import FrozenBradleyTerryResult
 from judgearena.benchmarks.execution import (
     build_completion_cache,
     build_generation_kwargs,
@@ -52,6 +51,21 @@ def _prepare_frozen_run(
     cfg: RunConfig, task: ResolvedTaskSpec
 ) -> tuple[Path, AnchorSet, pd.DataFrame]:
     """Check runtime settings before a frozen leaderboard run."""
+    rating_request = next(
+        (
+            request
+            for request in task.spec.protocol.scoring.metrics
+            if request.metric == "bradley_terry"
+        ),
+        None,
+    )
+    if rating_request is None:
+        raise ValueError("Frozen leaderboards require the bradley_terry metric.")
+    if rating_request.breakdown_by:
+        raise ValueError(
+            "Frozen Bradley-Terry already includes per-language estimates; "
+            "breakdown_by is not supported for this metric."
+        )
     directory = Path(cfg.elo.leaderboard_dir)
     anchors, panel, frozen_config = load_frozen_files(directory)
     if anchors.task != task.task:
@@ -77,49 +91,6 @@ def _prepare_frozen_run(
     if any(row["model"] == cfg.model.name for row in leaderboard["entries"]):
         raise ValueError(f"Model {cfg.model.name!r} is already on the leaderboard.")
     return directory, anchors, panel
-
-
-def _frozen_rating_result(
-    entry: LeaderboardEntry, anchors: AnchorSet, cfg: RunConfig
-) -> dict[str, object]:
-    """Adapt a frozen entry to the existing Elo report renderer."""
-    ratings = {**anchors.overall_ratings, entry.model: entry.overall.rating}
-    battle_counts = {
-        model: sum(
-            anchors.counts_by_language[language][model]
-            for language in anchors.languages
-        )
-        for model in anchors.overall_ratings
-    }
-    battle_counts[entry.model] = entry.overall.n_battles
-    rating_entries = []
-    if entry.overall.ci_low is not None and entry.overall.ci_high is not None:
-        rating_entries.append(
-            {
-                "model": entry.model,
-                **entry.overall.model_dump(),
-                "source": "evaluated",
-            }
-        )
-    n_bootstraps = cfg.elo.n_bootstraps
-    return {
-        "ratings": ratings,
-        "rating": entry.overall.rating,
-        "rating_std": float("nan"),
-        "rating_n_bootstraps": n_bootstraps,
-        "mean_ratings": ratings,
-        "human_ratings": anchors.overall_ratings,
-        "bootstrap_ratings": [],
-        "rating_entries": rating_entries,
-        "battle_counts": battle_counts,
-        "mae_vs_human": float("nan"),
-        "mae_num_models": 0,
-        "n_bootstraps": n_bootstraps,
-        "method": "Frozen-anchor Soft-ELO" if cfg.elo.soft_elo else "Frozen-anchor ELO",
-        "evaluation_model": entry.model,
-        "llm_judged_battles": entry.overall.n_battles,
-        "human_anchor_battles": sum(anchors.human_battles_by_language.values()),
-    }
 
 
 def run_frozen_leaderboard(cfg: RunConfig, task: ResolvedTaskSpec) -> dict:
@@ -164,25 +135,25 @@ def run_frozen_leaderboard(cfg: RunConfig, task: ResolvedTaskSpec) -> dict:
     sampling_metadata["attempted_battles"] = n
     sampling_metadata["skipped_battles"] = n - len(metric_battles)
     model_name = cfg.model.name
-    leaderboard_entry = score_frozen_submission(
-        metric_battles,
-        model_name,
-        anchors,
-        soft_elo=cfg.elo.soft_elo,
-        n_bootstraps=cfg.elo.n_bootstraps,
-    )
     metric_battles["evaluation_model"] = model_name
-    non_rating_requests = tuple(
-        request
-        for request in protocol.scoring.metrics
-        if request.metric != "bradley_terry"
+    metrics = build_metrics(
+        protocol.scoring.metrics,
+        parameter_overrides_by_metric={
+            "bradley_terry": {
+                "n_bootstraps": cfg.elo.n_bootstraps,
+                "soft": cfg.elo.soft_elo,
+            },
+        },
     )
     metric_results = calculate_metrics(
-        metric_battles, build_metrics(non_rating_requests)
+        metric_battles,
+        metrics,
+        runtime_by_metric={"bradley_terry": {"anchors": anchors}},
     )
-    metric_results["bradley_terry"] = _frozen_rating_result(
-        leaderboard_entry, anchors, cfg
+    rating_result = FrozenBradleyTerryResult.model_validate(
+        metric_results["bradley_terry"]
     )
+    leaderboard_entry = rating_result.entry
     report = EloReport(
         arena=arena,
         judge_model=cfg.judge.model,
@@ -204,16 +175,24 @@ def run_frozen_leaderboard(cfg: RunConfig, task: ResolvedTaskSpec) -> dict:
     res_dir = prepare_run_directory(cfg, result_directory)
     result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
     write_battles(res_dir / "battles.parquet", df_llm_judge[list(BATTLE_COLUMNS)])
-    rating_result = metric_results["bradley_terry"]
-    if rating_result["rating_entries"]:
-        entries = [RatingEntry(**entry) for entry in rating_result["rating_entries"]]
+    summary = leaderboard_entry.overall
+    if summary.ci_low is not None:
         Leaderboard(
             arena=arena,
             model=model_name,
             judge_model=cfg.judge.model,
-            n_bootstraps=rating_result["n_bootstraps"],
-            seed=cfg.run.seed,
-            ratings=entries,
+            n_bootstraps=rating_result.n_bootstraps,
+            seed=anchors.bootstrap_seed,
+            ratings=[
+                RatingEntry(
+                    model=model_name,
+                    rating=summary.rating,
+                    ci_low=summary.ci_low,
+                    ci_high=summary.ci_high,
+                    n_battles=summary.n_battles,
+                    source="evaluated",
+                )
+            ],
         ).write(res_dir / "elo_ratings.json")
     write_run_metadata_safely(
         output_dir=res_dir,
