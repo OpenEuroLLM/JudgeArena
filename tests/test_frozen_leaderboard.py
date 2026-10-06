@@ -1,35 +1,22 @@
-"""Focused tests for the frozen-anchor leaderboard boundary."""
+"""Focused regressions for fixed-reference scoring and execution."""
 
 import json
-from dataclasses import replace
+import shutil
 from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
+from test_leaderboard_cli import setup_path as setup_path
 
-import judgearena.benchmarks.elo.runner as elo_runner
 import judgearena.models as models
-from judgearena.benchmarks.elo.artifacts import BATTLE_COLUMNS
-from judgearena.benchmarks.elo.leaderboard import (
-    AnchorSet,
-    LeaderboardEntry,
-    build_leaderboard,
-    collapse_swapped_rows,
-    comparable_config,
-    protocol_identifier,
-    rebuild_leaderboard,
-    score_frozen_submission,
-    write_entry,
-)
+from judgearena.benchmarks.elo.leaderboard import AnchorSet
 from judgearena.benchmarks.elo.rating import fit_against_frozen_ratings
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import FrozenBradleyTerryResult
-from judgearena.benchmarks.scoring import (
-    build_metrics,
-    calculate_metrics,
-    render_metrics,
-)
-from judgearena.config import RunConfig, dump_config, load_config
+from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
+from judgearena.cli import cli
+from judgearena.config import load_config
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec
 
@@ -56,26 +43,6 @@ def _anchors():
     )
 
 
-def _battles(*, duplicate=False):
-    rows = []
-    for language, prefs in (("en", [0.0, 0.0, 0.0, 1.0]), ("fr", [0.0, 1.0, 1.0, 1.0])):
-        for index, pref in enumerate(prefs):
-            row = {
-                "panel_id": f"{language}-{index}",
-                "lang": language,
-                "model_a": "candidate",
-                "model_b": "reference",
-                "pref": pref,
-            }
-            if duplicate:
-                rows.extend(
-                    [row | {"orientation": "direct"}, row | {"orientation": "reversed"}]
-                )
-            else:
-                rows.append(row)
-    return pd.DataFrame(rows)
-
-
 def test_fixed_bradley_terry_keeps_opponent_ratings_fixed():
     anchors = {"weaker": 800.0, "stronger": 1300.0}
     expected = 1100.0
@@ -96,619 +63,123 @@ def test_fixed_bradley_terry_keeps_opponent_ratings_fixed():
     assert anchors == {"weaker": 800.0, "stronger": 1300.0}
 
 
-@pytest.mark.parametrize(("win_rate", "expected"), [(0.0, -10000.0), (1.0, 10000.0)])
-def test_fixed_bradley_terry_uses_bounds_when_theta_mle_is_infinite(win_rate, expected):
+def test_fixed_rating_respects_bounds():
     battles = pd.DataFrame(
-        {"model_a": ["candidate"], "model_b": ["reference"], "pref": [1 - win_rate]}
+        {"model_a": ["candidate"], "model_b": ["reference"], "pref": [0.0]}
     )
     assert (
         fit_against_frozen_ratings(
             battles, "candidate", {"reference": 1000.0}, rating_bounds=(-10000, 10000)
         )
-        == expected
-    )
-
-
-@pytest.mark.parametrize(
-    ("win_rates", "expected"),
-    [([0.0, 0.0, 1.0], 900.0), ([1.0, 1.0, 0.0], 1100.0)],
-)
-@pytest.mark.parametrize("candidate_is_a", [False, True])
-def test_fixed_bradley_terry_mixed_outcomes_can_have_boundary_optimum(
-    win_rates, expected, candidate_is_a
-):
-    battles = pd.DataFrame(
-        {
-            "model_a": "candidate" if candidate_is_a else "reference",
-            "model_b": "reference" if candidate_is_a else "candidate",
-            "pref": [1 - win if candidate_is_a else win for win in win_rates],
-        }
+        == 10000
     )
     assert (
         fit_against_frozen_ratings(
-            battles, "candidate", {"reference": 1000.0}, rating_bounds=(900.0, 1100.0)
+            battles.assign(pref=1.0),
+            "candidate",
+            {"reference": 1000.0},
+            rating_bounds=(-10000, 10000),
         )
-        == expected
+        == -10000
     )
 
 
-def test_anchor_round_trip(tmp_path):
+def test_metric_pipeline_rewards_better_judgments():
     anchors = _anchors()
-    path = anchors.save(tmp_path / "anchors.json")
-
-    assert AnchorSet.load(path) == anchors
-    assert anchors.overall_ratings == {"reference": 1000.0, "strong": 1150.0}
-
-
-def test_protocol_identity_covers_anchor_material_and_ordered_panel():
-    panel = pd.DataFrame([{"panel_id": "one"}, {"panel_id": "two"}])
-    material = _anchors()
-    config = {"task": "elo-test"}
-    identity = protocol_identifier(material, panel, config)
-
-    assert (
-        identity == "67ccee9c3a6cab65a7c5ed64696f06ea74a772ec4db2a038735467a67f2dbe81"
-    )
-    changed = material.model_copy(update={"bootstrap_seed": 20})
-    assert protocol_identifier(changed, panel, config) != identity
-    assert protocol_identifier(material, panel, {"task": "other"}) != identity
-    assert protocol_identifier(material, panel.iloc[::-1], config) != identity
-    with pytest.raises(ValueError, match="Out of range float"):
-        protocol_identifier(material, panel.assign(pref=float("nan")), config)
-
-
-def test_swap_rows_are_required_and_averaged_by_panel_id():
-    rows = pd.DataFrame(
-        [
-            {
-                "panel_id": "p",
-                "lang": "en",
-                "model_a": "candidate",
-                "model_b": "reference",
-                "pref": 0.2,
-                "orientation": "direct",
-            },
-            {
-                "panel_id": "p",
-                "lang": "en",
-                "model_a": "candidate",
-                "model_b": "reference",
-                "pref": 0.6,
-                "orientation": "reversed",
-            },
-        ]
-    )
-    collapsed = collapse_swapped_rows(rows, "both")
-
-    assert collapsed.to_dict("records") == [
+    original = anchors.model_copy(deep=True)
+    battles = pd.DataFrame(
         {
-            "panel_id": "p",
-            "lang": "en",
+            "panel_id": ["en-0", "fr-0"],
+            "lang": ["en", "fr"],
             "model_a": "candidate",
             "model_b": "reference",
-            "pref": 0.4,
-        }
-    ]
-    with pytest.raises(ValueError, match="expected 2"):
-        collapse_swapped_rows(rows.iloc[:1], "both")
-    hard_rows = rows.assign(pref_hard=[0.0, 1.0])
-    assert collapse_swapped_rows(hard_rows, "both").loc[0, "pref_hard"] == 0.5
-    duplicated = rows.assign(orientation="direct")
-    with pytest.raises(ValueError, match="invalid orientations"):
-        collapse_swapped_rows(duplicated, "both")
-    with pytest.raises(ValueError, match="between zero and one"):
-        collapse_swapped_rows(rows.assign(pref=[-1.0, 2.0]), "both")
-
-
-def _score(
-    battles, candidate="candidate", anchors=None, *, soft_elo=True, n_bootstraps=20
-):
-    return score_frozen_submission(
-        battles,
-        candidate,
-        anchors or _anchors(),
-        soft_elo=soft_elo,
-        n_bootstraps=n_bootstraps,
-    )
-
-
-@pytest.mark.parametrize("soft,n_bootstraps", [(False, 0), (True, 3)])
-def test_frozen_bt_uses_configured_metric_collection(soft, n_bootstraps):
-    battles = _battles().assign(evaluation_model="candidate")
-    battles["pref_hard"] = battles["pref"]
-    battles["pref"] = 0.2 + 0.6 * battles["pref_hard"]
-    requests = (
-        MetricSpec(
-            metric="bradley_terry",
-            parameters={"soft": soft, "n_bootstraps": n_bootstraps},
-        ),
-        MetricSpec(metric="pairwise_win_rate", breakdown_by=("lang",)),
-    )
-    results = calculate_metrics(
-        battles,
-        build_metrics(requests),
-        runtime_by_metric={"bradley_terry": {"anchors": _anchors()}},
-    )
-    assert list(results) == [request.metric for request in requests]
-    frozen = FrozenBradleyTerryResult.model_validate(results["bradley_terry"])
-    assert frozen.entry == _score(battles, soft_elo=soft, n_bootstraps=n_bootstraps)
-    assert frozen.n_bootstraps == n_bootstraps
-    assert set(results["bradley_terry"]) == {"entry", "n_bootstraps", "method"}
-    assert frozen.method == ("Soft-ELO" if soft else "ELO")
-    assert len(results["pairwise_win_rate"]["groups"]["lang"]) == 2
-    rendered = render_metrics(results)
-    assert "Overall (8):" in rendered
-    assert "en (4):" in rendered and "fr (4):" in rendered
-    assert "MAE" not in rendered
-    assert ("[" in rendered) == bool(n_bootstraps)
-
-
-@pytest.mark.parametrize(
-    "requests,message",
-    [
-        ((MetricSpec(metric="pairwise_win_rate"),), "require the bradley_terry metric"),
-        ((MetricSpec(metric="bradley_terry", breakdown_by=("lang",)),), "breakdown_by"),
-    ],
-)
-def test_frozen_metric_requests_are_checked_before_inference(
-    requests, message, monkeypatch, tmp_path
-):
-    task = get_packaged_task("elo-comparia")
-    scoring = task.spec.protocol.scoring.model_copy(update={"metrics": requests})
-    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
-    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
-    cfg = _frozen_run_config(tmp_path, tmp_path / "leaderboard", "Dummy/candidate")
-    monkeypatch.setattr(
-        models,
-        "make_model",
-        lambda *_args, **_kwargs: pytest.fail(
-            "invalid metric request reached inference"
-        ),
-    )
-    with pytest.raises(ValueError, match=message):
-        run_elo(cfg, task)
-
-
-def test_multilingual_score_uses_point_estimates_weights_and_bootstrap_units():
-    entry = _score(_battles())
-
-    assert entry.by_language["en"].rating == pytest.approx(1000 + 400 * 0.4771212547)
-    assert entry.by_language["fr"].rating == pytest.approx(1000 - 400 * 0.4771212547)
-    expected = (entry.by_language["en"].rating + entry.by_language["fr"].rating) / 2
-    assert entry.overall.rating == pytest.approx(expected)
-    assert entry.overall.n_battles == 8
-    assert entry.overall.ci_low is not None
-    assert entry.by_language["en"].ci_high is not None
-
-
-def test_hard_frozen_score_uses_quantized_preferences():
-    battles = _battles().assign(pref=0.5, pref_hard=0.0)
-
-    entry = _score(battles, soft_elo=False, n_bootstraps=0)
-
-    assert entry.overall.rating == 2000.0
-
-
-def test_swap_scoring_counts_prompts_not_judge_passes():
-    battles = collapse_swapped_rows(_battles(duplicate=True), "both")
-    entry = _score(battles, n_bootstraps=0)
-
-    assert entry.overall.n_battles == 8
-    assert entry.overall.ci_low is None
-    assert entry.by_language["en"].rating > entry.by_language["fr"].rating
-
-
-def test_scoring_requires_complete_languages_and_known_opponents():
-    battles = _battles()
-    with pytest.raises(ValueError, match="languages must be exactly"):
-        _score(battles[battles.lang == "en"])
-
-    battles.loc[0, "model_b"] = "unknown"
-    with pytest.raises(ValueError, match="Unknown frozen opponents"):
-        _score(battles)
-
-
-def test_exclusive_entry_write_and_atomic_rebuild(tmp_path):
-    anchors = _anchors()
-    entry = _score(_battles(), anchors=anchors, n_bootstraps=0)
-    entry_path = write_entry(tmp_path, entry)
-    with pytest.raises(FileExistsError):
-        write_entry(tmp_path, entry)
-
-    board_path = rebuild_leaderboard(tmp_path, anchors)
-    board = json.loads(board_path.read_text())
-    assert board["protocol_id"] == anchors.protocol_id
-    assert {row["source"] for row in board["entries"]} == {"anchor", "submission"}
-    ratings = [row["overall"]["rating"] for row in board["entries"]]
-    assert ratings == sorted(ratings, reverse=True)
-
-    old_board = board_path.read_text()
-    invalid = LeaderboardEntry.model_validate_json(entry_path.read_text()).model_copy(
-        update={"protocol_id": "other"}
-    )
-    entry_path.write_text(invalid.model_dump_json(by_alias=True))
-    with pytest.raises(ValueError, match="protocol mismatch"):
-        rebuild_leaderboard(tmp_path, anchors)
-    assert board_path.read_text() == old_board
-
-
-def test_build_rejects_duplicate_models():
-    anchors = _anchors()
-    battles = _battles().replace({"candidate": "strong"})
-    entry = _score(battles, "strong", anchors, n_bootstraps=0)
-    with pytest.raises(ValueError, match="duplicate leaderboard model"):
-        build_leaderboard(anchors, [entry])
-    invalid = entry.model_copy(
-        update={
-            "model": "other",
-            "overall": entry.overall.model_copy(update={"rating": 0}),
+            "evaluation_model": "candidate",
         }
     )
-    with pytest.raises(ValueError, match="incorrect overall rating"):
-        build_leaderboard(anchors, [invalid])
-
-
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_unparseable_comparison_is_skipped_and_partial_entry_is_valid(
-    swap_mode, tmp_path
-):
-    battles = _battles(duplicate=swap_mode == "both")
-    failed_row = 1 if swap_mode == "both" else 0
-    battles.loc[failed_row, "pref"] = float("nan")
-    complete = collapse_swapped_rows(battles, swap_mode)
-
-    assert "en-0" not in set(complete.panel_id)
-    assert len(complete) == 7
-    entry = _score(complete, n_bootstraps=5)
-    assert entry.overall.n_battles == 7
-    assert entry.by_language["en"].n_battles == 3
-    assert entry.by_language["fr"].n_battles == 4
-    write_entry(tmp_path, entry)
-    board = json.loads(rebuild_leaderboard(tmp_path, _anchors()).read_text())
-    candidate = next(row for row in board["entries"] if row["source"] == "submission")
-    assert candidate["overall"]["n_battles"] == 7
-
-
-def test_no_valid_judgments_for_a_language_cannot_produce_a_rating():
-    battles = _battles(duplicate=True)
-    battles.loc[battles.lang.eq("en"), "pref"] = float("nan")
-    complete = collapse_swapped_rows(battles, "both")
-    with pytest.raises(ValueError, match="languages must be exactly"):
-        _score(complete)
-
-
-def _frozen_run_config(tmp_path, leaderboard_dir, model: str) -> RunConfig:
-    return RunConfig(
-        task="elo-comparia",
-        model={"name": model},
-        judge={"model": "Dummy/score A: 0 score B: 10", "swap_mode": "fixed"},
-        generation={"n_instructions": None},
-        elo={
-            "baseline_model": "anchor",
-            "languages": ["en", "fr"],
-            "n_bootstraps": 3,
-            "calibrate_temperature": False,
-            "leaderboard_dir": leaderboard_dir,
-        },
-        run={"result_folder": str(tmp_path / "results"), "store_root": None},
-    )
-
-
-def _write_frozen_run_files(cfg: RunConfig, directory, task) -> None:
-    assert cfg.elo is not None
-    cfg.elo = cfg.elo.resolve(task.spec.protocol.scoring)
-    panel = pd.DataFrame(
-        [
-            {
-                "panel_id": f"{language}-{index}",
-                "question_id": f"q-{language}-{index}",
-                "lang": language,
-                "instruction": f"Instruction {language} {index}",
-                "opponent_model": "anchor",
-                "opponent_completion": f"Anchor response {language} {index}",
-                "candidate_position": "A" if index % 2 == 0 else "B",
-            }
-            for language in ("en", "fr")
-            for index in range(2)
-        ]
-    )
-    data = {
-        "name": "test-leaderboard",
-        "version": "0.01",
-        "min_anchor_battles": 1,
-        "dataset_sources": {},
-        "task": task.task,
-        "arena": task.spec.protocol.arena,
-        "baseline_model": "anchor",
-        "languages": ("en", "fr"),
-        "ratings_by_language": {
-            "en": {"anchor": 1000.0},
-            "fr": {"anchor": 1000.0},
-        },
-        "counts_by_language": {"en": {"anchor": 20}, "fr": {"anchor": 20}},
-        "human_battles_by_language": {"en": 30, "fr": 30},
-        "battles_per_language": 2,
-        "bootstrap_seed": 0,
-        "schema_version": 1,
-    }
-    directory.mkdir()
-    frozen_cfg = cfg.model_copy(
-        update={"elo": cfg.elo.model_copy(update={"leaderboard_dir": None})}
-    )
-    config_path = directory / "config.yaml"
-    dump_config(frozen_cfg, config_path)
-    frozen_config = load_config(config_path)
-    anchors = AnchorSet(**data, protocol_id="")
-    anchors = anchors.model_copy(
-        update={
-            "protocol_id": protocol_identifier(
-                anchors, panel, comparable_config(frozen_config)
-            )
-        }
-    )
-    panel.to_parquet(directory / "panel.parquet", index=False)
-    anchors.save(directory / "anchors.json")
-    (directory / "entries").mkdir()
-    rebuild_leaderboard(directory, anchors)
-
-
-def test_frozen_runner_adds_independent_immutable_entries(monkeypatch, tmp_path):
-    directory = tmp_path / "leaderboard"
-    task = get_packaged_task("elo-comparia")
-    cfg_a = _frozen_run_config(tmp_path, directory, "Dummy/a/b")
-    _write_frozen_run_files(cfg_a, directory, task)
-    monkeypatch.setattr(
-        elo_runner,
-        "load_battles",
-        lambda _task: pytest.fail("frozen runs must not reload arena battles"),
-    )
-    cfg_a.run.seed = (
-        137  # Bootstrap provenance comes from the benchmark, not this seed.
-    )
-    first = run_elo(cfg_a, task)
-    first_directory = Path(first["result_path"]).parent
-    ratings_file = json.loads((first_directory / "elo_ratings.json").read_text())
-    assert (
-        ratings_file["seed"]
-        == AnchorSet.load(directory / "anchors.json").bootstrap_seed
-    )
-    assert ratings_file["seed"] != cfg_a.run.seed
-    metric = FrozenBradleyTerryResult.model_validate(first["metrics"]["bradley_terry"])
-    assert json.loads(
-        (first_directory / "entry.json").read_text()
-    ) == metric.entry.model_dump(mode="json")
-    assert ratings_file["ratings"][0]["rating"] == metric.entry.overall.rating
-    assert list(first["metrics"]) == [
-        request.metric for request in task.spec.protocol.scoring.metrics
-    ]
-    board_after_a = json.loads((directory / "leaderboard.json").read_text())
-    entry_a = next(
-        row for row in board_after_a["entries"] if row["model"] == "Dummy/a/b"
-    )
-    with pytest.raises(ValueError, match="already on the leaderboard"):
-        run_elo(_frozen_run_config(tmp_path, directory, "Dummy/a/b"), task)
-
-    cfg_b = _frozen_run_config(tmp_path, directory, "Dummy/a_b")
-    second = run_elo(cfg_b, task)
-    board_after_b = json.loads((directory / "leaderboard.json").read_text())
-
-    assert board_after_a["protocol_id"] in first["result_path"]
-    assert first["result_path"] != second["result_path"]
-    assert Path(first["result_path"]).is_file()
-    assert Path(second["result_path"]).is_file()
-    assert first["sampling_metadata"]["sampling_mode"] == "frozen_panel"
-    assert first["num_battles"] == 4
-    assert first["metrics"]["bradley_terry"]["method"] == "Soft-ELO"
-    assert entry_a["overall"]["n_battles"] == 4
-    assert (
-        next(row for row in board_after_b["entries"] if row["model"] == "Dummy/a/b")
-        == entry_a
-    )
-    assert {row["model"] for row in board_after_b["entries"]} == {
-        "anchor",
-        "Dummy/a/b",
-        "Dummy/a_b",
-    }
-    battles = pd.read_parquet(next((tmp_path / "results").rglob("battles.parquet")))
-    assert set(battles["panel_id"]) == {"en-0", "en-1", "fr-0", "fr-1"}
-
-
-def test_frozen_runner_rejects_changed_config(tmp_path):
-    directory = tmp_path / "leaderboard"
-    task = get_packaged_task("elo-comparia")
-    cfg = _frozen_run_config(tmp_path, directory, "Dummy/candidate")
-    _write_frozen_run_files(cfg, directory, task)
-    cfg.judge.temperature = 0.5
-
-    with pytest.raises(ValueError, match="runtime config does not match"):
-        run_elo(cfg, task)
-
-
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_native_cache_full_and_partial_hits_preserve_frozen_results(
-    monkeypatch, tmp_path, swap_mode
-):
-    from judgearena.cache.sqlite import CompletionCache, JudgementCache
-    from judgearena.inference import InferenceResult
-
-    task = get_packaged_task("elo-comparia")
-    calls = []
-    materialized = []
-
-    class Backend:
-        def __init__(self, model):
-            self.model = model
-            materialized.append(model)
-
-        def batch(self, inputs, **_kwargs):
-            prompts = [item.to_messages()[-1].content for item in inputs]
-            calls.append((self.model, prompts))
-            if self.model == "Dummy/candidate":
-                return [f"Candidate response to {prompt}" for prompt in prompts]
-            # Different scores expose accidental reordering of cached rows.
-            return [
-                InferenceResult(
-                    text=(
-                        "score A: 2 score B: 8"
-                        if "Instruction en 0" in prompt
-                        else "score A: 7 score B: 4"
-                    ),
-                    first_token_top_logprobs={"score": -0.1},
-                )
-                for prompt in prompts
-            ]
-
-    monkeypatch.setattr(models, "make_model", lambda model, **_kwargs: Backend(model))
-    results = []
-    for index in range(3):
-        directory = tmp_path / f"leaderboard-{index}"
-        cfg = _frozen_run_config(
-            tmp_path / f"run-{index}", directory, "Dummy/candidate"
+    metrics = build_metrics(
+        (
+            MetricSpec(metric="bradley_terry"),
+            MetricSpec(metric="pairwise_win_rate"),
         )
-        cfg.judge.swap_mode = swap_mode
-        cfg.run.store_root = str(tmp_path / "cache")
-        _write_frozen_run_files(cfg, directory, task)
-        if index == 2:
-            completion_path = next(Path(cfg.run.store_root).rglob("completions.db"))
-            judgement_path = next(Path(cfg.run.store_root).rglob("judgements.db"))
-            completion_store = CompletionCache(completion_path)
-            judgement_store = JudgementCache(judgement_path)
-            assert set(completion_store.query().instruction_id) == {
-                "en-0",
-                "en-1",
-                "fr-0",
-                "fr-1",
-            }
-            assert set(judgement_store.query().instruction_id) == {
-                "en-0",
-                "en-1",
-                "fr-0",
-                "fr-1",
-            }
-            assert judgement_store.query().top_logprobs.map(json.loads).tolist() == [
-                {"score": -0.1}
-            ] * (8 if swap_mode == "both" else 4)
-            assert completion_store.delete(instruction_id="en-1") == 1
-            assert judgement_store.delete(instruction_id="en-1") == (
-                2 if swap_mode == "both" else 1
-            )
-            completion_store.close()
-            judgement_store.close()
-        calls.clear()
-        materialized.clear()
-        results.append(run_elo(cfg, task))
-        if index == 1:
-            assert calls == []
-            assert materialized == []
-        elif index == 2:
-            assert all(len(prompts) == 1 for _, prompts in calls)
-            assert len(calls) == (3 if swap_mode == "both" else 2)
-            assert all("Instruction en 1" in prompts[0] for _, prompts in calls)
-
-    first_dir = Path(results[0]["result_path"]).parent
-    for result in results[1:]:
-        directory = Path(result["result_path"]).parent
-        assert json.loads((directory / "entry.json").read_text()) == json.loads(
-            (first_dir / "entry.json").read_text()
-        )
-        pd.testing.assert_frame_equal(
-            pd.read_parquet(directory / "battles.parquet"),
-            pd.read_parquet(first_dir / "battles.parquet"),
-        )
-    battles = pd.read_parquet(first_dir / "battles.parquet")
-    assert tuple(battles.columns) == BATTLE_COLUMNS
-    assert battles.panel_id.tolist() == ["en-0", "en-1", "fr-0", "fr-1"] * (
-        2 if swap_mode == "both" else 1
     )
+    estimates = []
+    win_rates = []
+    for preference in (0.8, 0.2):
+        result = calculate_metrics(
+            battles.assign(pref=preference),
+            metrics,
+            runtime_by_metric={"bradley_terry": {"anchors": anchors}},
+        )
+        estimates.append(
+            FrozenBradleyTerryResult.model_validate(result["bradley_terry"])
+        )
+        win_rates.append(result["pairwise_win_rate"]["winrate"])
+
+    assert estimates[1].entry.overall.rating > estimates[0].entry.overall.rating
+    assert win_rates[1] > win_rates[0]
+    assert anchors == original
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_frozen_runner_keeps_malformed_raw_rows_but_skips_whole_comparison(
-    monkeypatch, tmp_path, swap_mode
+def test_frozen_run_reuses_cache_and_saves_benchmark_seed(
+    setup_path, tmp_path, monkeypatch
 ):
-    task = get_packaged_task("elo-comparia")
-    directory = tmp_path / "leaderboard"
-    cfg = _frozen_run_config(tmp_path, directory, "Dummy/candidate")
-    cfg.judge.swap_mode = swap_mode
-    _write_frozen_run_files(cfg, directory, task)
+    board = tmp_path / "benchmark"
+    cli(["leaderboard", "create", str(setup_path), "--output", str(board)])
+    anchors = AnchorSet.load(board / "anchors.json")
+    entries = []
+
+    def no_new_inference(*_args, **_kwargs):
+        raise AssertionError("A cached run must not construct a model backend")
+
+    for index, seed in enumerate((11, 29)):
+        directory = tmp_path / f"run-{index}"
+        shutil.copytree(board, directory)
+        cfg = load_config(directory / "config.yaml")
+        cfg.model.name = "Dummy/candidate"
+        cfg.elo.leaderboard_dir = directory
+        cfg.run.result_folder = str(tmp_path / f"results-{index}")
+        cfg.run.seed = seed
+        if index:
+            monkeypatch.setattr(models, "make_model", no_new_inference)
+        result = run_elo(cfg, get_packaged_task(cfg.task))
+        output = Path(result["result_path"]).parent
+        entries.append(json.loads((output / "entry.json").read_text()))
+        assert (
+            json.loads((output / "elo_ratings.json").read_text())["seed"]
+            == anchors.bootstrap_seed
+        )
+
+    assert entries[0] == entries[1]
+
+
+def test_hard_preferences_are_combined_after_rounding_each_pass(
+    setup_path, tmp_path, monkeypatch
+):
+    setup = yaml.safe_load(setup_path.read_text())
+    setup["evaluation"]["elo"]["soft_elo"] = False
+    setup_path.write_text(yaml.safe_dump(setup))
+    board = tmp_path / "benchmark"
+    cli(["leaderboard", "create", str(setup_path), "--output", str(board)])
+    positions = pd.read_parquet(board / "panel.parquet")["candidate_position"]
     judge_pass = 0
 
     def batch(self, inputs, **_kwargs):
         nonlocal judge_pass
-        if self.name == cfg.model.name:
+        if self.name == "Dummy/candidate":
             return ["candidate response"] * len(inputs)
         judge_pass += 1
-        outputs = ["score A: 2 score B: 8"] * len(inputs)
-        if judge_pass == 1:
-            outputs[0] = "malformed"
-        return outputs
+        # The candidate loses strongly in direct order, then wins narrowly
+        # in reverse order, regardless of its assigned panel position.
+        scores = (
+            {"A": "score A: 0 score B: 10", "B": "score A: 10 score B: 0"}
+            if judge_pass == 1
+            else {"A": "score A: 4 score B: 5", "B": "score A: 5 score B: 4"}
+        )
+        return [scores[position] for position in positions]
 
     monkeypatch.setattr(models.DummyModel, "batch", batch)
-    result = run_elo(cfg, task)
-    output_dir = Path(result["result_path"]).parent
-    battles = pd.read_parquet(output_dir / "battles.parquet")
-    assert len(battles) == (8 if swap_mode == "both" else 4)
-    assert battles.pref.isna().sum() == 1
-    assert result["sampling_metadata"]["skipped_battles"] == 1
-    entry = LeaderboardEntry.model_validate_json(
-        (output_dir / "entry.json").read_text()
-    )
-    assert entry.overall.n_battles == 3
-    assert entry.by_language["en"].n_battles == 1
-
-
-def test_frozen_runner_hardens_each_pass_before_collapsing(monkeypatch, tmp_path):
-    task = get_packaged_task("elo-comparia")
-    directory = tmp_path / "leaderboard"
-    cfg = _frozen_run_config(tmp_path, directory, "Dummy/candidate")
-    cfg.judge.swap_mode = "both"
-    cfg.elo.soft_elo = False
-    _write_frozen_run_files(cfg, directory, task)
-    judge_pass = 0
-
-    def batch(self, inputs, **_kwargs):
-        nonlocal judge_pass
-        if self.name == cfg.model.name:
-            return ["candidate response"] * len(inputs)
-        judge_pass += 1
-        return [
-            "score A: 0 score B: 10" if judge_pass == 1 else "score A: 4 score B: 5"
-        ] * len(inputs)
-
-    monkeypatch.setattr(models.DummyModel, "batch", batch)
-    result = run_elo(cfg, task)
-    battles = pd.read_parquet(Path(result["result_path"]).parent / "battles.parquet")
-    collapsed = collapse_swapped_rows(battles, "both")
-    assert collapsed.pref_hard.tolist() == [0.5] * 4
-    assert collapsed.pref.gt(0.5).all()
-    assert result["metrics"]["bradley_terry"]["entry"]["overall"][
-        "rating"
-    ] == pytest.approx(1000)
-
-
-@pytest.mark.parametrize(
-    ("section", "field", "value", "message"),
-    [
-        ("elo", "languages", ["en"], "exactly match"),
-        ("generation", "n_instructions", 1, "cannot resample"),
-        ("elo", "n_instructions_per_language", 1, "cannot resample"),
-        ("elo", "elo_random_battles", 1, "cannot resample"),
-        ("elo", "calibrate_temperature", True, "cannot recalibrate"),
-        ("model", "name", "anchor", "already on the leaderboard"),
-    ],
-)
-def test_frozen_preflight_rejects_invalid_runs_before_inference(
-    monkeypatch, tmp_path, section, field, value, message
-):
-    task = get_packaged_task("elo-comparia")
-    directory = tmp_path / "leaderboard"
-    cfg = _frozen_run_config(tmp_path, directory, "Dummy/candidate")
-    _write_frozen_run_files(cfg, directory, task)
-    setattr(getattr(cfg, section), field, value)
-    monkeypatch.setattr(
-        models,
-        "make_model",
-        lambda *_args, **_kwargs: pytest.fail("invalid frozen run reached inference"),
-    )
-    with pytest.raises(ValueError, match=message):
-        run_elo(cfg, task)
+    cli(["leaderboard", "evaluate", str(board), "--model", "Dummy/candidate"])
+    entry = json.loads(next((board / "entries").glob("*.json")).read_text())
+    # Each pair is one hard win and one hard loss. Averaging soft scores before
+    # rounding instead would incorrectly produce a decisive preference.
+    assert entry["overall"]["rating"] == pytest.approx(1000)

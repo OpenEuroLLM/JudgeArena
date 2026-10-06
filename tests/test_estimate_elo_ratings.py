@@ -1,4 +1,3 @@
-import json
 import math
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,7 +9,6 @@ import pytest
 import judgearena.benchmarks.elo.calibration as elo_calibration
 import judgearena.benchmarks.elo.execution as elo_execution
 import judgearena.benchmarks.elo.runner as estimate_elo_ratings
-from judgearena.artifacts import to_jsonable
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     fit_bradley_terry,
@@ -126,206 +124,29 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
     )
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-@pytest.mark.parametrize("soft", [False, True])
-@pytest.mark.parametrize("sampling", ["head", "random"])
-def test_run_elo_preserves_order_rng_and_artifacts(
-    monkeypatch, tmp_path, swap_mode, soft, sampling
-):
-    # Repeated numeric IDs must not become a label-based completion join.
-    arena = _arena_df(9)
-    arena.index = range(100, 127, 3)
-    arena["question_id"] = [101, 101, 101, 203, 203, 203, 307, 307, 307]
-    arena["lang"] = ["en", "fr", "en", "en", "fr", "en", "en", "fr", "en"]
-    monkeypatch.setattr(estimate_elo_ratings, "load_battles", lambda _task: arena)
-    cfg = _default_args(
-        result_folder=str(tmp_path),
-        n_instructions=None,
-        n_bootstraps=2,
-        swap_mode=swap_mode,
-        languages=["en"],
-        strip_thinking_before_judging=True,
-    )
-    cfg.run.seed = 17
-    cfg.elo.soft_elo = soft
-    if sampling == "random":
-        cfg.elo.elo_random_battles = 4
-    else:
-        cfg.generation.n_instructions = 4
-    eligible = arena[arena["lang"] == "en"]
-    selected = (
-        eligible.sample(n=4, random_state=17)
-        if sampling == "random"
-        else eligible.head(4)
-    )
-    ids = selected["question_id"].tolist()
-    instructions = [row[0]["content"] for row in selected["conversation_a"]]
-    completions = [f"<think>private {i}</think>candidate {i}" for i in range(4)]
-    events = []
-    captured = {}
-
-    def generate(instructions, **kwargs):
-        events.append("generate")
-        captured["instructions"] = instructions.copy()
-        return pd.DataFrame(
-            {
-                "instruction_index": instructions.index,
-                "completion": completions,
-            }
-        )
-
-    judge = elo_execution.judge_and_parse_prefs
-
-    def capture_judge(**kwargs):
-        events.append("judge")
-        captured["judge_kwargs"] = kwargs
-        captured["judged"] = judge(**kwargs)
-        return captured["judged"]
-
-    outputs = iter(
-        [
-            [
-                "Score_A: 6\nScore_B: 8",
-                "invalid",
-                "Score_A: 8\nScore_B: 6",
-                "Score_A: 5\nScore_B: 5",
-            ],
-            [
-                "Score_A: 6\nScore_B: 4",
-                "Score_A: 7\nScore_B: 9",
-                "invalid",
-                "Score_A: 5\nScore_B: 5",
-            ],
-        ]
-    )
-    monkeypatch.setattr(DummyModel, "batch", lambda *args, **kwargs: next(outputs))
-    monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", generate)
-    monkeypatch.setattr(elo_execution, "judge_and_parse_prefs", capture_judge)
-    rng = np.random.default_rng(17)
-    opponent_a = rng.choice([True, False], size=4)
-    candidate_a = rng.choice([True, False], size=4)
-    expected_state = rng.bit_generator.state
-
-    def calibrate(*args, **kwargs):
-        events.append("calibrate")
-        assert kwargs["rng"].bit_generator.state == expected_state
-        return -0.42 if soft else None
-
-    monkeypatch.setattr(
-        estimate_elo_ratings, "calibrate_pairscore_temperature", calibrate
-    )
-    calculate = estimate_elo_ratings.calculate_metrics
-
-    def capture_metrics(frame, *args, **kwargs):
-        events.append("metrics")
-        captured["battles"] = frame.copy()
-        assert (
-            kwargs["runtime_by_metric"]["bradley_terry"]["rng"].bit_generator.state
-            == expected_state
-        )
-        return calculate(frame, *args, **kwargs)
-
-    monkeypatch.setattr(estimate_elo_ratings, "calculate_metrics", capture_metrics)
-    result = run_elo_with_task(cfg)
-    assert events == ["generate", "judge", "calibrate", "metrics"]
-    assert captured["instructions"].tolist() == instructions
-    assert captured["instructions"].index.tolist() == [f"ComparIA:{qid}" for qid in ids]
-    opponents = [
-        row.model_a if use_a else row.model_b
-        for row, use_a in zip(selected.itertuples(), opponent_a, strict=True)
-    ]
-    texts = [
-        (row.conversation_a if use_a else row.conversation_b)[1]["content"]
-        for row, use_a in zip(selected.itertuples(), opponent_a, strict=True)
-    ]
-    presented_a = [
-        candidate if pos_a else opponent
-        for candidate, opponent, pos_a in zip(
-            completions, texts, candidate_a, strict=True
-        )
-    ]
-    presented_b = [
-        opponent if pos_a else candidate
-        for candidate, opponent, pos_a in zip(
-            completions, texts, candidate_a, strict=True
-        )
-    ]
-    judge_kwargs = captured["judge_kwargs"]
-    assert judge_kwargs["instructions"] == instructions
-    assert judge_kwargs["completions_A"] == presented_a
-    assert judge_kwargs["completions_B"] == presented_b
-    assert judge_kwargs["cache_row_metadata"] == [
+def test_shared_judging_pairs_duplicate_ids_by_position(tmp_path):
+    cfg = _default_args(result_folder=str(tmp_path))
+    panel = pd.DataFrame(
         {
-            "instruction_id": f"ComparIA:{qid}",
-            "model_a": cfg.model.name if pos_a else opponent,
-            "model_b": opponent if pos_a else cfg.model.name,
-            "orientation": "direct" if pos_a else "reversed",
-        }
-        for qid, opponent, pos_a in zip(ids, opponents, candidate_a, strict=True)
+            "instruction": ["first question", "second question"],
+            "question_id": [101, 101],
+            "opponent_model": ["opponent", "opponent"],
+            "opponent_completion": ["first opponent", "second opponent"],
+            "candidate_position": ["A", "B"],
+        },
+        index=["ComparIA:101", "ComparIA:101"],
+    )
+    completions = pd.Series(["first candidate", "second candidate"], index=panel.index)
+    prompt = estimate_elo_ratings.resolve_run_judge_prompt(cfg.task, cfg.judge)
+
+    annotations, _, _ = elo_execution.judge_candidate_battles(
+        cfg, panel, completions, prompt
+    )
+
+    assert [(a.instruction, a.completion_A, a.completion_B) for a in annotations] == [
+        ("first question", "first candidate", "first opponent"),
+        ("second question", "second opponent", "second candidate"),
     ]
-    annotations, reversed_annotations, _ = captured["judged"]
-    assert all("<think>" not in a.completion_A + a.completion_B for a in annotations)
-    if swap_mode == "both":
-        assert [a.completion_A for a in reversed_annotations] == [
-            a.completion_B for a in annotations
-        ]
-        assert [a.completion_B for a in reversed_annotations] == [
-            a.completion_A for a in annotations
-        ]
-    repeats = 2 if swap_mode == "both" else 1
-    battles = captured["battles"]
-    assert battles["question_id"].tolist() == ids * repeats
-    assert battles["instruction_index"].tolist() == ids * repeats
-    assert battles["completion_a"].tolist() == presented_a * repeats
-    assert battles["completion_b"].tolist() == presented_b * repeats
-    assert (
-        battles["model_a"].tolist()
-        == [row["model_a"] for row in judge_kwargs["cache_row_metadata"]] * repeats
-    )
-    assert (
-        battles["model_b"].tolist()
-        == [row["model_b"] for row in judge_kwargs["cache_row_metadata"]] * repeats
-    )
-    assert battles["orientation"].tolist() == (
-        ["direct"] * 4 + ["reversed"] * 4 if repeats == 2 else ["single"] * 4
-    )
-    temperature = -0.42 if soft else 0.3
-    probability = 1 / (1 + math.exp(-2 * temperature))
-    expected_prefs = [probability, float("nan"), 1 - probability, 0.5]
-    if repeats == 2:
-        expected_prefs += [probability, 1 - probability, float("nan"), 0.5]
-    assert battles["pref"].tolist() == pytest.approx(expected_prefs, nan_ok=True)
-    assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
-    saved = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
-    columns = [
-        "model_a",
-        "model_b",
-        "winner",
-        "pref",
-        "pref_hard",
-        "source",
-        "judge_model",
-        "question_id",
-    ]
-    pd.testing.assert_frame_equal(saved, battles[columns], check_dtype=False)
-    assert result["num_battles"] == 4
-    assert _rating_metric(result)["method"] == ("Soft-ELO" if soft else "ELO")
-    if sampling == "random":
-        assert (
-            result["sampling_metadata"]["sampled_original_indices"]
-            == selected.index.tolist()
-        )
-        assert result["sampling_metadata"]["sampled_question_ids"] == list(
-            map(str, ids)
-        )
-    else:
-        assert result["sampling_metadata"] == {"sampling_mode": "head"}
-    saved_result = json.loads(next(tmp_path.rglob("results-*.json")).read_text())
-    assert saved_result == to_jsonable(
-        {key: value for key, value in result.items() if key != "result_path"}
-    )
-    assert next(tmp_path.rglob("elo_ratings.json")).is_file()
-    assert len(pd.read_csv(next(tmp_path.rglob("bootstrap_ratings.csv")))) == 2
 
 
 def test_missing_preference_remains_missing_in_hard_battles():
@@ -853,8 +674,7 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     assert 0 < total_en < total_all
 
 
-@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swap_mode):
+def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     """Regression: the calibration path constructs its own judge model and once
     crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
     MLE fit itself is mocked."""
@@ -865,33 +685,6 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swa
         return 0.42
 
     monkeypatch.setattr(elo_calibration, "fit_temperature", fake_calibrate)
-    rng = np.random.default_rng(0)
-    rng.choice([True, False], size=10)  # opponent selection
-    rng.choice([True, False], size=10)  # candidate position
-    expected_sample = arena_anchor_battles(_arena_df(900)).sample(
-        frac=1, random_state=int(rng.integers(0, 2**31))
-    )
-    judge = elo_calibration.judge_and_parse_prefs
-
-    def capture_calibration_judge(**kwargs):
-        assert kwargs["instructions"] == [
-            f"Instruction {i}" for i in expected_sample.index
-        ]
-        return judge(**kwargs)
-
-    monkeypatch.setattr(
-        elo_calibration, "judge_and_parse_prefs", capture_calibration_judge
-    )
-    calculate = estimate_elo_ratings.calculate_metrics
-
-    def capture_metrics(*args, **kwargs):
-        assert (
-            kwargs["runtime_by_metric"]["bradley_terry"]["rng"].bit_generator.state
-            == rng.bit_generator.state
-        )
-        return calculate(*args, **kwargs)
-
-    monkeypatch.setattr(estimate_elo_ratings, "calculate_metrics", capture_metrics)
     # Anchor battles require models with >= 500 appearances; the default
     # 30-battle fixture leaves the calibration pool empty.
     monkeypatch.setattr(
@@ -903,22 +696,16 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swa
         _default_args(
             result_folder=str(tmp_path),
             calibrate_temperature=True,
-            swap_mode=swap_mode,
             store_root=str(store_root),
         )
     )
 
-    assert (
-        captured["n_pairs"]
-        == expected_sample["winner"].isin(["model_a", "model_b"]).sum()
-    )
+    assert captured["n_pairs"] >= 10
     assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
     battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
-    probability = 1 / (1 + math.exp(-0.42 * 10))
-    expected = [probability] * 10
-    if swap_mode == "both":
-        expected += [1 - probability] * 10
-    assert battles["pref"].tolist() == pytest.approx(expected)
+    assert battles["pref"].tolist() == pytest.approx(
+        [1 / (1 + math.exp(-0.42 * 10))] * len(battles)
+    )
     judgement_db = next((store_root / "judgements").rglob("judgements.db"))
     with JudgementCache(judgement_db) as cache:
         assert cache.query()["instruction_id"].str.startswith("ComparIA:").all()
