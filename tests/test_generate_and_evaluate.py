@@ -218,7 +218,7 @@ def test_benchmark_dispatch_passes_the_resolved_task(monkeypatch):
     )
     monkeypatch.setattr(benchmark_registry, "benchmark_adapters", lambda: (pairwise,))
     monkeypatch.setattr(benchmark_registry, "get_packaged_task", lambda _task: resolved)
-    cfg = SimpleNamespace(task="yaml-task", tune_judge=None)
+    cfg = SimpleNamespace(task="yaml-task")
 
     result = benchmark_runner.run_benchmark(cfg)
 
