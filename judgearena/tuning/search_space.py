@@ -1,115 +1,69 @@
-"""Translate a judge-tuning search space to and from a neps search space."""
+"""Construct NePS domains using its public constructor arguments."""
 
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any
-
-from judgearena.config import FloatRange, TuneJudgeArgs
 
 if TYPE_CHECKING:
     import neps
 
-TUNER_OWNED_KEYS = frozenset(
-    {"task", "meta_eval.battles_per_model", "meta_eval.split", "run.result_folder"}
-)
-FIDELITY = "battles_per_model"
+FIDELITY = "meta_eval.battles_per_model"
+DOMAIN_TYPES = frozenset({"Categorical", "Float", "Integer", "IntegerFidelity"})
 
 
-def choice_overrides(name: str, value: object) -> dict[str, object]:
-    """Return the dotted overrides one choice of an axis applies."""
-    return dict(value) if isinstance(value, Mapping) else {name: value}
-
-
-def axis_overrides(tuning: TuneJudgeArgs) -> Iterator[dict[str, object]]:
-    """Yield every choice and range bound, rejecting tuner-owned keys."""
-    for name, axis in tuning.search_space.items():
-        values = [axis.lower, axis.upper] if isinstance(axis, FloatRange) else axis
-        for value in values:
-            overrides = choice_overrides(name, value)
-            owned = sorted(
-                key
-                for key in overrides
-                if key in TUNER_OWNED_KEYS or key.startswith("tune_judge")
-            )
-            if owned:
-                raise ValueError(
-                    f"search_space must not override tuner-owned keys: {owned}"
-                )
-            yield overrides
-
-
-def _lookup(values: Mapping[str, Any], path: str) -> object:
-    for key in path.split("."):
-        if not isinstance(values, Mapping) or key not in values:
-            return None
-        values = values[key]
-    return values
-
-
-def build_neps_space(
-    tuning: TuneJudgeArgs, base: Mapping[str, Any]
-) -> neps.SearchSpace:
-    """Return the neps space whose prior is the base config.
-
-    Choices are JSON-encoded override mappings so grouped settings stay one
-    categorical; the fidelity is the number of validation battles per model.
-    """
+def build_neps_space(specs: Mapping[str, dict]) -> neps.PipelineSpace:
+    """Translate constructor tags to domains without changing their arguments."""
     import neps
 
-    confidence = tuning.prior_confidence
     parameters = {}
-    for name, axis in tuning.search_space.items():
-        if isinstance(axis, FloatRange):
-            prior = _lookup(base, name)
-            inside = (
-                isinstance(prior, int | float) and axis.lower <= prior <= axis.upper
-            )
-            parameters[name] = neps.HPOFloat(
-                lower=axis.lower,
-                upper=axis.upper,
-                log=axis.log,
-                prior=prior if inside else None,
-                prior_confidence=confidence,
-            )
+    for name, spec in specs.items():
+        kind = spec["type"]
+        if kind not in DOMAIN_TYPES:
+            raise ValueError(f"Unsupported NePS domain: {kind}")
+        if name == FIDELITY:
+            if kind != "IntegerFidelity":
+                raise ValueError(f"{FIDELITY} must use IntegerFidelity")
+        elif not (
+            name.startswith("judge.") or name == "generation.truncate_judge_input_chars"
+        ):
+            raise ValueError(f"Search space must not override tuner-owned keys: {name}")
+        elif kind == "IntegerFidelity":
+            raise ValueError(f"Only {FIDELITY} may be a fidelity")
+        kwargs = {key: value for key, value in spec.items() if key != "type"}
+        if kind == "Categorical":
+            kwargs["choices"] = tuple(kwargs["choices"])
+        parameters[name] = getattr(neps, kind)(**kwargs)
+    if FIDELITY not in parameters:
+        raise ValueError(f"Search space requires {FIDELITY}")
+    return type("JudgeSpace", (neps.PipelineSpace,), parameters)()
+
+
+def axis_overrides(specs: Mapping[str, dict]) -> Iterator[dict[str, object]]:
+    """Yield candidate values for preflight RunConfig validation."""
+    for name, spec in specs.items():
+        if name == FIDELITY:
             continue
-        overrides = [choice_overrides(name, value) for value in axis]
-        choices = [json.dumps(choice, sort_keys=True) for choice in overrides]
-        prior = next(
-            (
-                encoded
-                for encoded, choice in zip(choices, overrides, strict=True)
-                if all(_lookup(base, key) == value for key, value in choice.items())
-            ),
-            None,
+        values = (
+            spec["choices"]
+            if spec["type"] == "Categorical"
+            else [spec["lower"], spec["upper"]]
         )
-        parameters[name] = neps.HPOCategorical(
-            choices=choices, prior=prior, prior_confidence=confidence
-        )
-    parameters[FIDELITY] = neps.HPOInteger(
-        lower=tuning.min_battles_per_model,
-        upper=tuning.max_battles_per_model,
-        is_fidelity=True,
-    )
-    return neps.SearchSpace(parameters)
+        for value in values:
+            yield {name: value}
 
 
 def decode_config(config: Mapping[str, Any]) -> tuple[dict[str, object], int]:
-    """Return the dotted overrides and battles per model of a neps config."""
-    overrides: dict[str, object] = {}
-    for name, value in config.items():
-        if name == FIDELITY:
-            continue
-        overrides.update(json.loads(value) if isinstance(value, str) else {name: value})
-    return overrides, int(config[FIDELITY])
+    """Split the sampled judge settings from the evaluation fidelity."""
+    overrides = dict(config)
+    return overrides, int(overrides.pop(FIDELITY))
 
 
 def apply_overrides(
     base: Mapping[str, object], overrides: Mapping[str, object]
 ) -> dict[str, object]:
-    """Return a copy of ``base`` with dotted-path ``overrides`` assigned."""
+    """Return a copy of base with dotted-path overrides assigned."""
     values = copy.deepcopy(dict(base))
     for path, value in overrides.items():
         *parents, leaf = path.split(".")

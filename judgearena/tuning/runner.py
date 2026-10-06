@@ -1,33 +1,26 @@
-"""Multi-fidelity search over judge configurations on meta-eval battles.
-
-Follows Salinas et al., "Tuning LLM Judge Design Decisions for 1/1000 of the
-Cost" (ICML 2025), with the fidelity being validation battles per model. A neps
-optimizer (priorband by default, seeded with the base config as prior) proposes
-each trial, which runs as the meta-eval task so trials share its judgement
-cache. The best configuration per judge model at the highest fidelity is then
-scored once on the held-out test split.
-"""
+"""Run NePS searches using meta-evaluation subprocesses."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import random
 import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 import tiktoken
 
-from judgearena.artifacts import prepare_run_directory, safe_filename
-from judgearena.config import RunConfig, TuneJudgeArgs, dump_config
+from judgearena.config import RunConfig, dump_config
 from judgearena.log import get_logger
 from judgearena.tuning.search_space import (
+    FIDELITY,
     apply_overrides,
     axis_overrides,
     build_neps_space,
@@ -36,6 +29,8 @@ from judgearena.tuning.search_space import (
 
 if TYPE_CHECKING:
     from judgearena.tasks.schema import ResolvedTaskSpec
+
+from judgearena.tuning.session import collect_trials, prepare_session
 
 logger = get_logger(__name__)
 
@@ -132,6 +127,12 @@ class _TrialRunner:
         folder.mkdir(parents=True, exist_ok=True)
         config_path = folder / "config.yaml"
         dump_config(trial_cfg, config_path)
+        if split == "test" and any(folder.glob("*/results.json")):
+            return {
+                **record,
+                "status": "completed",
+                **_read_trial(folder, self.prices[trial_cfg.judge.model]),
+            }
         try:
             self.execute_trial(config_path)
         except subprocess.CalledProcessError as exc:
@@ -141,41 +142,64 @@ class _TrialRunner:
         return {**record, "status": "completed", **_read_trial(folder, price)}
 
 
-def _objective(record: dict, algorithm: str) -> dict | Exception:
+def _objective(record: dict, objectives: list[str]) -> dict:
     if record["status"] != "completed":
-        return RuntimeError(f"Trial {record['config_id']} failed.")
-    disagreement = 1 - record["agreement"]
-    if algorithm == "mo_hyperband":
-        return {"objective_to_minimize": [disagreement, record["cost_per_1k_battles"]]}
-    return {"objective_to_minimize": disagreement}
+        return {
+            "exception": RuntimeError(f"Trial {record['config_id']} failed"),
+            "info_dict": record,
+        }
+    values = [
+        1 - record[key] if key == "agreement" else record[key] for key in objectives
+    ]
+    return {
+        "objective_to_minimize": values[0] if len(values) == 1 else values,
+        "info_dict": record,
+    }
 
 
-def _search(
-    runner: _TrialRunner, tuning: TuneJudgeArgs, tune_dir: Path
-) -> pd.DataFrame:
-    """Run the neps ask-and-tell loop on the validation split."""
-    from neps import AskAndTell
-    from neps.optimizers import algorithms
+def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None:
+    """Let NePS persist and coordinate the search across workers."""
+    import neps
 
-    space = build_neps_space(tuning, runner.base)
-    optimizer = AskAndTell(getattr(algorithms, tuning.algorithm)(space, eta=tuning.eta))
-    # neps resamples identical configs on small categorical spaces.
-    results: dict[tuple[str, int], dict] = {}
-    records = []
-    for _ in range(tuning.max_evaluations):
-        trial = optimizer.ask()
-        overrides, battles_per_model = decode_config(trial.config)
-        key = (json.dumps(overrides, sort_keys=True), battles_per_model)
-        if key not in results:
-            results[key] = runner.run(
-                overrides,
-                split="validation",
-                battles_per_model=battles_per_model,
-                folder=tune_dir / "trials" / trial.metadata.id,
-            )
-        records.append({"neps_trial_id": trial.metadata.id, **results[key]})
-        optimizer.tell(trial, _objective(results[key], tuning.algorithm))
-    return pd.DataFrame(records)
+    def evaluate(pipeline_directory: Path, **config):
+        overrides, battles = decode_config(config)
+        record = runner.run(
+            overrides,
+            split="validation",
+            battles_per_model=battles,
+            folder=tune_dir / "trials" / pipeline_directory.name,
+        )
+        return _objective(record, cfg.tune_judge.objectives)
+
+    options = {
+        key: value
+        for key, value in cfg.tune_judge.neps.items()
+        if key != "pipeline_space"
+    }
+    # NePS 0.17's space compatibility check does not inspect optimizer mappings.
+    if isinstance(optimizer := options.get("optimizer"), dict):
+        options["optimizer"] = (
+            optimizer["name"],
+            {key: value for key, value in optimizer.items() if key != "name"},
+        )
+    root = tune_dir / "neps"
+    continuing = (root / "pipeline_space.pkl").exists()
+    if cfg.tune_judge.search_only:
+        options.pop("total_evaluations_to_spend", None)
+        options.pop("total_fidelities_to_spend", None)
+    elif not continuing:
+        import torch
+
+        random.seed(cfg.run.seed)
+        np.random.seed(cfg.run.seed)
+        torch.manual_seed(cfg.run.seed)
+    neps.run(
+        evaluate_pipeline=evaluate,
+        pipeline_space=None if continuing else space,
+        root_directory=root,
+        continue_until_max_evaluation_completed=False,
+        **options,
+    )
 
 
 def _meta_eval_task(task: ResolvedTaskSpec) -> str:
@@ -194,69 +218,73 @@ def run_tune_judge(
 ) -> pd.DataFrame:
     """Tune judge settings on validation battles and score the picks on test."""
     tuning = cfg.tune_judge
-    started_at = datetime.now(UTC)
-    tune_dir = prepare_run_directory(
-        cfg,
-        Path(cfg.run.result_folder)
-        / f"{safe_filename(cfg.task)}-{started_at:%Y%m%d_%H%M%S}",
-    )
+    specs = tuning.neps["pipeline_space"]
+    space = build_neps_space(specs)
+    max_battles = specs[FIDELITY]["upper"]
     base = cfg.model_dump(mode="json", exclude={"tune_judge"})
-    if base["judge"]["prompt"] is None and base["judge"]["prompt_preset"] is None:
-        # Make the task's default preset explicit so it can be the prior.
-        default_preset = task.spec.protocol.judge.default_prompt_preset
-        base["judge"]["prompt_preset"] = default_preset
     runner = _TrialRunner(
         base={**base, "task": _meta_eval_task(task)},
         prices=tuning.price_per_million_tokens,
         execute_trial=execute_trial,
     )
-    # Build every choice before judging so invalid settings fail up front.
-    judge_models = {cfg.judge.model} | {
-        runner.config(
-            overrides, split="validation", battles_per_model=1, folder=tune_dir
-        ).judge.model
-        for overrides in axis_overrides(tuning)
-    }
-    missing_prices = sorted(judge_models - set(tuning.price_per_million_tokens))
-    if missing_prices:
-        raise ValueError(
-            f"tune_judge.price_per_million_tokens is missing models: {missing_prices}"
+    models = set()
+    for overrides in axis_overrides(specs):
+        trial_cfg = runner.config(
+            overrides,
+            split="validation",
+            battles_per_model=1,
+            folder=Path(cfg.run.result_folder),
         )
-    logger.info("Tuning %s with neps %s in %s", cfg.task, tuning.algorithm, tune_dir)
-
-    trials = _search(runner, tuning, tune_dir)
+        if "judge.model" not in specs or "judge.model" in overrides:
+            models.add(trial_cfg.judge.model)
+    if "judge.model" not in specs:
+        models.add(cfg.judge.model)
+    if missing := sorted(models - set(tuning.price_per_million_tokens)):
+        raise ValueError(
+            f"tune_judge.price_per_million_tokens is missing models: {missing}"
+        )
+    tune_dir = prepare_session(cfg)
+    logger.info("Tuning %s in %s", cfg.task, tune_dir)
+    _search(runner, cfg, tune_dir, space)
+    if tuning.search_only:
+        return pd.DataFrame()
+    trials = collect_trials(tune_dir / "neps", wait=True)
     trials.to_parquet(tune_dir / "trials.parquet", index=False)
+    return _evaluate_picks(runner, tuning, tune_dir, trials, max_battles)
+
+
+def _evaluate_picks(runner, tuning, tune_dir, trials, max_battles) -> pd.DataFrame:
     final = trials[
-        (trials["status"] == "completed")
-        & (trials["battles_per_model"] == tuning.max_battles_per_model)
+        (trials["status"] == "completed") & (trials["battles_per_model"] == max_battles)
     ].drop_duplicates("config_id")
     if final.empty:
         raise RuntimeError(
-            "No configuration completed the highest fidelity; "
-            "increase tune_judge.max_evaluations."
+            "No configuration completed the highest fidelity; increase the NePS global budget"
         )
-    picks = final.loc[final.groupby("judge_model")["agreement"].idxmax()]
+    ranked = final.sort_values(
+        ["agreement", "cost_per_1k_battles", "config_id"], ascending=[False, True, True]
+    )
+    picks = ranked.groupby("judge_model", sort=False).head(1)
     test_results = pd.DataFrame(
         [
             runner.run(
                 json.loads(pick.overrides),
                 split="test",
-                battles_per_model=(
-                    tuning.test_battles_per_model or tuning.max_battles_per_model
-                ),
+                battles_per_model=tuning.test_battles_per_model or max_battles,
                 folder=tune_dir / "test" / pick.config_id,
             )
             for pick in picks.itertuples()
         ]
     )
     test_results.to_parquet(tune_dir / "test_results.parquet", index=False)
-
-    print(f"\n=== Judge tuning: {cfg.task} ({tuning.algorithm}) ===")
-    print(f"Validation ({tuning.max_battles_per_model} battles per model):")
-    ranked = final.sort_values("agreement", ascending=False)
+    print("\n=== Judge tuning ===")
+    print("Validation:")
     print(ranked[_SUMMARY_COLUMNS].to_string(index=False))
     print("Test:")
-    summary = test_results.reindex(columns=[*_SUMMARY_COLUMNS, "status"])
-    print(summary.to_string(index=False))
+    print(
+        test_results.reindex(columns=[*_SUMMARY_COLUMNS, "status"]).to_string(
+            index=False
+        )
+    )
     print(f"Results: {tune_dir}")
     return test_results

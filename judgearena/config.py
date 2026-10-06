@@ -412,57 +412,74 @@ class MetaEvalArgs(BaseModel):
     """Share of arena prompts assigned to the validation partition."""
 
 
-class FloatRange(BaseModel):
-    """Continuous search-space axis."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    lower: float
-    upper: float
-    log: bool = False
-
-
 class TuneJudgeArgs(BaseModel):
-    """Multi-fidelity neps search over judge settings on meta-eval battles."""
+    """NePS search settings and judge-evaluation objectives."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    search_space: dict[str, list[Any] | FloatRange] = Field(min_length=1)
-    """Axes keyed by dotted config path (``judge.temperature``), each a list of
-    choices or a ``{lower, upper}`` range. Choices that are mappings of dotted
-    overrides change those settings together. The base config is the prior."""
+    neps: dict[str, Any]
+    """NePS constructor specs in pipeline_space and native neps.run arguments."""
+
+    objectives: list[Literal["agreement", "cost_per_1k_battles"]] = Field(
+        default=["agreement", "cost_per_1k_battles"], min_length=1
+    )
+    """Ordered objectives; agreement is maximized and expected cost minimized."""
 
     price_per_million_tokens: dict[str, float]
-    """USD per million judge tokens for every searched ``judge.model``."""
-
-    algorithm: Literal["priorband", "hyperband", "mo_hyperband"] = "priorband"
-    """neps optimizer; ``mo_hyperband`` also minimizes judge cost."""
-
-    max_evaluations: int = Field(gt=0)
-    """Validation trials to run, counting each promotion to more battles."""
-
-    min_battles_per_model: int = Field(default=10, gt=0)
-    """Lowest fidelity, in validation battles per model."""
-
-    max_battles_per_model: int = 90
-    """Highest fidelity, in validation battles per model."""
-
-    eta: int = Field(default=3, ge=2)
-    """Hyperband reduction factor between fidelities."""
-
-    prior_confidence: Literal["low", "medium", "high"] = "medium"
-    """How strongly priorband trusts the base config."""
+    """USD per million judge tokens, including cached judgements."""
 
     test_battles_per_model: int | None = Field(default=None, gt=0)
-    """Test battles per model for the selected judges. Defaults to the highest
-    fidelity."""
+    """Test budget; defaults to the highest fidelity."""
+
+    run_dir: Path | None = None
+    """Explicit directory to resume or share; otherwise create a fresh run."""
+
+    search_only: bool = False
+    """Join an initialized run as a validation-only worker."""
 
     @model_validator(mode="after")
-    def _validate_fidelity(self) -> TuneJudgeArgs:
-        if self.min_battles_per_model >= self.max_battles_per_model:
+    def _validate_runtime(self) -> TuneJudgeArgs:
+        reserved = {
+            "evaluate_pipeline",
+            "root_directory",
+            "overwrite_root_directory",
+            "continue_until_max_evaluation_completed",
+            "total_cost_to_spend",
+            "worker_cost_to_spend",
+        }
+        if forbidden := reserved.intersection(self.neps):
             raise ValueError(
-                "tune_judge.min_battles_per_model must be below max_battles_per_model."
+                f"Unsupported or managed NePS options: {sorted(forbidden)}"
             )
+        if self.search_only and self.run_dir is None:
+            raise ValueError("search_only requires an explicit tune_judge.run_dir")
+        if not self.search_only:
+            if not any(
+                self.neps.get(k)
+                for k in ("total_evaluations_to_spend", "total_fidelities_to_spend")
+            ):
+                raise ValueError("The primary worker requires a finite global budget")
+            if any(
+                self.neps.get(k) is not None
+                for k in ("worker_evaluations_to_spend", "worker_fidelities_to_spend")
+            ):
+                raise ValueError("Worker-local budgets require search_only")
+        optimizer = self.neps.get("optimizer", "auto")
+        name = (
+            optimizer.get("name")
+            if isinstance(optimizer, dict)
+            else optimizer[0]
+            if isinstance(optimizer, (list, tuple))
+            else optimizer
+        )
+        if name in {"neps_priorband", "neps_hyperband"} and len(self.objectives) != 1:
+            raise ValueError(f"{name} requires a single objective")
+        if name in {"mo_hyperband", "primo"} and len(self.objectives) != 2:
+            raise ValueError(f"{name} requires agreement and cost objectives")
+        if len(set(self.objectives)) != len(self.objectives):
+            raise ValueError("objectives must not contain duplicates")
+        if any(price < 0 for price in self.price_per_million_tokens.values()):
+            raise ValueError("Judge token prices must be nonnegative")
         return self
 
 

@@ -114,5 +114,5 @@ vllm = [
 ]
 llamacpp = ["llama-cpp-python>=0.3.0"]
 tune = [
-    "neural-pipeline-search>=0.16.0",
+    "neural-pipeline-search==0.17.0",
 ]
