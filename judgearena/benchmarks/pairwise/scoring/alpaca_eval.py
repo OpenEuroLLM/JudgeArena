@@ -223,6 +223,14 @@ class AlpacaEvalLengthControlledMetric:
         ):
             raise ValueError("gamed_weight must be a finite non-negative number.")
 
+    def prefetch(self) -> None:
+        """Download and validate the configured calibration data."""
+        _load_gamed_data(
+            self.calibration_repo_id,
+            self.calibration_filename,
+            self.calibration_revision,
+        )
+
     def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
         if not battles["pref"].notna().any():
             return {}

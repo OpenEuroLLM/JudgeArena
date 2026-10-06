@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import judgearena.utils.io as utils_io
 from judgearena import cli as cli_module
 from judgearena.tasks.cli import run_task_command
 from judgearena.tasks.registry import (
@@ -509,7 +510,9 @@ def test_unknown_task_lists_registered_tasks(tmp_path, capsys):
     assert "test-task" in capsys.readouterr().err
 
 
-def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
+def test_task_commands_list_show_validate_and_download(
+    tmp_path, capsys, caplog, monkeypatch
+):
     _write_family(
         tmp_path,
         family="example",
@@ -528,6 +531,17 @@ def test_task_commands_list_show_and_validate(tmp_path, capsys, caplog):
 
     run_task_command(["validate"], tasks=tasks)
     assert "Validated 1 task(s)." in capsys.readouterr().out
+
+    downloads = []
+    monkeypatch.setattr(utils_io, "data_root", tmp_path)
+    monkeypatch.setattr(
+        utils_io,
+        "download_hf",
+        lambda name, path: downloads.append((name, path)),
+    )
+    run_task_command(["download", "test-task"], tasks=tasks)
+    assert downloads == [("test-task", tmp_path / "tables")]
+    assert "Downloaded task 'test-task'." in capsys.readouterr().out
 
 
 def test_task_show_reports_resolved_selection(tmp_path, capsys):

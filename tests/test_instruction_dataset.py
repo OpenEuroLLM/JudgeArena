@@ -41,9 +41,27 @@ def test_table_adapter_download_uses_declared_paths(monkeypatch, tmp_path):
     assert captured["local_dir"] == tmp_path
 
 
+def test_table_adapter_downloads_if_only_instruction_is_cached(monkeypatch, tmp_path):
+    task = get_packaged_task("alpaca-eval")
+    assert task is not None
+    path = tmp_path / "instructions" / "alpaca-eval.csv"
+    path.parent.mkdir()
+    path.touch()
+    calls = []
+    monkeypatch.setattr(
+        judgearena_tables, "snapshot_download", lambda **kwargs: calls.append(kwargs)
+    )
+
+    judgearena_tables.download_task_sources(task, tmp_path)
+
+    assert len(calls) == 1
+
+
 def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        judgearena_tables, "download_task_sources", lambda _task, _path: None
+        judgearena_tables,
+        "snapshot_download",
+        lambda **kwargs: pytest.fail("Prepared tables must load without a Hub call"),
     )
     instructions_dir = tmp_path / "instructions"
     outputs_dir = tmp_path / "model_outputs"
@@ -129,20 +147,66 @@ def test_m_arena_hard_sources_and_baselines_are_owned_by_task_yaml():
     assert v20.spec.protocol.baseline.reference_id == "google/gemini-2.5-flash"
 
 
+@pytest.mark.parametrize("offline, expected_calls", [(True, 0), (False, 1)])
+def test_m_arena_hard_checks_selected_local_examples(
+    monkeypatch, tmp_path, offline, expected_calls
+):
+    task = get_packaged_task("m-arena-hard-v0.1-uk")
+    assert task is not None
+    source = task.spec.dataset.sources["examples"]
+    path = tmp_path / "_sources" / source.repo_id.replace("/", "--") / "uk"
+    path.mkdir(parents=True)
+    (path / "test-00000.parquet").touch()
+    calls = []
+    monkeypatch.setattr(m_arenahard, "HF_HUB_OFFLINE", offline)
+    monkeypatch.setattr(
+        m_arenahard, "snapshot_download", lambda **kwargs: calls.append(kwargs)
+    )
+
+    m_arenahard._download_source(task, "examples", tmp_path)
+
+    assert len(calls) == expected_calls
+
+
+def test_m_arena_hard_downloads_if_selected_language_is_missing(monkeypatch, tmp_path):
+    task = get_packaged_task("m-arena-hard-v2.0-EU")
+    assert task is not None
+    source = task.spec.dataset.sources["examples"]
+    root = tmp_path / "_sources" / source.repo_id.replace("/", "--")
+    (root / "cs").mkdir(parents=True)
+    (root / "cs" / "test-00000.parquet").touch()
+    monkeypatch.setattr(m_arenahard, "HF_HUB_OFFLINE", True)
+    calls = []
+    monkeypatch.setattr(
+        m_arenahard, "snapshot_download", lambda **kwargs: calls.append(kwargs)
+    )
+
+    m_arenahard._download_source(task, "examples", tmp_path)
+
+    assert len(calls) == 1
+    monkeypatch.setattr(
+        m_arenahard.pd,
+        "read_parquet",
+        lambda path: pd.DataFrame({"question_id": ["q1"], "prompt": ["Czech"]}),
+    )
+    with pytest.raises(FileNotFoundError, match="uk"):
+        m_arenahard.load_task_instructions(task, tmp_path)
+
+
 def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_path):
     task = get_packaged_task("m-arena-hard-v2.0-EU")
     assert task is not None
     source = task.spec.dataset.sources["examples"]
     source_root = tmp_path / "_sources" / source.repo_id.replace("/", "--")
-    for language in ("cs", "uk", "ar"):
+    selected = m_arenahard._selected_languages(task)
+    for language in (*selected, "ar"):
         language_dir = source_root / language
         language_dir.mkdir(parents=True)
         (language_dir / "test.parquet").touch()
 
     frames = {
-        "cs": pd.DataFrame({"question_id": ["q1"], "prompt": ["Czech"]}),
-        "uk": pd.DataFrame({"question_id": ["q1"], "prompt": ["Ukrainian"]}),
-        "ar": pd.DataFrame({"question_id": ["q1"], "prompt": ["Arabic"]}),
+        language: pd.DataFrame({"question_id": ["q1"], "prompt": [language]})
+        for language in (*selected, "ar")
     }
     monkeypatch.setattr(
         m_arenahard, "_download_source", lambda _task, _name, _path, **_kwargs: None
@@ -155,9 +219,10 @@ def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_p
 
     loaded = m_arenahard.load_task_instructions(task, tmp_path)
 
-    assert loaded["instruction_index"].tolist() == ["q1-cs", "q1-uk"]
-    assert loaded["instruction"].tolist() == ["Czech", "Ukrainian"]
-    assert loaded["lang"].tolist() == ["cs", "uk"]
+    assert loaded["instruction_index"].tolist() == [
+        f"q1-{lang}" for lang in sorted(selected)
+    ]
+    assert loaded["lang"].tolist() == sorted(selected)
 
 
 def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp_path):
@@ -174,7 +239,9 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
     )
     expected.to_csv(output_path, index=False)
     monkeypatch.setattr(
-        m_arenahard, "_download_source", lambda _task, _name, _path, **_kwargs: None
+        m_arenahard,
+        "snapshot_download",
+        lambda **kwargs: pytest.fail("Prepared data must load without a Hub call"),
     )
 
     loaded = m_arenahard.load_task_model_outputs(task, tmp_path)
@@ -480,10 +547,46 @@ def test_fluency_variants_cover_all_supported_languages():
     assert set(task.spec.variants.values) == expected
 
 
+def test_fluency_downloads_if_selected_language_is_missing(monkeypatch, tmp_path):
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+    monkeypatch.setattr(fluency, "HF_HUB_OFFLINE", True)
+    calls = []
+    monkeypatch.setattr(
+        fluency, "snapshot_download", lambda **kwargs: calls.append(kwargs)
+    )
+
+    fluency.download_task_sources(task, tmp_path)
+
+    assert len(calls) == 1
+
+
+def test_fluency_online_download_completes_existing_data(monkeypatch, tmp_path):
+    task = get_packaged_task("fluency-french")
+    assert task is not None
+    root = fluency._source_local_dir(fluency._source(task), tmp_path)
+    (root / "French").mkdir(parents=True)
+    (root / "French" / "data.parquet").touch()
+    monkeypatch.setattr(fluency, "HF_HUB_OFFLINE", False)
+    calls = []
+    monkeypatch.setattr(
+        fluency, "snapshot_download", lambda **kwargs: calls.append(kwargs)
+    )
+
+    fluency.download_task_sources(task, tmp_path)
+
+    assert len(calls) == 1
+
+
 def test_fluency_adapter_loads_selected_language(monkeypatch, tmp_path):
     task = get_packaged_task("fluency-french")
     assert task is not None
-    monkeypatch.setattr(fluency, "download_task_sources", lambda _task, _path: None)
+    monkeypatch.setattr(fluency, "HF_HUB_OFFLINE", True)
+    monkeypatch.setattr(
+        fluency,
+        "snapshot_download",
+        lambda **kwargs: pytest.fail("Prepared data must load without a Hub call"),
+    )
     root = fluency._source_local_dir(fluency._source(task), tmp_path)
     (root / "French").mkdir(parents=True)
     pd.DataFrame({"sentence": ["Le chat", "La maison"]}).to_parquet(

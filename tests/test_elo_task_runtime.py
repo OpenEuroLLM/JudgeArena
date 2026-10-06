@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+import judgearena.arenas_utils as arenas_utils
 import judgearena.datasets.arena_battles as arena_battles
 from judgearena.tasks.registry import get_packaged_task
 
@@ -36,6 +37,7 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
 def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
     task = _elo_task("elo-lmarena-100k")
     captured = {}
+    monkeypatch.setattr(arena_battles, "HF_HUB_OFFLINE", True)
     monkeypatch.setattr(
         arena_battles,
         "snapshot_download",
@@ -47,3 +49,26 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
     assert captured["repo_id"] == "lmarena-ai/arena-human-preference-100k"
     assert captured["revision"] == "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
     assert captured["allow_patterns"] == ("data/*.parquet",)
+    assert captured["local_files_only"] is True
+
+
+def test_elo_runtime_uses_cached_snapshot_offline(monkeypatch):
+    task = _elo_task("elo-lmarena-100k")
+    repo_id = "lmarena-ai/arena-human-preference-100k"
+    captured = {}
+    monkeypatch.setattr(arenas_utils, "HF_HUB_OFFLINE", True)
+
+    def cached_snapshot(**kwargs):
+        captured.update(kwargs)
+        return "/cached/snapshot"
+
+    monkeypatch.setattr(arenas_utils, "snapshot_download", cached_snapshot)
+    result = arenas_utils._download_arena_dataset(
+        repo_id=repo_id,
+        default_allow_patterns="data/*.parquet",
+        dataset_sources={repo_id: task.spec.dataset.sources["lmarena_100k"]},
+    )
+
+    assert result == "/cached/snapshot"
+    assert captured["revision"] == "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
+    assert captured["local_files_only"] is True

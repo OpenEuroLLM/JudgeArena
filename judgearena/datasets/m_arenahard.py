@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HF_HUB_OFFLINE
 
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
@@ -57,6 +58,21 @@ def _download_source(
         if name == "examples"
         else local_tables_path
     )
+    if (
+        name == "examples"
+        and HF_HUB_OFFLINE
+        and all(
+            any(
+                path.is_file() for path in (local_dir / language).glob("test-*.parquet")
+            )
+            for language in _selected_languages(task)
+        )
+    ):
+        return
+    if name == "outputs" and task.selection is not None:
+        path = local_dir / "model_outputs" / f"{task.task}.csv.zip"
+        if path.is_file():
+            return
     snapshot_download(
         repo_id=declared_source.repo_id,
         repo_type="dataset",
@@ -87,6 +103,7 @@ def _load_source_frames(
     selected = set(_selected_languages(task))
 
     frames: list[pd.DataFrame] = []
+    found_languages: set[str] = set()
     for parquet_path in sorted(source_root.rglob("*.parquet")):
         language = parquet_path.parent.name
         if language not in selected:
@@ -94,10 +111,12 @@ def _load_source_frames(
         frame = pd.read_parquet(parquet_path)
         frame["lang"] = language
         frames.append(frame)
+        found_languages.add(language)
 
-    if not frames:
+    missing = selected - found_languages
+    if missing:
         raise FileNotFoundError(
-            f"No m-ArenaHard parquet files for {sorted(selected)} under {source_root}."
+            f"No m-ArenaHard parquet files for {sorted(missing)} under {source_root}."
         )
 
     df = pd.concat(frames, ignore_index=True)

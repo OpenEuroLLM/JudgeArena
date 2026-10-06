@@ -27,6 +27,9 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = commands.add_parser("validate", help="Validate packaged tasks.")
     validate.add_argument("task", nargs="?")
+
+    download = commands.add_parser("download", help="Download a packaged task.")
+    download.add_argument("task", nargs="+")
     return parser
 
 
@@ -56,6 +59,13 @@ def run_task_command(
                 print(f"Validated task {args.task!r}.")
             else:
                 print(f"Validated {len(tasks)} task(s).")
+        elif args.command == "download":
+            selected = [_require(parser, tasks, name) for name in args.task]
+            from judgearena.utils.io import data_root, download_hf
+
+            for task in selected:
+                download_hf(task.task, data_root / "tables")
+                print(f"Downloaded task {task.task!r}.")
     except TaskDefinitionError as exc:
         parser.error(str(exc))
 

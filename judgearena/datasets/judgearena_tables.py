@@ -49,6 +49,10 @@ def download_task_sources(task: ResolvedTaskSpec, local_dir: Path) -> None:
                 f"Dataset source {name!r} for task {task.task!r} is not supported "
                 "by the 'judgearena_tables' adapter."
             )
+        if source.allow_patterns and all(
+            (local_dir / pattern).is_file() for pattern in source.allow_patterns
+        ):
+            continue
         snapshot_download(
             repo_id=source.repo_id,
             repo_type="dataset",

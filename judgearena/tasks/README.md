@@ -26,6 +26,24 @@ Executable behavior lives outside the definitions:
 - `judgearena/benchmarks/` runs the selected evaluation workflow.
 - `judgearena/prompts/` owns reusable judge prompt presets.
 
+## Task data
+
+Set `JUDGEARENA_DATA` before downloading and running a task. By default it is
+`OPENJURY_DATA` or `~/judgearena-data`. Use the same path on the download host
+and compute node, and bind it into the container.
+
+- `$JUDGEARENA_DATA/tables/`: task-owned inputs and archived outputs. MT-Bench
+  keeps its pinned questions and baseline answers under `tables/_sources/mt-bench/`.
+- `$JUDGEARENA_DATA/cache/`: generated model responses.
+- `HF_HOME`: separate Hugging Face model/cache storage.
+- `--run.result_folder`: run results, separate from task inputs.
+
+`judgearena tasks download mt-bench` prepares its sources under `tables/`.
+Use the same `JUDGEARENA_DATA` for evaluation. Do not move answers to the old
+`$JUDGEARENA_DATA/mt-bench` path; re-download into the current task path instead.
+Some task variants lack archived baseline answers and require generation from
+the declared baseline model.
+
 ## Add a task using existing components
 
 Create a public YAML file under `definitions/<family>/`. Files beginning with
