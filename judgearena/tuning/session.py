@@ -24,7 +24,7 @@ def _config_hash(cfg: RunConfig) -> str:
     tuning["neps"] = {
         key: value
         for key, value in tuning["neps"].items()
-        if not key.startswith("worker_")
+        if not key.endswith("_to_spend") and key != "worker_id"
     }
     if cfg.judge.prompt is not None:
         payload["prompt_contents"] = [
@@ -76,9 +76,7 @@ def collect_trials(root: Path, *, wait: bool) -> pd.DataFrame:
     state = NePSState.create_or_load(root, load_only=True)
     while True:
         trials = state.lock_and_read_trials()
-        active = [
-            t for t in trials.values() if t.metadata.state in {"pending", "evaluating"}
-        ]
+        active = [t for t in trials.values() if t.metadata.state == "evaluating"]
         if not wait or not active:
             break
         time.sleep(1)

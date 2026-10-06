@@ -146,6 +146,19 @@ def test_native_optimizer_smoke(tmp_path, token_counter, algorithm):
     runner.run_tune_judge(fresh, task, execute_trial=execute)
     repeated = pd.read_parquet(fresh.tune_judge.run_dir / "trials.parquet")
     assert repeated.overrides.tolist() == trials.overrides.tolist()
+    extended = _tuning_config(tmp_path)
+    extended.tune_judge.neps["total_evaluations_to_spend"] = 11
+    runner.run_tune_judge(extended, task, execute_trial=execute)
+    assert len(pd.read_parquet(folder / "trials.parquet")) == 11
+    runner.run_tune_judge(helper, task, execute_trial=execute)
+    from neps.state import NePSState
+
+    assert (
+        NePSState.create_or_load(
+            folder / "neps", load_only=True
+        ).lock_and_get_global_budgets()[0]
+        == 11
+    )
 
 
 def test_dotted_domains_and_index_priors(tmp_path):
@@ -175,6 +188,27 @@ def test_dotted_domains_and_index_priors(tmp_path):
     ]:
         with pytest.raises(ValueError, match="tuner-owned|Only"):
             build_neps_space({**specs, name: spec})
+
+
+def test_budget_end_does_not_wait_for_unstarted_batch(
+    tmp_path, token_counter, monkeypatch
+):
+    pytest.importorskip("neps")
+    cfg = _tuning_config(tmp_path)
+    cfg.tune_judge.neps.update(
+        optimizer={"name": "neps_random_search", "ignore_fidelity": "highest_fidelity"},
+        total_evaluations_to_spend=2,
+        sample_batch_size=3,
+    )
+    monkeypatch.setattr(
+        "judgearena.tuning.session.time.sleep",
+        lambda _: pytest.fail("Waiting for an unstarted trial"),
+    )
+    results = runner.run_tune_judge(
+        cfg, get_packaged_task(cfg.task), execute_trial=_fake_trial
+    )
+    assert not results.empty
+    assert len(pd.read_parquet(cfg.tune_judge.run_dir / "trials.parquet")) == 2
 
 
 def test_cost_counts_both_cached_orientations(tmp_path, token_counter):
