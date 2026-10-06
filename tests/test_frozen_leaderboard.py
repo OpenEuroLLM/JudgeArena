@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import judgearena.benchmarks.elo.rating as elo_rating
 import judgearena.benchmarks.elo.runner as elo_runner
 import judgearena.models as models
 from judgearena.benchmarks.elo.artifacts import BATTLE_COLUMNS
@@ -89,6 +90,46 @@ def test_fixed_bradley_terry_matches_known_odds_and_bounds(
 
     assert rating == pytest.approx(expected, rel=0, abs=1e-7)
     assert anchors == {"reference": 1000.0}
+
+
+def test_fixed_bradley_terry_optimizes_only_candidate_theta(monkeypatch):
+    anchors = {"weaker": 800.0, "stronger": 1300.0}
+    expected = 1100.0
+    win_rates = {
+        model: 1 / (1 + 10 ** ((rating - expected) / 400))
+        for model, rating in anchors.items()
+    }
+    battles = pd.DataFrame(
+        {
+            "model_a": ["candidate", "stronger"],
+            "model_b": ["weaker", "candidate"],
+            "pref": [1 - win_rates["weaker"], win_rates["stronger"]],
+        }
+    )
+    minimize = elo_rating.minimize
+
+    def fit_one_theta(fun, x0, **kwargs):
+        assert len(x0) == 1
+        return minimize(fun, x0, **kwargs)
+
+    monkeypatch.setattr(elo_rating, "minimize", fit_one_theta)
+    rating = fit_against_frozen_ratings(battles, "candidate", anchors)
+
+    assert rating == pytest.approx(expected, rel=0, abs=1e-7)
+    assert anchors == {"weaker": 800.0, "stronger": 1300.0}
+
+
+@pytest.mark.parametrize(("win_rate", "expected"), [(0.0, -10000.0), (1.0, 10000.0)])
+def test_fixed_bradley_terry_uses_bounds_when_theta_mle_is_infinite(win_rate, expected):
+    battles = pd.DataFrame(
+        {"model_a": ["candidate"], "model_b": ["reference"], "pref": [1 - win_rate]}
+    )
+    assert (
+        fit_against_frozen_ratings(
+            battles, "candidate", {"reference": 1000.0}, rating_bounds=(-10000, 10000)
+        )
+        == expected
+    )
 
 
 def test_anchor_round_trip(tmp_path):

@@ -7,7 +7,7 @@ import json
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import brentq
+from scipy.optimize import minimize
 from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 
@@ -84,11 +84,7 @@ def fit_against_frozen_ratings(
     scale: float = 400.0,
     base: float = 10.0,
 ) -> float:
-    """Fit fixed-reference Bradley-Terry by maximum likelihood.
-
-    Only the candidate rating varies. The concave log-likelihood is maximized
-    where its derivative is zero, or at a rating bound if the optimum is outside.
-    """
+    """Fit one Bradley-Terry theta while keeping all opponent thetas fixed."""
     required = {"model_a", "model_b", pref_col}
     missing = required - set(battles.columns)
     if missing:
@@ -120,18 +116,32 @@ def fit_against_frozen_ratings(
     if not np.isfinite(prefs).all() or np.any((prefs < 0) | (prefs > 1)):
         raise ValueError("Preferences must be finite values from zero to one")
     candidate_wins = np.where(candidate_is_a, 1.0 - prefs, prefs)
-
-    log_base_over_scale = np.log(base) / scale
-
-    def log_likelihood_derivative(rating: float) -> float:
-        win_probabilities = expit((rating - opponent_ratings) * log_base_over_scale)
-        return float(log_base_over_scale * np.sum(candidate_wins - win_probabilities))
-
-    if log_likelihood_derivative(lower) <= 0:
-        return lower
-    if log_likelihood_derivative(upper) >= 0:
+    # All wins or losses have no finite theta MLE; use the corresponding bound.
+    if np.all(candidate_wins == 1):
         return upper
-    return brentq(log_likelihood_derivative, lower, upper)
+    if np.all(candidate_wins == 0):
+        return lower
+
+    rating_origin = (lower + upper) / 2
+    theta_per_elo = np.log(base) / scale
+    opponent_thetas = (opponent_ratings - rating_origin) * theta_per_elo
+
+    def negative_log_likelihood(theta):
+        logits = theta[0] - opponent_thetas
+        return np.sum(np.logaddexp(0.0, logits) - candidate_wins * logits)
+
+    def gradient(theta):
+        return np.array([np.sum(expit(theta[0] - opponent_thetas) - candidate_wins)])
+
+    fit = minimize(
+        negative_log_likelihood,
+        x0=[0.0],
+        jac=gradient,
+        method="BFGS",
+        options={"gtol": 1e-11},
+    )
+    # For this convex, one-parameter loss, clipping preserves the bounded optimum.
+    return float(np.clip(rating_origin + fit.x[0] / theta_per_elo, lower, upper))
 
 
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:
