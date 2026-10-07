@@ -394,7 +394,7 @@ judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/t
 judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
 ```
 
-`run_dir: null` creates a tuning directory under `--run.result_folder`; set an explicit `tune_judge.run_dir` to resume or share workers. NePS state lives in `<tune_dir>/neps/`, with meta-eval trial artifacts separately in `<tune_dir>/trials/`. `trials.parquet` summarizes trials and `test_results.parquet` holds the selected configurations' test results. For multiple workers on the same node, share a node-local `store_root` for SQLite judgement caching; multi-node NFS cache sharing is not supported.
+`run_dir: null` creates a tuning directory under `--run.result_folder`; set an explicit `tune_judge.run_dir` to resume or share workers. NePS state lives in `<tune_dir>/neps/`, with meta-eval trial artifacts separately in `<tune_dir>/trials/`. `trials.parquet` summarizes trials, `pareto.parquet` reports the agreement/cost front of completed maximum-fidelity validation configurations, and `test_results.parquet` holds the selected configurations' test results. The example sets `neps.ignore_errors: true` so failed trials are recorded while the search continues. For multiple workers on the same node, share a node-local `store_root` for SQLite judgement caching; multi-node NFS cache sharing is not supported.
 
 The primary process can extend the global evaluation or fidelity budget when resuming. Helpers inherit the persisted global limits. Search-space, optimizer, objective, and pricing changes require a new run directory.
 

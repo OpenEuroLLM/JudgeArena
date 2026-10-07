@@ -46,6 +46,7 @@ tune_judge:
         upper: 90
     optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}
     total_evaluations_to_spend: 40
+    ignore_errors: true  # Record failed trials and continue the search.
   objectives: [agreement, cost_per_1k_battles]
   # Estimated USD per million tokens, not measured spend or provider quotes.
   price_per_million_tokens:
