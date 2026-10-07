@@ -9,6 +9,9 @@ from judgearena.usage import track_usage
 def _install_fake_vllm(monkeypatch):
     captured = {}
 
+    class FakeValidationError(ValueError):
+        parameter = "input_tokens"
+
     class FakeSamplingParams:
         def __init__(self, **kwargs):
             captured["sampling_kwargs"] = kwargs
@@ -28,6 +31,10 @@ def _install_fake_vllm(monkeypatch):
         def get_tokenizer(self):
             return SimpleNamespace(chat_template="{{ messages }}")
 
+        def _preprocess_chat_one(self, messages, **kwargs):
+            if messages[0]["content"] == "overlong":
+                raise FakeValidationError("too long")
+
         def chat(self, messages, sampling_params, **kwargs):
             captured["chat_call"] = {
                 "messages": messages,
@@ -45,6 +52,11 @@ def _install_fake_vllm(monkeypatch):
         sys.modules,
         "vllm",
         SimpleNamespace(LLM=FakeLLM, SamplingParams=FakeSamplingParams),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.exceptions",
+        SimpleNamespace(VLLMValidationError=FakeValidationError),
     )
     monkeypatch.setitem(
         sys.modules,
@@ -321,3 +333,34 @@ def test_do_inference_keeps_chat_vllm_on_native_batch_path(monkeypatch):
     monkeypatch.setattr(chat_model, "ainvoke", fail_if_called)
 
     assert models.do_inference(chat_model, ["hello"], use_tqdm=True) == ["ok"]
+
+
+def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch):
+    from judgearena.cache.inference import JudgementInferenceCache
+
+    captured, _ = _install_fake_vllm(monkeypatch)
+    backend = models.ChatVLLM(model="test/model", max_tokens=128)
+    monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: backend)
+    cache = JudgementInferenceCache(tmp_path, "meta-eval-test")
+    metadata = [
+        {
+            "instruction_id": str(i),
+            "model_a": "a",
+            "model_b": "b",
+            "orientation": "direct",
+        }
+        for i in range(2)
+    ]
+    prepared = models.prepare_model("Dummy/judge", cache=cache)
+    assert models.do_inference(
+        prepared, ["overlong", "valid"], cache_row_metadata=metadata
+    ) == ["", "ok"]
+    assert captured["chat_call"]["messages"] == [[{"role": "user", "content": "valid"}]]
+    assert models.do_inference(
+        prepared, ["overlong", "valid"], cache_row_metadata=metadata
+    ) == ["", "ok"]
+    import sqlite3
+
+    db = next(tmp_path.rglob("judgements.db"))
+    with sqlite3.connect(db) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM judgements").fetchone()[0] == 1
