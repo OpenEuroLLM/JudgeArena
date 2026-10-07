@@ -146,15 +146,20 @@ contention. Operational cache open/read/write failures are logged and runtime
 inference continues without losing generated results. Descriptor validation
 errors still fail loudly.
 
-Sharing is explicit and separate from benchmark execution. These synchronization
-commands fail loudly when fetching, merging, or pushing cannot complete:
+Sharing is explicit and separate from benchmark execution. Synchronization uses
+the public `judge-arena/judge-arena-cache` dataset by default; pass `--hf_repo`
+to use another dataset. `--kind`, `--task`, and `--model` are optional filters.
+Use `--all` explicitly when no filter is supplied. Commands fail loudly when
+fetching, merging, or pushing cannot complete:
 
 ```bash
 judgearena-cache --action fetch --store_root ./cache \
-  --hf_repo organization/cache-dataset --kind completions --task alpaca-eval
+  --kind completions --task alpaca-eval
 
 judgearena-cache --action push --store_root ./cache \
-  --hf_repo organization/cache-dataset --kind judgements --task alpaca-eval
+  --kind judgements --task alpaca-eval --model OpenRouter/org/model
+
+judgearena-cache --action fetch --store_root ./cache --all
 ```
 
 ## 🎨 Model Specification
