@@ -1,4 +1,4 @@
-"""Contracts for native NePS judge tuning and persisted trial artifacts."""
+"""Native NePS execution and persisted trial artifacts."""
 
 from __future__ import annotations
 
@@ -7,18 +7,11 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from pydantic import ValidationError
 
 from judgearena.config import RunConfig, dump_config, load_config
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tuning import runner
-from judgearena.tuning.search_space import (
-    FIDELITY,
-    apply_overrides,
-    axis_overrides,
-    build_neps_space,
-    decode_config,
-)
+from judgearena.tuning.search_space import FIDELITY
 
 
 def _tuning_config(tmp_path, algorithm="neps_priorband", **settings):
@@ -161,35 +154,6 @@ def test_native_optimizer_smoke(tmp_path, token_counter, algorithm):
     )
 
 
-def test_dotted_domains_and_index_priors(tmp_path):
-    neps = pytest.importorskip("neps")
-    specs = _tuning_config(tmp_path).tune_judge.neps["pipeline_space"]
-    specs["judge.max_out_tokens"] = dict(type="Integer", lower=16, upper=32)
-    attrs = build_neps_space(specs).get_attrs()
-    assert attrs["judge.model"].prior == 1
-    assert attrs["judge.model"].choices == ("Dummy/judge", "Dummy/other")
-    assert isinstance(attrs["judge.temperature"], neps.Float)
-    assert attrs["judge.temperature"].prior == 0.2
-    assert isinstance(attrs["judge.max_out_tokens"], neps.Integer)
-    assert isinstance(attrs[FIDELITY], neps.IntegerFidelity)
-    assert {"judge.temperature": 1.0} in list(axis_overrides(specs))
-    overrides, battles = decode_config(
-        {"judge.temperature": 0.37, "judge.model": "Dummy/other", FIDELITY: 3}
-    )
-    base = {"judge": {"temperature": 0.2}}
-    assert apply_overrides(base, overrides)["judge"] == {
-        "temperature": 0.37,
-        "model": "Dummy/other",
-    }
-    assert base["judge"]["temperature"] == 0.2 and battles == 3
-    for name, spec in [
-        ("meta_eval.split", {"type": "Categorical", "choices": ["test"]}),
-        ("judge.temperature", {"type": "IntegerFidelity", "lower": 1, "upper": 3}),
-    ]:
-        with pytest.raises(ValueError, match="tuner-owned|Only"):
-            build_neps_space({**specs, name: spec})
-
-
 def test_budget_end_does_not_wait_for_unstarted_batch(
     tmp_path, token_counter, monkeypatch
 ):
@@ -223,28 +187,6 @@ def test_cost_counts_both_cached_orientations(tmp_path, token_counter):
     )
     assert objective["objective_to_minimize"] == pytest.approx([0.42, 0.012])
     assert "cost" not in objective
-
-
-@pytest.mark.parametrize(
-    "change,match",
-    [
-        ({"neps": {"total_cost_to_spend": 1}}, "managed"),
-        ({"neps": {"root_directory": "elsewhere"}}, "managed"),
-        ({"neps": {}}, "finite global budget"),
-        ({"search_only": True, "run_dir": None}, "explicit"),
-        ({"neps": {"worker_evaluations_to_spend": 1}}, "Worker-local"),
-        ({"objectives": ["agreement", "cost_per_1k_battles"]}, "single objective"),
-        ({"neps": {"optimizer": {"name": "mo_hyperband"}}}, "agreement and cost"),
-        ({"price_per_million_tokens": {"Dummy/judge": -1}}, "nonnegative"),
-    ],
-)
-def test_tuning_config_validation(tmp_path, change, match):
-    values = _tuning_config(tmp_path).model_dump()
-    if "neps" in change and change["neps"]:
-        change = {**change, "neps": {**values["tune_judge"]["neps"], **change["neps"]}}
-    values["tune_judge"].update(change)
-    with pytest.raises(ValidationError, match=match):
-        RunConfig(**values)
 
 
 def test_prices_required_before_execution(tmp_path):

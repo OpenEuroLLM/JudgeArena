@@ -339,65 +339,6 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 `--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
 
-### Tuning a judge
-
-The `tune-judge-*` tasks search judge configurations against the same human battles as their `meta-eval-*` counterparts, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Install `pip install 'judgearena[tune]'` for [NePS](https://github.com/automl/neps) 0.17 (`neural-pipeline-search`).
-
-[configs/tune_judge.yaml](configs/tune_judge.yaml) uses native NePS settings under `tune_judge.neps`: `pipeline_space` has dotted config names, a `type` (`Categorical`, `Float`, `Integer`, or `IntegerFidelity`), and native constructor kwargs such as `choices`, `lower`, `upper`, `prior`, `prior_confidence`, and `log` where supported. Categorical `prior` is a choice **index**. Every parameter with a `prior` must also set `prior_confidence` (the example uses `medium`). Prompt presets are scalar choices (`meta-eval-pair-score`, `arena-hard`, `default_with_explanation`); grouped overrides are unsupported. The example searches temperature continuously and uses `meta_eval.battles_per_model` as the validation fidelity.
-
-For example, a continuous temperature parameter under `tune_judge.neps.pipeline_space`:
-
-```yaml
-judge.temperature:
-  type: Float
-  lower: 0.0
-  upper: 1.0
-  prior: 0.0
-  prior_confidence: medium
-```
-
-- `optimizer: {name: neps_priorband, eta: 3}` uses parameter priors; `neps_hyperband` samples uniformly. Both require `objectives: [agreement]` outside `neps`.
-- `optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}` and `primo` support `objectives: [agreement, cost_per_1k_battles]`. Agreement is maximized (NePS minimizes `1 - agreement`); cost is minimized.
-- For `primo`, put native `prior_centers` settings in the optimizer mapping, keyed by `objective_0` (disagreement) and `objective_1` (cost). Each contains dotted parameter names mapped to native setting **values**, for example:
-
-```yaml
-optimizer:
-  name: primo
-  eta: 3
-  mo_selector: epsnet
-  prior_centers:
-    objective_0:
-      judge.model: VLLM/Qwen/Qwen2.5-7B-Instruct
-      judge.prompt_preset: meta-eval-pair-score
-      judge.temperature: 0.0
-      judge.max_out_tokens: 2048
-      judge.swap_mode: both
-    objective_1:
-      judge.model: VLLM/Qwen/Qwen2.5-7B-Instruct
-      judge.prompt_preset: meta-eval-pair-score
-      judge.temperature: 0.0
-      judge.max_out_tokens: 1024
-      judge.swap_mode: fixed
-```
-
-Each trial runs the matching `meta-eval-*` task on the validation split and shares its judgement cache. Cost uses input plus output tokens (counted with tiktoken), including cached outputs, and `price_per_million_tokens[judge.model]` for every searched model. The Qwen/Gemma prices are illustrative estimates; this objective estimates USD per 1,000 battles, not actual API spend. NePS cost spend limits are unsupported and rejected; use `neps.total_evaluations_to_spend` (40 in the example).
-
-The main process waits for active trials after `neps.run` returns under normal budget accounting, then selects the best agreement configuration per judge model at the highest fidelity for held-out testing. The native NePS completion flag is not a worker barrier. Optional `test_battles_per_model` defaults to the highest fidelity.
-
-With NePS 0.17, leave `sample_prior_first` at its default for `neps_priorband` and `neps_hyperband`: enabling it fails in upstream trial-ID parsing. Priors still guide sampling without that option. For `primo`, its initial design must reach the highest fidelity before it switches to Bayesian optimization.
-
-```bash
-judgearena --config_path configs/tune_judge.yaml
-# Resume with the same explicit tuning directory and settings.
-judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir
-# Helper workers join that directory and run only the search.
-judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
-```
-
-`run_dir: null` creates a tuning directory under `--run.result_folder`; set an explicit `tune_judge.run_dir` to resume or share workers. NePS state lives in `<tune_dir>/neps/`, with meta-eval trial artifacts separately in `<tune_dir>/trials/`. `trials.parquet` summarizes trials and `test_results.parquet` holds the selected configurations' test results. For multiple workers on the same node, share a node-local `store_root` for SQLite judgement caching; multi-node NFS cache sharing is not supported.
-
-The primary process can extend the global evaluation or fidelity budget when resuming. Helpers inherit the persisted global limits. Search-space, optimizer, objective, and pricing changes require a new run directory.
-
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
