@@ -641,7 +641,7 @@ def _to_inference_result(
     default_model: str | None,
 ) -> InferenceResult:
     if isinstance(response, InferenceResult):
-        if response.usage is not None:
+        if response.usage is not None or response.error is not None:
             return response
         return replace(
             response,

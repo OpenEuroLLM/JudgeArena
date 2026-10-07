@@ -352,9 +352,11 @@ def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch
         for i in range(2)
     ]
     prepared = models.prepare_model("Dummy/judge", cache=cache)
-    assert models.do_inference(
-        prepared, ["overlong", "valid"], cache_row_metadata=metadata
-    ) == ["", "ok"]
+    with track_usage() as tracker:
+        assert models.do_inference(
+            prepared, ["overlong", "valid"], cache_row_metadata=metadata
+        ) == ["", "ok"]
+    assert len(tracker.snapshot().requests) == 1
     assert captured["chat_call"]["messages"] == [[{"role": "user", "content": "valid"}]]
     assert models.do_inference(
         prepared, ["overlong", "valid"], cache_row_metadata=metadata
