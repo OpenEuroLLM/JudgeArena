@@ -7,7 +7,6 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -24,8 +23,21 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --extra tune
+        run: uv sync
       - name: Run pre-commit
         run: uv run pre-commit run --all-files
       - name: Test with pytest
-        run: uv run --extra tune pytest
+        run: uv run pytest
+
+  tuning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Install tuning dependencies
+        run: uv sync --extra tune
+      - name: Test tuning integration
+        run: uv run --extra tune pytest tests/test_tuning.py tests/test_tuning_config.py

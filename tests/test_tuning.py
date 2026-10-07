@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pandas as pd
@@ -198,3 +199,59 @@ def test_prices_required_before_execution(tmp_path):
             get_packaged_task(cfg.task),
             execute_trial=lambda _: pytest.fail("executed without prices"),
         )
+
+
+def test_failed_trial_does_not_stop_search(tmp_path, token_counter):
+    pytest.importorskip("neps")
+    cfg = _tuning_config(tmp_path, "mo_hyperband")
+    cfg.tune_judge.neps["ignore_errors"] = True
+    calls = []
+
+    def execute(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, ["judge-trial"])
+        _fake_trial(path)
+
+    results = runner.run_tune_judge(
+        cfg, get_packaged_task(cfg.task), execute_trial=execute
+    )
+    trials = pd.read_parquet(cfg.tune_judge.run_dir / "trials.parquet")
+    assert len(trials) == 10
+    assert (trials.status == "failed").sum() == 1
+    assert not results.empty and set(results.status) == {"completed"}
+    pareto = pd.read_parquet(cfg.tune_judge.run_dir / "pareto.parquet")
+    final = trials[(trials.status == "completed") & (trials.battles_per_model == 3)]
+    assert pareto.agreement.tolist() == [final.agreement.max()]
+    assert set(pareto.status) == {"completed"}
+    assert set(pareto.battles_per_model) == {3}
+
+
+def test_pareto_report_uses_completed_full_fidelity_validation(tmp_path):
+    pytest.importorskip("neps")
+    trials = pd.DataFrame(
+        [
+            dict(
+                config_id=name,
+                judge_model=name,
+                agreement=agreement,
+                cost_per_1k_battles=cost,
+                battles_per_model=fidelity,
+                status=status,
+                overrides="{}",
+            )
+            for name, agreement, cost, fidelity, status in [
+                ("cheap", 0.5, 1.0, 3, "completed"),
+                ("accurate", 0.8, 2.0, 3, "completed"),
+                ("dominated", 0.4, 3.0, 3, "completed"),
+                ("low-fidelity", 0.9, 0.1, 1, "completed"),
+                ("failed", 1.0, 0.0, 3, "failed"),
+            ]
+        ]
+    )
+    executor = SimpleNamespace(run=lambda *args, **kwargs: {"status": "completed"})
+    runner._evaluate_picks(
+        executor, SimpleNamespace(test_battles_per_model=None), tmp_path, trials, 3
+    )
+    front = pd.read_parquet(tmp_path / "pareto.parquet")
+    assert set(front.config_id) == {"cheap", "accurate"}
