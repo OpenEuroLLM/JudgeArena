@@ -146,6 +146,11 @@ def _objective(record: dict, objectives: list[str]) -> dict:
     if record["status"] != "completed":
         return {
             "exception": RuntimeError(f"Trial {record['config_id']} failed"),
+            "objective_to_minimize": (
+                float("inf")
+                if len(objectives) == 1
+                else [float("inf")] * len(objectives)
+            ),
             "info_dict": record,
         }
     values = [
@@ -264,6 +269,12 @@ def _evaluate_picks(runner, tuning, tune_dir, trials, max_battles) -> pd.DataFra
     ranked = final.sort_values(
         ["agreement", "cost_per_1k_battles", "config_id"], ascending=[False, True, True]
     )
+    from neps.optimizers.utils.multiobjective.epsnet import pareto_efficient
+
+    costs = ranked[["agreement", "cost_per_1k_battles"]].to_numpy().copy()
+    costs[:, 0] *= -1
+    pareto = ranked.loc[pareto_efficient(costs)]
+    pareto.to_parquet(tune_dir / "pareto.parquet", index=False)
     picks = ranked.groupby("judge_model", sort=False).head(1)
     test_results = pd.DataFrame(
         [
@@ -280,6 +291,8 @@ def _evaluate_picks(runner, tuning, tune_dir, trials, max_battles) -> pd.DataFra
     print("\n=== Judge tuning ===")
     print("Validation:")
     print(ranked[_SUMMARY_COLUMNS].to_string(index=False))
+    print("Agreement/cost Pareto front (validation):")
+    print(pareto[_SUMMARY_COLUMNS].to_string(index=False))
     print("Test:")
     print(
         test_results.reindex(columns=[*_SUMMARY_COLUMNS, "status"]).to_string(
