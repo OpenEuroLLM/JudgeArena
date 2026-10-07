@@ -679,7 +679,7 @@ def _collect_inference_results(
         )
         for response in responses
     ]
-    request_usage = [result.usage for result in results]
+    request_usage = [result.usage for result in results if result.usage is not None]
     record_usage(request_usage)
 
     batch_usage = RunUsage(tuple(request_usage))
