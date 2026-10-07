@@ -345,6 +345,8 @@ The `tune-judge-*` tasks search judge configurations against the same human batt
 
 [configs/tune_judge.yaml](configs/tune_judge.yaml) uses native NePS settings under `tune_judge.neps`: `pipeline_space` has dotted config names, a `type` (`Categorical`, `Float`, `Integer`, or `IntegerFidelity`), and native constructor kwargs such as `choices`, `lower`, `upper`, `prior`, `prior_confidence`, and `log` where supported. Categorical `prior` is a choice **index**. Every parameter with a `prior` must also set `prior_confidence` (the example uses `medium`). Prompt presets are scalar choices (`meta-eval-pair-score`, `arena-hard`, `default_with_explanation`); grouped overrides are unsupported. The example searches temperature continuously and uses `meta_eval.battles_per_model` as the validation fidelity.
 
+Use categorical temperature choices (for example, `[0.0, 0.1, 1.0]`) when cache reuse matters: continuous sampling usually produces a new model descriptor for each value.
+
 For example, a continuous temperature parameter under `tune_judge.neps.pipeline_space`:
 
 ```yaml
@@ -394,7 +396,9 @@ judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/t
 judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
 ```
 
-`run_dir: null` creates a tuning directory under `--run.result_folder`; set an explicit `tune_judge.run_dir` to resume or share workers. NePS state lives in `<tune_dir>/neps/`, with meta-eval trial artifacts separately in `<tune_dir>/trials/`. `trials.parquet` summarizes trials, `pareto.parquet` reports the agreement/cost front of completed maximum-fidelity validation configurations, and `test_results.parquet` holds the selected configurations' test results. The example sets `neps.ignore_errors: true` so failed trials are recorded while the search continues. For multiple workers on the same node, share a node-local `store_root` for SQLite judgement caching; multi-node NFS cache sharing is not supported.
+The example keeps the paper limits fixed across judges: 8,192 characters per candidate completion, 8,192 judge output tokens, and each model’s native context. Instructions are not truncated. A battle whose rendered prompt exceeds the judge’s context produces a failed annotation, lowering agreement and coverage; it stays in the shared battle set and its skipped output is not cached. Only parameters explicitly included in the search space vary between trials.
+
+`run_dir: null` creates a tuning directory under `--run.result_folder`; set an explicit `tune_judge.run_dir` to resume or share workers. NePS state lives in `<tune_dir>/neps/`, with meta-eval trial artifacts separately in `<tune_dir>/trials/`. `trials.parquet` summarizes trials, `pareto.parquet` reports the agreement/cost front of completed maximum-fidelity validation configurations, and `test_results.parquet` holds the selected configurations' test results. The example sets `neps.ignore_errors: true` so failed trials are recorded while the search continues. Shared SQLite judgement caching uses rollback journaling. Concurrent writes passed a two-node stress test on kislurm’s NFSv3; this does not guarantee correct locking on other filesystems. Never enable WAL for an NFS cache. A node-local `store_root` remains an option for workers on the same node.
 
 The primary process can extend the global evaluation or fidelity budget when resuming. Helpers inherit the persisted global limits. Search-space, optimizer, objective, and pricing changes require a new run directory.
 

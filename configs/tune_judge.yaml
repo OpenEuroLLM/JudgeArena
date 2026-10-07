@@ -6,8 +6,10 @@ judge:
   model: VLLM/Qwen/Qwen2.5-7B-Instruct
   prompt_preset: meta-eval-pair-score
   temperature: 0.0
-  max_out_tokens: 2048
-  max_model_len: 16384
+  max_out_tokens: 8192
+  max_model_len: null
+generation:
+  truncate_judge_input_chars: 8192
 meta_eval:
   top_models: 20
 tune_judge:
@@ -28,12 +30,6 @@ tune_judge:
         lower: 0.0
         upper: 1.0
         prior: 0.0
-        prior_confidence: medium
-      judge.max_out_tokens:
-        type: Integer
-        lower: 1024
-        upper: 2048
-        prior: 2048
         prior_confidence: medium
       judge.swap_mode:
         type: Categorical
