@@ -201,9 +201,10 @@ def test_prices_required_before_execution(tmp_path):
         )
 
 
-def test_failed_trial_does_not_stop_search(tmp_path, token_counter):
+@pytest.mark.parametrize("algorithm", ["neps_priorband", "mo_hyperband"])
+def test_failed_trial_does_not_stop_search(tmp_path, token_counter, algorithm):
     pytest.importorskip("neps")
-    cfg = _tuning_config(tmp_path, "mo_hyperband")
+    cfg = _tuning_config(tmp_path, algorithm)
     cfg.tune_judge.neps["ignore_errors"] = True
     calls = []
 
@@ -222,7 +223,7 @@ def test_failed_trial_does_not_stop_search(tmp_path, token_counter):
     assert not results.empty and set(results.status) == {"completed"}
     pareto = pd.read_parquet(cfg.tune_judge.run_dir / "pareto.parquet")
     final = trials[(trials.status == "completed") & (trials.battles_per_model == 3)]
-    assert pareto.agreement.tolist() == [final.agreement.max()]
+    assert set(pareto.agreement) == {final.agreement.max()}
     assert set(pareto.status) == {"completed"}
     assert set(pareto.battles_per_model) == {3}
 
