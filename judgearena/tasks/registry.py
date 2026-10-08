@@ -28,6 +28,7 @@ from judgearena.tasks.schema import (
     TaskProvenance,
     TaskSelection,
     TaskSpec,
+    TuneJudgeProtocol,
 )
 
 logger = get_logger(__name__)
@@ -317,6 +318,10 @@ def _discover_tasks(
 
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
+    if isinstance(spec.protocol, TuneJudgeProtocol):
+        if spec.protocol.runner not in adapters.runners:
+            raise TaskDefinitionError(f"Unknown runner {spec.protocol.runner!r}")
+        return
     is_battle_backed = isinstance(spec.protocol, (EloProtocol, MetaEvalProtocol))
     dataset_names = (
         adapters.battle_datasets if is_battle_backed else adapters.instruction_datasets

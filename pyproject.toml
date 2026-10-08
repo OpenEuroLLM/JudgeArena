@@ -61,6 +61,7 @@ exclude = ["slurmpilot_scripts*"]
     "templates/*/*.txt",
 ]
 "judgearena.tasks" = ["definitions/*/*.yaml"]
+"judgearena.tuning" = ["prices.json"]
 "judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 
 [dependency-groups]

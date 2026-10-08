@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
-from judgearena.tuning import TUNE_JUDGE_TASK
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -43,6 +42,12 @@ class ResolvedBenchmark:
     task: ResolvedTaskSpec | None
 
 
+def _run_tune_judge(cfg, task):
+    from judgearena.tuning.runner import run_tune_judge
+
+    return run_tune_judge(cfg, task)
+
+
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
     from judgearena.benchmarks.elo.runner import run_elo
@@ -50,14 +55,13 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
     from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
     from judgearena.benchmarks.pairwise.runner import run_pairwise
-    from judgearena.tuning.runner import run_tune_judge
 
     return (
         BenchmarkAdapter("elo", frozenset(), run_elo),
         BenchmarkAdapter("meta_eval", frozenset(), run_meta_eval),
         BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
         BenchmarkAdapter("mt_bench_101", frozenset(), run_mt_bench_101_benchmark),
-        BenchmarkAdapter("tune_judge", frozenset({TUNE_JUDGE_TASK}), run_tune_judge),
+        BenchmarkAdapter("tune_judge", frozenset(), _run_tune_judge),
         BenchmarkAdapter("pairwise", None, run_pairwise),
     )
 

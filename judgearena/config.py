@@ -26,8 +26,8 @@ from judgearena.tasks.schema import (
     EloScoringSpec,
     MetaEvalProtocol,
     MTBenchProtocol,
+    TuneJudgeProtocol,
 )
-from judgearena.tuning import TUNE_JUDGE_TASK
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -417,19 +417,54 @@ class TuneJudgeArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    meta_eval_task: str
+    meta_eval_task: str | None = None
     """Packaged meta-evaluation task used by every trial."""
 
-    neps: dict[str, Any]
-    """NePS constructor specs in pipeline_space and native neps.run arguments."""
+    search_space: dict[str, Any]
+    """Nested judge parameters, written as lists or bounded ranges."""
 
-    objectives: list[Literal["agreement", "cost_per_1k_battles"]] = Field(
-        default=["agreement", "cost_per_1k_battles"], min_length=1
+    fidelity: dict[str, dict[str, int]] = Field(default_factory=dict)
+    optimizer: dict[str, Any] = Field(default_factory=dict)
+    neps: dict[str, Any] = Field(default_factory=dict)
+    """Native neps.run arguments; search space and optimizer are separate."""
+
+    objectives: list[Literal["agreement", "cost"]] | None = None
+    """Agreement is maximized and expected token cost minimized."""
+
+    price_per_million_tokens: dict[str, float | dict[str, float]] = Field(
+        default_factory=dict
     )
-    """Ordered objectives; agreement is maximized and expected cost minimized."""
+    """Optional USD per million tokens; scalar or separate input/output rates."""
 
-    price_per_million_tokens: dict[str, float]
-    """USD per million judge tokens, including cached judgements."""
+    def resolve(self, protocol: TuneJudgeProtocol) -> TuneJudgeArgs:
+        values = self.model_dump()
+        values["meta_eval_task"] = (
+            self.meta_eval_task or protocol.default_meta_eval_task
+        )
+        values["objectives"] = (
+            self.objectives
+            if self.objectives is not None
+            else protocol.default_objectives
+        )
+        values["fidelity"] = {
+            name: {**bounds, **self.fidelity.get(name, {})}
+            for name, bounds in protocol.default_fidelity.items()
+        }
+        if set(self.fidelity) - {"battles_per_model"}:
+            raise ValueError("Only battles_per_model fidelity is supported")
+        lower, upper = (
+            values["fidelity"]["battles_per_model"][k] for k in ("lower", "upper")
+        )
+        if not 0 < lower < upper:
+            raise ValueError("Fidelity requires 0 < lower < upper")
+        defaults = protocol.default_optimizer
+        values["optimizer"] = (
+            {**defaults, **self.optimizer}
+            if self.optimizer.get("name", defaults["name"]) == defaults["name"]
+            else self.optimizer
+        )
+        values["neps"] = {"ignore_errors": True, **self.neps}
+        return TuneJudgeArgs.model_validate(values)
 
     test_battles_per_model: int | None = Field(default=None, gt=0)
     """Test budget; defaults to the highest fidelity."""
@@ -443,6 +478,8 @@ class TuneJudgeArgs(BaseModel):
     @model_validator(mode="after")
     def _validate_runtime(self) -> TuneJudgeArgs:
         reserved = {
+            "pipeline_space",
+            "optimizer",
             "evaluate_pipeline",
             "root_directory",
             "overwrite_root_directory",
@@ -467,22 +504,23 @@ class TuneJudgeArgs(BaseModel):
                 for k in ("worker_evaluations_to_spend", "worker_fidelities_to_spend")
             ):
                 raise ValueError("Worker-local budgets require search_only")
-        optimizer = self.neps.get("optimizer", "auto")
-        name = (
-            optimizer.get("name")
-            if isinstance(optimizer, dict)
-            else optimizer[0]
-            if isinstance(optimizer, (list, tuple))
-            else optimizer
-        )
-        if name in {"neps_priorband", "neps_hyperband"} and len(self.objectives) != 1:
-            raise ValueError(f"{name} requires a single objective")
-        if name in {"mo_hyperband", "primo"} and len(self.objectives) != 2:
-            raise ValueError(f"{name} requires agreement and cost objectives")
-        if len(set(self.objectives)) != len(self.objectives):
-            raise ValueError("objectives must not contain duplicates")
-        if any(price < 0 for price in self.price_per_million_tokens.values()):
-            raise ValueError("Judge token prices must be nonnegative")
+        name = self.optimizer.get("name")
+        if self.objectives is not None:
+            if (
+                name in {"neps_priorband", "neps_hyperband"}
+                and len(self.objectives) != 1
+            ):
+                raise ValueError(f"{name} requires a single objective")
+            if name in {"mo_hyperband", "primo"} and len(self.objectives) != 2:
+                raise ValueError(f"{name} requires agreement and cost objectives")
+            if len(set(self.objectives)) != len(self.objectives):
+                raise ValueError("objectives must not contain duplicates")
+        for price in self.price_per_million_tokens.values():
+            if isinstance(price, dict) and set(price) != {"input", "output"}:
+                raise ValueError("Token price overrides require input and output rates")
+            rates = price.values() if isinstance(price, dict) else [price]
+            if any(rate < 0 for rate in rates):
+                raise ValueError("Judge token prices must be nonnegative")
         return self
 
 
@@ -560,24 +598,25 @@ class RunConfig(BaseSettings):
                 if not path.is_file():
                     raise ValueError(f"judge prompt file not found: {path}")
 
-        is_tune_judge = self.task == TUNE_JUDGE_TASK
+        resolved_task = get_packaged_task(self.task)
+        if resolved_task is None:
+            raise ValueError(
+                f"Unknown task {self.task!r}; use 'judgearena tasks list'."
+            )
+        protocol = resolved_task.spec.protocol
+        is_tune_judge = isinstance(protocol, TuneJudgeProtocol)
         if (self.tune_judge is not None) != is_tune_judge:
             raise ValueError(
                 "tune_judge config is required by, and only valid for, tune-judge."
             )
-        evaluation_task = self.tune_judge.meta_eval_task if is_tune_judge else self.task
-        resolved_task = get_packaged_task(evaluation_task)
-        if resolved_task is None:
-            raise ValueError(
-                f"Unknown task {evaluation_task!r}; use 'judgearena tasks list' to "
-                "inspect packaged tasks."
-            )
-
-        protocol = resolved_task.spec.protocol
-        if is_tune_judge and not isinstance(protocol, MetaEvalProtocol):
-            raise ValueError(
-                "tune_judge.meta_eval_task must select a meta-evaluation task."
-            )
+        if is_tune_judge:
+            self.tune_judge = self.tune_judge.resolve(protocol)
+            target = get_packaged_task(self.tune_judge.meta_eval_task)
+            if target is None or not isinstance(target.spec.protocol, MetaEvalProtocol):
+                raise ValueError(
+                    "tune_judge.meta_eval_task must select a meta-evaluation task."
+                )
+            protocol = target.spec.protocol
         task_generation = getattr(protocol, "generation", None)
         if (
             "truncate_all_input_chars" not in self.generation.model_fields_set
