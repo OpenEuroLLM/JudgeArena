@@ -15,6 +15,7 @@ from judgearena.tuning.search_space import (
 
 def _settings():
     return TuneJudgeArgs(
+        meta_eval_task="meta-eval-comparia-fr",
         neps={
             "optimizer": {"name": "neps_priorband", "eta": 3},
             "total_evaluations_to_spend": 10,
