@@ -1,6 +1,4 @@
-# NePS 0.17 judge-tuning example; install with pip install 'judgearena[tune]'.
-# Run: judgearena --config_path configs/tune_judge.yaml
-# Validation trials use the matching meta-eval task and its judgement cache.
+# Install judgearena[tune], then run: judgearena --config_path configs/tune_judge.yaml
 task: tune-judge
 judge:
   model: VLLM/Qwen/Qwen2.5-7B-Instruct
@@ -10,46 +8,15 @@ judge:
   max_model_len: null
 generation:
   truncate_judge_input_chars: 8192
-meta_eval:
-  top_models: 20
 tune_judge:
-  meta_eval_task: meta-eval-lmarena-140k-en
+  search_space:
+    judge:
+      model: [VLLM/Qwen/Qwen2.5-7B-Instruct, VLLM/google/gemma-2-9b-it]
+      prompt_preset: [meta-eval-pair-score, arena-hard, default_with_explanation]
+      swap_mode: [fixed, both]
+      temperature: {lower: 0.0, upper: 1.0, prior_confidence: low}
+      max_out_tokens: {lower: 1024, upper: 8192, log: true}
   neps:
-    pipeline_space:
-      judge.model:
-        type: Categorical
-        choices: [VLLM/Qwen/Qwen2.5-7B-Instruct, VLLM/google/gemma-2-9b-it]
-        prior: 0  # Categorical priors are choice indices.
-        prior_confidence: medium
-      judge.prompt_preset:
-        type: Categorical
-        choices: [meta-eval-pair-score, arena-hard, default_with_explanation]
-        prior: 0
-        prior_confidence: medium
-      judge.temperature:
-        type: Float
-        lower: 0.0
-        upper: 1.0
-        prior: 0.0
-        prior_confidence: medium
-      judge.swap_mode:
-        type: Categorical
-        choices: [fixed, both]
-        prior: 0
-        prior_confidence: medium
-      meta_eval.battles_per_model:
-        type: IntegerFidelity
-        lower: 10
-        upper: 90
-    optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}
     total_evaluations_to_spend: 40
-    ignore_errors: true  # Record failed trials and continue the search.
-  objectives: [agreement, cost_per_1k_battles]
-  # Estimated USD per million tokens, not measured spend or provider quotes.
-  price_per_million_tokens:
-    VLLM/Qwen/Qwen2.5-7B-Instruct: 0.12
-    VLLM/google/gemma-2-9b-it: 0.14
-  # Optional; null uses the highest validation fidelity for held-out testing.
-  test_battles_per_model: null
-  run_dir: null
-  search_only: false
+# Task defaults select meta-eval-lmarena-140k-en, agreement/cost objectives,
+# mo_hyperband, and 10-90 battles per model. Each can be overridden here.
