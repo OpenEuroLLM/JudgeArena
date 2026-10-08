@@ -1,7 +1,7 @@
 {
   "source": {
-    "url": "https://github.com/geoalgo/judgetuning/blob/main/judgetuning/llm_client/llm_specs.py",
-    "revision": "main (commit lookup unavailable during implementation)",
+    "url": "https://github.com/geoalgo/judgetuning/blob/c5202286238d6af45c9652320ce5aeb62158e671/judgetuning/llm_client/llm_specs.py",
+    "revision": "c5202286238d6af45c9652320ce5aeb62158e671",
     "fetched_file_sha256": "ff23df03a293c1ded9c521aad1f2f6812947dbda4b16b1808c4b2d3a4ab9aed4"
   },
   "models": {
