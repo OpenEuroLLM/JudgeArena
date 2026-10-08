@@ -1,7 +1,7 @@
 # NePS 0.17 judge-tuning example; install with pip install 'judgearena[tune]'.
 # Run: judgearena --config_path configs/tune_judge.yaml
 # Validation trials use the matching meta-eval task and its judgement cache.
-task: tune-judge-lmarena-140k-en
+task: tune-judge
 judge:
   model: VLLM/Qwen/Qwen2.5-7B-Instruct
   prompt_preset: meta-eval-pair-score
@@ -13,6 +13,7 @@ generation:
 meta_eval:
   top_models: 20
 tune_judge:
+  meta_eval_task: meta-eval-lmarena-140k-en
   neps:
     pipeline_space:
       judge.model:

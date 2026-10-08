@@ -341,7 +341,18 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 ### Tuning a judge
 
-The `tune-judge-*` tasks search judge configurations against the same human battles as their `meta-eval-*` counterparts, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Install `pip install 'judgearena[tune]'` for [NePS](https://github.com/automl/neps) 0.17 (`neural-pipeline-search`).
+The `tune-judge` workflow searches judge configurations against the human battles of the packaged task selected by `tune_judge.meta_eval_task`, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Install `pip install 'judgearena[tune]'` for [NePS](https://github.com/automl/neps) 0.17 (`neural-pipeline-search`).
+
+Select the benchmark and language in the configuration:
+
+```yaml
+task: tune-judge
+tune_judge:
+  meta_eval_task: meta-eval-lmarena-140k-en
+  # NePS search settings, objectives, and prices follow below.
+```
+
+`tune-judge` has no dataset definition of its own. `judgearena tasks list` and dataset downloads continue to use the packaged meta-eval tasks. Judge defaults and meta-eval restrictions come from the selected target; `meta_eval` holds its sampling settings.
 
 [configs/tune_judge.yaml](configs/tune_judge.yaml) uses native NePS settings under `tune_judge.neps`: `pipeline_space` has dotted config names, a `type` (`Categorical`, `Float`, `Integer`, or `IntegerFidelity`), and native constructor kwargs such as `choices`, `lower`, `upper`, `prior`, `prior_confidence`, and `log` where supported. Categorical `prior` is a choice **index**. Every parameter with a `prior` must also set `prior_confidence` (the example uses `medium`). Prompt presets are scalar choices (`meta-eval-pair-score`, `arena-hard`, `default_with_explanation`); grouped overrides are unsupported. The example searches temperature continuously and uses `meta_eval.battles_per_model` as the validation fidelity.
 
@@ -382,7 +393,7 @@ optimizer:
       judge.swap_mode: fixed
 ```
 
-Each trial runs the matching `meta-eval-*` task on the validation split and shares its judgement cache. Cost uses input plus output tokens (counted with tiktoken), including cached outputs, and `price_per_million_tokens[judge.model]` for every searched model. The Qwen/Gemma prices are illustrative estimates; this objective estimates USD per 1,000 battles, not actual API spend. NePS cost spend limits are unsupported and rejected; use `neps.total_evaluations_to_spend` (40 in the example).
+Each trial runs the configured `meta-eval-*` task on the validation split and shares its judgement cache. Cost uses input plus output tokens (counted with tiktoken), including cached outputs, and `price_per_million_tokens[judge.model]` for every searched model. The Qwen/Gemma prices are illustrative estimates; this objective estimates USD per 1,000 battles, not actual API spend. NePS cost spend limits are unsupported and rejected; use `neps.total_evaluations_to_spend` (40 in the example).
 
 The main process waits for active trials after `neps.run` returns under normal budget accounting, then selects the best agreement configuration per judge model at the highest fidelity for held-out testing. The native NePS completion flag is not a worker barrier. Optional `test_battles_per_model` defaults to the highest fidelity.
 
