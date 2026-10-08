@@ -1,7 +1,0 @@
-extends: _comparia.yaml
-task: tune-judge-comparia
-description: Tune judge settings on human votes from the ComparIA arena.
-
-protocol:
-  runner: tune_judge
-  meta_eval_task: meta-eval-comparia

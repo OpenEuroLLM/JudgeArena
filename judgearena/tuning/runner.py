@@ -207,17 +207,9 @@ def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None
     )
 
 
-def _meta_eval_task(task: ResolvedTaskSpec) -> str:
-    """Return the meta-eval task ID trials run as, keeping the variant suffix."""
-    meta_eval_task = task.spec.protocol.meta_eval_task
-    if task.selection is None:
-        return meta_eval_task
-    return f"{meta_eval_task}-{task.selection.name}"
-
-
 def run_tune_judge(
     cfg: RunConfig,
-    task: ResolvedTaskSpec,
+    task: ResolvedTaskSpec | None,
     *,
     execute_trial: TrialExecutor = run_trial_subprocess,
 ) -> pd.DataFrame:
@@ -228,7 +220,7 @@ def run_tune_judge(
     max_battles = specs[FIDELITY]["upper"]
     base = cfg.model_dump(mode="json", exclude={"tune_judge"})
     runner = _TrialRunner(
-        base={**base, "task": _meta_eval_task(task)},
+        base={**base, "task": tuning.meta_eval_task},
         prices=tuning.price_per_million_tokens,
         execute_trial=execute_trial,
     )
