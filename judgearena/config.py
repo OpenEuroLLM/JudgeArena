@@ -516,6 +516,8 @@ class TuneJudgeArgs(BaseModel):
             if len(set(self.objectives)) != len(self.objectives):
                 raise ValueError("objectives must not contain duplicates")
         for price in self.price_per_million_tokens.values():
+            if isinstance(price, dict) and set(price) != {"input", "output"}:
+                raise ValueError("Token price overrides require input and output rates")
             rates = price.values() if isinstance(price, dict) else [price]
             if any(rate < 0 for rate in rates):
                 raise ValueError("Judge token prices must be nonnegative")
