@@ -357,6 +357,10 @@ def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch
             prepared, ["overlong", "valid"], cache_row_metadata=metadata
         ) == ["", "ok"]
     assert len(tracker.snapshot().requests) == 1
+    assert [r.error for r in backend.batch(["overlong", "valid"])] == [
+        "context_length",
+        None,
+    ]
     assert captured["chat_call"]["messages"] == [[{"role": "user", "content": "valid"}]]
     assert models.do_inference(
         prepared, ["overlong", "valid"], cache_row_metadata=metadata

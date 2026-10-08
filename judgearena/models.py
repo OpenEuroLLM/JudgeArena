@@ -425,6 +425,8 @@ class ChatVLLM:
             valid_indices = []
             for index, messages in enumerate(messages_batch):
                 try:
+                    # Private vLLM API (0.19-0.25): renders and length-checks one
+                    # chat request exactly as LLM.chat() does.
                     self.llm._preprocess_chat_one(
                         messages,
                         add_generation_prompt=True,
@@ -464,8 +466,12 @@ class ChatVLLM:
         """
         usage_stage = invoke_kwargs.pop("usage_stage", None)
         outputs = self._run_raw_batch(inputs)
-        if self._top_logprobs is None and usage_stage is None:
-            return [out.outputs[0].text if out is not None else "" for out in outputs]
+        if (
+            self._top_logprobs is None
+            and usage_stage is None
+            and all(out is not None for out in outputs)
+        ):
+            return [out.outputs[0].text for out in outputs]
         results = []
         for out in outputs:
             if out is None:
