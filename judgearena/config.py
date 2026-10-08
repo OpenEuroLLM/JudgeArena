@@ -26,8 +26,8 @@ from judgearena.tasks.schema import (
     EloScoringSpec,
     MetaEvalProtocol,
     MTBenchProtocol,
-    TuneJudgeProtocol,
 )
+from judgearena.tuning import TUNE_JUDGE_TASK
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -417,6 +417,9 @@ class TuneJudgeArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
+    meta_eval_task: str
+    """Packaged meta-evaluation task used by every trial."""
+
     neps: dict[str, Any]
     """NePS constructor specs in pipeline_space and native neps.run arguments."""
 
@@ -557,14 +560,24 @@ class RunConfig(BaseSettings):
                 if not path.is_file():
                     raise ValueError(f"judge prompt file not found: {path}")
 
-        resolved_task = get_packaged_task(self.task)
+        is_tune_judge = self.task == TUNE_JUDGE_TASK
+        if (self.tune_judge is not None) != is_tune_judge:
+            raise ValueError(
+                "tune_judge config is required by, and only valid for, tune-judge."
+            )
+        evaluation_task = self.tune_judge.meta_eval_task if is_tune_judge else self.task
+        resolved_task = get_packaged_task(evaluation_task)
         if resolved_task is None:
             raise ValueError(
-                f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
+                f"Unknown task {evaluation_task!r}; use 'judgearena tasks list' to "
                 "inspect packaged tasks."
             )
 
         protocol = resolved_task.spec.protocol
+        if is_tune_judge and not isinstance(protocol, MetaEvalProtocol):
+            raise ValueError(
+                "tune_judge.meta_eval_task must select a meta-evaluation task."
+            )
         task_generation = getattr(protocol, "generation", None)
         if (
             "truncate_all_input_chars" not in self.generation.model_fields_set
@@ -630,12 +643,6 @@ class RunConfig(BaseSettings):
         if self.meta_eval is not None and not is_meta_eval:
             raise ValueError(
                 "meta_eval config is only valid for meta-evaluation tasks."
-            )
-        is_tune_judge = isinstance(protocol, TuneJudgeProtocol)
-        if (self.tune_judge is not None) != is_tune_judge:
-            raise ValueError(
-                "tune_judge config is required by, and only valid for, "
-                "tune-judge tasks."
             )
         if is_elo:
             if self.elo is None:

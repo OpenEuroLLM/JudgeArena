@@ -39,11 +39,3 @@ class MetaEvalProtocol(StrictFrozenModel):
                     f"meta-evaluation metric {request.metric} does not support breakdown_by"
                 )
         return self
-
-
-class TuneJudgeProtocol(MetaEvalProtocol):
-    """Search judge settings by running trials of a meta-evaluation task."""
-
-    runner: Literal["tune_judge"]
-    meta_eval_task: str = Field(min_length=1)
-    """Task each trial runs as, so trials share its judgement cache."""
