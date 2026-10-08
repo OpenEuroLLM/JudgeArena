@@ -403,6 +403,13 @@ class MetaEvalArgs(BaseModel):
     languages: list[str] | None = None
     """Restrict arena battles to these language codes. Defaults to all languages."""
 
+    split: Literal["all", "validation", "test"] = "all"
+    """Prompt-hashed arena partition to sample from. Judge tuning selects on
+    ``validation`` and reports on ``test``."""
+
+    validation_fraction: float = Field(default=0.5, gt=0, lt=1)
+    """Share of arena prompts assigned to the validation partition."""
+
 
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
