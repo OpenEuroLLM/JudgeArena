@@ -43,10 +43,11 @@ def _tuning_config(tmp_path, algorithm="neps_priorband", **settings):
     for key, value in [("judge.temperature", 0.2), ("judge.model", 1)]:
         specs[key].update(prior=value, prior_confidence="medium")
     return RunConfig(
-        task="tune-judge-comparia-fr",
+        task="tune-judge",
         judge={"model": "Dummy/judge", "temperature": 0.2, "swap_mode": "both"},
         run={"result_folder": str(tmp_path), "no_log_file": True},
         tune_judge={
+            "meta_eval_task": "meta-eval-comparia-fr",
             "neps": {
                 "pipeline_space": specs,
                 "optimizer": optimizer,
@@ -135,6 +136,9 @@ def test_native_optimizer_smoke(tmp_path, token_counter, algorithm):
     )
     with pytest.raises(ValueError, match="Incompatible configuration"):
         runner.run_tune_judge(incompatible, task, execute_trial=execute)
+    changed_target = _tuning_config(tmp_path, meta_eval_task="meta-eval-comparia-en")
+    with pytest.raises(ValueError, match="Incompatible configuration"):
+        runner.run_tune_judge(changed_target, task, execute_trial=execute)
     assert len(calls) == before
     fresh = _tuning_config(tmp_path, run_dir=tmp_path / "fresh")
     runner.run_tune_judge(fresh, task, execute_trial=execute)
@@ -256,3 +260,30 @@ def test_pareto_report_uses_completed_full_fidelity_validation(tmp_path):
     )
     front = pd.read_parquet(tmp_path / "pareto.parquet")
     assert set(front.config_id) == {"cheap", "accurate"}
+
+
+def test_generic_route_uses_target_defaults(tmp_path):
+    from judgearena.benchmarks.registry import resolve_benchmark
+
+    tuning = _tuning_config(tmp_path).tune_judge.model_dump()
+    direct = RunConfig(task=tuning["meta_eval_task"], judge={"model": "Dummy/judge"})
+    outer = RunConfig(
+        task="tune-judge", judge={"model": "Dummy/judge"}, tune_judge=tuning
+    )
+    assert outer.judge == direct.judge
+    assert outer.meta_eval == direct.meta_eval
+    resolved = resolve_benchmark(outer.task)
+    assert resolved.adapter.name == "tune_judge" and resolved.task is None
+    for target in ("unknown-task", "mt-bench"):
+        with pytest.raises(ValueError):
+            RunConfig(
+                task="tune-judge",
+                judge={"model": "Dummy/judge"},
+                tune_judge={**tuning, "meta_eval_task": target},
+            )
+    with pytest.raises(ValueError):
+        RunConfig(
+            task="tune-judge",
+            judge={"model": "Dummy/judge", "swap_mode": "random"},
+            tune_judge=tuning,
+        )

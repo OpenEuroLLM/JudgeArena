@@ -13,7 +13,7 @@ from judgearena.tasks.schema.baselines import (
 )
 from judgearena.tasks.schema.dataset import DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol
-from judgearena.tasks.schema.meta_eval import MetaEvalProtocol, TuneJudgeProtocol
+from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.mt_bench import MTBenchProtocol
 from judgearena.tasks.schema.mt_bench_101 import MTBench101Protocol
 from judgearena.tasks.schema.pairwise import PairwiseProtocol
@@ -23,8 +23,7 @@ ProtocolSpec = Annotated[
     | MTBenchProtocol
     | MTBench101Protocol
     | EloProtocol
-    | MetaEvalProtocol
-    | TuneJudgeProtocol,
+    | MetaEvalProtocol,
     Field(discriminator="runner"),
 ]
 

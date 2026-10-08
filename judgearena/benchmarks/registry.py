@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
+from judgearena.tuning import TUNE_JUDGE_TASK
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -56,7 +57,7 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
         BenchmarkAdapter("meta_eval", frozenset(), run_meta_eval),
         BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
         BenchmarkAdapter("mt_bench_101", frozenset(), run_mt_bench_101_benchmark),
-        BenchmarkAdapter("tune_judge", frozenset(), run_tune_judge),
+        BenchmarkAdapter("tune_judge", frozenset({TUNE_JUDGE_TASK}), run_tune_judge),
         BenchmarkAdapter("pairwise", None, run_pairwise),
     )
 
