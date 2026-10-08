@@ -1,0 +1,40 @@
+{
+  "source": {
+    "url": "https://github.com/geoalgo/judgetuning/blob/main/judgetuning/llm_client/llm_specs.py",
+    "revision": "main (commit lookup unavailable during implementation)",
+    "fetched_file_sha256": "ff23df03a293c1ded9c521aad1f2f6812947dbda4b16b1808c4b2d3a4ab9aed4"
+  },
+  "models": {
+    "meta-llama/Meta-Llama-3-8B-instruct": [0.20, 0.20, "historical-together-reference"],
+    "meta-llama/Meta-Llama-3-70B-instruct": [0.90, 0.90, "historical-together-reference"],
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": [0.11, 0.11, "measured-runtime"],
+    "meta-llama/Meta-Llama-3.1-70B-Instruct": [0.90, 0.90, "historical-together-reference"],
+    "neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8": [0.35, 0.35, "measured-runtime"],
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct": [0.06, 0.06, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-0.5B-Instruct": [0.06, 0.06, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-1.5B-Instruct": [0.06, 0.06, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-3B-Instruct": [0.10, 0.10, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-7B-Instruct": [0.12, 0.12, "measured-runtime"],
+    "Qwen/Qwen2.5-14B-Instruct": [0.30, 0.30, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-32B-Instruct": [0.80, 0.80, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8": [0.36, 0.36, "measured-runtime"],
+    "Qwen/Qwen2.5-72B-Instruct": [1.20, 1.20, "historical-size-tier-reference"],
+    "Qwen/Qwen2.5-72B-Instruct-GPTQ-Int8": [0.58, 0.58, "measured-runtime"],
+    "google/gemma-2-2b-it": [0.06, 0.06, "historical-size-tier-reference"],
+    "google/gemma-2-9b-it": [0.14, 0.14, "measured-runtime"],
+    "google/gemma-2-27b-it": [0.30, 0.30, "measured-runtime"],
+    "mistralai/Mixtral-8x7B-Instruct-v0.1": [1.20, 1.20, "historical-together-reference"],
+    "BAAI/JudgeLM-7B-v1.0": [0.20, 0.20, "historical-size-tier-reference"],
+    "WeOpenML/PandaLM-7B-v1": [0.20, 0.20, "historical-size-tier-reference"]
+  },
+  "tiers": [
+    [3, 0.06],
+    [4, 0.10],
+    [8, 0.20],
+    [21, 0.30],
+    [41, 0.80],
+    [70, 0.90],
+    [null, 1.20]
+  ],
+  "tier_note": "Historical references document tiers through 41B and examples at 70B and 72B. The 41-70B interval uses the 70B reference; above 70B, 1.20 is an explicit extrapolation from Qwen2.5-72B, not a source-stated tier."
+}
