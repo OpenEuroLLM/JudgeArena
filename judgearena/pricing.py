@@ -1,10 +1,12 @@
-"""Explicit judge-token prices used by the tuning cost objective."""
+"""Shared reference token pricing and request cost calculation."""
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from judgearena.usage import RequestUsage
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/models"
 
@@ -14,6 +16,24 @@ class TokenPrice:
     input: float
     output: float
     source: str
+
+
+def reference_cost(usage: RequestUsage, price: TokenPrice) -> float:
+    """Calculate USD from native input/output token counts and per-million rates."""
+    missing = [
+        name
+        for name in ("input_tokens", "output_tokens")
+        if getattr(usage, name) is None
+    ]
+    if missing:
+        fields = " and ".join(missing)
+        raise ValueError(
+            f"Cannot calculate reference cost: missing native {fields}; "
+            "provide provider-reported input_tokens and output_tokens usage"
+        )
+    return (
+        usage.input_tokens * price.input + usage.output_tokens * price.output
+    ) / 1_000_000
 
 
 def _fetch_openrouter(catalog_cache: Path | None) -> list[dict]:
@@ -27,20 +47,16 @@ def _fetch_openrouter(catalog_cache: Path | None) -> list[dict]:
     except (URLError, TimeoutError, OSError) as error:
         if catalog_cache is not None and catalog_cache.exists():
             cached = json.loads(catalog_cache.read_text(encoding="utf-8"))
-            if isinstance(cached, dict):
-                return [
-                    {
-                        "id": model_id,
-                        "pricing": {"prompt": price[0], "completion": price[1]},
-                    }
-                    for model_id, price in cached.items()
-                ]
             if isinstance(cached, list):
                 return cached
+            raise ValueError(
+                "Cached OpenRouter pricing catalog uses an unsupported format; "
+                "refresh the catalog or set price_per_million_tokens overrides"
+            ) from error
         raise ValueError(
             "Could not fetch OpenRouter pricing and no cached catalog is available; "
             "fetch the catalog on a login node or set "
-            "tune_judge.price_per_million_tokens"
+            "price_per_million_tokens overrides"
         ) from error
 
 
@@ -80,6 +96,8 @@ def resolve_prices(
     require_cost=True,
 ) -> dict[str, TokenPrice]:
     """Resolve explicit or OpenRouter reference USD-per-million-token rates."""
+    if not require_cost:
+        return {}
     prices = {}
     unresolved = []
     for model in sorted(models):
@@ -98,9 +116,9 @@ def resolve_prices(
         if price is not None:
             prices[model] = price
     missing = sorted(set(models) - prices.keys())
-    if missing and require_cost:
+    if missing:
         raise ValueError(
-            f"No token price for {missing}; set tune_judge.price_per_million_tokens "
+            f"No token price for {missing}; set price_per_million_tokens "
             f"overrides for: {missing}"
         )
     return prices

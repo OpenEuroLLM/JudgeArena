@@ -30,7 +30,7 @@ from judgearena.tuning.search_space import (
 if TYPE_CHECKING:
     from judgearena.tasks.schema import ResolvedTaskSpec
 
-from judgearena.tuning.pricing import TokenPrice, resolve_prices
+from judgearena.pricing import TokenPrice, resolve_prices
 from judgearena.tuning.session import collect_trials, prepare_session
 
 logger = get_logger(__name__)
