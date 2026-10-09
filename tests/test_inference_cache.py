@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pandas as pd
 import pytest
@@ -15,7 +15,7 @@ from judgearena.cache.inference import (
     canonicalize_model_input,
     provider_input_mode,
 )
-from judgearena.cache.sqlite import cached_usage_to_json
+from judgearena.cache.sqlite import CompletionCache as SQLiteCompletionCache
 from judgearena.inference import InferenceResult
 from judgearena.models import do_inference, prepare_model
 from judgearena.usage import RequestUsage, track_usage
@@ -158,16 +158,11 @@ def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypa
     assert tracker.snapshot().requests == (first[0].usage,)
     assert first[0].usage.cost_usd == 0.42
 
-    stored_usage = json.loads(cached_usage_to_json(first[0].usage))
-    assert stored_usage == {
-        "cached_tokens": 2,
-        "input_tokens": 7,
-        "model": "Dummy/usage-model",
-        "output_tokens": 11,
-        "reasoning_tokens": 3,
-        "stage": "generation",
-        "total_tokens": 18,
-    }
+    expected_usage = asdict(first[0].usage)
+    expected_usage.pop("cost_usd")
+    with SQLiteCompletionCache(next(tmp_path.glob("**/completions.db"))) as store:
+        stored_usage = json.loads(store.query().iloc[0]["usage_json"])
+    assert stored_usage == expected_usage
 
     with track_usage() as tracker:
         second = do_inference(
@@ -182,15 +177,10 @@ def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypa
     assert tracker.snapshot().requests == ()
 
 
-@pytest.mark.parametrize(
-    ("cache", "row"),
-    [
-        (CompletionInferenceCache, {"completion": "answer"}),
-        (JudgementInferenceCache, {"judge_completion": "answer", "top_logprobs": None}),
-    ],
-)
-def test_cached_result_discards_legacy_cost(cache, row):
+@pytest.mark.parametrize("cache", [CompletionInferenceCache, JudgementInferenceCache])
+def test_cached_result_discards_legacy_cost(cache):
     usage = json.dumps({"stage": "generation", "input_tokens": 7, "cost_usd": 0.42})
+    row = {"completion": "answer", "judge_completion": "answer", "top_logprobs": None}
     result = cache("unused", "arena-hard").cached_result(
         pd.Series({**row, "usage_json": usage})
     )
