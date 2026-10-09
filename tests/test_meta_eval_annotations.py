@@ -13,7 +13,9 @@ from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
     annotate_sample,
 )
+from judgearena.inference import InferenceResult
 from judgearena.prompts.registry import resolve_judge_prompt
+from judgearena.usage import RequestUsage
 
 
 def _sample():
@@ -53,8 +55,18 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
         )
     responses = iter(
         [
-            ["score_A: 9\nscore_B: 1", "score_A: 5\nscore_B: 6", "unparseable"],
-            ["score_A: 1\nscore_B: 7", "unparseable", "unparseable"],
+            [
+                InferenceResult(text=text)
+                for text in (
+                    "score_A: 9\nscore_B: 1",
+                    "score_A: 5\nscore_B: 6",
+                    "unparseable",
+                )
+            ],
+            [
+                InferenceResult(text=text)
+                for text in ("score_A: 1\nscore_B: 7", "unparseable", "unparseable")
+            ],
         ]
     )
     monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
@@ -67,6 +79,7 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
 
     assert rows["orientation"].tolist() == ["direct"] * 3 + ["reversed"] * 3
     rendered = rows["judge_input"]
+    assert pd.isna(rows.loc[2, "error"])
     assert rendered[0].index("Alpha answer") < rendered[0].index("Beta answer")
     assert rendered[3].index("Beta answer") < rendered[3].index("Alpha answer")
     assert rows.loc[[0, 3], "pref"].tolist() == pytest.approx(
@@ -88,7 +101,9 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     output = (
         '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: [output])
+    monkeypatch.setattr(
+        evaluate, "do_inference", lambda **kwargs: [InferenceResult(text=output)]
+    )
     rows = annotate_sample(
         _sample(),
         _config("fixed"),
@@ -99,6 +114,40 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     assert json.loads(rows.loc[0, "parsed_details_json"]) == {"ranks": {"M": 1, "m": 2}}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
     assert battles["pref"].tolist() == [1.0]
+
+
+def test_annotation_carries_usage_and_context_skip_error(monkeypatch):
+    usage = RequestUsage(stage="judging", model="judge", input_tokens=7)
+
+    def fake_do_inference(**kwargs):
+        assert kwargs["return_results"] is True
+        assert kwargs["return_top_logprobs"] is False
+        return [
+            InferenceResult(text="", error="context_length"),
+            InferenceResult(text="", usage=usage),
+        ]
+
+    monkeypatch.setattr(evaluate, "do_inference", fake_do_inference)
+    sample = pd.concat([_sample()] * 2, ignore_index=True)
+    rows = annotate_sample(
+        sample,
+        _config("fixed"),
+        judge_chat_model=object(),
+        resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
+    )
+    assert rows.loc[0, "error"] == "context_length"
+    assert pd.isna(rows.loc[0, "usage_json"])
+    assert rows.loc[1, "error"] is None
+    assert json.loads(rows.loc[1, "usage_json"]) == {
+        "stage": "judging",
+        "model": "judge",
+        "input_tokens": 7,
+        "output_tokens": None,
+        "total_tokens": None,
+        "reasoning_tokens": None,
+        "cached_tokens": None,
+        "cost_usd": None,
+    }
 
 
 def test_aggregate_rejects_incomplete_orientation_sets():

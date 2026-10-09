@@ -59,6 +59,19 @@ def test_structured_response_preserves_partial_fallback_usage(capsys):
     assert "input/output token usage unavailable" in capsys.readouterr().out
 
 
+def test_return_results_exposes_native_usage_without_logprobs():
+    message = AIMessage(
+        content="answer",
+        usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+    )
+    with track_usage() as tracker:
+        (result,) = do_inference(FakeModel([message]), ["prompt"], return_results=True)
+    assert result.text == "answer"
+    assert result.first_token_top_logprobs is None
+    assert result.usage == tracker.snapshot().requests[0]
+    assert result.usage.total_tokens == 12
+
+
 def test_run_benchmark_saves_nested_usage_and_cleans_up(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(metadata_module, "_get_dependency_versions", lambda **_: {})
     monkeypatch.setattr(metadata_module, "_get_git_hash", lambda **_: None)

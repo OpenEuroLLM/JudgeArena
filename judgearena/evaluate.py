@@ -8,7 +8,7 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.log import get_logger
-from judgearena.models import InferenceResult, do_inference
+from judgearena.models import do_inference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -17,6 +17,7 @@ from judgearena.prompts.registry import (
 from judgearena.prompts.registry import (
     resolve_run_judge_prompt as _resolve_run_judge_prompt,
 )
+from judgearena.usage import RequestUsage
 from judgearena.utils import strip_thinking_tags, truncate
 
 if TYPE_CHECKING:
@@ -103,6 +104,8 @@ class JudgeAnnotation:
     # first-token top logprobs, only collected for logprob-weighted presets
     judge_top_logprobs: dict[str, float] | None = None
     parsed: ParsedPreference | None = None
+    usage: RequestUsage | None = None
+    error: str | None = None
 
 
 def annotate_battles(
@@ -188,12 +191,10 @@ def annotate_battles(
         inputs=inputs,
         use_tqdm=use_tqdm,
         return_top_logprobs=collect_top_logprobs,
+        return_results=True,
         stage="judging",
         cache_row_metadata=cache_row_metadata,
     )
-    if not collect_top_logprobs:
-        judge_results = [InferenceResult(text=text) for text in judge_results]
-
     annotations = []
     for judge_input, judge_result, instruction, completion_A, completion_B in zip(
         inputs,
@@ -212,6 +213,8 @@ def annotate_battles(
                 completion_B=completion_B,
                 prompt_preset=resolved_prompt.preset_name,
                 judge_top_logprobs=judge_result.first_token_top_logprobs,
+                usage=judge_result.usage,
+                error=judge_result.error,
             )
         )
     return annotations
