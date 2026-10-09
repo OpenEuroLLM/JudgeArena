@@ -15,7 +15,7 @@ from judgearena.benchmarks.meta_eval.annotate import (
 )
 from judgearena.inference import InferenceResult
 from judgearena.prompts.registry import resolve_judge_prompt
-from judgearena.usage import RequestUsage
+from judgearena.usage import RequestUsage, request_usage_from_json
 
 
 def _sample():
@@ -53,21 +53,12 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
         sample[column] = sample[column].map(
             lambda turns: np.asarray(turns, dtype=object)
         )
+    batches = [
+        ("score_A: 9\nscore_B: 1", "score_A: 5\nscore_B: 6", "unparseable"),
+        ("score_A: 1\nscore_B: 7", "unparseable", "unparseable"),
+    ]
     responses = iter(
-        [
-            [
-                InferenceResult(text=text)
-                for text in (
-                    "score_A: 9\nscore_B: 1",
-                    "score_A: 5\nscore_B: 6",
-                    "unparseable",
-                )
-            ],
-            [
-                InferenceResult(text=text)
-                for text in ("score_A: 1\nscore_B: 7", "unparseable", "unparseable")
-            ],
-        ]
+        [[InferenceResult(text=text) for text in batch] for batch in batches]
     )
     monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
     rows = annotate_sample(
@@ -138,16 +129,7 @@ def test_annotation_carries_usage_and_context_skip_error(monkeypatch):
     assert rows.loc[0, "error"] == "context_length"
     assert pd.isna(rows.loc[0, "usage_json"])
     assert rows.loc[1, "error"] is None
-    assert json.loads(rows.loc[1, "usage_json"]) == {
-        "stage": "judging",
-        "model": "judge",
-        "input_tokens": 7,
-        "output_tokens": None,
-        "total_tokens": None,
-        "reasoning_tokens": None,
-        "cached_tokens": None,
-        "cost_usd": None,
-    }
+    assert request_usage_from_json(rows.loc[1, "usage_json"]) == usage
 
 
 def test_aggregate_rejects_incomplete_orientation_sets():

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from dataclasses import asdict
 
 import pandas as pd
 import pytest
@@ -20,6 +21,33 @@ DESCRIPTOR = {
     "provider": "VLLM",
     "sampling": {"max_tokens": 1024, "temperature": 0.0},
 }
+
+LEGACY_COMPLETIONS_SCHEMA = """CREATE TABLE completions (
+    input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
+    completion TEXT NOT NULL, benchmark TEXT NOT NULL,
+    instruction_id TEXT NOT NULL, model TEXT NOT NULL,
+    pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
+)"""
+
+
+def create_legacy_completion_db(path, *, completion=None):
+    with sqlite3.connect(path) as db:
+        db.execute(LEGACY_COMPLETIONS_SCHEMA)
+        if completion is not None:
+            db.execute(
+                "INSERT INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    input_hash("old prompt"),
+                    "old prompt",
+                    completion,
+                    "arena",
+                    "1",
+                    "Dummy/model",
+                    "bob",
+                    "2030-01-01T00:00:00+00:00",
+                    "old-run",
+                ),
+            )
 
 
 def test_descriptor_paths_separate_completion_and_judgement_caches(tmp_path):
@@ -187,17 +215,17 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
 
 def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
     db_path = tmp_path / COMPLETION_DB_NAME
-    legacy = sqlite3.connect(db_path)
-    legacy.execute(
-        """CREATE TABLE completions (
-            input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
-            completion TEXT NOT NULL, benchmark TEXT NOT NULL,
-            instruction_id TEXT NOT NULL, model TEXT NOT NULL,
-            pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
-        )"""
+    create_legacy_completion_db(db_path)
+    usage = RequestUsage(
+        stage="generation",
+        input_tokens=3,
+        output_tokens=5,
+        cached_tokens=1,
+        reasoning_tokens=2,
+        total_tokens=8,
+        model="Dummy/model",
+        cost_usd=0.25,
     )
-    legacy.commit()
-    legacy.close()
 
     rows = pd.DataFrame(
         [
@@ -207,16 +235,7 @@ def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
                 "benchmark": "arena",
                 "instruction_id": "1",
                 "model": "Dummy/model",
-                "usage_json": RequestUsage(
-                    stage="generation",
-                    input_tokens=3,
-                    output_tokens=5,
-                    cached_tokens=1,
-                    reasoning_tokens=2,
-                    total_tokens=8,
-                    model="Dummy/model",
-                    cost_usd=0.25,
-                ),
+                "usage_json": usage,
             }
         ]
     )
@@ -225,15 +244,10 @@ def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
         result = cache.query().iloc[0]
 
     assert "usage_json" in result.index
-    assert json.loads(result["usage_json"]) == {
-        "cached_tokens": 1,
-        "input_tokens": 3,
-        "model": "Dummy/model",
-        "output_tokens": 5,
-        "reasoning_tokens": 2,
-        "stage": "generation",
-        "total_tokens": 8,
-    }
+    stored_usage = json.loads(result["usage_json"])
+    expected_usage = asdict(usage)
+    expected_usage.pop("cost_usd")
+    assert stored_usage == expected_usage
 
 
 @pytest.mark.parametrize(
@@ -246,33 +260,18 @@ def test_merge_legacy_incoming_database_projects_null_usage(
     local_path = tmp_path / "local" / COMPLETION_DB_NAME
     incoming_path = tmp_path / "legacy" / COMPLETION_DB_NAME
     incoming_path.parent.mkdir(parents=True)
-    legacy = sqlite3.connect(incoming_path)
-    legacy.execute(
-        """CREATE TABLE completions (
-            input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
-            completion TEXT NOT NULL, benchmark TEXT NOT NULL,
-            instruction_id TEXT NOT NULL, model TEXT NOT NULL,
-            pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
-        )"""
-    )
-    legacy.execute(
-        "INSERT INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            input_hash("old prompt"),
-            "old prompt",
-            incoming_completion,
-            "arena",
-            "1",
-            "Dummy/model",
-            "bob",
-            "2030-01-01T00:00:00+00:00",
-            "old-run",
-        ),
-    )
-    legacy.commit()
-    legacy.close()
+    create_legacy_completion_db(incoming_path, completion=incoming_completion)
 
     prior_usage = RequestUsage(stage="generation", input_tokens=4)
+
+    def assert_legacy_schema():
+        with sqlite3.connect(incoming_path) as db:
+            columns = {
+                column[1] for column in db.execute("PRAGMA table_info(completions)")
+            }
+        assert "usage_json" not in columns
+
+    assert_legacy_schema()
     with CompletionCache(local_path) as cache:
         cache.save(
             pd.DataFrame(
@@ -297,10 +296,4 @@ def test_merge_legacy_incoming_database_projects_null_usage(
         assert json.loads(result["usage_json"])["input_tokens"] == 4
     else:
         assert pd.isna(result["usage_json"])
-
-    incoming = sqlite3.connect(incoming_path)
-    incoming_columns = {
-        column[1] for column in incoming.execute("PRAGMA table_info(completions)")
-    }
-    incoming.close()
-    assert "usage_json" not in incoming_columns
+    assert_legacy_schema()
