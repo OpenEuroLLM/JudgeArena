@@ -1,4 +1,5 @@
 import json
+from urllib.error import URLError
 
 import pytest
 
@@ -6,128 +7,102 @@ from judgearena.tuning import pricing
 from judgearena.tuning.pricing import TokenPrice, resolve_prices
 
 
-def test_source_prices_exact_model_identifiers(tmp_path):
-    prices = resolve_prices(
-        [
-            "VLLM/Qwen/Qwen2.5-7B-Instruct",
-            "VLLM/google/gemma-2-9b-it",
-            "VLLM/google/gemma-2-27b-it",
-            "VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8",
-        ],
-        {},
-        tmp_path,
-    )
-    assert prices["VLLM/Qwen/Qwen2.5-7B-Instruct"] == TokenPrice(
-        0.12, 0.12, "measured-runtime"
-    )
-    assert prices["VLLM/google/gemma-2-9b-it"].input == 0.14
-    assert prices["VLLM/google/gemma-2-27b-it"].input == 0.30
-    assert prices["VLLM/Qwen/Qwen2.5-32B-Instruct-GPTQ-Int8"].input == 0.36
+def test_overrides_do_not_fetch_catalog(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("all prices were overridden")
 
-
-@pytest.mark.parametrize(
-    "count, expected",
-    [(3, 0.06), (4, 0.10), (8, 0.20), (21, 0.30), (41, 0.80), (70, 0.90), (72, 1.20)],
-)
-def test_parameter_tiers(count, expected):
-    tiers = json.loads(pricing._TABLE.read_text())["tiers"]
-    assert pricing._tier_price(count, tiers) == expected
-
-
-def _write_safetensors(path, shape):
-    header = {"weight": {"dtype": "I8", "shape": shape, "data_offsets": [0, 1]}}
-    encoded = json.dumps(header).encode()
-    (path / "model.safetensors").write_bytes(
-        len(encoded).to_bytes(8, "little") + encoded
-    )
-
-
-def test_offline_hf_cache_snapshot_counts_shape_products(tmp_path, monkeypatch):
-    snapshot = tmp_path / "models--org--model" / "snapshots" / "abc"
-    snapshot.mkdir(parents=True)
-    _write_safetensors(snapshot, [2_000_000_000])
-    monkeypatch.setattr(
-        pricing, "try_to_load_from_cache", lambda *a, **k: snapshot / "config.json"
-    )
-    result = resolve_prices(["VLLM/org/model"], {}, tmp_path / "store")
-    assert result["VLLM/org/model"].input == 0.06
-
-
-def test_quantized_model_without_exact_entry_has_no_tier_price(tmp_path, monkeypatch):
-    snapshot = tmp_path / "quantized"
-    snapshot.mkdir()
-    (snapshot / "config.json").write_text(
-        json.dumps({"quantization_config": {"bits": 4}})
-    )
-    monkeypatch.setattr(
-        pricing, "try_to_load_from_cache", lambda *a, **k: snapshot / "config.json"
-    )
-    with pytest.raises(ValueError, match="quantized-model"):
-        resolve_prices(["VLLM/quantized-model"], {}, tmp_path)
-
-
-def test_override_numeric_and_asymmetric(tmp_path, monkeypatch):
-    def fail(_):
-        raise AssertionError("override must avoid hosted pricing fetch")
-
-    monkeypatch.setattr(pricing, "_fetch_openrouter", fail)
+    monkeypatch.setattr(pricing, "urlopen", fail)
     result = resolve_prices(
-        ["OpenRouter/org/a", "OpenAI/b"],
-        {"OpenRouter/org/a": 0.4, "OpenAI/b": {"input": 0.2, "output": 0.9}},
-        tmp_path,
+        ["VLLM/local", "OpenRouter/hosted"],
+        {"VLLM/local": 1.2, "OpenRouter/hosted": {"input": 0.2, "output": 0.7}},
     )
-    assert result["OpenRouter/org/a"] == TokenPrice(0.4, 0.4, "user_override")
-    assert result["OpenAI/b"] == TokenPrice(0.2, 0.9, "user_override")
+    assert result["VLLM/local"] == TokenPrice(1.2, 1.2, "user_override")
+    assert result["OpenRouter/hosted"] == TokenPrice(0.2, 0.7, "user_override")
 
 
-def test_unknown_required_fails_but_agreement_only_omits(tmp_path):
-    with pytest.raises(ValueError, match="unlisted"):
-        resolve_prices(["VLLM/unlisted"], {}, tmp_path)
-    assert resolve_prices(["VLLM/unlisted"], {}, tmp_path, require_cost=False) == {}
-
-
-def test_openrouter_matches_hf_id_first_then_model_id(tmp_path, monkeypatch):
+def test_huggingface_id_match_precedes_suffix_for_every_provider(tmp_path, monkeypatch):
     records = [
         {
-            "id": "provider/other",
-            "hugging_face_id": "org/model",
-            "pricing": {"prompt": "0.000002", "completion": "0.000007"},
+            "id": "org/model",
+            "pricing": {"prompt": "0.000001", "completion": "0.000002"},
         },
         {
-            "id": "org/fallback",
-            "pricing": {"prompt": "0.000003", "completion": "0.000009"},
+            "id": "elsewhere/different",
+            "hugging_face_id": "ORG/Model",
+            "pricing": {"prompt": "0.000003", "completion": "0.000004"},
         },
     ]
-    monkeypatch.setattr(pricing, "_fetch_openrouter", lambda path: records)
-    result = resolve_prices(
-        ["OpenRouter/org/model", "Provider/org/fallback"], {}, tmp_path
+    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _Response(records))
+    cache = tmp_path / "openrouter_pricing.json"
+    for model in ("VLLM/org/model", "Provider/org/model"):
+        result = resolve_prices([model], {}, catalog_cache=cache)
+        assert result[model] == TokenPrice(3, 4, "openrouter_reference")
+        assert json.loads(cache.read_text()) == records
+
+
+def test_suffix_match(monkeypatch):
+    monkeypatch.setattr(
+        pricing,
+        "urlopen",
+        lambda *a, **k: _Response(
+            [
+                {
+                    "id": "org/model",
+                    "pricing": {"prompt": "0.000005", "completion": "0.000009"},
+                }
+            ]
+        ),
     )
-    assert result["OpenRouter/org/model"] == TokenPrice(
-        2.0, 7.0, "openrouter_reference"
-    )
-    assert result["Provider/org/fallback"] == TokenPrice(
-        3.0, 9.0, "openrouter_reference"
-    )
-
-
-def test_nonhosted_unlisted_model_does_not_fetch(tmp_path, monkeypatch):
-    def fail(_):
-        raise AssertionError("unexpected hosted pricing fetch")
-
-    monkeypatch.setattr(pricing, "_fetch_openrouter", fail)
-    assert resolve_prices(["VLLM/unlisted"], {}, tmp_path, require_cost=False) == {}
-
-
-def test_legacy_openrouter_cache_mapping_is_supported(tmp_path):
-    cache_file = tmp_path / "openrouter_pricing.json"
-    cache_file.write_text(json.dumps({"org/model": [0.000002, 0.000007]}))
-    records = pricing._fetch_openrouter(cache_file)
-    assert pricing._hosted_price("org/model", records) == TokenPrice(
-        2.0, 7.0, "openrouter_reference"
+    assert resolve_prices(["Hosted/org/model"], {})["Hosted/org/model"] == TokenPrice(
+        5, 9, "openrouter_reference"
     )
 
 
-def test_hf_cache_missing_sentinel_is_not_a_path(tmp_path, monkeypatch):
-    sentinel = object()
-    monkeypatch.setattr(pricing, "try_to_load_from_cache", lambda *a, **k: sentinel)
-    assert pricing._repo_snapshot("org/missing") is None
+def test_fetch_failure_uses_cached_catalog(tmp_path, monkeypatch):
+    cache = tmp_path / "openrouter_pricing.json"
+    cache.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "org/model",
+                    "pricing": {"prompt": "0.000002", "completion": "0.000006"},
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
+    price = resolve_prices(["Backend/org/model"], {}, catalog_cache=cache)
+    assert price["Backend/org/model"] == TokenPrice(2, 6, "openrouter_reference")
+
+
+def test_fetch_failure_without_cache_has_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
+    with pytest.raises(ValueError, match="login node.*price_per_million_tokens"):
+        resolve_prices(
+            ["Backend/org/model"], {}, catalog_cache=tmp_path / "catalog.json"
+        )
+
+
+def test_unpriced_model_fails_for_cost_objective(monkeypatch):
+    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _Response([]))
+    with pytest.raises(ValueError, match="unknown.*overrides"):
+        resolve_prices(["VLLM/unknown"], {})
+    assert resolve_prices(["VLLM/unknown"], {}, require_cost=False) == {}
+
+
+class _Response:
+    def __init__(self, records):
+        self.records = records
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def read(self):
+        return json.dumps({"data": self.records}).encode()
+
+
+def _raise_url_error():
+    raise URLError("offline")

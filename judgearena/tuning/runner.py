@@ -253,22 +253,27 @@ def run_tune_judge(
             models.add(trial_cfg.judge.model)
     if "judge.model" not in specs:
         models.add(cfg.judge.model)
-    prices = resolve_prices(
-        models,
-        tuning.price_per_million_tokens,
-        cfg.run.store_root or Path(cfg.run.result_folder),
-        require_cost="cost" in tuning.objectives,
-    )
-    runner = _TrialRunner(runner.base, prices, execute_trial)
     tune_dir = prepare_session(cfg)
     price_path = tune_dir / "prices.json"
-    snapshot = {model: asdict(price) for model, price in prices.items()}
     if price_path.exists():
-        stored = json.loads(price_path.read_text())
-        if stored != snapshot:
-            raise ValueError("Resolved prices changed for this tuning session")
-    elif not tuning.search_only:
-        price_path.write_text(json.dumps(snapshot, indent=2))
+        prices = {
+            model: TokenPrice(**price)
+            for model, price in json.loads(price_path.read_text()).items()
+        }
+    else:
+        prices = resolve_prices(
+            models,
+            tuning.price_per_million_tokens,
+            catalog_cache=Path(cfg.run.store_root or cfg.run.result_folder)
+            / "openrouter_pricing.json",
+            require_cost="cost" in tuning.objectives,
+        )
+        price_path.write_text(
+            json.dumps(
+                {model: asdict(price) for model, price in prices.items()}, indent=2
+            )
+        )
+    runner = _TrialRunner(runner.base, prices, execute_trial)
     logger.info("Tuning %s in %s", cfg.task, tune_dir)
     _search(runner, cfg, tune_dir, space)
     if tuning.search_only:
