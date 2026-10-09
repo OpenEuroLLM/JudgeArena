@@ -17,7 +17,7 @@ def _settings():
     return TuneJudgeArgs(
         search_space={
             "judge": {
-                "temperature": {"lower": 0.0, "upper": 1.0, "prior_confidence": "low"},
+                "temperature": {"lower": 0, "upper": 1, "prior_confidence": "low"},
                 "model": {
                     "choices": ["Dummy/judge", "Dummy/other"],
                     "prior": "Dummy/other",
