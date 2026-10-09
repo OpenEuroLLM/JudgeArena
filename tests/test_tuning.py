@@ -98,7 +98,7 @@ def _fake_trial(config_path):
 @pytest.mark.parametrize(
     "algorithm", ["neps_priorband", "neps_hyperband", "mo_hyperband", "primo"]
 )
-def test_native_optimizer_smoke(tmp_path, token_counter, algorithm):
+def test_native_optimizer_smoke(tmp_path, token_counter, algorithm, monkeypatch):
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path, algorithm)
     calls = []
@@ -127,11 +127,16 @@ def test_native_optimizer_smoke(tmp_path, token_counter, algorithm):
     assert load_config(calls[-1]).meta_eval.battles_per_model == 3
     before = len(calls)
     (folder / "test_results.parquet").unlink()
-    resumed = runner.run_tune_judge(cfg, task, execute_trial=execute)
-    pd.testing.assert_frame_equal(results, resumed)
-    assert len(calls) == before  # Completed search and held-out artifacts are reused.
     helper = _tuning_config(tmp_path, search_only=True)
-    assert runner.run_tune_judge(helper, task, execute_trial=execute).empty
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            runner,
+            "resolve_prices",
+            lambda *a, **kw: pytest.fail("Refetched session prices"),
+        )
+        resumed = runner.run_tune_judge(cfg, task, execute_trial=execute)
+        assert runner.run_tune_judge(helper, task, execute_trial=execute).empty
+    pd.testing.assert_frame_equal(results, resumed)
     assert len(calls) == before
     incompatible = _tuning_config(
         tmp_path, price_per_million_tokens={"Dummy/judge": 2.0, "Dummy/other": 2.0}
@@ -199,7 +204,10 @@ def test_cost_counts_both_cached_orientations(tmp_path, token_counter):
     assert "cost" not in objective
 
 
-def test_prices_required_before_execution(tmp_path):
+def test_prices_required_before_execution(tmp_path, monkeypatch):
+    from judgearena.tuning import pricing
+
+    monkeypatch.setattr(pricing, "_fetch_openrouter", lambda _: [])
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path, "mo_hyperband", price_per_million_tokens={})
     with pytest.raises(ValueError, match="No token price"):
