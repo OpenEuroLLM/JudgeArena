@@ -1,4 +1,6 @@
 import json
+from contextlib import nullcontext
+from io import BytesIO
 from urllib.error import URLError
 
 import pytest
@@ -6,6 +8,21 @@ import pytest
 from judgearena import pricing
 from judgearena.pricing import TokenPrice, reference_cost, resolve_prices
 from judgearena.usage import RequestUsage
+
+
+@pytest.fixture
+def catalog():
+    return [
+        {
+            "id": "org/model",
+            "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+        },
+        {
+            "id": "elsewhere/different",
+            "hugging_face_id": "ORG/Model",
+            "pricing": {"prompt": "0.000003", "completion": "0.000004"},
+        },
+    ]
 
 
 def test_overrides_do_not_fetch_catalog(monkeypatch):
@@ -21,67 +38,53 @@ def test_overrides_do_not_fetch_catalog(monkeypatch):
     assert result["OpenRouter/hosted"] == TokenPrice(0.2, 0.7, "user_override")
 
 
-def test_huggingface_id_match_precedes_suffix_for_every_provider(tmp_path, monkeypatch):
-    records = [
-        {
-            "id": "org/model",
-            "pricing": {"prompt": "0.000001", "completion": "0.000002"},
-        },
-        {
-            "id": "elsewhere/different",
-            "hugging_face_id": "ORG/Model",
-            "pricing": {"prompt": "0.000003", "completion": "0.000004"},
-        },
-    ]
-    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _Response(records))
-    cache = tmp_path / "openrouter_pricing.json"
-    for model in ("VLLM/org/model", "Provider/org/model"):
-        result = resolve_prices([model], {}, catalog_cache=cache)
-        assert result[model] == TokenPrice(3, 4, "openrouter_reference")
-        assert json.loads(cache.read_text()) == records
-
-
-def test_suffix_match(monkeypatch):
+@pytest.mark.parametrize(
+    ("model", "hf_match", "expected"),
+    [
+        ("VLLM/org/model", True, TokenPrice(3, 4, "openrouter_reference")),
+        ("Hosted/org/model", True, TokenPrice(3, 4, "openrouter_reference")),
+        ("Gateway/org/model", True, TokenPrice(3, 4, "openrouter_reference")),
+        ("VLLM/org/model", False, TokenPrice(1, 2, "openrouter_reference")),
+    ],
+)
+def test_reference_model_matching(
+    model, hf_match, expected, catalog, monkeypatch, tmp_path
+):
+    records = catalog if hf_match else catalog[:1]
     monkeypatch.setattr(
         pricing,
         "urlopen",
-        lambda *a, **k: _Response(
-            [
-                {
-                    "id": "org/model",
-                    "pricing": {"prompt": "0.000005", "completion": "0.000009"},
-                }
-            ]
-        ),
+        lambda *a, **k: nullcontext(BytesIO(json.dumps({"data": records}).encode())),
     )
-    assert resolve_prices(["Hosted/org/model"], {})["Hosted/org/model"] == TokenPrice(
-        5, 9, "openrouter_reference"
-    )
+    cache = tmp_path / "catalog.json"
+    assert resolve_prices([model], {}, catalog_cache=cache) == {model: expected}
+    assert json.loads(cache.read_text()) == records
 
 
-def test_fetch_failure_uses_cached_catalog(tmp_path, monkeypatch):
-    cache = tmp_path / "openrouter_pricing.json"
-    cache.write_text(
-        json.dumps(
-            [
-                {
-                    "id": "org/model",
-                    "pricing": {"prompt": "0.000002", "completion": "0.000006"},
-                }
-            ]
+@pytest.mark.parametrize(
+    "cache_content,error",
+    [
+        ("catalog", None),
+        (None, "login node.*price_per_million_tokens"),
+        ({"org/model": [1, 2]}, "unsupported format.*refresh.*overrides"),
+    ],
+)
+def test_offline_catalog_resolution(
+    tmp_path, monkeypatch, catalog, cache_content, error
+):
+    cache = tmp_path / "catalog.json"
+    if cache_content is not None:
+        cache.write_text(
+            json.dumps(catalog if cache_content == "catalog" else cache_content)
         )
-    )
     monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
-    price = resolve_prices(["Backend/org/model"], {}, catalog_cache=cache)
-    assert price["Backend/org/model"] == TokenPrice(2, 6, "openrouter_reference")
-
-
-def test_fetch_failure_without_cache_has_actionable_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
-    with pytest.raises(ValueError, match="login node.*price_per_million_tokens"):
-        resolve_prices(
-            ["Backend/org/model"], {}, catalog_cache=tmp_path / "catalog.json"
-        )
+    if error:
+        with pytest.raises(ValueError, match=error):
+            resolve_prices(["VLLM/org/model"], {}, catalog_cache=cache)
+    else:
+        assert resolve_prices(["VLLM/org/model"], {}, catalog_cache=cache) == {
+            "VLLM/org/model": TokenPrice(3, 4, "openrouter_reference")
+        }
 
 
 def test_unpriced_model_fails_for_cost_objective(monkeypatch):
@@ -91,51 +94,35 @@ def test_unpriced_model_fails_for_cost_objective(monkeypatch):
     monkeypatch.setattr(pricing, "urlopen", unexpected_fetch)
     assert resolve_prices(["VLLM/unknown"], {}, require_cost=False) == {}
 
-    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _Response([]))
+    monkeypatch.setattr(
+        pricing,
+        "urlopen",
+        lambda *a, **k: nullcontext(BytesIO(b'{"data": []}')),
+    )
     with pytest.raises(ValueError, match="unknown.*overrides"):
         resolve_prices(["VLLM/unknown"], {})
 
 
-def test_reference_cost_requires_native_counts_and_uses_reported_zero():
-    with pytest.raises(
-        ValueError, match="missing native input_tokens and output_tokens"
-    ):
-        reference_cost(
+@pytest.mark.parametrize(
+    ("usage", "missing"),
+    [
+        (
             RequestUsage(stage="judging", reasoning_tokens=12),
-            TokenPrice(1, 2, "ref"),
-        )
+            "input_tokens and output_tokens",
+        ),
+        (RequestUsage(stage="judging", input_tokens=3), "output_tokens"),
+    ],
+)
+def test_reference_cost_requires_native_counts(usage, missing):
+    with pytest.raises(ValueError, match=f"missing native {missing}"):
+        reference_cost(usage, TokenPrice(1, 2, "ref"))
 
+
+def test_reference_cost_uses_native_counts_including_zero():
     usage = RequestUsage(
         stage="judging", input_tokens=0, output_tokens=3, reasoning_tokens=100
     )
     assert reference_cost(usage, TokenPrice(1_000_000, 2_000_000, "ref")) == 6
-
-    with pytest.raises(ValueError, match="missing native output_tokens"):
-        reference_cost(
-            RequestUsage(stage="judging", input_tokens=3), TokenPrice(1, 2, "ref")
-        )
-
-
-def test_fetch_failure_rejects_legacy_dictionary_catalog(tmp_path, monkeypatch):
-    cache = tmp_path / "catalog.json"
-    cache.write_text(json.dumps({"org/model": [1, 2]}))
-    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
-    with pytest.raises(ValueError, match="unsupported format.*refresh.*overrides"):
-        resolve_prices(["Backend/org/model"], {}, catalog_cache=cache)
-
-
-class _Response:
-    def __init__(self, records):
-        self.records = records
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return None
-
-    def read(self):
-        return json.dumps({"data": self.records}).encode()
 
 
 def _raise_url_error():
