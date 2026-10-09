@@ -15,6 +15,7 @@ from judgearena.benchmarks.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
+from judgearena.inference import InferenceResult
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
@@ -114,7 +115,7 @@ def test_meta_eval_alpaca_prompt_embeds_json_safe_inputs(monkeypatch):
 
     def fake_do_inference(**kwargs):
         captured.extend(kwargs["inputs"])
-        return ["unparsed"]
+        return [InferenceResult(text="unparsed")]
 
     monkeypatch.setattr(evaluate_module, "do_inference", fake_do_inference)
     instruction = 'Say "hi"\r\nnext \\ path {curly} café'
