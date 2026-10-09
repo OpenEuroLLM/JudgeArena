@@ -86,7 +86,7 @@ class TaskSpec(StrictFrozenModel):
             raise ValueError("tags must not contain duplicates")
         if isinstance(self.protocol, TuneJudgeProtocol):
             if self.dataset is not None:
-                raise ValueError("Tuning tasks use their target benchmark's dataset.")
+                raise ValueError("Tuning tasks use their target meta-eval benchmark's dataset.")
             return self
         if self.dataset is None:
             raise ValueError("Benchmark tasks require a dataset.")
