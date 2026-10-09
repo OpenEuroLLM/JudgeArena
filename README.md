@@ -366,12 +366,16 @@ tune_judge:
       model: [VLLM/Qwen/Qwen2.5-7B-Instruct, VLLM/google/gemma-2-9b-it]
       prompt_preset: [meta-eval-pair-score, arena-hard]
       swap_mode: [fixed, both]
-      temperature: {lower: 0.0, upper: 1.0, prior_confidence: low}
+      temperature: {lower: 0, upper: 1, prior_confidence: low}
       max_out_tokens: {lower: 1024, upper: 8192, log: true}
+  # User estimates in USD per 1M tokens, not live catalog prices.
+  price_per_million_tokens:
+    VLLM/Qwen/Qwen2.5-7B-Instruct: {input: 0.12, output: 0.12}
+    VLLM/google/gemma-2-9b-it: {input: 0.14, output: 0.14}
   neps: {total_evaluations_to_spend: 40}
 ```
 
-Lists, or `{choices: [...]}`, define categorical parameters. `{lower, upper}` defines a range, integer when both bounds are integers and float otherwise; use `0.0` and `1.0` for continuous temperature. `log: true` enables logarithmic sampling. Parameters are nested like the run configuration and may vary judge fields or `generation.truncate_judge_input_chars`.
+Lists, or `{choices: [...]}`, define categorical parameters. `{lower, upper}` defines a range whose type follows the corresponding run-config field: temperature is continuous even when written `{lower: 0, upper: 1}`, while `max_out_tokens` is integer. `log: true` enables logarithmic sampling. Parameters are nested like the run configuration and may vary judge fields or `generation.truncate_judge_input_chars`.
 
 The resolved reference judge supplies each parameter's prior when its value lies in the domain. An explicit `prior` is a **value**, including for categorical parameters. `prior_confidence` can be `low`, `medium`, or `high` and defaults to `medium`. For example:
 
@@ -394,9 +398,16 @@ tune_judge:
 
 `mo_hyperband` and `primo` support agreement and cost objectives. `neps_priorband` and `neps_hyperband` require `objectives: [agreement]`. Optimizer kwargs remain native NePS settings; `primo` accepts objective-specific `prior_centers` and `prior_confidences` with dotted parameter names. Other run settings belong under `neps`, including evaluation budgets and `ignore_errors` (defaults to `true`). Managed directory/completion settings and NePS cost-spend budgets are unsupported. With NePS 0.17, leave `sample_prior_first` at its default for `neps_priorband` and `neps_hyperband` because enabling it fails in upstream trial-ID parsing.
 
-**Expected judge cost** counts input and output tokens with tiktoken, including cached judgements, and reports USD per 1,000 battles. Local vLLM models use the pinned [judgetuning price table](https://github.com/geoalgo/judgetuning/blob/main/judgetuning/llm_client/llm_specs.py): some entries are runtime-derived measurements, others historical provider references. Unlisted models use historical size tiers based on tensor shapes in locally cached safetensors headers. These are estimates; the tiers above 41B are extrapolated from the paper's larger-model examples. Unknown quantized models require an override because packed tensor shapes do not reveal their original parameter count.
+**Expected judge cost** counts input and output tokens with tiktoken, including cached judgements, and reports USD per 1,000 battles. A per-model override takes precedence and may be a scalar (same input/output rate) or separate input/output rates, in USD per 1M tokens. Without an override, the OpenRouter model catalog supplies reference rates for every provider, including vLLM: matching first uses the Hugging Face ID, then the model ID's last two path segments. Catalog prices are estimates for comparison, not the actual price charged by another provider.
 
-Hosted models use OpenRouter's published input/output prices, cached in `openrouter_pricing.json`. This supplies a reference estimate even when another provider serves the model. Optional per-model overrides take precedence:
+A new primary run fetches the catalog's free metadata and saves it as `{store_root}/openrouter_pricing.json`. If fetching fails, it uses that cached catalog; if neither is available, add an override or fetch the catalog on a login node and make the cache available. Resume and helper workers use the run's `prices.json` without fetching. On an internet-connected login node, prefetch the catalog into the same `run.store_root` used by the job:
+
+```bash
+mkdir -p /path/to/store-root
+curl -fsS https://openrouter.ai/api/v1/models | jq '.data' > /path/to/store-root/openrouter_pricing.json
+```
+
+Optional per-model overrides use:
 
 ```yaml
 tune_judge:
@@ -405,7 +416,7 @@ tune_judge:
     OpenRouter/org/model: {input: 0.2, output: 0.8}
 ```
 
-A cost-objective search stops before evaluation if any searched model has no price. An agreement-only run may leave cost unknown. `prices.json` records the resolved rates and sources in the tuning directory; resuming with different resolved prices is rejected. Expected cost is separate from actual provider spend and NePS's search budget.
+The example's Qwen2.5-7B and gemma-2-9b-it rates (0.12 and 0.14) are user-provided estimates, not claims about current catalog prices. A cost-objective search stops before evaluation if any searched model has no price, naming the unresolved models and `tune_judge.price_per_million_tokens`. An agreement-only run may leave cost unknown. `prices.json` records the resolved rates and whether each came from `user_override` or `openrouter_reference`; resuming uses this run-specific file without a catalog fetch. Expected cost is separate from actual provider spend and NePS's search budget.
 
 The primary process waits for active trials, reports the full-budget agreement/cost Pareto front, and selects the best agreement configuration per model for held-out testing. `test_battles_per_model` defaults to the highest validation fidelity. Results include `trials.parquet`, `pareto.parquet`, and `test_results.parquet`; NePS state stays under `neps/`, separate from inference caches.
 
