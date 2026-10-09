@@ -53,12 +53,20 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
         sample[column] = sample[column].map(
             lambda turns: np.asarray(turns, dtype=object)
         )
-    batches = [
-        ("score_A: 9\nscore_B: 1", "score_A: 5\nscore_B: 6", "unparseable"),
-        ("score_A: 1\nscore_B: 7", "unparseable", "unparseable"),
-    ]
+    usage = RequestUsage(stage="judging", model="judge", input_tokens=7)
     responses = iter(
-        [[InferenceResult(text=text) for text in batch] for batch in batches]
+        [
+            [
+                InferenceResult(text="score_A: 9\nscore_B: 1", usage=usage),
+                InferenceResult(text="score_A: 5\nscore_B: 6"),
+                InferenceResult(text="unparseable"),
+            ],
+            [
+                InferenceResult(text="score_A: 1\nscore_B: 7", usage=usage),
+                InferenceResult(text="", error="context_length"),
+                InferenceResult(text="unparseable"),
+            ],
+        ]
     )
     monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
     rows = annotate_sample(
@@ -71,6 +79,9 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
     assert rows["orientation"].tolist() == ["direct"] * 3 + ["reversed"] * 3
     rendered = rows["judge_input"]
     assert pd.isna(rows.loc[2, "error"])
+    assert rows.loc[4, "error"] == "context_length"
+    assert pd.isna(rows.loc[4, "usage_json"])
+    assert request_usage_from_json(rows.loc[3, "usage_json"]) == usage
     assert rendered[0].index("Alpha answer") < rendered[0].index("Beta answer")
     assert rendered[3].index("Beta answer") < rendered[3].index("Alpha answer")
     assert rows.loc[[0, 3], "pref"].tolist() == pytest.approx(
@@ -105,31 +116,6 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     assert json.loads(rows.loc[0, "parsed_details_json"]) == {"ranks": {"M": 1, "m": 2}}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
     assert battles["pref"].tolist() == [1.0]
-
-
-def test_annotation_carries_usage_and_context_skip_error(monkeypatch):
-    usage = RequestUsage(stage="judging", model="judge", input_tokens=7)
-
-    def fake_do_inference(**kwargs):
-        assert kwargs["return_results"] is True
-        assert kwargs["return_top_logprobs"] is False
-        return [
-            InferenceResult(text="", error="context_length"),
-            InferenceResult(text="", usage=usage),
-        ]
-
-    monkeypatch.setattr(evaluate, "do_inference", fake_do_inference)
-    sample = pd.concat([_sample()] * 2, ignore_index=True)
-    rows = annotate_sample(
-        sample,
-        _config("fixed"),
-        judge_chat_model=object(),
-        resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
-    )
-    assert rows.loc[0, "error"] == "context_length"
-    assert pd.isna(rows.loc[0, "usage_json"])
-    assert rows.loc[1, "error"] is None
-    assert request_usage_from_json(rows.loc[1, "usage_json"]) == usage
 
 
 def test_aggregate_rejects_incomplete_orientation_sets():
