@@ -4,13 +4,29 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
+
+from judgearena.config import RunConfig
 
 if TYPE_CHECKING:
     import neps
 
 FIDELITY = "meta_eval.battles_per_model"
 DOMAIN_TYPES = frozenset({"Categorical", "Float", "Integer", "IntegerFidelity"})
+
+
+def _range_type(name: str) -> str:
+    model = RunConfig
+    for part in name.split("."):
+        field = model.model_fields[part]
+        model = next(
+            t
+            for t in (get_args(field.annotation) or (field.annotation,))
+            if t is not type(None)
+        )
+    if model not in (int, float):
+        raise ValueError(f"Range requires a numeric config field: {name}")
+    return "Integer" if model is int else "Float"
 
 
 def parameter_specs(search_space: Mapping, base: Mapping, fidelity: Mapping) -> dict:
@@ -47,11 +63,7 @@ def parameter_specs(search_space: Mapping, base: Mapping, fidelity: Mapping) -> 
                     spec["choices"].index(prior) if prior in spec["choices"] else None
                 )
             else:
-                kind = (
-                    "Integer"
-                    if all(type(spec[k]) is int for k in ("lower", "upper"))
-                    else "Float"
-                )
+                kind = _range_type(name)
                 if prior is not None and not spec["lower"] <= prior <= spec["upper"]:
                     if explicit_prior:
                         raise ValueError(f"Prior for {name} is outside its range")
