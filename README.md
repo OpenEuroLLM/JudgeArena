@@ -339,6 +339,100 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 `--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
 
+### Tuning a judge
+
+The packaged `tune-judge` task searches judge settings against human preferences, inspired by [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Install `pip install 'judgearena[tune]'` for NePS 0.17.0, then run:
+
+```bash
+judgearena --config_path configs/tune_judge.yaml
+judgearena tasks show tune-judge
+```
+
+The task supplies method defaults: `meta-eval-lmarena-140k-en`, objectives `[agreement, cost]`, `mo_hyperband` with `eta: 3`, and 10-90 battles per model. Run settings override these defaults field by field. Selecting another optimizer name starts with that optimizer's own kwargs; provide `eta` or other settings explicitly when needed. Trials use the selected meta-eval task's judge defaults and restrictions, data, language variant, and judgement cache. `meta_eval.top_models` and other sampling settings remain optional run settings.
+
+[configs/tune_judge.yaml](configs/tune_judge.yaml) uses this short form:
+
+```yaml
+task: tune-judge
+judge:
+  model: VLLM/Qwen/Qwen2.5-7B-Instruct
+  prompt_preset: meta-eval-pair-score
+  temperature: 0.0
+  max_out_tokens: 8192
+generation: {truncate_judge_input_chars: 8192}
+tune_judge:
+  search_space:
+    judge:
+      model: [VLLM/Qwen/Qwen2.5-7B-Instruct, VLLM/google/gemma-2-9b-it]
+      prompt_preset: [meta-eval-pair-score, arena-hard]
+      swap_mode: [fixed, both]
+      temperature: {lower: 0, upper: 1, prior_confidence: low}
+      max_out_tokens: {lower: 1024, upper: 8192, log: true}
+  # User estimates in USD per 1M tokens, not live catalog prices.
+  price_per_million_tokens:
+    VLLM/Qwen/Qwen2.5-7B-Instruct: {input: 0.12, output: 0.12}
+    VLLM/google/gemma-2-9b-it: {input: 0.14, output: 0.14}
+  neps: {total_evaluations_to_spend: 40}
+```
+
+Lists, or `{choices: [...]}`, define categorical parameters. `{lower, upper}` defines a range whose type follows the corresponding run-config field: temperature is continuous even when written `{lower: 0, upper: 1}`, while `max_out_tokens` is integer. `log: true` enables logarithmic sampling. Parameters are nested like the run configuration and may vary judge fields or `generation.truncate_judge_input_chars`.
+
+The resolved reference judge supplies each parameter's prior when its value lies in the domain. An explicit `prior` is a **value**, including for categorical parameters. `prior_confidence` can be `low`, `medium`, or `high` and defaults to `medium`. For example:
+
+```yaml
+prompt_preset:
+  choices: [meta-eval-pair-score, arena-hard]
+  prior: arena-hard
+  prior_confidence: high
+```
+
+Use categorical temperature choices such as `[0.0, 0.1, 1.0]` when cache reuse matters; continuous sampling usually produces a new model descriptor for each value. Fidelity is separate from the search space:
+
+```yaml
+tune_judge:
+  meta_eval_task: meta-eval-comparia-fr
+  fidelity: {battles_per_model: {lower: 10, upper: 90}}
+  objectives: [agreement, cost]
+  optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}
+```
+
+`mo_hyperband` and `primo` support agreement and cost objectives. `neps_priorband` and `neps_hyperband` require `objectives: [agreement]`. Optimizer kwargs remain native NePS settings; `primo` accepts objective-specific `prior_centers` and `prior_confidences` with dotted parameter names. Other run settings belong under `neps`, including evaluation budgets and `ignore_errors` (defaults to `true`). Managed directory/completion settings and NePS cost-spend budgets are unsupported. With NePS 0.17, leave `sample_prior_first` at its default for `neps_priorband` and `neps_hyperband` because enabling it fails in upstream trial-ID parsing.
+
+**Expected judge cost** uses native input and output token counts from model responses, including counts persisted with cached judgements, and reports USD per 1,000 battles. It does not estimate tokens with tiktoken. Cost tuning therefore requires fresh caches populated with native usage; caches created before usage was persisted cannot supply those counts. A per-model override takes precedence and may be a scalar (same input/output rate) or separate input/output rates, in USD per 1M tokens. Without an override, the shared OpenRouter reference price resolver supplies rates for any backend. Catalog prices are estimates for comparison, not the actual price charged by another provider.
+
+When a searched model has no override, a cost-objective run may fetch the catalog's free metadata and save it as `{store_root}/openrouter_pricing.json`. Agreement-only tuning does not fetch the catalog and leaves cost unreported. Resume and helper workers use the run's `prices.json` without fetching. On an internet-connected login node, the catalog can be prefetched into the same `run.store_root` used by the job:
+
+```bash
+mkdir -p /path/to/store-root
+curl -fsS https://openrouter.ai/api/v1/models | jq '.data' > /path/to/store-root/openrouter_pricing.json
+```
+
+Optional per-model overrides use:
+
+```yaml
+tune_judge:
+  price_per_million_tokens:
+    VLLM/org/model: 0.2
+    OpenRouter/org/model: {input: 0.2, output: 0.8}
+```
+
+The example's Qwen2.5-7B and gemma-2-9b-it rates (0.12 and 0.14) are user-provided estimates, not claims about current catalog prices. A cost-objective search stops before evaluation if any searched model has no price, naming the unresolved models and `tune_judge.price_per_million_tokens`; resolved rates are frozen for the session. `prices.json` records the resolved rates and whether each came from `user_override` or `openrouter_reference`; resuming uses this run-specific file without a catalog fetch. Expected cost includes cached judgements and describes the judge configuration. Inference caches retain token usage without dollar charges; charges in older cache rows are discarded when restoring usage. Expected cost is recalculated from these counts using the session's frozen prices. Actual provider spend stays in the original run reports and counts only calls made during that run; cache hits incur no new provider call. Both are separate from NePS's search budget, and the tuner leaves NePS's built-in `cost` field unset.
+
+Cost tuning requires native input and output token counts on every reused judgement. If the cache contains rows without counts, the run errors and directs you to use a fresh `store_root` or agreement-only tuning. It does not estimate or backfill counts, or automatically regenerate cached judgements. A judge call skipped because its prompt exceeds the model context limit contributes zero generation tokens; the failed annotation remains in the battle set and affects agreement and coverage. With `ignore_errors: true`, failed judge subprocess trials are recorded and penalized with infinite objective values; pricing, usage-accounting, and configuration errors still abort the tuning run.
+
+The primary process waits for active trials, reports the full-budget agreement/cost Pareto front, and selects the best agreement configuration per model for held-out testing. `test_battles_per_model` defaults to the highest validation fidelity. Results include `trials.parquet`, `pareto.parquet`, and `test_results.parquet`; NePS state stays under `neps/`, separate from inference caches.
+
+```bash
+# Explicitly resume the same session.
+judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir
+# Helper workers join an initialized session and run validation only.
+judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
+```
+
+The example keeps paper limits fixed across judges: 8,192 characters per candidate completion, 8,192 judge output tokens, and native context. Instructions are not truncated. For vLLM chat judges, overlong prompts remain failed annotations in the shared battle set, lowering agreement and coverage; skipped outputs are not cached. Only searched settings vary.
+
+Shared rollback-mode SQLite caching was verified on kislurm NFSv3 in a two-node test; this does not guarantee locking on other filesystems. Never use WAL on NFS. Workers share an explicit tuning directory and can reuse judgements from direct runs of the target meta-eval task.
+
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).
