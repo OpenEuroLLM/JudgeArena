@@ -400,7 +400,7 @@ tune_judge:
 
 **Expected judge cost** counts input and output tokens with tiktoken, including cached judgements, and reports USD per 1,000 battles. A per-model override takes precedence and may be a scalar (same input/output rate) or separate input/output rates, in USD per 1M tokens. Without an override, the OpenRouter model catalog supplies reference rates for every provider, including vLLM: matching first uses the Hugging Face ID, then the model ID's last two path segments. Catalog prices are estimates for comparison, not the actual price charged by another provider.
 
-A new primary run fetches the catalog's free metadata and saves it as `{store_root}/openrouter_pricing.json`. If fetching fails, it uses that cached catalog; if neither is available, add an override or fetch the catalog on a login node and make the cache available. Resume and helper workers use the run's `prices.json` without fetching. On an internet-connected login node, prefetch the catalog into the same `run.store_root` used by the job:
+When a searched model has no override, a new primary run fetches the catalog's free metadata and saves it as `{store_root}/openrouter_pricing.json`. If fetching fails, it uses that cached catalog; if neither is available, add an override or fetch the catalog on a login node and make the cache available. Resume and helper workers use the run's `prices.json` without fetching. On an internet-connected login node, prefetch the catalog into the same `run.store_root` used by the job:
 
 ```bash
 mkdir -p /path/to/store-root
