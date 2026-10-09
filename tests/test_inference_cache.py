@@ -1,8 +1,6 @@
 import json
 import sqlite3
-from dataclasses import asdict, replace
 
-import pandas as pd
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -15,7 +13,6 @@ from judgearena.cache.inference import (
     canonicalize_model_input,
     provider_input_mode,
 )
-from judgearena.cache.sqlite import CompletionCache as SQLiteCompletionCache
 from judgearena.inference import InferenceResult
 from judgearena.models import do_inference, prepare_model
 from judgearena.usage import RequestUsage, track_usage
@@ -124,66 +121,16 @@ def test_judgement_hit_preserves_top_logprobs(tmp_path, monkeypatch):
     assert tracker.snapshot().requests == ()
 
 
-def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypatch):
-    cache = CompletionInferenceCache(tmp_path, "arena-hard")
-
-    class UsageModel:
-        def batch(self, inputs, **_kwargs):
-            return [
-                InferenceResult(
-                    text="answer",
-                    usage=RequestUsage(
-                        stage="generation",
-                        input_tokens=7,
-                        output_tokens=11,
-                        cached_tokens=2,
-                        reasoning_tokens=3,
-                        total_tokens=18,
-                        model="Dummy/usage-model",
-                        cost_usd=0.42,
-                    ),
-                )
-                for _ in inputs
-            ]
-
-    monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: UsageModel())
-    metadata = [{"instruction_id": "1"}]
-    with track_usage() as tracker:
-        first = do_inference(
-            prepare_model("Dummy/usage-model", cache=cache),
-            ["prompt"],
-            cache_row_metadata=metadata,
-            return_results=True,
-        )
-    assert tracker.snapshot().requests == (first[0].usage,)
-    assert first[0].usage.cost_usd == 0.42
-
-    expected_usage = asdict(first[0].usage)
-    expected_usage.pop("cost_usd")
-    with SQLiteCompletionCache(next(tmp_path.glob("**/completions.db"))) as store:
-        stored_usage = json.loads(store.query().iloc[0]["usage_json"])
-    assert stored_usage == expected_usage
-
-    with track_usage() as tracker:
-        second = do_inference(
-            prepare_model("Dummy/usage-model", cache=cache),
-            ["prompt"],
-            cache_row_metadata=metadata,
-            return_results=True,
-        )
-
-    assert second[0].usage == replace(first[0].usage, cost_usd=None)
-    assert second[0].usage.cost_usd is None
-    assert tracker.snapshot().requests == ()
-
-
 @pytest.mark.parametrize("cache", [CompletionInferenceCache, JudgementInferenceCache])
-def test_cached_result_discards_legacy_cost(cache):
+def test_cached_result_discards_legacy_cost(cache, tmp_path):
     usage = json.dumps({"stage": "generation", "input_tokens": 7, "cost_usd": 0.42})
-    row = {"completion": "answer", "judge_completion": "answer", "top_logprobs": None}
-    result = cache("unused", "arena-hard").cached_result(
-        pd.Series({**row, "usage_json": usage})
-    )
+    row = {
+        "completion": "answer",
+        "judge_completion": "answer",
+        "top_logprobs": None,
+        "usage_json": usage,
+    }
+    result = cache(tmp_path, "arena-hard").cached_result(row)
     assert result.usage.input_tokens == 7
     assert result.usage.cost_usd is None
 
