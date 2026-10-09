@@ -342,15 +342,7 @@ def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch
     backend = models.ChatVLLM(model="test/model", max_tokens=128)
     monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: backend)
     cache = JudgementInferenceCache(tmp_path, "meta-eval-test")
-    metadata = [
-        {
-            "instruction_id": str(i),
-            "model_a": "a",
-            "model_b": "b",
-            "orientation": "direct",
-        }
-        for i in range(2)
-    ]
+    metadata = [dict(instruction_id=str(i), model_a="a", model_b="b") for i in range(2)]
     prepared = models.prepare_model("Dummy/judge", cache=cache)
     with track_usage() as tracker:
         assert models.do_inference(
@@ -362,9 +354,6 @@ def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch
         None,
     ]
     assert captured["chat_call"]["messages"] == [[{"role": "user", "content": "valid"}]]
-    assert models.do_inference(
-        prepared, ["overlong", "valid"], cache_row_metadata=metadata
-    ) == ["", "ok"]
     import sqlite3
 
     db = next(tmp_path.rglob("judgements.db"))

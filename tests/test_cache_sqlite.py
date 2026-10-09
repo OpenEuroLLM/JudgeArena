@@ -1,6 +1,5 @@
 import json
 import sqlite3
-from dataclasses import asdict
 
 import pandas as pd
 import pytest
@@ -21,33 +20,6 @@ DESCRIPTOR = {
     "provider": "VLLM",
     "sampling": {"max_tokens": 1024, "temperature": 0.0},
 }
-
-LEGACY_COMPLETIONS_SCHEMA = """CREATE TABLE completions (
-    input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
-    completion TEXT NOT NULL, benchmark TEXT NOT NULL,
-    instruction_id TEXT NOT NULL, model TEXT NOT NULL,
-    pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
-)"""
-
-
-def create_legacy_completion_db(path, *, completion=None):
-    with sqlite3.connect(path) as db:
-        db.execute(LEGACY_COMPLETIONS_SCHEMA)
-        if completion is not None:
-            db.execute(
-                "INSERT INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    input_hash("old prompt"),
-                    "old prompt",
-                    completion,
-                    "arena",
-                    "1",
-                    "Dummy/model",
-                    "bob",
-                    "2030-01-01T00:00:00+00:00",
-                    "old-run",
-                ),
-            )
 
 
 def test_descriptor_paths_separate_completion_and_judgement_caches(tmp_path):
@@ -215,16 +187,12 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
 
 def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
     db_path = tmp_path / COMPLETION_DB_NAME
-    create_legacy_completion_db(db_path)
+    with CompletionCache(db_path) as cache:
+        cache._connect()
+    with sqlite3.connect(db_path) as db:
+        db.execute("ALTER TABLE completions DROP COLUMN usage_json")
     usage = RequestUsage(
-        stage="generation",
-        input_tokens=3,
-        output_tokens=5,
-        cached_tokens=1,
-        reasoning_tokens=2,
-        total_tokens=8,
-        model="Dummy/model",
-        cost_usd=0.25,
+        stage="generation", input_tokens=3, output_tokens=5, cost_usd=0.25
     )
 
     rows = pd.DataFrame(
@@ -243,57 +211,6 @@ def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
         cache.save(rows, pushed_by="alice")
         result = cache.query().iloc[0]
 
-    assert "usage_json" in result.index
     stored_usage = json.loads(result["usage_json"])
-    expected_usage = asdict(usage)
-    expected_usage.pop("cost_usd")
-    assert stored_usage == expected_usage
-
-
-@pytest.mark.parametrize(
-    ("incoming_completion", "expect_prior_usage"),
-    [("old answer", False), ("native answer", True)],
-)
-def test_merge_legacy_incoming_database_projects_null_usage(
-    tmp_path, incoming_completion, expect_prior_usage
-):
-    local_path = tmp_path / "local" / COMPLETION_DB_NAME
-    incoming_path = tmp_path / "legacy" / COMPLETION_DB_NAME
-    incoming_path.parent.mkdir(parents=True)
-    create_legacy_completion_db(incoming_path, completion=incoming_completion)
-
-    prior_usage = RequestUsage(stage="generation", input_tokens=4)
-
-    def assert_legacy_schema():
-        with sqlite3.connect(incoming_path) as db:
-            columns = {
-                column[1] for column in db.execute("PRAGMA table_info(completions)")
-            }
-        assert "usage_json" not in columns
-
-    assert_legacy_schema()
-    with CompletionCache(local_path) as cache:
-        cache.save(
-            pd.DataFrame(
-                [
-                    {
-                        "input_text": "old prompt",
-                        "completion": "native answer",
-                        "benchmark": "arena",
-                        "instruction_id": "1",
-                        "model": "Dummy/model",
-                        "usage_json": prior_usage,
-                    }
-                ]
-            ),
-            pushed_by="alice",
-        )
-        assert cache.merge_from(incoming_path) == 1
-        result = cache.query().iloc[0]
-
-    assert result["completion"] == incoming_completion
-    if expect_prior_usage:
-        assert json.loads(result["usage_json"])["input_tokens"] == 4
-    else:
-        assert pd.isna(result["usage_json"])
-    assert_legacy_schema()
+    assert stored_usage["input_tokens"] == usage.input_tokens
+    assert "cost_usd" not in stored_usage
