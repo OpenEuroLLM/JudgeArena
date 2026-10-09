@@ -41,7 +41,9 @@ def test_download_all_dispatches_registered_tasks(monkeypatch, tmp_path):
     )
     utils_io.download_all()
 
-    assert [name for _, name, _ in calls] == list(load_tasks())
+    assert [name for _, name, _ in calls] == [
+        name for name, task in load_tasks().items() if task.spec.dataset is not None
+    ]
     assert {path for _, _, path in calls} == {tmp_path / "tables"}
 
 

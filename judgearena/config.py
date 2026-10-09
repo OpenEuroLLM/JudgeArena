@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,6 +26,7 @@ from judgearena.tasks.schema import (
     EloScoringSpec,
     MetaEvalProtocol,
     MTBenchProtocol,
+    TuneJudgeProtocol,
 )
 
 # Set by build_run_config() for the duration of RunConfig() construction.
@@ -411,6 +412,118 @@ class MetaEvalArgs(BaseModel):
     """Share of arena prompts assigned to the validation partition."""
 
 
+class TuneJudgeArgs(BaseModel):
+    """NePS search settings and judge-evaluation objectives."""
+
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    meta_eval_task: str | None = None
+    """Packaged meta-evaluation task used by every trial."""
+
+    search_space: dict[str, Any]
+    """Nested judge parameters, written as lists or bounded ranges."""
+
+    fidelity: dict[str, dict[str, int]] = Field(default_factory=dict)
+    optimizer: dict[str, Any] = Field(default_factory=dict)
+    neps: dict[str, Any] = Field(default_factory=dict)
+    """Native neps.run arguments; search space and optimizer are separate."""
+
+    objectives: list[Literal["agreement", "cost"]] | None = None
+    """Agreement is maximized and expected token cost minimized."""
+
+    price_per_million_tokens: dict[str, float | dict[str, float]] = Field(
+        default_factory=dict
+    )
+    """Optional USD per million tokens; scalar or separate input/output rates."""
+
+    def resolve(self, protocol: TuneJudgeProtocol) -> TuneJudgeArgs:
+        values = self.model_dump()
+        values["meta_eval_task"] = (
+            self.meta_eval_task or protocol.default_meta_eval_task
+        )
+        values["objectives"] = (
+            self.objectives
+            if self.objectives is not None
+            else protocol.default_objectives
+        )
+        values["fidelity"] = {
+            name: {**bounds, **self.fidelity.get(name, {})}
+            for name, bounds in protocol.default_fidelity.items()
+        }
+        if set(self.fidelity) - {"battles_per_model"}:
+            raise ValueError("Only battles_per_model fidelity is supported")
+        lower, upper = (
+            values["fidelity"]["battles_per_model"][k] for k in ("lower", "upper")
+        )
+        if not 0 < lower < upper:
+            raise ValueError("Fidelity requires 0 < lower < upper")
+        defaults = protocol.default_optimizer
+        values["optimizer"] = (
+            {**defaults, **self.optimizer}
+            if self.optimizer.get("name", defaults["name"]) == defaults["name"]
+            else self.optimizer
+        )
+        values["neps"] = {"ignore_errors": True, **self.neps}
+        return TuneJudgeArgs.model_validate(values)
+
+    test_battles_per_model: int | None = Field(default=None, gt=0)
+    """Test budget; defaults to the highest fidelity."""
+
+    run_dir: Path | None = None
+    """Explicit directory to resume or share; otherwise create a fresh run."""
+
+    search_only: bool = False
+    """Join an initialized run as a validation-only worker."""
+
+    @model_validator(mode="after")
+    def _validate_runtime(self) -> TuneJudgeArgs:
+        reserved = {
+            "pipeline_space",
+            "optimizer",
+            "evaluate_pipeline",
+            "root_directory",
+            "overwrite_root_directory",
+            "continue_until_max_evaluation_completed",
+            "total_cost_to_spend",
+            "worker_cost_to_spend",
+        }
+        if forbidden := reserved.intersection(self.neps):
+            raise ValueError(
+                f"Unsupported or managed NePS options: {sorted(forbidden)}"
+            )
+        if self.search_only and self.run_dir is None:
+            raise ValueError("search_only requires an explicit tune_judge.run_dir")
+        if not self.search_only:
+            if not any(
+                self.neps.get(k)
+                for k in ("total_evaluations_to_spend", "total_fidelities_to_spend")
+            ):
+                raise ValueError("The primary worker requires a finite global budget")
+            if any(
+                self.neps.get(k) is not None
+                for k in ("worker_evaluations_to_spend", "worker_fidelities_to_spend")
+            ):
+                raise ValueError("Worker-local budgets require search_only")
+        name = self.optimizer.get("name")
+        if self.objectives is not None:
+            if (
+                name in {"neps_priorband", "neps_hyperband"}
+                and len(self.objectives) != 1
+            ):
+                raise ValueError(f"{name} requires a single objective")
+            if name in {"mo_hyperband", "primo"} and len(self.objectives) != 2:
+                raise ValueError(f"{name} requires agreement and cost objectives")
+            if len(set(self.objectives)) != len(self.objectives):
+                raise ValueError("objectives must not contain duplicates")
+        for price in self.price_per_million_tokens.values():
+            if isinstance(price, dict) and set(price) != {"input", "output"}:
+                raise ValueError("Token price overrides require input and output rates")
+            rates = price.values() if isinstance(price, dict) else [price]
+            if any(rate < 0 for rate in rates):
+                raise ValueError("Judge token prices must be nonnegative")
+        return self
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -467,6 +580,9 @@ class RunConfig(BaseSettings):
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
 
+    tune_judge: TuneJudgeArgs | None = None
+    """Tune the judge on a meta-evaluation task instead of scoring it once."""
+
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
 
@@ -485,11 +601,22 @@ class RunConfig(BaseSettings):
         resolved_task = get_packaged_task(self.task)
         if resolved_task is None:
             raise ValueError(
-                f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
-                "inspect packaged tasks."
+                f"Unknown task {self.task!r}; use 'judgearena tasks list'."
             )
-
         protocol = resolved_task.spec.protocol
+        is_tune_judge = isinstance(protocol, TuneJudgeProtocol)
+        if (self.tune_judge is not None) != is_tune_judge:
+            raise ValueError(
+                "tune_judge config is required by, and only valid for, tune-judge."
+            )
+        if is_tune_judge:
+            self.tune_judge = self.tune_judge.resolve(protocol)
+            target = get_packaged_task(self.tune_judge.meta_eval_task)
+            if target is None or not isinstance(target.spec.protocol, MetaEvalProtocol):
+                raise ValueError(
+                    "tune_judge.meta_eval_task must select a meta-evaluation task."
+                )
+            protocol = target.spec.protocol
         task_generation = getattr(protocol, "generation", None)
         if (
             "truncate_all_input_chars" not in self.generation.model_fields_set

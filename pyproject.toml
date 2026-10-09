@@ -114,3 +114,6 @@ vllm = [
     "openai>=2.30.0", # vLLM 0.25 imports responses.NamespaceTool.
 ]
 llamacpp = ["llama-cpp-python>=0.3.0"]
+tune = [
+    "neural-pipeline-search==0.17.0",
+]
