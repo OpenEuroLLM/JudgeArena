@@ -256,7 +256,6 @@ def run_tune_judge(
     prices = resolve_prices(
         models,
         tuning.price_per_million_tokens,
-        cfg.run.store_root or Path(cfg.run.result_folder),
         require_cost="cost" in tuning.objectives,
     )
     runner = _TrialRunner(runner.base, prices, execute_trial)
