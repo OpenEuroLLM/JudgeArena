@@ -19,12 +19,12 @@ from judgearena.cache.sqlite import (
     CompletionCache,
     JudgementCache,
     cache_folder,
+    cached_usage_from_json,
     stable_json_dumps,
     write_descriptor,
 )
 from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
 from judgearena.inference import InferenceResult
-from judgearena.usage import request_usage_from_json
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 VLLM_EXECUTION_ONLY_KWARGS = {
@@ -248,7 +248,7 @@ class CompletionInferenceCache(InferenceCache[CompletionCacheRowMetadata]):
     def cached_result(self, row: pd.Series) -> InferenceResult:
         return InferenceResult(
             text=str(row["completion"]),
-            usage=request_usage_from_json(row.get("usage_json")),
+            usage=cached_usage_from_json(row.get("usage_json")),
         )
 
 
@@ -287,5 +287,5 @@ class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
             first_token_top_logprobs=(
                 json.loads(top_logprobs) if pd.notna(top_logprobs) else None
             ),
-            usage=request_usage_from_json(row.get("usage_json")),
+            usage=cached_usage_from_json(row.get("usage_json")),
         )

@@ -208,7 +208,14 @@ def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
                 "instruction_id": "1",
                 "model": "Dummy/model",
                 "usage_json": RequestUsage(
-                    stage="generation", input_tokens=3, output_tokens=5
+                    stage="generation",
+                    input_tokens=3,
+                    output_tokens=5,
+                    cached_tokens=1,
+                    reasoning_tokens=2,
+                    total_tokens=8,
+                    model="Dummy/model",
+                    cost_usd=0.25,
                 ),
             }
         ]
@@ -219,14 +226,13 @@ def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
 
     assert "usage_json" in result.index
     assert json.loads(result["usage_json"]) == {
-        "cached_tokens": None,
-        "cost_usd": None,
+        "cached_tokens": 1,
         "input_tokens": 3,
-        "model": None,
+        "model": "Dummy/model",
         "output_tokens": 5,
-        "reasoning_tokens": None,
+        "reasoning_tokens": 2,
         "stage": "generation",
-        "total_tokens": None,
+        "total_tokens": 8,
     }
 
 
