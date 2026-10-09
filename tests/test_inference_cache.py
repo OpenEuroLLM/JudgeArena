@@ -15,7 +15,7 @@ from judgearena.cache.inference import (
 )
 from judgearena.inference import InferenceResult
 from judgearena.models import do_inference, prepare_model
-from judgearena.usage import track_usage
+from judgearena.usage import RequestUsage, track_usage
 
 
 class EchoModel:
@@ -87,6 +87,7 @@ def test_judgement_hit_preserves_top_logprobs(tmp_path, monkeypatch):
                 InferenceResult(
                     text="m",
                     first_token_top_logprobs={"m": -0.1, "M": -2.0},
+                    usage=RequestUsage(stage="judging", input_tokens=13),
                 )
                 for _ in inputs
             ]
@@ -106,16 +107,56 @@ def test_judgement_hit_preserves_top_logprobs(tmp_path, monkeypatch):
         return_top_logprobs=True,
         cache_row_metadata=metadata,
     )
-    second = do_inference(
-        prepare_model("Dummy/judge", cache=cache),
-        ["judge prompt"],
-        return_top_logprobs=True,
-        cache_row_metadata=metadata,
-    )
+    with track_usage() as tracker:
+        second = do_inference(
+            prepare_model("Dummy/judge", cache=cache),
+            ["judge prompt"],
+            return_top_logprobs=True,
+            cache_row_metadata=metadata,
+        )
 
     assert second[0].text == first[0].text
     assert second[0].first_token_top_logprobs == first[0].first_token_top_logprobs
-    assert second[0].usage is None
+    assert second[0].usage == first[0].usage
+    assert tracker.snapshot().requests == ()
+
+
+def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypatch):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+
+    class UsageModel:
+        def batch(self, inputs, **_kwargs):
+            return [
+                InferenceResult(
+                    text="answer",
+                    usage=RequestUsage(
+                        stage="generation", input_tokens=7, output_tokens=11
+                    ),
+                )
+                for _ in inputs
+            ]
+
+    monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: UsageModel())
+    metadata = [{"instruction_id": "1"}]
+    with track_usage() as tracker:
+        first = do_inference(
+            prepare_model("Dummy/usage-model", cache=cache),
+            ["prompt"],
+            cache_row_metadata=metadata,
+            return_results=True,
+        )
+    assert tracker.snapshot().requests == (first[0].usage,)
+
+    with track_usage() as tracker:
+        second = do_inference(
+            prepare_model("Dummy/usage-model", cache=cache),
+            ["prompt"],
+            cache_row_metadata=metadata,
+            return_results=True,
+        )
+
+    assert second[0].usage == first[0].usage
+    assert tracker.snapshot().requests == ()
 
 
 def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
