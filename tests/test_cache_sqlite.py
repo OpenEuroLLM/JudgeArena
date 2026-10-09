@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pandas as pd
 import pytest
@@ -12,6 +13,7 @@ from judgearena.cache.sqlite import (
     input_hash,
     write_descriptor,
 )
+from judgearena.usage import RequestUsage
 
 DESCRIPTOR = {
     "model": "Qwen/Qwen3-8B",
@@ -181,3 +183,118 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
         assert cache.merge_from(incoming_path) == 2
         assert local_path.stat().st_ino == inode
         assert cache.query()["completion"].tolist() == ["incoming", "new"]
+
+
+def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
+    db_path = tmp_path / COMPLETION_DB_NAME
+    legacy = sqlite3.connect(db_path)
+    legacy.execute(
+        """CREATE TABLE completions (
+            input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
+            completion TEXT NOT NULL, benchmark TEXT NOT NULL,
+            instruction_id TEXT NOT NULL, model TEXT NOT NULL,
+            pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
+        )"""
+    )
+    legacy.commit()
+    legacy.close()
+
+    rows = pd.DataFrame(
+        [
+            {
+                "input_text": "prompt",
+                "completion": "answer",
+                "benchmark": "arena",
+                "instruction_id": "1",
+                "model": "Dummy/model",
+                "usage_json": RequestUsage(
+                    stage="generation", input_tokens=3, output_tokens=5
+                ),
+            }
+        ]
+    )
+    with CompletionCache(db_path) as cache:
+        cache.save(rows, pushed_by="alice")
+        result = cache.query().iloc[0]
+
+    assert "usage_json" in result.index
+    assert json.loads(result["usage_json"]) == {
+        "cached_tokens": None,
+        "cost_usd": None,
+        "input_tokens": 3,
+        "model": None,
+        "output_tokens": 5,
+        "reasoning_tokens": None,
+        "stage": "generation",
+        "total_tokens": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("incoming_completion", "expect_prior_usage"),
+    [("old answer", False), ("native answer", True)],
+)
+def test_merge_legacy_incoming_database_projects_null_usage(
+    tmp_path, incoming_completion, expect_prior_usage
+):
+    local_path = tmp_path / "local" / COMPLETION_DB_NAME
+    incoming_path = tmp_path / "legacy" / COMPLETION_DB_NAME
+    incoming_path.parent.mkdir(parents=True)
+    legacy = sqlite3.connect(incoming_path)
+    legacy.execute(
+        """CREATE TABLE completions (
+            input_hash TEXT PRIMARY KEY, input_text TEXT NOT NULL,
+            completion TEXT NOT NULL, benchmark TEXT NOT NULL,
+            instruction_id TEXT NOT NULL, model TEXT NOT NULL,
+            pushed_by TEXT NOT NULL, pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
+        )"""
+    )
+    legacy.execute(
+        "INSERT INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            input_hash("old prompt"),
+            "old prompt",
+            incoming_completion,
+            "arena",
+            "1",
+            "Dummy/model",
+            "bob",
+            "2030-01-01T00:00:00+00:00",
+            "old-run",
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+
+    prior_usage = RequestUsage(stage="generation", input_tokens=4)
+    with CompletionCache(local_path) as cache:
+        cache.save(
+            pd.DataFrame(
+                [
+                    {
+                        "input_text": "old prompt",
+                        "completion": "native answer",
+                        "benchmark": "arena",
+                        "instruction_id": "1",
+                        "model": "Dummy/model",
+                        "usage_json": prior_usage,
+                    }
+                ]
+            ),
+            pushed_by="alice",
+        )
+        assert cache.merge_from(incoming_path) == 1
+        result = cache.query().iloc[0]
+
+    assert result["completion"] == incoming_completion
+    if expect_prior_usage:
+        assert json.loads(result["usage_json"])["input_tokens"] == 4
+    else:
+        assert pd.isna(result["usage_json"])
+
+    incoming = sqlite3.connect(incoming_path)
+    incoming_columns = {
+        column[1] for column in incoming.execute("PRAGMA table_info(completions)")
+    }
+    incoming.close()
+    assert "usage_json" not in incoming_columns

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,18 @@ class RequestUsage:
                 self.cached_tokens,
             )
         )
+
+
+def request_usage_to_json(usage: RequestUsage | None) -> str | None:
+    if usage is None:
+        return None
+    return json.dumps(asdict(usage), sort_keys=True, separators=(",", ":"))
+
+
+def request_usage_from_json(value: str | None) -> RequestUsage | None:
+    if not isinstance(value, str):
+        return None
+    return RequestUsage(**json.loads(value))
 
 
 def _sum_optional(requests: tuple[RequestUsage, ...], field: str) -> int | None:

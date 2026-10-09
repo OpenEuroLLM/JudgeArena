@@ -3,8 +3,9 @@ from urllib.error import URLError
 
 import pytest
 
-from judgearena.tuning import pricing
-from judgearena.tuning.pricing import TokenPrice, resolve_prices
+from judgearena import pricing
+from judgearena.pricing import TokenPrice, reference_cost, resolve_prices
+from judgearena.usage import RequestUsage
 
 
 def test_overrides_do_not_fetch_catalog(monkeypatch):
@@ -84,10 +85,43 @@ def test_fetch_failure_without_cache_has_actionable_error(tmp_path, monkeypatch)
 
 
 def test_unpriced_model_fails_for_cost_objective(monkeypatch):
+    def unexpected_fetch(*args, **kwargs):
+        raise AssertionError("agreement-only pricing must not fetch the catalog")
+
+    monkeypatch.setattr(pricing, "urlopen", unexpected_fetch)
+    assert resolve_prices(["VLLM/unknown"], {}, require_cost=False) == {}
+
     monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _Response([]))
     with pytest.raises(ValueError, match="unknown.*overrides"):
         resolve_prices(["VLLM/unknown"], {})
-    assert resolve_prices(["VLLM/unknown"], {}, require_cost=False) == {}
+
+
+def test_reference_cost_requires_native_counts_and_uses_reported_zero():
+    with pytest.raises(
+        ValueError, match="missing native input_tokens and output_tokens"
+    ):
+        reference_cost(
+            RequestUsage(stage="judging", reasoning_tokens=12),
+            TokenPrice(1, 2, "ref"),
+        )
+
+    usage = RequestUsage(
+        stage="judging", input_tokens=0, output_tokens=3, reasoning_tokens=100
+    )
+    assert reference_cost(usage, TokenPrice(1_000_000, 2_000_000, "ref")) == 6
+
+    with pytest.raises(ValueError, match="missing native output_tokens"):
+        reference_cost(
+            RequestUsage(stage="judging", input_tokens=3), TokenPrice(1, 2, "ref")
+        )
+
+
+def test_fetch_failure_rejects_legacy_dictionary_catalog(tmp_path, monkeypatch):
+    cache = tmp_path / "catalog.json"
+    cache.write_text(json.dumps({"org/model": [1, 2]}))
+    monkeypatch.setattr(pricing, "urlopen", lambda *a, **k: _raise_url_error())
+    with pytest.raises(ValueError, match="unsupported format.*refresh.*overrides"):
+        resolve_prices(["Backend/org/model"], {}, catalog_cache=cache)
 
 
 class _Response:

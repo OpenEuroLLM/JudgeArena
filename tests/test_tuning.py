@@ -63,15 +63,6 @@ def _tuning_config(tmp_path, algorithm="neps_priorband", **settings):
     )
 
 
-@pytest.fixture
-def token_counter(monkeypatch):
-    monkeypatch.setattr(
-        runner,
-        "_judge_token_encoding",
-        lambda: SimpleNamespace(encode=lambda text, **kwargs: text.split()),
-    )
-
-
 def _fake_trial(config_path):
     cfg = load_config(config_path)
     folder = config_path.parent / "run"
@@ -90,6 +81,11 @@ def _fake_trial(config_path):
             "battle_id": ["b1", "b1"],
             "judge_input": ["system forward", "system reverse"],
             "judge_completion": ["answer", "answer"],
+            "usage_json": [
+                json.dumps({"stage": "judging", "input_tokens": 2, "output_tokens": 1}),
+                json.dumps({"stage": "judging", "input_tokens": 2, "output_tokens": 1}),
+            ],
+            "error": [None, None],
             "cache_hit": [True, True],
         }
     ).to_parquet(folder / "annotations.parquet")
@@ -98,7 +94,7 @@ def _fake_trial(config_path):
 @pytest.mark.parametrize(
     "algorithm", ["neps_priorband", "neps_hyperband", "mo_hyperband", "primo"]
 )
-def test_native_optimizer_smoke(tmp_path, token_counter, algorithm, monkeypatch):
+def test_native_optimizer_smoke(tmp_path, algorithm, monkeypatch):
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path, algorithm)
     calls = []
@@ -166,9 +162,7 @@ def test_native_optimizer_smoke(tmp_path, token_counter, algorithm, monkeypatch)
     )
 
 
-def test_budget_end_does_not_wait_for_unstarted_batch(
-    tmp_path, token_counter, monkeypatch
-):
+def test_budget_end_does_not_wait_for_unstarted_batch(tmp_path, monkeypatch):
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path)
     cfg.tune_judge.optimizer = {
@@ -190,7 +184,7 @@ def test_budget_end_does_not_wait_for_unstarted_batch(
     assert len(pd.read_parquet(cfg.tune_judge.run_dir / "trials.parquet")) == 2
 
 
-def test_cost_counts_both_cached_orientations(tmp_path, token_counter):
+def test_cost_counts_both_cached_orientations(tmp_path):
     path = tmp_path / "config.yaml"
     dump_config(_tuning_config(tmp_path), path)
     _fake_trial(path)
@@ -204,10 +198,61 @@ def test_cost_counts_both_cached_orientations(tmp_path, token_counter):
     assert "cost" not in objective
 
 
+def test_agreement_only_reads_old_cached_artifacts(tmp_path):
+    path = tmp_path / "config.yaml"
+    dump_config(_tuning_config(tmp_path), path)
+    _fake_trial(path)
+    annotations_path = tmp_path / "run" / "annotations.parquet"
+    pd.read_parquet(annotations_path).drop(columns=["usage_json", "error"]).to_parquet(
+        annotations_path, index=False
+    )
+
+    result = runner._read_trial(tmp_path, price=None)
+    assert result["agreement"] == pytest.approx(0.58)
+    assert result["tokens_per_battle"] is None
+    assert result["cost_per_1k_battles"] is None
+
+
+def test_missing_native_usage_aborts_even_when_failed_trials_are_ignored(tmp_path):
+    pytest.importorskip("neps")
+    cfg = _tuning_config(tmp_path, "mo_hyperband")
+    cfg.tune_judge.neps.update(ignore_errors=True, total_evaluations_to_spend=1)
+
+    def execute(path):
+        _fake_trial(path)
+        annotations_path = path.parent / "run" / "annotations.parquet"
+        annotations = pd.read_parquet(annotations_path)
+        annotations["usage_json"] = None
+        annotations.to_parquet(annotations_path, index=False)
+
+    from neps.exceptions import WorkerRaiseError
+
+    with pytest.raises(WorkerRaiseError) as exc_info:
+        runner.run_tune_judge(cfg, get_packaged_task(cfg.task), execute_trial=execute)
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "fresh store_root" in str(exc_info.value.__cause__)
+    assert "agreement-only" in str(exc_info.value.__cause__)
+
+
+def test_skipped_request_is_free_but_unparsed_response_keeps_cost(tmp_path):
+    path = tmp_path / "config.yaml"
+    dump_config(_tuning_config(tmp_path), path)
+    _fake_trial(path)
+    annotations_path = tmp_path / "run" / "annotations.parquet"
+    annotations = pd.read_parquet(annotations_path)
+    annotations.loc[0, ["usage_json", "error"]] = [None, "context_length"]
+    annotations.loc[1, "judge_completion"] = "unparseable"
+    annotations.to_parquet(annotations_path, index=False)
+    record = runner._read_trial(tmp_path, runner.TokenPrice(2, 4, "test"))
+    assert record["tokens_per_battle"] == 3
+    assert record["cost_per_1k_battles"] == pytest.approx(0.008)
+
+
 def test_prices_required_before_execution(tmp_path, monkeypatch):
-    from judgearena.tuning import pricing
+    from judgearena import pricing
 
     monkeypatch.setattr(pricing, "_fetch_openrouter", lambda _: [])
+
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path, "mo_hyperband", price_per_million_tokens={})
     with pytest.raises(ValueError, match="No token price"):
@@ -219,7 +264,7 @@ def test_prices_required_before_execution(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("algorithm", ["neps_priorband", "mo_hyperband"])
-def test_failed_trial_does_not_stop_search(tmp_path, token_counter, algorithm):
+def test_failed_trial_does_not_stop_search(tmp_path, algorithm):
     pytest.importorskip("neps")
     cfg = _tuning_config(tmp_path, algorithm)
     cfg.tune_judge.neps["ignore_errors"] = True
@@ -239,6 +284,10 @@ def test_failed_trial_does_not_stop_search(tmp_path, token_counter, algorithm):
     assert (trials.status == "failed").sum() == 1
     assert not results.empty and set(results.status) == {"completed"}
     pareto = pd.read_parquet(cfg.tune_judge.run_dir / "pareto.parquet")
+    if algorithm == "neps_priorband":
+        assert pareto.empty
+        assert "cost" not in cfg.tune_judge.objectives
+        return
     final = trials[(trials.status == "completed") & (trials.battles_per_model == 3)]
     assert set(pareto.agreement) == {final.agreement.max()}
     assert set(pareto.status) == {"completed"}

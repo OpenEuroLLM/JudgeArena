@@ -19,6 +19,8 @@ def _config_hash(cfg: RunConfig) -> str:
     payload = cfg.model_dump(mode="json")
     payload["run"] = {"seed": cfg.run.seed}
     tuning = payload["tune_judge"]
+    if "cost" in tuning["objectives"]:
+        payload["cost_accounting"] = "native_usage_v1"
     tuning.pop("run_dir")
     tuning.pop("search_only")
     tuning["neps"] = {
