@@ -1,6 +1,8 @@
 import json
 import sqlite3
+from dataclasses import replace
 
+import pandas as pd
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -13,6 +15,7 @@ from judgearena.cache.inference import (
     canonicalize_model_input,
     provider_input_mode,
 )
+from judgearena.cache.sqlite import cached_usage_to_json
 from judgearena.inference import InferenceResult
 from judgearena.models import do_inference, prepare_model
 from judgearena.usage import RequestUsage, track_usage
@@ -130,7 +133,14 @@ def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypa
                 InferenceResult(
                     text="answer",
                     usage=RequestUsage(
-                        stage="generation", input_tokens=7, output_tokens=11
+                        stage="generation",
+                        input_tokens=7,
+                        output_tokens=11,
+                        cached_tokens=2,
+                        reasoning_tokens=3,
+                        total_tokens=18,
+                        model="Dummy/usage-model",
+                        cost_usd=0.42,
                     ),
                 )
                 for _ in inputs
@@ -146,6 +156,18 @@ def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypa
             return_results=True,
         )
     assert tracker.snapshot().requests == (first[0].usage,)
+    assert first[0].usage.cost_usd == 0.42
+
+    stored_usage = json.loads(cached_usage_to_json(first[0].usage))
+    assert stored_usage == {
+        "cached_tokens": 2,
+        "input_tokens": 7,
+        "model": "Dummy/usage-model",
+        "output_tokens": 11,
+        "reasoning_tokens": 3,
+        "stage": "generation",
+        "total_tokens": 18,
+    }
 
     with track_usage() as tracker:
         second = do_inference(
@@ -155,8 +177,25 @@ def test_cached_usage_is_restored_without_recording_new_spend(tmp_path, monkeypa
             return_results=True,
         )
 
-    assert second[0].usage == first[0].usage
+    assert second[0].usage == replace(first[0].usage, cost_usd=None)
+    assert second[0].usage.cost_usd is None
     assert tracker.snapshot().requests == ()
+
+
+@pytest.mark.parametrize(
+    ("cache", "row"),
+    [
+        (CompletionInferenceCache, {"completion": "answer"}),
+        (JudgementInferenceCache, {"judge_completion": "answer", "top_logprobs": None}),
+    ],
+)
+def test_cached_result_discards_legacy_cost(cache, row):
+    usage = json.dumps({"stage": "generation", "input_tokens": 7, "cost_usd": 0.42})
+    result = cache("unused", "arena-hard").cached_result(
+        pd.Series({**row, "usage_json": usage})
+    )
+    assert result.usage.input_tokens == 7
+    assert result.usage.cost_usd is None
 
 
 def test_vllm_descriptor_contains_output_configuration(tmp_path, monkeypatch):
