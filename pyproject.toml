@@ -111,5 +111,9 @@ indent-style = "space"
 vllm = [
     "vllm>=0.19.1,<1.0.0",
     "transformers>=5.5.1,<6.0.0",
+    "openai>=2.30.0", # vLLM 0.25 imports responses.NamespaceTool.
 ]
 llamacpp = ["llama-cpp-python>=0.3.0"]
+tune = [
+    "neural-pipeline-search==0.17.0",
+]

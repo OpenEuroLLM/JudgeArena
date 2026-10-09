@@ -11,6 +11,7 @@ from pydantic import ValidationError
 import judgearena.evaluate as evaluate_module
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
+    filter_split,
     sample_battles_per_model,
     select_top_models,
 )
@@ -54,6 +55,19 @@ def test_sampling_rejects_insufficient_quota():
     battles = pd.DataFrame({"battle_id": ["ab"], "model_a": ["a"], "model_b": ["b"]})
     with pytest.raises(MetaEvalSamplingError, match="Insufficient unique battles"):
         sample_battles_per_model(battles, ["a", "b"], battles_per_model=2, seed=0)
+
+
+def test_split_partitions_battles_by_prompt():
+    battles = pd.DataFrame({"battle_id": range(200)})
+    prompts = battles["battle_id"].map(lambda i: f"prompt {i % 40}")
+    validation, test = (
+        filter_split(battles, prompts, split=split, validation_fraction=0.5)
+        for split in ("validation", "test")
+    )
+
+    assert 0 < len(validation) < len(battles)
+    assert sorted([*validation["battle_id"], *test["battle_id"]]) == list(range(200))
+    assert not set(prompts[validation["battle_id"]]) & set(prompts[test["battle_id"]])
 
 
 def test_meta_eval_protocol_requires_no_baseline_and_compatible_metrics():

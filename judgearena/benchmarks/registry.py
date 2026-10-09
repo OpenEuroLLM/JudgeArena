@@ -42,6 +42,12 @@ class ResolvedBenchmark:
     task: ResolvedTaskSpec | None
 
 
+def _run_tune_judge(cfg, task):
+    from judgearena.tuning.runner import run_tune_judge
+
+    return run_tune_judge(cfg, task)
+
+
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
     from judgearena.benchmarks.elo.runner import run_elo
@@ -55,6 +61,7 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
         BenchmarkAdapter("meta_eval", frozenset(), run_meta_eval),
         BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
         BenchmarkAdapter("mt_bench_101", frozenset(), run_mt_bench_101_benchmark),
+        BenchmarkAdapter("tune_judge", frozenset(), _run_tune_judge),
         BenchmarkAdapter("pairwise", None, run_pairwise),
     )
 

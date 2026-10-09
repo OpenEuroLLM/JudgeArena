@@ -1,0 +1,15 @@
+schema_version: 1
+task: tune-judge
+task_version: 1
+description: Tune a judge against human preferences with agreement and cost objectives.
+tags: [tuning, judge]
+protocol:
+  runner: tune_judge
+  default_meta_eval_task: meta-eval-lmarena-140k-en
+  default_objectives: [agreement, cost]
+  default_fidelity:
+    battles_per_model: {lower: 10, upper: 90}
+  default_optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}
+metadata:
+  reference_implementation: https://github.com/geoalgo/judgetuning
+  paper: https://arxiv.org/abs/2501.17178
