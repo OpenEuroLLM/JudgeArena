@@ -9,13 +9,11 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-import tiktoken
 
 from judgearena.config import RunConfig, dump_config
 from judgearena.log import get_logger
@@ -30,8 +28,9 @@ from judgearena.tuning.search_space import (
 if TYPE_CHECKING:
     from judgearena.tasks.schema import ResolvedTaskSpec
 
-from judgearena.tuning.pricing import TokenPrice, resolve_prices
+from judgearena.pricing import TokenPrice, reference_cost, resolve_prices
 from judgearena.tuning.session import collect_trials, prepare_session
+from judgearena.usage import request_usage_from_json
 
 logger = get_logger(__name__)
 
@@ -49,35 +48,41 @@ def run_trial_subprocess(config_path: Path) -> None:
     )
 
 
-@cache
-def _judge_token_encoding() -> tiktoken.Encoding:
-    return tiktoken.encoding_for_model("gpt-4o")
-
-
 def _read_trial(trial_dir: Path, price: TokenPrice | None) -> dict:
     (result_path,) = trial_dir.glob("*/results.json")
     metrics = json.loads(result_path.read_text())["metrics"]
     agreement = metrics["meta_eval_agreement"]["all"]
-    annotations = pd.read_parquet(
-        result_path.parent / "annotations.parquet",
-        columns=["battle_id", "judge_input", "judge_completion"],
-    )
-    encoding = _judge_token_encoding()
-    input_tokens = sum(
-        len(encoding.encode(text, disallowed_special=()))
-        for text in annotations["judge_input"]
-    )
-    output_tokens = sum(
-        len(encoding.encode(text, disallowed_special=()))
-        for text in annotations["judge_completion"].fillna("")
-    )
+    annotations = pd.read_parquet(result_path.parent / "annotations.parquet")
     n_battles = annotations["battle_id"].nunique()
-    tokens_per_battle = (input_tokens + output_tokens) / n_battles
-    cost = (
-        (input_tokens * price.input + output_tokens * price.output) / n_battles / 1000
-        if price
-        else None
+    total_input = total_output = 0
+    total_cost = 0.0
+    has_usage_columns = {"usage_json", "error"}.issubset(annotations.columns)
+    has_complete_usage = has_usage_columns
+    if has_usage_columns:
+        for row in annotations.itertuples(index=False):
+            request_usage = request_usage_from_json(row.usage_json)
+            if request_usage is None and row.error == "context_length":
+                continue
+            input_tokens = request_usage.input_tokens if request_usage else None
+            output_tokens = request_usage.output_tokens if request_usage else None
+            if input_tokens is None or output_tokens is None:
+                has_complete_usage = False
+                continue
+            total_input += input_tokens
+            total_output += output_tokens
+            if price is not None:
+                total_cost += reference_cost(request_usage, price)
+    if price is not None and not has_complete_usage:
+        raise ValueError(
+            "Cannot calculate tuning cost: annotations are missing native input/output "
+            "token usage in "
+            f"{result_path.parent / 'annotations.parquet'}. Rerun with a fresh "
+            "store_root so usage is recorded, or use agreement-only tuning."
+        )
+    tokens_per_battle = (
+        (total_input + total_output) / n_battles if has_complete_usage else None
     )
+    cost = total_cost / n_battles * 1000 if price is not None else None
     return {
         "agreement": agreement["accuracy_attempted"],
         "cohen_kappa": agreement["cohen_kappa"],
@@ -99,6 +104,7 @@ class _TrialRunner:
     base: dict
     prices: dict[str, TokenPrice]
     execute_trial: TrialExecutor
+    ignore_failed_trials: bool = False
 
     def config(
         self,
@@ -149,6 +155,8 @@ class _TrialRunner:
         try:
             self.execute_trial(config_path)
         except subprocess.CalledProcessError as exc:
+            if not self.ignore_failed_trials:
+                raise
             logger.warning("Trial %s failed: %s", folder, exc)
             return {**record, "status": "failed"}
         price = self.prices.get(trial_cfg.judge.model)
@@ -158,7 +166,6 @@ class _TrialRunner:
 def _objective(record: dict, objectives: list[str]) -> dict:
     if record["status"] != "completed":
         return {
-            "exception": RuntimeError(f"Trial {record['config_id']} failed"),
             "objective_to_minimize": (
                 float("inf")
                 if len(objectives) == 1
@@ -191,6 +198,7 @@ def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None
         return _objective(record, cfg.tune_judge.objectives)
 
     options = dict(cfg.tune_judge.neps)
+    options.pop("ignore_errors", None)
     # NePS 0.17's space compatibility check does not inspect optimizer mappings.
     optimizer = cfg.tune_judge.optimizer
     if isinstance(optimizer, dict):
@@ -214,6 +222,8 @@ def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None
         pipeline_space=None if continuing else space,
         root_directory=root,
         continue_until_max_evaluation_completed=False,
+        # Only subprocess failures may be ignored; accounting errors stop the run.
+        ignore_errors=False,
         **options,
     )
 
@@ -253,21 +263,34 @@ def run_tune_judge(
             models.add(trial_cfg.judge.model)
     if "judge.model" not in specs:
         models.add(cfg.judge.model)
-    prices = resolve_prices(
-        models,
-        tuning.price_per_million_tokens,
-        require_cost="cost" in tuning.objectives,
-    )
-    runner = _TrialRunner(runner.base, prices, execute_trial)
     tune_dir = prepare_session(cfg)
-    price_path = tune_dir / "prices.json"
-    snapshot = {model: asdict(price) for model, price in prices.items()}
-    if price_path.exists():
-        stored = json.loads(price_path.read_text())
-        if stored != snapshot:
-            raise ValueError("Resolved prices changed for this tuning session")
-    elif not tuning.search_only:
-        price_path.write_text(json.dumps(snapshot, indent=2))
+    prices = {}
+    if "cost" in tuning.objectives:
+        price_path = tune_dir / "prices.json"
+        if price_path.exists():
+            prices = {
+                model: TokenPrice(**price)
+                for model, price in json.loads(price_path.read_text()).items()
+            }
+        else:
+            prices = resolve_prices(
+                models,
+                tuning.price_per_million_tokens,
+                require_cost=True,
+            )
+            if not tuning.search_only:
+                price_path.write_text(
+                    json.dumps(
+                        {model: asdict(price) for model, price in prices.items()},
+                        indent=2,
+                    )
+                )
+    runner = _TrialRunner(
+        runner.base,
+        prices,
+        execute_trial,
+        ignore_failed_trials=tuning.neps.get("ignore_errors", False),
+    )
     logger.info("Tuning %s in %s", cfg.task, tune_dir)
     _search(runner, cfg, tune_dir, space)
     if tuning.search_only:
