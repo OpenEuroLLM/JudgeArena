@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pandas as pd
 import pytest
@@ -12,6 +13,7 @@ from judgearena.cache.sqlite import (
     input_hash,
     write_descriptor,
 )
+from judgearena.usage import RequestUsage
 
 DESCRIPTOR = {
     "model": "Qwen/Qwen3-8B",
@@ -181,3 +183,34 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
         assert cache.merge_from(incoming_path) == 2
         assert local_path.stat().st_ino == inode
         assert cache.query()["completion"].tolist() == ["incoming", "new"]
+
+
+def test_completion_usage_round_trips_and_legacy_database_upgrades(tmp_path):
+    db_path = tmp_path / COMPLETION_DB_NAME
+    with CompletionCache(db_path) as cache:
+        cache._connect()
+    with sqlite3.connect(db_path) as db:
+        db.execute("ALTER TABLE completions DROP COLUMN usage_json")
+    usage = RequestUsage(
+        stage="generation", input_tokens=3, output_tokens=5, cost_usd=0.25
+    )
+
+    rows = pd.DataFrame(
+        [
+            {
+                "input_text": "prompt",
+                "completion": "answer",
+                "benchmark": "arena",
+                "instruction_id": "1",
+                "model": "Dummy/model",
+                "usage_json": usage,
+            }
+        ]
+    )
+    with CompletionCache(db_path) as cache:
+        cache.save(rows, pushed_by="alice")
+        result = cache.query().iloc[0]
+
+    stored_usage = json.loads(result["usage_json"])
+    assert stored_usage["input_tokens"] == usage.input_tokens
+    assert "cost_usd" not in stored_usage

@@ -19,6 +19,7 @@ from judgearena.cache.sqlite import (
     CompletionCache,
     JudgementCache,
     cache_folder,
+    cached_usage_from_json,
     stable_json_dumps,
     write_descriptor,
 )
@@ -199,8 +200,10 @@ class InferenceCache[CacheRowMetadataT: CacheRowMetadata](ABC):
                 metadata=metadata[index],
             )
             for index, output in zip(indices, outputs, strict=True)
+            if output.error is None
         ]
-        store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
+        if rows:
+            store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
 
     @abstractmethod
     def make_row(
@@ -239,10 +242,14 @@ class CompletionInferenceCache(InferenceCache[CompletionCacheRowMetadata]):
             "benchmark": self.task,
             "instruction_id": metadata["instruction_id"],
             "model": model.model_spec,
+            "usage_json": output.usage,
         }
 
     def cached_result(self, row: pd.Series) -> InferenceResult:
-        return InferenceResult(text=str(row["completion"]))
+        return InferenceResult(
+            text=str(row["completion"]),
+            usage=cached_usage_from_json(row.get("usage_json")),
+        )
 
 
 class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
@@ -270,6 +277,7 @@ class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
             "judge": model.model_spec,
             "top_logprobs": output.first_token_top_logprobs,
             "orientation": metadata.get("orientation"),
+            "usage_json": output.usage,
         }
 
     def cached_result(self, row: pd.Series) -> InferenceResult:
@@ -279,4 +287,5 @@ class JudgementInferenceCache(InferenceCache[JudgementCacheRowMetadata]):
             first_token_top_logprobs=(
                 json.loads(top_logprobs) if pd.notna(top_logprobs) else None
             ),
+            usage=cached_usage_from_json(row.get("usage_json")),
         )

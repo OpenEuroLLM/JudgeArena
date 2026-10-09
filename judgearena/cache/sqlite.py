@@ -6,13 +6,15 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from dataclasses import astuple, dataclass, fields
+from dataclasses import asdict, astuple, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import quote, unquote
 
 import pandas as pd
+
+from judgearena.usage import RequestUsage, request_usage_from_json
 
 COMPLETION_DB_NAME = "completions.db"
 JUDGEMENT_DB_NAME = "judgements.db"
@@ -23,6 +25,21 @@ CacheKind = Literal["completions", "judgements"]
 
 def stable_json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def cached_usage_to_json(usage: RequestUsage | None) -> str | None:
+    """Persist reusable usage without the original request's dollar charge."""
+    if usage is None:
+        return None
+    values = asdict(usage)
+    values.pop("cost_usd")
+    return stable_json_dumps(values)
+
+
+def cached_usage_from_json(value: str | None) -> RequestUsage | None:
+    """Restore tokens, discarding charges also present in older cache rows."""
+    usage = request_usage_from_json(value)
+    return replace(usage, cost_usd=None) if usage is not None else None
 
 
 def descriptor_hash(descriptor: dict[str, Any]) -> str:
@@ -93,6 +110,7 @@ def read_descriptor(folder: Path) -> dict[str, Any]:
 class _SQLiteCache:
     table: str
     schema: str
+    output_column: str
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
@@ -102,8 +120,17 @@ class _SQLiteCache:
         if self._conn is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(self.db_path)
-            self._conn.execute(self.schema)
-            self._conn.commit()
+            with self._conn:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(self.schema)
+                columns = {
+                    row[1]
+                    for row in self._conn.execute(f"PRAGMA table_info({self.table})")
+                }
+                if "usage_json" not in columns:
+                    self._conn.execute(
+                        f"ALTER TABLE {self.table} ADD COLUMN usage_json TEXT"
+                    )
         return self._conn
 
     def _query(
@@ -145,17 +172,35 @@ class _SQLiteCache:
         columns = [row[1] for row in conn.execute(f"PRAGMA table_info({self.table})")]
         column_list = ", ".join(columns)
         updates = ", ".join(
-            f"{column} = excluded.{column}"
+            (
+                f"{column} = CASE "
+                f"WHEN excluded.{column} IS NULL "
+                f"AND excluded.{self.output_column} = "
+                f"{self.table}.{self.output_column} "
+                f"THEN {self.table}.{column} ELSE excluded.{column} END"
+                if column == "usage_json"
+                else f"{column} = excluded.{column}"
+            )
             for column in columns
             if column != "input_hash"
         )
         conn.execute("ATTACH DATABASE ? AS incoming", (str(other_db),))
         try:
+            incoming_columns = {
+                row[1]
+                for row in conn.execute(f"PRAGMA incoming.table_info({self.table})")
+            }
+            projection = column_list
+            if "usage_json" not in incoming_columns:
+                projection = ", ".join(
+                    "NULL AS usage_json" if column == "usage_json" else column
+                    for column in columns
+                )
             with conn:
                 conn.execute(
                     f"""
                     INSERT INTO {self.table} ({column_list})
-                    SELECT {column_list} FROM incoming.{self.table} WHERE true
+                    SELECT {projection} FROM incoming.{self.table} WHERE true
                     ON CONFLICT(input_hash) DO UPDATE SET {updates}
                     WHERE excluded.pushed_at > {self.table}.pushed_at
                     """
@@ -180,6 +225,7 @@ class CompletionCache(_SQLiteCache):
     """Completion rows keyed by the exact rendered model input."""
 
     table = "completions"
+    output_column = "completion"
     schema = """
         CREATE TABLE IF NOT EXISTS completions (
             input_hash     TEXT PRIMARY KEY,
@@ -190,7 +236,8 @@ class CompletionCache(_SQLiteCache):
             model           TEXT NOT NULL,
             pushed_by       TEXT NOT NULL,
             pushed_at       TEXT NOT NULL,
-            run_id          TEXT NOT NULL
+            run_id          TEXT NOT NULL,
+            usage_json      TEXT
         )
     """
 
@@ -214,12 +261,13 @@ class CompletionCache(_SQLiteCache):
                 pushed_by,
                 now,
                 resolved_run_id,
+                cached_usage_to_json(row.get("usage_json")),
             )
             for _, row in rows.iterrows()
         ]
         with self._connect() as conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO completions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
         return len(values)
@@ -262,6 +310,7 @@ class JudgementCache(_SQLiteCache):
     """Raw judge completions keyed by the exact rendered judge input."""
 
     table = "judgements"
+    output_column = "judge_completion"
     schema = """
         CREATE TABLE IF NOT EXISTS judgements (
             input_hash       TEXT PRIMARY KEY,
@@ -277,7 +326,8 @@ class JudgementCache(_SQLiteCache):
             orientation      TEXT,
             pushed_by        TEXT NOT NULL,
             pushed_at        TEXT NOT NULL,
-            run_id           TEXT NOT NULL
+            run_id           TEXT NOT NULL,
+            usage_json       TEXT
         )
     """
 
@@ -309,13 +359,14 @@ class JudgementCache(_SQLiteCache):
                 pushed_by,
                 now,
                 resolved_run_id,
+                cached_usage_to_json(row.get("usage_json")),
             )
             for _, row in rows.iterrows()
         ]
         with self._connect() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO judgements "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
         return len(values)
