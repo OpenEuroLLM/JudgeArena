@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from dataclasses import astuple, dataclass, fields
+from dataclasses import asdict, astuple, dataclass, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, Literal
@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 
 import pandas as pd
 
-from judgearena.usage import request_usage_to_json
+from judgearena.usage import RequestUsage, request_usage_from_json
 
 COMPLETION_DB_NAME = "completions.db"
 JUDGEMENT_DB_NAME = "judgements.db"
@@ -25,6 +25,21 @@ CacheKind = Literal["completions", "judgements"]
 
 def stable_json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def cached_usage_to_json(usage: RequestUsage | None) -> str | None:
+    """Persist reusable usage without the original request's dollar charge."""
+    if usage is None:
+        return None
+    values = asdict(usage)
+    values.pop("cost_usd")
+    return stable_json_dumps(values)
+
+
+def cached_usage_from_json(value: str | None) -> RequestUsage | None:
+    """Restore tokens, discarding charges also present in older cache rows."""
+    usage = request_usage_from_json(value)
+    return replace(usage, cost_usd=None) if usage is not None else None
 
 
 def descriptor_hash(descriptor: dict[str, Any]) -> str:
@@ -246,7 +261,7 @@ class CompletionCache(_SQLiteCache):
                 pushed_by,
                 now,
                 resolved_run_id,
-                request_usage_to_json(row.get("usage_json")),
+                cached_usage_to_json(row.get("usage_json")),
             )
             for _, row in rows.iterrows()
         ]
@@ -344,7 +359,7 @@ class JudgementCache(_SQLiteCache):
                 pushed_by,
                 now,
                 resolved_run_id,
-                request_usage_to_json(row.get("usage_json")),
+                cached_usage_to_json(row.get("usage_json")),
             )
             for _, row in rows.iterrows()
         ]
