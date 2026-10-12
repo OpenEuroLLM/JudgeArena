@@ -17,15 +17,27 @@ if str(ROOT) not in sys.path:
 
 from judgearena.config import dump_config, load_config  # noqa: E402
 from judgearena.pricing import TokenPrice  # noqa: E402
+from judgearena.tuning.budget import clip_trials_to_common_budget  # noqa: E402
 from judgearena.tuning.runner import _read_trial, run_trial_subprocess  # noqa: E402
 
 
-def select(manifest: dict) -> tuple[pd.DataFrame, list[dict]]:
+def select(
+    manifest: dict, budget_manifest: dict | None = None
+) -> tuple[pd.DataFrame, list[dict], dict]:
     limit = manifest.get("max_battles_per_model", 90)
+    all_runs = (budget_manifest or manifest)["runs"]
+    trial_tables = {
+        str(run["run_dir"]): pd.read_parquet(Path(run["run_dir"]) / "trials.parquet")
+        for run in all_runs
+    }
+    clipped, budget = clip_trials_to_common_budget(
+        trial_tables,
+        {int(k): v for k, v in (budget_manifest or manifest)["panel_sizes"].items()},
+    )
     completed = []
     for run in manifest["runs"]:
         root = Path(run["run_dir"])
-        trials = pd.read_parquet(root / "trials.parquet")
+        trials = clipped[str(root)]
         finalists = trials[
             (trials.status == "completed") & (trials.battles_per_model == limit)
         ].copy()
@@ -58,7 +70,7 @@ def select(manifest: dict) -> tuple[pd.DataFrame, list[dict]]:
                 missing.append({"method": method, "judge_model": name})
             else:
                 selected.append(choice.iloc[0].to_dict())
-    return pd.DataFrame(selected), missing
+    return pd.DataFrame(selected), missing, budget
 
 
 def prepare(manifest: dict, picks: pd.DataFrame, output: Path, execute: bool) -> None:
@@ -103,11 +115,19 @@ def main() -> None:
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     args.output.mkdir(parents=True, exist_ok=True)
-    picks, missing = select(manifest)
+    budget_path = args.manifest.parent / "manifest.json"
+    budget_manifest = (
+        json.loads(budget_path.read_text()) if budget_path.exists() else manifest
+    )
+    picks, missing, budget = select(manifest, budget_manifest)
     picks.to_parquet(args.output / "selections.parquet", index=False)
     (args.output / "selections.json").write_text(
         json.dumps(
-            {"selections": picks.to_dict("records"), "missing_models": missing},
+            {
+                "selections": picks.to_dict("records"),
+                "missing_models": missing,
+                "budget": budget,
+            },
             indent=2,
             default=str,
         )

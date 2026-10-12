@@ -89,6 +89,7 @@ def collect_trials(root: Path, *, wait: bool) -> pd.DataFrame:
             records.append(
                 {
                     "neps_trial_id": trial.id,
+                    "time_sampled": trial.metadata.time_sampled,
                     "status": "failed",
                     **trial.report.extra,
                 }
