@@ -75,6 +75,10 @@ def prepare(manifest: dict, picks: pd.DataFrame, output: Path, execute: bool) ->
         test_config = folder / "config.yaml"
         dump_config(cfg, test_config)
         if execute:
+            record = {
+                key: pick[key] for key in ("method", "seed", "config_id", "judge_model")
+            }
+            record["validation_agreement"] = pick["agreement"]
             price_data = json.loads(Path(pick["price_file"]).read_text())
             prices = {model: TokenPrice(**value) for model, value in price_data.items()}
             price = prices.get(cfg.judge.model)
@@ -82,10 +86,10 @@ def prepare(manifest: dict, picks: pd.DataFrame, output: Path, execute: bool) ->
                 if not list(folder.glob("*/results.json")):
                     run_trial_subprocess(test_config)
                 results.append(
-                    {**pick, **_read_trial(folder, price), "status": "completed"}
+                    {**record, **_read_trial(folder, price), "status": "completed"}
                 )
             except subprocess.CalledProcessError as error:
-                results.append({**pick, "status": "failed", "error": str(error)})
+                results.append({**record, "status": "failed", "error": str(error)})
             pd.DataFrame(results).to_parquet(
                 output / "test_results.parquet", index=False
             )
