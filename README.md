@@ -420,7 +420,9 @@ The example's Qwen2.5-7B and gemma-2-9b-it rates (0.12 and 0.14) are user-provid
 
 Cost tuning requires native input and output token counts on every reused judgement. If the cache contains rows without counts, the run errors and directs you to use a fresh `store_root` or agreement-only tuning. It does not estimate or backfill counts, or automatically regenerate cached judgements. A judge call skipped because its prompt exceeds the model context limit contributes zero generation tokens; the failed annotation remains in the battle set and affects agreement and coverage. With `ignore_errors: true`, failed judge subprocess trials are recorded and penalized with infinite objective values; pricing, usage-accounting, and configuration errors still abort the tuning run.
 
-The primary process waits for active trials, reports the full-budget agreement/cost Pareto front, and selects the best agreement configuration per model for held-out testing. `test_battles_per_model` defaults to the highest validation fidelity. Results include `trials.parquet`, `pareto.parquet`, and `test_results.parquet`; NePS state stays under `neps/`, separate from inference caches.
+`tune_judge.seed` controls optimizer randomness and defaults to `run.seed`. Keep `run.seed` fixed while varying the optimizer seed to reuse the same battle panels and bootstrap draws.
+
+The primary process waits for active trials, reports the full-budget agreement/cost Pareto front, and selects the best agreement configuration per model for held-out testing. `test_battles_per_model` defaults to the highest validation fidelity. Set `tune_judge.skip_test: true` to write validation and Pareto reports without running held-out evaluation, for example when pooling several searches with `scripts/select_tuning_experiment.py`. This is separate from `search_only`, which joins an existing search as a helper. Results include `trials.parquet`, `pareto.parquet`, and `test_results.parquet`; NePS state stays under `neps/`, separate from inference caches.
 
 ```bash
 # Explicitly resume the same session.

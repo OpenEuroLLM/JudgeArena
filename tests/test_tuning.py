@@ -95,6 +95,33 @@ def test_budget_end_does_not_wait_for_unstarted_batch(config, monkeypatch):
     assert len(pd.read_parquet(config.tune_judge.run_dir / "trials.parquet")) == 2
 
 
+def test_deferred_test_separates_optimizer_and_panel_seeds(config, monkeypatch):
+    config.run.seed = 7
+    config.tune_judge.seed = 11
+    config.tune_judge.skip_test = True
+    calls, seeds = [], []
+    original_seed = runner.random.seed
+
+    def seed(value):
+        seeds.append(value)
+        original_seed(value)
+
+    def trial(path):
+        assert load_config(path).run.seed == 7
+        calls.append(path)
+        execute(path)
+
+    monkeypatch.setattr(runner.random, "seed", seed)
+    assert not run(config, trial).empty
+    assert 11 in seeds and all("test" not in path.parts for path in calls)
+    root = config.tune_judge.run_dir
+    assert (root / "pareto.parquet").exists()
+    assert not (root / "test_results.parquet").exists()
+    config.tune_judge.skip_test = False
+    assert not run(config, trial).empty
+    assert (root / "test_results.parquet").exists()
+
+
 @pytest.mark.parametrize(
     "case,expected",
     [("cached", 0.016), ("skipped", 0.008), ("missing", None), ("agreement", None)],
@@ -162,7 +189,7 @@ def test_pareto_excludes_failed_low_fidelity_and_dominated_trials(tmp_path):
     trials = trials.assign(judge_model=trials.config_id, overrides="{}")
     runner._evaluate_picks(
         SimpleNamespace(run=lambda *a, **k: {"status": "completed"}),
-        SimpleNamespace(test_battles_per_model=None),
+        SimpleNamespace(test_battles_per_model=None, skip_test=False),
         tmp_path,
         trials,
         3,

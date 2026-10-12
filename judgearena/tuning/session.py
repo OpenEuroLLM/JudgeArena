@@ -23,6 +23,7 @@ def _config_hash(cfg: RunConfig) -> str:
         payload["cost_accounting"] = "native_usage_v1"
     tuning.pop("run_dir")
     tuning.pop("search_only")
+    tuning.pop("skip_test")
     tuning["neps"] = {
         key: value
         for key, value in tuning["neps"].items()

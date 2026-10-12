@@ -428,6 +428,12 @@ class TuneJudgeArgs(BaseModel):
     neps: dict[str, Any] = Field(default_factory=dict)
     """Native neps.run arguments; search space and optimizer are separate."""
 
+    seed: int | None = None
+    """Optimizer seed only; the runner falls back to ``run.seed`` when unset."""
+
+    skip_test: bool = False
+    """Defer test evaluation while retaining validation artifacts."""
+
     objectives: list[Literal["agreement", "cost"]] | None = None
     """Agreement is maximized and expected token cost minimized."""
 

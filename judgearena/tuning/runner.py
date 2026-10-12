@@ -214,9 +214,10 @@ def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None
     elif not continuing:
         import torch
 
-        random.seed(cfg.run.seed)
-        np.random.seed(cfg.run.seed)
-        torch.manual_seed(cfg.run.seed)
+        seed = cfg.run.seed if cfg.tune_judge.seed is None else cfg.tune_judge.seed
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
     neps.run(
         evaluate_pipeline=evaluate,
         pipeline_space=None if continuing else space,
@@ -320,6 +321,13 @@ def _evaluate_picks(runner, tuning, tune_dir, trials, max_battles) -> pd.DataFra
     costs[:, 0] *= -1
     pareto = priced.loc[pareto_efficient(costs)] if len(priced) else priced
     pareto.to_parquet(tune_dir / "pareto.parquet", index=False)
+    print("\n=== Judge tuning ===")
+    print("Validation:")
+    print(ranked[_SUMMARY_COLUMNS].to_string(index=False))
+    print("Agreement/cost Pareto front (validation):")
+    print(pareto[_SUMMARY_COLUMNS].to_string(index=False))
+    if tuning.skip_test:
+        return ranked
     picks = ranked.groupby("judge_model", sort=False).head(1)
     test_results = pd.DataFrame(
         [
@@ -333,11 +341,6 @@ def _evaluate_picks(runner, tuning, tune_dir, trials, max_battles) -> pd.DataFra
         ]
     )
     test_results.to_parquet(tune_dir / "test_results.parquet", index=False)
-    print("\n=== Judge tuning ===")
-    print("Validation:")
-    print(ranked[_SUMMARY_COLUMNS].to_string(index=False))
-    print("Agreement/cost Pareto front (validation):")
-    print(pareto[_SUMMARY_COLUMNS].to_string(index=False))
     print("Test:")
     print(
         test_results.reindex(columns=[*_SUMMARY_COLUMNS, "status"]).to_string(

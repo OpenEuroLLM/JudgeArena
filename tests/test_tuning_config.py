@@ -46,6 +46,13 @@ def test_packaged_defaults_and_target_restrictions():
     }
     assert cfg.tune_judge.objectives == ["agreement", "cost"]
     assert cfg.tune_judge.fidelity == {"battles_per_model": {"lower": 10, "upper": 90}}
+    assert (cfg.tune_judge.seed, cfg.tune_judge.skip_test) == (None, False)
+    explicit = RunConfig(
+        task="tune-judge",
+        judge={"model": "Dummy/judge"},
+        tune_judge={**settings, "seed": 17, "skip_test": True},
+    )
+    assert (explicit.tune_judge.seed, explicit.tune_judge.skip_test) == (17, True)
     with pytest.raises(ValueError):
         RunConfig(
             task="tune-judge",
