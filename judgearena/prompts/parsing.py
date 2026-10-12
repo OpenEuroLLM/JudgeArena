@@ -120,7 +120,7 @@ class ArenaHardVerdict(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> ParsedPreference | None:
-        text = strip_thinking_tags(judge_completion).upper()
+        text = strip_thinking_tags(judge_completion, discard_unclosed=True).upper()
         matches = [m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m]
         if not matches:
             matches = [
@@ -165,7 +165,7 @@ class AlpacaEvalToken(JudgeParser):
         preference = weighted_token_preference(top_logprobs, self._TOKENS)
         if preference is None:
             return None
-        label = strip_thinking_tags(judge_completion).strip()
+        label = strip_thinking_tags(judge_completion, discard_unclosed=True).strip()
         return ParsedPreference(
             preference=preference,
             label=label if label in self._TOKENS else None,
@@ -254,7 +254,7 @@ class PairScore(JudgeParser):
         """Extract the raw A and B scores from a judge completion (no temperature)."""
         # Strip thinking-model <think> blocks, then lower-case to avoid confusion
         # (e.g. when "a" is used instead of "A").
-        text = strip_thinking_tags(judge_completion).lower()
+        text = strip_thinking_tags(judge_completion, discard_unclosed=True).lower()
         score_a = PairScore.get_regexp_match(text, r'score.*?a[": *\n]*(-?\d+)')
         score_b = PairScore.get_regexp_match(text, r'score.*?b[": *\n]*(-?\d+)')
         return score_a, score_b
@@ -280,7 +280,7 @@ class MetaEvalPairScore(PairScore):
     def parse_raw_scores(
         judge_completion: str,
     ) -> tuple[float | None, float | None]:
-        text = strip_thinking_tags(judge_completion).lower()
+        text = strip_thinking_tags(judge_completion, discard_unclosed=True).lower()
 
         def parse_score(label: str) -> float | None:
             match = re.search(
@@ -319,7 +319,7 @@ class AlpacaEvalJSON(JudgeParser):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> ParsedPreference | None:
-        text = strip_thinking_tags(judge_completion)
+        text = strip_thinking_tags(judge_completion, discard_unclosed=True)
         fenced = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
         if fenced:
             text = fenced.group(1)

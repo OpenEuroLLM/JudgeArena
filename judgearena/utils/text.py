@@ -37,11 +37,19 @@ def safe_text(value: object, truncate_chars: int | None) -> str:
 
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_GEMMA_THINK_BLOCK_RE = re.compile(
+    r"<\|channel>thought\b.*?<channel\|>", re.IGNORECASE | re.DOTALL
+)
 
 
-def strip_thinking_tags(text: str | None) -> str:
+def strip_thinking_tags(text: str | None, *, discard_unclosed: bool = False) -> str:
     """Remove full `<think>...</think>` blocks from raw model output."""
-    return strip_thinking_tags_with_metadata(text)[0]
+    cleaned = strip_thinking_tags_with_metadata(text)[0]
+    if discard_unclosed and re.search(
+        r"<think>|<\|channel>thought\b", cleaned, re.IGNORECASE
+    ):
+        return ""
+    return cleaned
 
 
 def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
@@ -49,7 +57,7 @@ def strip_thinking_tags_with_metadata(text: str | None) -> tuple[str, bool]:
     if not isinstance(text, str):
         return "", False
 
-    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _GEMMA_THINK_BLOCK_RE.sub("", _THINK_BLOCK_RE.sub("", text))
     if cleaned != text:
         return cleaned.lstrip(), True
 

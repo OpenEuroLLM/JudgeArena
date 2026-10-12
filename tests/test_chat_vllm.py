@@ -2,7 +2,10 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 import judgearena.models as models
+from judgearena.prompts.parsing import MetaEvalPairScore
 from judgearena.usage import track_usage
 
 
@@ -157,6 +160,30 @@ def test_chat_vllm_passes_disable_thinking_via_chat_template_kwargs(monkeypatch)
     assert captured["chat_call"]["kwargs"]["chat_template_kwargs"] == {
         "enable_thinking": False
     }
+
+
+@pytest.mark.parametrize(
+    "prefix,end", [("<think>", "</think>"), ("<|channel>thought\n", "<channel|>")]
+)
+def test_judge_parses_final_scores_only(prefix, end):
+    thought = prefix + "score_A: 10\nscore_B: 0\n"
+    assert MetaEvalPairScore.parse_raw_scores(thought) == (None, None)
+    assert MetaEvalPairScore.parse_raw_scores(
+        thought + end + "\nscore_A: 1\nscore_B: 9"
+    ) == (1.0, 9.0)
+
+
+def test_chat_vllm_preserves_prompt_thinking_prefix(monkeypatch):
+    captured, _ = _install_fake_vllm(monkeypatch)
+    model = models.ChatVLLM(model="Qwen/Qwen3.5-9B", skip_special_tokens=False)
+    monkeypatch.setattr(
+        model.llm,
+        "get_tokenizer",
+        lambda: SimpleNamespace(decode=lambda tokens, **kwargs: "assistant\n<think>\n"),
+    )
+    assert model.batch(["hello"]) == ["<think>ok"]
+    assert captured["sampling_kwargs"]["skip_special_tokens"] is False
+    assert "skip_special_tokens" not in captured["llm_init"]["kwargs"]
 
 
 def test_build_default_judge_model_kwargs_only_defaults_qwen_judges():

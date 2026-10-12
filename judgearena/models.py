@@ -231,6 +231,7 @@ class ChatVLLM:
         self.model_path = model
         self.max_tokens = max_tokens
         disable_thinking = bool(vllm_kwargs.pop("disable_thinking", False))
+        self._skip_special_tokens = vllm_kwargs.pop("skip_special_tokens", True)
         thinking_token_budget = vllm_kwargs.pop("thinking_token_budget", None)
         explicit_chat_template_kwargs = vllm_kwargs.pop("chat_template_kwargs", None)
         explicit_reasoning_settings = (
@@ -271,6 +272,7 @@ class ChatVLLM:
 
         self._sampling_params_kwargs = {
             "max_tokens": max_tokens,
+            "skip_special_tokens": self._skip_special_tokens,
             "temperature": (
                 VLLM_DEFAULT_TEMPERATURE if temperature is None else float(temperature)
             ),
@@ -458,6 +460,17 @@ class ChatVLLM:
                 )
         return outputs
 
+    def _completion_text(self, output) -> str:
+        text = output.outputs[0].text
+        if not self._skip_special_tokens and output.prompt_token_ids:
+            tail = self.llm.get_tokenizer().decode(
+                output.prompt_token_ids[-16:], skip_special_tokens=False
+            )
+            # Qwen's opening thought tag is in the generation prompt.
+            if tail.rstrip().endswith("<think>"):
+                text = "<think>" + text
+        return text
+
     def batch(self, inputs: list, **invoke_kwargs) -> list:
         """Return the completion for each input in *inputs*.
 
@@ -471,7 +484,7 @@ class ChatVLLM:
             and usage_stage is None
             and all(out is not None for out in outputs)
         ):
-            return [out.outputs[0].text for out in outputs]
+            return [self._completion_text(out) for out in outputs]
         results = []
         for out in outputs:
             if out is None:
@@ -508,7 +521,7 @@ class ChatVLLM:
                 )
             results.append(
                 InferenceResult(
-                    text=generation.text,
+                    text=self._completion_text(out),
                     first_token_top_logprobs=top,
                     usage=usage,
                 )
