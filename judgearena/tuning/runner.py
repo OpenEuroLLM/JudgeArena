@@ -163,7 +163,11 @@ class _TrialRunner:
         return {**record, "status": "completed", **_read_trial(folder, price)}
 
 
-def _objective(record: dict, objectives: list[str]) -> dict:
+def _objective(
+    record: dict,
+    objectives: list[str],
+    bounds: dict[str, tuple[float, float]] | None = None,
+) -> dict:
     if record["status"] != "completed":
         return {
             "objective_to_minimize": (
@@ -173,10 +177,23 @@ def _objective(record: dict, objectives: list[str]) -> dict:
             ),
             "info_dict": record,
         }
-    values = [
-        1 - record[key] if key == "agreement" else record["cost_per_1k_battles"]
-        for key in objectives
-    ]
+    bounds = bounds or {}
+    values = []
+    for key in objectives:
+        if key == "agreement":
+            agreement = record["agreement"]
+            if key in bounds:
+                lower, upper = bounds[key]
+                values.append((upper - agreement) / (upper - lower))
+            else:
+                values.append(1 - agreement)
+        else:
+            cost = record["cost_per_1k_battles"]
+            if key in bounds:
+                lower, upper = bounds[key]
+                values.append((cost - lower) / (upper - lower))
+            else:
+                values.append(cost)
     return {
         "objective_to_minimize": values[0] if len(values) == 1 else values,
         "info_dict": record,
@@ -195,7 +212,9 @@ def _search(runner: _TrialRunner, cfg: RunConfig, tune_dir: Path, space) -> None
             battles_per_model=battles,
             folder=tune_dir / "trials" / pipeline_directory.name,
         )
-        return _objective(record, cfg.tune_judge.objectives)
+        return _objective(
+            record, cfg.tune_judge.objectives, cfg.tune_judge.objective_bounds
+        )
 
     options = dict(cfg.tune_judge.neps)
     options.pop("ignore_errors", None)

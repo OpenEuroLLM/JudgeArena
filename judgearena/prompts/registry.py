@@ -27,6 +27,9 @@ ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
 META_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-pair-score"
 META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET = "meta-eval-alpaca-eval-json"
 META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-alpaca-eval-pair-score"
+V2_CRITERIA_JUDGE_PROMPT_PRESET = "v2-criteria"
+V2_EVIDENCE_JUDGE_PROMPT_PRESET = "v2-evidence"
+V2_VERIFICATION_JUDGE_PROMPT_PRESET = "v2-verification"
 
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
@@ -163,6 +166,25 @@ PRESETS: dict[str, JudgePromptPreset] = {
         parser=JUDGE_PARSERS["meta-eval-score"],
         system_file="meta-eval-alpaca-eval-system-prompt.txt",
         user_file="meta-eval-alpaca-eval-pair-score-prompt.txt",
+    ),
+    # Frozen v2 score-format variants (same SCORE_PARSER + system-prompt).
+    V2_CRITERIA_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=V2_CRITERIA_JUDGE_PROMPT_PRESET,
+        parser=SCORE_PARSER,
+        system_file="system-prompt.txt",
+        user_file="prompt-v2-criteria.txt",
+    ),
+    V2_EVIDENCE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=V2_EVIDENCE_JUDGE_PROMPT_PRESET,
+        parser=SCORE_PARSER,
+        system_file="system-prompt.txt",
+        user_file="prompt-v2-evidence.txt",
+    ),
+    V2_VERIFICATION_JUDGE_PROMPT_PRESET: JudgePromptPreset(
+        name=V2_VERIFICATION_JUDGE_PROMPT_PRESET,
+        parser=SCORE_PARSER,
+        system_file="system-prompt.txt",
+        user_file="prompt-v2-verification.txt",
     ),
 }
 

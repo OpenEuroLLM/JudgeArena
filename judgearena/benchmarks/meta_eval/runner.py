@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ from judgearena.benchmarks.meta_eval.annotate import (
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
     filter_split,
+    require_connected_pool,
     sample_battles_per_model,
     select_top_models,
 )
@@ -112,8 +114,54 @@ def _metric_rng(seed: int, metric_name: str) -> np.random.Generator:
     return np.random.default_rng(metric_seed)
 
 
+def _load_panel_battle_ids(
+    panel_file: Path, *, split: str, battles_per_model: int
+) -> tuple[list[str], str]:
+    """Load ordered battle IDs and the panel file content hash."""
+    panel_bytes = Path(panel_file).read_bytes()
+    panel_hash = hashlib.sha256(panel_bytes).hexdigest()
+    try:
+        panel = json.loads(panel_bytes.decode())
+        battle_ids = panel[split][str(battles_per_model)]
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise MetaEvalSamplingError(
+            f"Malformed explicit panel {panel_file} for "
+            f"split={split!r} battles_per_model={battles_per_model}."
+        ) from exc
+    if not isinstance(battle_ids, list) or not all(
+        isinstance(battle_id, str) for battle_id in battle_ids
+    ):
+        raise MetaEvalSamplingError(
+            f"Explicit panel {panel_file} must list battle ID strings."
+        )
+    return battle_ids, panel_hash
+
+
+def _select_panel_rows(
+    pool: pd.DataFrame, battle_ids: list[str], *, context: str
+) -> pd.DataFrame:
+    """Select exact ordered rows from the filtered top-model pool."""
+    if not battle_ids:
+        raise MetaEvalSamplingError(f"{context} panel is empty.")
+    if len(set(battle_ids)) != len(battle_ids):
+        raise MetaEvalSamplingError(f"{context} panel contains duplicate battle IDs.")
+    by_id = pool.drop_duplicates("battle_id").set_index("battle_id", drop=False)
+    missing = [battle_id for battle_id in battle_ids if battle_id not in by_id.index]
+    if missing:
+        raise MetaEvalSamplingError(
+            f"{context} panel IDs are missing from the pool: {missing[:5]}."
+        )
+    sample = by_id.loc[list(battle_ids)].reset_index(drop=True)
+    models = sorted(set(pool["model_a"]) | set(pool["model_b"]))
+    require_connected_pool(sample, models, context=context)
+    return sample
+
+
 def run_meta_eval(
-    cfg: RunConfig, task: ResolvedTaskSpec | None = None
+    cfg: RunConfig,
+    task: ResolvedTaskSpec | None = None,
+    *,
+    judge_chat_model=None,
 ) -> dict[str, object]:
     """Sample arena battles, judge them, and run configured meta metrics."""
     protocol = task.spec.protocol if task is not None else None
@@ -142,12 +190,21 @@ def run_meta_eval(
             split=cfg.meta_eval.split,
             validation_fraction=cfg.meta_eval.validation_fraction,
         )
-    sample = sample_battles_per_model(
-        top_pool,
-        top_models,
-        battles_per_model=cfg.meta_eval.battles_per_model,
-        seed=cfg.run.seed,
-    )
+    panel_hash = None
+    if cfg.meta_eval.panel_file is not None:
+        battle_ids, panel_hash = _load_panel_battle_ids(
+            cfg.meta_eval.panel_file,
+            split=cfg.meta_eval.split,
+            battles_per_model=cfg.meta_eval.battles_per_model,
+        )
+        sample = _select_panel_rows(top_pool, battle_ids, context="Explicit")
+    else:
+        sample = sample_battles_per_model(
+            top_pool,
+            top_models,
+            battles_per_model=cfg.meta_eval.battles_per_model,
+            seed=cfg.run.seed,
+        )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
@@ -170,11 +227,17 @@ def run_meta_eval(
     sample.loc[
         :, ("battle_id", "question_id", "model_a", "model_b", "winner", "lang")
     ].to_parquet(result_dir / "sample.parquet", index=False)
+    if panel_hash is not None:
+        (result_dir / "panel-file.sha256").write_text(
+            f"{panel_hash}\n", encoding="utf-8"
+        )
 
     annotations = annotate_sample(
         sample,
         cfg,
-        judge_chat_model=build_judge(cfg),
+        judge_chat_model=(
+            build_judge(cfg) if judge_chat_model is None else judge_chat_model
+        ),
         resolved_prompt=resolved_prompt,
     )
     annotations.to_parquet(result_dir / "annotations.parquet", index=False)

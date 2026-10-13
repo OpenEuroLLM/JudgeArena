@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -411,6 +412,10 @@ class MetaEvalArgs(BaseModel):
     validation_fraction: float = Field(default=0.5, gt=0, lt=1)
     """Share of arena prompts assigned to the validation partition."""
 
+    panel_file: Path | None = None
+    """Optional explicit battle-ID panel JSON. Paths may be remote during local
+    preflight, so existence is checked only when the panel is loaded."""
+
 
 class TuneJudgeArgs(BaseModel):
     """NePS search settings and judge-evaluation objectives."""
@@ -436,6 +441,12 @@ class TuneJudgeArgs(BaseModel):
 
     objectives: list[Literal["agreement", "cost"]] | None = None
     """Agreement is maximized and expected token cost minimized."""
+
+    objective_bounds: dict[Literal["agreement", "cost"], tuple[float, float]] = Field(
+        default_factory=dict
+    )
+    """Optional fixed ``(lower, upper)`` ranges used to normalize objectives.
+    Empty preserves the default agreement/cost objective transforms."""
 
     price_per_million_tokens: dict[str, float | dict[str, float]] = Field(
         default_factory=dict
@@ -527,6 +538,16 @@ class TuneJudgeArgs(BaseModel):
             rates = price.values() if isinstance(price, dict) else [price]
             if any(rate < 0 for rate in rates):
                 raise ValueError("Judge token prices must be nonnegative")
+        for name, bounds in self.objective_bounds.items():
+            if len(bounds) != 2:
+                raise ValueError(
+                    f"objective_bounds[{name!r}] requires a (lower, upper) pair"
+                )
+            lower, upper = bounds
+            if not (math.isfinite(lower) and math.isfinite(upper) and lower < upper):
+                raise ValueError(
+                    f"objective_bounds[{name!r}] requires finite increasing bounds"
+                )
         return self
 
 

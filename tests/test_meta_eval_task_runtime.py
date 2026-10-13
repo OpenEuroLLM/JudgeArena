@@ -56,9 +56,13 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
         else:
             request.parameters.update(battle_counts=[4], n_seeds=2)
     monkeypatch.setattr(runner_module, "load_battles", lambda _task: _arena())
-    monkeypatch.setattr(runner_module, "build_judge", lambda _cfg: object())
+    judge = object()
+    monkeypatch.setattr(
+        runner_module, "build_judge", lambda _cfg: pytest.fail("rebuilt")
+    )
 
     def fake_annotate(sample, *_args, **_kwargs):
+        assert _kwargs["judge_chat_model"] is judge
         rows = sample[["battle_id", "reference_pref"]].rename(
             columns={"reference_pref": "pref"}
         )
@@ -66,7 +70,9 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
         return rows.assign(orientation="single")
 
     monkeypatch.setattr(runner_module, "annotate_sample", fake_annotate)
-    result = runner_module.run_meta_eval(_config(tmp_path), task)
+    result = runner_module.run_meta_eval(
+        _config(tmp_path), task, judge_chat_model=judge
+    )
 
     result_path = Path(result["result_path"])
     sample = pd.read_parquet(result_path.parent / "sample.parquet")

@@ -34,6 +34,10 @@ def _config_hash(cfg: RunConfig) -> str:
             path.read_text()
             for path in (cfg.judge.prompt.system_file, cfg.judge.prompt.user_file)
         ]
+    panel_file = None if cfg.meta_eval is None else cfg.meta_eval.panel_file
+    if panel_file is not None:
+        panel_bytes = Path(panel_file).read_bytes()
+        payload["panel_file_sha256"] = hashlib.sha256(panel_bytes).hexdigest()
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
