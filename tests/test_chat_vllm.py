@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 from types import SimpleNamespace
 
@@ -354,8 +355,6 @@ def test_chat_vllm_skips_overlong_requests_without_caching(tmp_path, monkeypatch
         None,
     ]
     assert captured["chat_call"]["messages"] == [[{"role": "user", "content": "valid"}]]
-    import sqlite3
-
     db = next(tmp_path.rglob("judgements.db"))
     with sqlite3.connect(db) as connection:
         assert connection.execute("SELECT COUNT(*) FROM judgements").fetchone()[0] == 1
