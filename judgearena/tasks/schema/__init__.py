@@ -51,6 +51,7 @@ from judgearena.tasks.schema.task import (
     TaskMetadata,
     TaskSpec,
 )
+from judgearena.tasks.schema.tuning import TuneJudgeProtocol
 
 __all__ = [
     "BaselineSpec",
@@ -88,4 +89,5 @@ __all__ = [
     "TaskProvenance",
     "TaskSelection",
     "TaskSpec",
+    "TuneJudgeProtocol",
 ]

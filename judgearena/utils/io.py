@@ -29,6 +29,8 @@ def download_hf(name: str, local_path: Path):
     resolved_task = get_packaged_task(name)
     if resolved_task is None:
         raise ValueError(f"Unknown task {name!r}.")
+    if resolved_task.spec.dataset is None:
+        return
     from judgearena.datasets.registry import resolve_download_adapter
 
     resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
@@ -67,8 +69,9 @@ def download_all():
 
     logger.info("Downloading all datasets in %s", data_root)
     local_path_tables = data_root / "tables"
-    for task_id in load_tasks():
-        download_hf(name=task_id, local_path=local_path_tables)
+    for task_id, task in load_tasks().items():
+        if task.spec.dataset is not None:
+            download_hf(name=task_id, local_path=local_path_tables)
 
 
 if __name__ == "__main__":

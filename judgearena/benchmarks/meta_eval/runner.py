@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from judgearena.arenas_utils import extract_turn_text
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
@@ -24,6 +25,7 @@ from judgearena.benchmarks.meta_eval.annotate import (
 )
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
+    filter_split,
     sample_battles_per_model,
     select_top_models,
 )
@@ -133,6 +135,13 @@ def run_meta_eval(
     top_models, top_pool = select_top_models(
         arena_battles, top_models=cfg.meta_eval.top_models
     )
+    if cfg.meta_eval.split != "all":
+        top_pool = filter_split(
+            top_pool,
+            top_pool["conversation_a"].map(lambda turns: extract_turn_text(turns[0])),
+            split=cfg.meta_eval.split,
+            validation_fraction=cfg.meta_eval.validation_fraction,
+        )
     sample = sample_battles_per_model(
         top_pool,
         top_models,
@@ -155,7 +164,7 @@ def run_meta_eval(
     timestamp = run_started_at.strftime("%Y%m%d_%H%M%S")
     result_name = (
         f"{safe_filename(cfg.task)}-{safe_filename(cfg.judge.model)}-"
-        f"{cfg.judge.swap_mode}-{timestamp}"
+        f"{cfg.judge.swap_mode}-{cfg.meta_eval.split}-{timestamp}"
     )
     result_dir = prepare_run_directory(cfg, Path(cfg.run.result_folder) / result_name)
     sample.loc[
@@ -198,6 +207,7 @@ def run_meta_eval(
         top_models=top_models,
         n_sampled_battles=len(sample),
         swap_mode=cfg.judge.swap_mode,
+        split=cfg.meta_eval.split,
         metrics=metric_results,
     )
     results = report.to_dict()

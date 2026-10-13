@@ -17,13 +17,15 @@ from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.mt_bench import MTBenchProtocol
 from judgearena.tasks.schema.mt_bench_101 import MTBench101Protocol
 from judgearena.tasks.schema.pairwise import PairwiseProtocol
+from judgearena.tasks.schema.tuning import TuneJudgeProtocol
 
 ProtocolSpec = Annotated[
     PairwiseProtocol
     | MTBenchProtocol
     | MTBench101Protocol
     | EloProtocol
-    | MetaEvalProtocol,
+    | MetaEvalProtocol
+    | TuneJudgeProtocol,
     Field(discriminator="runner"),
 ]
 
@@ -73,7 +75,7 @@ class TaskSpec(StrictFrozenModel):
     task_version: int = Field(ge=1)
     description: str = Field(min_length=1)
     tags: tuple[str, ...] = ()
-    dataset: DatasetSpec
+    dataset: DatasetSpec | None = None
     protocol: ProtocolSpec
     variants: SuffixVariants | None = None
     metadata: TaskMetadata = Field(default_factory=TaskMetadata)
@@ -82,6 +84,14 @@ class TaskSpec(StrictFrozenModel):
     def _validate_task(self) -> TaskSpec:
         if len(set(self.tags)) != len(self.tags):
             raise ValueError("tags must not contain duplicates")
+        if isinstance(self.protocol, TuneJudgeProtocol):
+            if self.dataset is not None:
+                raise ValueError(
+                    "Tuning tasks use their target meta-eval benchmark's dataset."
+                )
+            return self
+        if self.dataset is None:
+            raise ValueError("Benchmark tasks require a dataset.")
         source_names = set(self.dataset.sources)
         baseline = self.protocol.baseline
         if (

@@ -337,6 +337,8 @@ judgearena \
 
 Runs save the selected sample, judge evidence, metric battles, configuration, and results under `--run.result_folder`.
 
+`--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
+
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).

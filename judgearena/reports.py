@@ -101,12 +101,13 @@ class MetaEvalReport(Report):
     top_models: list[str]
     n_sampled_battles: int
     swap_mode: str
+    split: str
     metrics: dict[str, dict[str, object]]
 
     def render(self) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
-        print(f"\n=== Meta-eval: {self.task} ===")
+        print(f"\n=== Meta-eval: {self.task} ({self.split} split) ===")
         print(f"Arena: {self.arena} | Judge: {self.judge_model}")
         print(
             f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "

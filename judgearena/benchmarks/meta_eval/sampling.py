@@ -7,6 +7,8 @@ from collections.abc import Iterable
 
 import pandas as pd
 
+_SPLIT_SALT = "judgearena-meta-eval-split"
+
 
 class MetaEvalSamplingError(ValueError):
     """Raised when filtering or sampling yields an unusable battle subset."""
@@ -83,6 +85,24 @@ def select_top_models(
     df_top = df[df["model_a"].isin(top) & df["model_b"].isin(top)].copy()
     require_connected_pool(df_top, top, context="Top-model")
     return top, df_top
+
+
+def _validation_bucket(prompt: str) -> float:
+    digest = hashlib.sha256(f"{_SPLIT_SALT}\0{prompt}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") / 2**64
+
+
+def filter_split(
+    df: pd.DataFrame, prompts: pd.Series, *, split: str, validation_fraction: float
+) -> pd.DataFrame:
+    """Keep battles whose prompt hashes into ``split``.
+
+    Keying on the prompt keeps repeated prompts on one side and makes the
+    partition independent of the sampling seed.
+    """
+    is_validation = prompts.map(_validation_bucket) < validation_fraction
+    keep = is_validation if split == "validation" else ~is_validation
+    return df.loc[keep.to_numpy()].reset_index(drop=True)
 
 
 def _stable_priority(battle_id: object, *, seed: int) -> str:
