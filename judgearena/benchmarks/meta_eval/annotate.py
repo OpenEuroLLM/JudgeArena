@@ -10,6 +10,7 @@ import pandas as pd
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
+from judgearena.usage import request_usage_to_json
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -99,6 +100,8 @@ def _annotation_frame(
                 "judge_top_logprobs_json": _serialize_mapping(
                     annotation.judge_top_logprobs
                 ),
+                "usage_json": request_usage_to_json(annotation.usage),
+                "error": annotation.error,
                 "parsed_label": None if parsed is None else parsed.label,
                 "parsed_scores_json": (
                     None if parsed is None else _serialize_mapping(parsed.scores)

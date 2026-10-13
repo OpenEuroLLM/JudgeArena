@@ -13,7 +13,9 @@ from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
     annotate_sample,
 )
+from judgearena.inference import InferenceResult
 from judgearena.prompts.registry import resolve_judge_prompt
+from judgearena.usage import RequestUsage, request_usage_from_json
 
 
 def _sample():
@@ -51,10 +53,19 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
         sample[column] = sample[column].map(
             lambda turns: np.asarray(turns, dtype=object)
         )
+    usage = RequestUsage(stage="judging", model="judge", input_tokens=7)
     responses = iter(
         [
-            ["score_A: 9\nscore_B: 1", "score_A: 5\nscore_B: 6", "unparseable"],
-            ["score_A: 1\nscore_B: 7", "unparseable", "unparseable"],
+            [
+                InferenceResult(text="score_A: 9\nscore_B: 1", usage=usage),
+                InferenceResult(text="score_A: 5\nscore_B: 6"),
+                InferenceResult(text="unparseable"),
+            ],
+            [
+                InferenceResult(text="score_A: 1\nscore_B: 7", usage=usage),
+                InferenceResult(text="", error="context_length"),
+                InferenceResult(text="unparseable"),
+            ],
         ]
     )
     monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
@@ -67,6 +78,10 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
 
     assert rows["orientation"].tolist() == ["direct"] * 3 + ["reversed"] * 3
     rendered = rows["judge_input"]
+    assert pd.isna(rows.loc[2, "error"])
+    assert rows.loc[4, "error"] == "context_length"
+    assert pd.isna(rows.loc[4, "usage_json"])
+    assert request_usage_from_json(rows.loc[3, "usage_json"]) == usage
     assert rendered[0].index("Alpha answer") < rendered[0].index("Beta answer")
     assert rendered[3].index("Beta answer") < rendered[3].index("Alpha answer")
     assert rows.loc[[0, 3], "pref"].tolist() == pytest.approx(
@@ -88,7 +103,9 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     output = (
         '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: [output])
+    monkeypatch.setattr(
+        evaluate, "do_inference", lambda **kwargs: [InferenceResult(text=output)]
+    )
     rows = annotate_sample(
         _sample(),
         _config("fixed"),
