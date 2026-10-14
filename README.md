@@ -339,6 +339,84 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 `--meta_eval.split validation|test` restricts sampling to one half of the arena prompts (`--meta_eval.validation_fraction`, default 0.5). The split hashes each battle's prompt, so it does not depend on `--run.seed`.
 
+### Tuning a judge
+
+The `tune-judge` task searches judge settings against human preferences, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Each trial runs the matching meta-eval task, so trials share its data and judgement cache. Install NePS with the `tune` extra, then run:
+
+```bash
+uv sync --extra tune
+uv run judgearena --config_path configs/tune_judge.yaml
+uv run judgearena tasks show tune-judge   # task defaults
+```
+
+By default the task tunes on `meta-eval-lmarena-140k-en`, optimizes agreement and cost with `mo_hyperband` (`eta: 3`), and uses 10 to 90 battles per model. Your config overrides these field by field. If you pick another optimizer, set its kwargs (such as `eta`) yourself. [configs/tune_judge.yaml](configs/tune_judge.yaml) is a minimal example:
+
+```yaml
+task: tune-judge
+judge:                      # reference judge, also the search prior
+  model: VLLM/Qwen/Qwen2.5-7B-Instruct
+  prompt_preset: meta-eval-pair-score
+  temperature: 0.0
+  max_out_tokens: 8192
+generation: {truncate_judge_input_chars: 8192}
+tune_judge:
+  search_space:
+    judge:
+      model: [VLLM/Qwen/Qwen2.5-7B-Instruct, VLLM/google/gemma-2-9b-it]
+      prompt_preset: [meta-eval-pair-score, arena-hard]
+      swap_mode: [fixed, both]
+      temperature: {lower: 0, upper: 1, prior_confidence: low}
+      max_out_tokens: {lower: 1024, upper: 8192, log: true}
+  price_per_million_tokens:  # your estimates in USD per 1M tokens
+    VLLM/Qwen/Qwen2.5-7B-Instruct: {input: 0.12, output: 0.12}
+    VLLM/google/gemma-2-9b-it: {input: 0.14, output: 0.14}
+  neps: {total_evaluations_to_spend: 40}
+```
+
+**Search space.** A list (or `{choices: [...]}`) is categorical. `{lower, upper}` is a range whose type follows the run-config field, so `temperature` is continuous and `max_out_tokens` is an integer; `log: true` samples on a log scale. Parameters are nested like the run config and can include `generation.truncate_judge_input_chars`.
+
+**Priors.** Your reference judge is the prior wherever its value lies in the domain. To override, set `prior` to a value (also for categoricals) and `prior_confidence` to `low`, `medium` (default) or `high`.
+
+**Cache reuse.** A continuous value such as temperature usually creates a new model descriptor per sample, so nothing is reused. Use a categorical list like `[0.0, 0.1, 1.0]` when reuse matters.
+
+**Optimizer and objectives.** These are the defaults; set them only to change something:
+
+```yaml
+tune_judge:
+  meta_eval_task: meta-eval-comparia-fr
+  fidelity: {battles_per_model: {lower: 10, upper: 90}}
+  objectives: [agreement, cost]
+  optimizer: {name: mo_hyperband, eta: 3, mo_selector: epsnet}
+```
+
+- `mo_hyperband` and `primo` take `[agreement, cost]`; `neps_priorband` and `neps_hyperband` take `[agreement]`.
+- Optimizer kwargs are native NePS settings. `primo` also takes per-objective `prior_centers` and `prior_confidences`.
+- Other `neps.run` settings go under `neps`, such as budgets and `ignore_errors` (default `true`). Directory, completion and NePS cost-budget settings are not supported.
+- Leave `sample_prior_first` unset for `neps_priorband` and `neps_hyperband`; NePS 0.17 fails on it.
+
+**Cost.** Expected cost is USD per 1,000 battles, computed from the native input and output token counts of the judge responses, including counts stored with cached judgements. It is separate from NePS's search budget.
+
+- Prices come from `tune_judge.price_per_million_tokens` (one number, or `{input, output}`). Without an override, the OpenRouter catalog supplies an estimate, saved to `{store_root}/openrouter_pricing.json`. Agreement-only runs never fetch it. For compute nodes without internet, prefetch it on the login node: `curl -fsS https://openrouter.ai/api/v1/models | jq '.data' > <store_root>/openrouter_pricing.json`.
+- A searched model with no price stops the run before evaluation. Resolved rates are frozen in the run's `prices.json`, which resume and helper workers read.
+- Every reused judgement needs native token counts. Caches written before usage was stored do not have them, so the run errors; use a fresh `store_root` or tune on agreement only. Counts are never estimated.
+- A judge call skipped for exceeding the context limit adds zero generation tokens, and the failed annotation lowers agreement and coverage.
+- With `ignore_errors: true`, failed trials get infinite objective values. Pricing, usage and configuration errors still abort the run.
+
+**Results.** The primary process waits for active trials, reports the agreement/cost Pareto front at full budget, and tests the best-agreement configuration per model on the held-out split (`test_battles_per_model`, default the highest fidelity). Outputs are `trials.parquet`, `pareto.parquet` and `test_results.parquet`; NePS state stays in `neps/`, apart from the inference caches.
+
+**Resume and parallel workers.** Workers share an explicit tuning directory:
+
+```bash
+# Resume the same session.
+uv run judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir
+# Join as a helper that runs validation trials only.
+uv run judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
+```
+
+The example keeps the paper's limits fixed across judges (8,192 characters per candidate completion, 8,192 judge output tokens, native context, no instruction truncation), so only searched settings vary. Overlong prompts for vLLM chat judges stay failed annotations and are not cached.
+
+Rollback-mode SQLite caching on a shared mount worked in a two-node test on kislurm (NFSv3). That is no guarantee for other filesystems, and WAL must never be used on NFS.
+
 ## 📈 Estimating ELO Ratings
 
 JudgeArena can estimate the ELO rating of a model by running it against opponents sampled from a human preference arena (`LMArena-100k`, `LMArena-140k`, or `ComparIA`).

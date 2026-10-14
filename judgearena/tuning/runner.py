@@ -276,6 +276,8 @@ def run_tune_judge(
             prices = resolve_prices(
                 models,
                 tuning.price_per_million_tokens,
+                catalog_cache=Path(cfg.run.store_root or cfg.run.result_folder)
+                / "openrouter_pricing.json",
                 require_cost=True,
             )
             if not tuning.search_only:
