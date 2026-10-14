@@ -341,11 +341,12 @@ Runs save the selected sample, judge evidence, metric battles, configuration, an
 
 ### Tuning a judge
 
-The `tune-judge` task searches judge settings against human preferences, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Each trial runs the matching meta-eval task, so trials share its data and judgement cache. Install NePS with `pip install 'judgearena[tune]'`, then run:
+The `tune-judge` task searches judge settings against human preferences, following [Salinas et al., 2025](https://arxiv.org/abs/2501.17178). Each trial runs the matching meta-eval task, so trials share its data and judgement cache. Install NePS with the `tune` extra, then run:
 
 ```bash
-judgearena --config_path configs/tune_judge.yaml
-judgearena tasks show tune-judge   # task defaults
+uv sync --extra tune
+uv run judgearena --config_path configs/tune_judge.yaml
+uv run judgearena tasks show tune-judge   # task defaults
 ```
 
 By default the task tunes on `meta-eval-lmarena-140k-en`, optimizes agreement and cost with `mo_hyperband` (`eta: 3`), and uses 10 to 90 battles per model. Your config overrides these field by field. If you pick another optimizer, set its kwargs (such as `eta`) yourself. [configs/tune_judge.yaml](configs/tune_judge.yaml) is a minimal example:
@@ -407,9 +408,9 @@ tune_judge:
 
 ```bash
 # Resume the same session.
-judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir
+uv run judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir
 # Join as a helper that runs validation trials only.
-judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
+uv run judgearena --config_path configs/tune_judge.yaml --tune_judge.run_dir /path/to/tune-dir --tune_judge.search_only true
 ```
 
 The example keeps the paper's limits fixed across judges (8,192 characters per candidate completion, 8,192 judge output tokens, native context, no instruction truncation), so only searched settings vary. Overlong prompts for vLLM chat judges stay failed annotations and are not cached.

@@ -1,4 +1,4 @@
-# Install judgearena[tune], then run: judgearena --config_path configs/tune_judge.yaml
+# Install the tune extra, then run: uv run judgearena --config_path configs/tune_judge.yaml
 task: tune-judge
 judge:
   model: VLLM/Qwen/Qwen2.5-7B-Instruct
