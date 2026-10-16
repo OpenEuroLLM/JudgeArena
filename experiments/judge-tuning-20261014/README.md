@@ -76,7 +76,13 @@ rows and descriptors are excluded. Native descriptors/input hashes govern reuse.
 
 Publication uses only the repository's `judgearena-cache` CLI and the standard
 cache layout. No replay bundle, optimizer-state archive or per-battle result
-archive is published to Hugging Face. The Git branch supplies scripts, frozen
+archive is published to Hugging Face.
+
+Published revision: `b36a31a9de6679fab7e15fa82bc1285f349dd949`. The three databases contain
+92,869 unique judgments (Qwen-9B: 25,408; Qwen-27B: 15,879; Gemma-31B: 51,582).
+Remote database SHA256 digests and sizes match the scoped local snapshots, and
+all three descriptor metadata files match exactly. The native fetch CLI reads
+current main; `PUBLICATION.json` records this verified snapshot for provenance. The Git branch supplies scripts, frozen
 panels/configs and aggregate reports. `PUBLICATION.json` records upload status
 and the published revision when available.
 

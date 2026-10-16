@@ -1,7 +1,33 @@
 {
-  "status": "approved_cache_upload_pending_authentication",
+  "status": "published",
   "repo": "judge-arena/judge-arena-cache",
-  "revision": null,
+  "revision": "b36a31a9de6679fab7e15fa82bc1285f349dd949",
+  "method": "judgearena-cache --action push --kind judgements --task meta-eval-lmarena-140k-en",
   "cache_manifest": "scoped-cache-manifest.json",
-  "method": "judgearena-cache --action push --kind judgements --task meta-eval-lmarena-140k-en"
+  "databases": [
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-9B/285d129c824df6db/judgements.db",
+      "rows": 25408,
+      "bytes": 345505792,
+      "sha256": "a8e71fe4cd02665b3f334e483ca2f3d96f259812311f1ea003c98d3451be5253",
+      "metadata_exact": true
+    },
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/google%2Fgemma-4-31B-it/d42b4f970128b97d/judgements.db",
+      "rows": 51582,
+      "bytes": 604102656,
+      "sha256": "ead643797c4eae0a8fdf8ea685525c8d9f726e52670dad6f81258e44074ced47",
+      "metadata_exact": true
+    },
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/a9e52dc17aa08d46/judgements.db",
+      "rows": 15879,
+      "bytes": 213131264,
+      "sha256": "4b80b0a79f68a2a9e6fd73d43b903426d50368a736b0ad17e7671eec64f99d47",
+      "metadata_exact": true
+    }
+  ],
+  "judgements": 92869,
+  "archive_uploaded": false,
+  "verification": "All three remote LFS SHA256 digests and sizes match staged SQLite files; descriptor metadata matches exactly."
 }
