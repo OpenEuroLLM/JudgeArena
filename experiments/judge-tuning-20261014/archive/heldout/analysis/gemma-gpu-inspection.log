@@ -1,0 +1,5 @@
+cpu-bind=MASK - dlc2gpu02, task  0  0 [1457623]: mask 0x40000000000000004 set
+0, 0 %, 16265 MiB
+1, 0 %, 16265 MiB
+2, 0 %, 16265 MiB
+3, 0 %, 16265 MiB

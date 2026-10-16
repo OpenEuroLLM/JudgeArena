@@ -89,6 +89,7 @@ conflicts = [
 ]
 
 [tool.ruff]
+extend-exclude = ["experiments/judge-tuning-20261014/archive"]
 target-version = "py312"
 line-length = 88
 

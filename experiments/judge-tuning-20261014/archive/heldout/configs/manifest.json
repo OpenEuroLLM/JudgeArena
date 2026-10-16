@@ -1,0 +1,94 @@
+{
+  "stage": "heldout3000",
+  "approved_allocated_L40S_hours": 32,
+  "max_own_GPUs": 8,
+  "panel_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/panels/heldout-3000.json",
+  "panel_sha256": "221ca1ac07ce7822458e3b1023c9971daf2cad709d85e0611ad4e513ea2cbea7",
+  "candidates": [
+    {
+      "arm": "uniform",
+      "config_id": "325aa74cc942",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-evidence-on",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/325aa74cc942.yaml",
+      "sha256": "12726872afd4fb2b6f0522e89956659b8aa2306b29961125e0e48cdda9760a06",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/uniform/trials/config_14_rung_2/config.yaml",
+      "source_sha256": "ada6aff42fd9fffd84e01a131a9a5b455e72aead28dcc8d41049315e627a0002",
+      "validation_agreement": 0.471815107102593,
+      "validation_cost_per1k": 0.50597289740699
+    },
+    {
+      "arm": "primo-none",
+      "config_id": "ea6e4bd6e590",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-criteria-off",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/ea6e4bd6e590.yaml",
+      "sha256": "8841cb6748b6ed14729bd54744473a32f2203006f5a184719cdb0be97b0e3bc4",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_8/config.yaml",
+      "source_sha256": "74ed886bfedbd4292e443696287bd2607d450d7d9268213d7cc60311f31d82c6",
+      "validation_agreement": 0.4774520856820744,
+      "validation_cost_per1k": 0.3916198308906426
+    },
+    {
+      "arm": "primo-prior",
+      "config_id": "f1d8421d913f",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "default",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/f1d8421d913f.yaml",
+      "sha256": "b041152d4e7ffb2e990dff05f36f72f6ad4d36513cfe08dc944d523dc2dd1964",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-prior/trials/config_3/config.yaml",
+      "source_sha256": "203283dd6945bd835b7cc24ba3f2234f3e3ac1e9ba94abf650879f52313d39cc",
+      "validation_agreement": 0.4785794813979707,
+      "validation_cost_per1k": 0.41966842728297615
+    },
+    {
+      "arm": "primo-none",
+      "config_id": "88685e7dc944",
+      "role": "secondary",
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verification-off",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/88685e7dc944.yaml",
+      "sha256": "3dd276a828c5c424fee31ba9e52cdc3e5623c3df7ccd61077672c70a16aebde6",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_4_rung_2/config.yaml",
+      "source_sha256": "efbb95c1bf9b95cd4ee696fe5a5743eccc6b2200f9a56491eb3e14e8e7faa60e",
+      "validation_agreement": 0.43404735062006766,
+      "validation_cost_per1k": 0.32202756482525513
+    },
+    {
+      "arm": "primo-prior",
+      "config_id": "4d39e6174e26",
+      "role": "secondary",
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verdict-on",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/4d39e6174e26.yaml",
+      "sha256": "387190ca5acadf3e9cd4c4ede55502b707013db01012dad4b41be11a099a2df5",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-prior/trials/config_1_rung_2/config.yaml",
+      "source_sha256": "5e05a6362893a082dd51d318d1d6cc81d958b563d27e358fd4f6d9fdc84b0bb6",
+      "validation_agreement": 0.4523675310033822,
+      "validation_cost_per1k": 0.3458016065388952
+    }
+  ],
+  "prices": {
+    "VLLM/Qwen/Qwen3.5-9B": {
+      "input": 0.1,
+      "output": 0.15
+    },
+    "VLLM/Qwen/Qwen3.5-27B-FP8": {
+      "input": 0.26,
+      "output": 2.6
+    },
+    "VLLM/google/gemma-4-31B-it": {
+      "input": 0.09,
+      "output": 0.34
+    }
+  },
+  "source_root": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/source",
+  "source_provenance_sha256": "36388eb1e50313489015927521aabb9c81c76c81ef7b2a3cbe39344e6287f83d",
+  "selection": "Frozen before held-out inference; common28540/full3548 arm fronts",
+  "analysis": "primary prior-vs-none; all3paired contrasts;10000bootstrap seed0;prompt-cluster if repeated;no test-driven selection",
+  "paper": "https://arxiv.org/html/2501.17178v3",
+  "API_spend": 0
+}

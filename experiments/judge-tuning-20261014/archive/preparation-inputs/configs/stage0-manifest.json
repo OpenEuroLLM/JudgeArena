@@ -1,0 +1,229 @@
+{
+  "stage": "Stage0 only; full searches NOT approved",
+  "allocated_l40s_hour_cap": 16,
+  "models": [
+    "VLLM/Qwen/Qwen3.5-9B",
+    "VLLM/Qwen/Qwen3.5-27B-FP8",
+    "VLLM/google/gemma-4-31B-it"
+  ],
+  "presets": [
+    "default",
+    "meta-eval-pair-score",
+    "default_with_explanation",
+    "arena-hard",
+    "v2-criteria",
+    "v2-evidence",
+    "v2-verification"
+  ],
+  "cohort": [
+    {
+      "config_id": "293cf4bc9a5d",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-9B",
+        "judge.prompt_preset": "default",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_4/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-validation-20261013_001942"
+    },
+    {
+      "config_id": "cbc203fd74c7",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-9B",
+        "judge.prompt_preset": "default",
+        "judge.swap_mode": "both"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_2/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-both-validation-20261012_235644"
+    },
+    {
+      "config_id": "c0c8e9b1b1b2",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+        "judge.prompt_preset": "default",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_5/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-27b-fp8-fixed-validation-20261013_002034"
+    },
+    {
+      "config_id": "2e598e556fe9",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+        "judge.prompt_preset": "arena-hard",
+        "judge.swap_mode": "both"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/uniform-360-0/trials/config_13_rung_2/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-27b-fp8-both-validation-20261013_000010"
+    },
+    {
+      "config_id": "f1d8421d913f",
+      "overrides": {
+        "judge.model": "VLLM/google/gemma-4-31B-it",
+        "judge.prompt_preset": "default",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_7/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-validation-20261013_003207"
+    },
+    {
+      "config_id": "30358442ec50",
+      "overrides": {
+        "judge.model": "VLLM/google/gemma-4-31B-it",
+        "judge.prompt_preset": "default",
+        "judge.swap_mode": "both"
+      },
+      "provenance": "preset-priority, not agreement",
+      "reused_v1_result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_6/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-both-validation-20261013_002128"
+    },
+    {
+      "config_id": "626e473e0312",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-9B",
+        "judge.prompt_preset": "v2-criteria",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    },
+    {
+      "config_id": "2720709c7087",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-9B",
+        "judge.prompt_preset": "v2-evidence",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    },
+    {
+      "config_id": "42a1ebb7c21b",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+        "judge.prompt_preset": "v2-evidence",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    },
+    {
+      "config_id": "d76cc388aa2e",
+      "overrides": {
+        "judge.model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+        "judge.prompt_preset": "v2-verification",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    },
+    {
+      "config_id": "48520a93b4e0",
+      "overrides": {
+        "judge.model": "VLLM/google/gemma-4-31B-it",
+        "judge.prompt_preset": "v2-verification",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    },
+    {
+      "config_id": "52459c797f11",
+      "overrides": {
+        "judge.model": "VLLM/google/gemma-4-31B-it",
+        "judge.prompt_preset": "v2-criteria",
+        "judge.swap_mode": "fixed"
+      },
+      "provenance": "balanced frozen rotation"
+    }
+  ],
+  "panel_counts": {
+    "180": 1930,
+    "60": 642,
+    "20": 224,
+    "1": 19,
+    "2": 490
+  },
+  "fresh_test_count": 1105,
+  "excluded_v1_test_prompts": 1049,
+  "panel_sha256": "a6a06deb8b917e4f42e0c354911ad4da2b9f31a4c85a1892495293abbd1b5830",
+  "prompt_hashes": {
+    "default": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "ca30b32626266397b0361f911871d76dbfbf36e4dd790bc0ffe5a893a540ffa1"
+    },
+    "meta-eval-pair-score": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "53f500340ef0964ab59a6d8642cb80e691df96088e372a0e51b1fc08e7caf8ad"
+    },
+    "default_with_explanation": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "46211f81a89722d6ca866a80e538a0cdebae2d76ba45f887564c56e069d9e763"
+    },
+    "arena-hard": {
+      "system_sha256": "03f68010febd7a6405102ef882b4dd5a9700c56b2e1ff286d3b38f5d3a929bbf",
+      "user_sha256": "82fc205856141b8751263b96f25b345b4f0be39c1548ba067f5ac0e3f224b5c9"
+    },
+    "v2-criteria": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "0402749a22ae94fd72373cf132b9ff6df3d4035e8890a510352024b5fb276fa7"
+    },
+    "v2-evidence": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "aa2362e38420a08df8bc77e3629494ec8747eef663b31378c1ddb7a2408c3566"
+    },
+    "v2-verification": {
+      "system_sha256": "0912ced093a83ed7f01e169c96824ac510da30b29c112ac998a31854e5c2239c",
+      "user_sha256": "34208eb916f760a8a307e4785a58004b5f32028b1afb3077c6aa653f1a229ae1"
+    }
+  },
+  "objective_bounds": {
+    "agreement": [
+      0.4,
+      0.4673469387755102
+    ],
+    "cost": [
+      0.33752316326530646,
+      14.60736244897959
+    ]
+  },
+  "bounds_validation_sources": [
+    "1d07d88d0c66",
+    "c0c8e9b1b1b2",
+    "2e598e556fe9",
+    "7f3153ade2d6",
+    "293cf4bc9a5d",
+    "30358442ec50",
+    "91b932796cd5",
+    "213b0d3ded01",
+    "fa4cfe6b33b9",
+    "f1d8421d913f",
+    "9899f6f90bb7",
+    "5f20b78ccaf7",
+    "77272e0fcf0a",
+    "cbc203fd74c7"
+  ],
+  "agreement_prior": {
+    "judge.model": "VLLM/google/gemma-4-31B-it",
+    "judge.prompt_preset": "default",
+    "judge.swap_mode": "fixed"
+  },
+  "cost_prior": {
+    "judge.model": "VLLM/Qwen/Qwen3.5-9B",
+    "judge.prompt_preset": "default",
+    "judge.swap_mode": "fixed"
+  },
+  "cost_prior_source": {
+    "config_id": "293cf4bc9a5d",
+    "result": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/searches/primo-360-1/trials/config_4/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-validation-20261013_001942",
+    "cost_per_1k": 0.33752316326530646
+  },
+  "prices": {
+    "VLLM/Qwen/Qwen3.5-9B": {
+      "input": 0.1,
+      "output": 0.15
+    },
+    "VLLM/Qwen/Qwen3.5-27B-FP8": {
+      "input": 0.26,
+      "output": 2.6
+    },
+    "VLLM/google/gemma-4-31B-it": {
+      "input": 0.09,
+      "output": 0.34
+    }
+  }
+}

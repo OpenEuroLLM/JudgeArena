@@ -1,0 +1,86 @@
+{
+  "complete": true,
+  "databases": [
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/a9e52dc17aa08d46/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "b9d8641f5cc92e76ddd45997a6035668149db23f5d1ab9a0e7ceed7231b54826"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/fc463a1faba60ef0/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "27974eb62cceae2961528be2dbc5bb8d81743735b3cebfc61eb4d5625a7a73ed"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/fe54d45119ed0f39/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "994c6fbe27c620fb48b80745c41559d44f4e63b1a76ffe44feebf21284eee3b1"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/fede6bb1af5326ec/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "db738f5e2b29b4bcd91b738ced8925c4605f69bd70a21afedf4fbae6111f35ca"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-9B/285d129c824df6db/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "c3c7f7246768f2edc02a0e0a0037ec0ab18e443278e7cd45f7a8e0ba15d9a377"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-9B/a30bb897ab99e8f8/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "98c1459c00f7571bd45e235c9c17140e846620c371d2ca45aeb394b18177a3d4"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-9B/f2c6c40c107912f3/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "d49702138813a97dcc56ae11c1c439fb5e823a29931d21929285183ce83cd593"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/google%2Fgemma-4-31B-it/24d868ad98fe639c/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "e638ff24c15d7b13466a5aabef16bcd096b622d50f70c9f3ce138de08ca482d6"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/google%2Fgemma-4-31B-it/c9c7a69f57e57077/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "1d4ae33d59b886ce6a9c36ec85baa762036dc8b05a0a7073c48a849a1bd829c7"
+    },
+    {
+      "path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache/judgements/meta-eval-lmarena-140k-en/VLLM/google%2Fgemma-4-31B-it/d42b4f970128b97d/judgements.db",
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete",
+      "checked_copy_sha256": "d4025d580f7368dac86c60d3aea258c9f2fa81eec23057166d8a1b3822a53236"
+    }
+  ],
+  "all_ok": true
+}

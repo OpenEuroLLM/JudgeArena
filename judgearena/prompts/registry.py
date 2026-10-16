@@ -188,6 +188,59 @@ PRESETS: dict[str, JudgePromptPreset] = {
     ),
 }
 
+PRESETS.update(
+    {
+        "mid-criteria-off": JudgePromptPreset(
+            name="mid-criteria-off",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-criteria-off.txt",
+        ),
+        "mid-criteria-on": JudgePromptPreset(
+            name="mid-criteria-on",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-criteria-on.txt",
+        ),
+        "mid-evidence-off": JudgePromptPreset(
+            name="mid-evidence-off",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-evidence-off.txt",
+        ),
+        "mid-evidence-on": JudgePromptPreset(
+            name="mid-evidence-on",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-evidence-on.txt",
+        ),
+        "mid-verification-off": JudgePromptPreset(
+            name="mid-verification-off",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-verification-off.txt",
+        ),
+        "mid-verification-on": JudgePromptPreset(
+            name="mid-verification-on",
+            parser=SCORE_PARSER,
+            system_file="system-prompt.txt",
+            user_file="mid-verification-on.txt",
+        ),
+        "mid-verdict-off": JudgePromptPreset(
+            name="mid-verdict-off",
+            parser=JUDGE_PARSERS["arena-hard-verdict"],
+            system_file="system-prompt.txt",
+            user_file="mid-verdict-off.txt",
+        ),
+        "mid-verdict-on": JudgePromptPreset(
+            name="mid-verdict-on",
+            parser=JUDGE_PARSERS["arena-hard-verdict"],
+            system_file="system-prompt.txt",
+            user_file="mid-verdict-on.txt",
+        ),
+    }
+)
+
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
 

@@ -1,0 +1,11 @@
+{
+  "pool_battles": 19539,
+  "test_partition_battles": 9679,
+  "fresh_battles": 8528,
+  "old_test_battles": 1050,
+  "excluded_prompt_identities": 10607,
+  "existing_reserved_battles": 1105,
+  "existing_still_eligible": false,
+  "selected_count": 0,
+  "complete": false
+}

@@ -1,0 +1,212 @@
+[
+  {
+    "agreement": 0.4776666666666667,
+    "cohen_kappa": 0.18992328545582837,
+    "coverage": 0.996,
+    "n_battles": 3000,
+    "spearman": null,
+    "tokens_per_battle": 2788.116666666667,
+    "cost_per_1k_battles": 0.49323416666666564,
+    "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/325aa74cc942/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_072237",
+    "config_id": "325aa74cc942",
+    "arm": "uniform",
+    "role": "primary",
+    "elapsed_s": 4765.953933872981,
+    "fresh_usage": {
+      "scope": "successful_model_responses_returned_by_completed_inference_calls",
+      "source": "provider_response_metadata_when_available",
+      "total": {
+        "requests": 3000,
+        "input_tokens": 5456706,
+        "output_tokens": 2907644,
+        "total_tokens": 8364350,
+        "reasoning_tokens": null,
+        "cached_tokens": null,
+        "cost_usd": null,
+        "requests_with_any_token_usage": 3000,
+        "requests_with_input_tokens": 3000,
+        "requests_with_output_tokens": 3000,
+        "requests_with_total_tokens": 3000,
+        "requests_with_reasoning_tokens": 0,
+        "requests_with_cached_tokens": 0,
+        "requests_with_cost": 0
+      },
+      "by_stage": {
+        "judging": {
+          "requests": 3000,
+          "input_tokens": 5456706,
+          "output_tokens": 2907644,
+          "total_tokens": 8364350,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      },
+      "by_model": {
+        "google/gemma-4-31B-it": {
+          "requests": 3000,
+          "input_tokens": 5456706,
+          "output_tokens": 2907644,
+          "total_tokens": 8364350,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      }
+    }
+  },
+  {
+    "agreement": 0.4703333333333333,
+    "cohen_kappa": 0.18171242422275236,
+    "coverage": 0.998,
+    "n_battles": 3000,
+    "spearman": null,
+    "tokens_per_battle": 2468.8816666666667,
+    "cost_per_1k_battles": 0.381694266666667,
+    "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/ea6e4bd6e590/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_084203",
+    "config_id": "ea6e4bd6e590",
+    "arm": "primo-none",
+    "role": "primary",
+    "elapsed_s": 3155.6412647439865,
+    "fresh_usage": {
+      "scope": "successful_model_responses_returned_by_completed_inference_calls",
+      "source": "provider_response_metadata_when_available",
+      "total": {
+        "requests": 3000,
+        "input_tokens": 5492706,
+        "output_tokens": 1913939,
+        "total_tokens": 7406645,
+        "reasoning_tokens": null,
+        "cached_tokens": null,
+        "cost_usd": null,
+        "requests_with_any_token_usage": 3000,
+        "requests_with_input_tokens": 3000,
+        "requests_with_output_tokens": 3000,
+        "requests_with_total_tokens": 3000,
+        "requests_with_reasoning_tokens": 0,
+        "requests_with_cached_tokens": 0,
+        "requests_with_cost": 0
+      },
+      "by_stage": {
+        "judging": {
+          "requests": 3000,
+          "input_tokens": 5492706,
+          "output_tokens": 1913939,
+          "total_tokens": 7406645,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      },
+      "by_model": {
+        "google/gemma-4-31B-it": {
+          "requests": 3000,
+          "input_tokens": 5492706,
+          "output_tokens": 1913939,
+          "total_tokens": 7406645,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      }
+    }
+  },
+  {
+    "agreement": 0.478,
+    "cohen_kappa": 0.19033427511941015,
+    "coverage": 0.9963333333333333,
+    "n_battles": 3000,
+    "spearman": null,
+    "tokens_per_battle": 2540.8426666666664,
+    "cost_per_1k_battles": 0.4099110066666668,
+    "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/f1d8421d913f/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_093439",
+    "config_id": "f1d8421d913f",
+    "arm": "primo-prior",
+    "role": "primary",
+    "elapsed_s": 3356.353162466956,
+    "fresh_usage": {
+      "scope": "successful_model_responses_returned_by_completed_inference_calls",
+      "source": "provider_response_metadata_when_available",
+      "total": {
+        "requests": 3000,
+        "input_tokens": 5447706,
+        "output_tokens": 2174822,
+        "total_tokens": 7622528,
+        "reasoning_tokens": null,
+        "cached_tokens": null,
+        "cost_usd": null,
+        "requests_with_any_token_usage": 3000,
+        "requests_with_input_tokens": 3000,
+        "requests_with_output_tokens": 3000,
+        "requests_with_total_tokens": 3000,
+        "requests_with_reasoning_tokens": 0,
+        "requests_with_cached_tokens": 0,
+        "requests_with_cost": 0
+      },
+      "by_stage": {
+        "judging": {
+          "requests": 3000,
+          "input_tokens": 5447706,
+          "output_tokens": 2174822,
+          "total_tokens": 7622528,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      },
+      "by_model": {
+        "google/gemma-4-31B-it": {
+          "requests": 3000,
+          "input_tokens": 5447706,
+          "output_tokens": 2174822,
+          "total_tokens": 7622528,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      }
+    }
+  }
+]

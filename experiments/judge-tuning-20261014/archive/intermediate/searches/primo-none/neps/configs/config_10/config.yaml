@@ -1,0 +1,4 @@
+judge.model: VLLM/google/gemma-4-31B-it
+judge.prompt_preset: mid-evidence-off
+judge.swap_mode: fixed
+meta_eval.battles_per_model: 180

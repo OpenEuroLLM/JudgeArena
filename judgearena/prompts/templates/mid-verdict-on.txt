@@ -1,0 +1,17 @@
+<|User Prompt|>
+{user_prompt}
+
+<|The Start of Assistant A's {completion_label}|>
+{completion_A}
+<|The End of Assistant A's {completion_label}|>
+
+<|The Start of Assistant B's {completion_label}|>
+{completion_B}
+<|The End of Assistant B's {completion_label}|>
+
+# Evaluation guidance
+Evaluate correctness, instruction satisfaction, helpfulness and completeness consistently for both answers.
+
+# Your output
+Return exactly one final verdict: [[A>>B]], [[A>B]], [[A=B]], [[B>A]], or [[B>>A]]. Use >> for a substantial quality difference, > for a smaller difference, and = for a tie.
+First give a brief justification, then return the final verdict.

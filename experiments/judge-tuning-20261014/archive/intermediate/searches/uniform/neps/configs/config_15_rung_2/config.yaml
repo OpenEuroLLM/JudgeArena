@@ -1,0 +1,4 @@
+judge.model: VLLM/Qwen/Qwen3.5-9B
+judge.prompt_preset: mid-criteria-on
+judge.swap_mode: fixed
+meta_eval.battles_per_model: 180

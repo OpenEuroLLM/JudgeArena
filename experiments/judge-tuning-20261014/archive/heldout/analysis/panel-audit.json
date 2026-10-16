@@ -1,0 +1,69 @@
+{
+  "pool_battles": 19539,
+  "test_partition_battles": 9679,
+  "fresh_battles": 8528,
+  "old_test_battles": 1050,
+  "excluded_prompt_identities": 10607,
+  "existing_reserved_battles": 1105,
+  "existing_still_eligible": false,
+  "selected_count": 3000,
+  "complete": true,
+  "removed_reserved_battles": [
+    {
+      "battle_id": "LMArena-140k:a5514ac9-fa73-456d-aa8b-6d76d965cf06",
+      "in_test_partition": true,
+      "excluded_raw_prompt": false,
+      "excluded_stripped_prompt": true
+    },
+    {
+      "battle_id": "LMArena-140k:7136e820-6faf-46db-b234-c7ff3aee7cc0",
+      "in_test_partition": true,
+      "excluded_raw_prompt": false,
+      "excluded_stripped_prompt": true
+    },
+    {
+      "battle_id": "LMArena-140k:4c85f4a3-df93-4c40-9cba-19d4a7a2ac18",
+      "in_test_partition": true,
+      "excluded_raw_prompt": false,
+      "excluded_stripped_prompt": true
+    },
+    {
+      "battle_id": "LMArena-140k:67d0abfc-ad02-457a-b0b0-0f44dab8c013",
+      "in_test_partition": true,
+      "excluded_raw_prompt": false,
+      "excluded_stripped_prompt": true
+    },
+    {
+      "battle_id": "LMArena-140k:35fc60f8-60ce-4a9a-9672-3cb9addf37a1",
+      "in_test_partition": true,
+      "excluded_raw_prompt": false,
+      "excluded_stripped_prompt": true
+    }
+  ],
+  "retained_reserved_battles": 1100,
+  "distinct_prompts": 2981,
+  "per_model_battles": {
+    "gemini-2.5-flash": 374,
+    "claude-3-7-sonnet-20250219": 252,
+    "claude-opus-4-20250514": 412,
+    "o3-2025-04-16": 311,
+    "gemma-3-27b-it": 289,
+    "mistral-medium-2505": 324,
+    "claude-sonnet-4-20250514": 323,
+    "claude-3-5-sonnet-20241022": 272,
+    "claude-3-7-sonnet-20250219-thinking-32k": 300,
+    "o4-mini-2025-04-16": 276,
+    "chatgpt-4o-latest-20250326": 320,
+    "qwen3-235b-a22b-no-thinking": 325,
+    "deepseek-v3-0324": 245,
+    "gemini-2.5-pro": 350,
+    "o3-mini": 277,
+    "grok-3-preview-02-24": 277,
+    "gpt-4.1-2025-04-14": 286,
+    "command-a-03-2025": 284,
+    "gemini-2.0-flash-001": 258,
+    "claude-3-5-haiku-20241022": 245
+  },
+  "panel_sha256": "221ca1ac07ce7822458e3b1023c9971daf2cad709d85e0611ad4e513ea2cbea7",
+  "selection": "Retain1100 eligible reserved rows; replace ineligible rows and expand to3000 by fixed seed0 SHA256 priority; no label-dependent selection"
+}

@@ -1,0 +1,4 @@
+judge.model: VLLM/Qwen/Qwen3.5-9B
+judge.prompt_preset: default_with_explanation
+judge.swap_mode: both
+meta_eval.battles_per_model: 20

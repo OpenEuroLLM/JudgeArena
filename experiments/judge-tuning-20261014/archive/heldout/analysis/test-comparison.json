@@ -1,0 +1,182 @@
+{
+  "n_battles": 3000,
+  "distinct_prompt_clusters": 2981,
+  "bootstrap_replicates": 10000,
+  "bootstrap_seed": 0,
+  "bootstrap_unit": "prompt cluster",
+  "configs": [
+    {
+      "agreement": 0.4776666666666667,
+      "cohen_kappa": 0.18992328545582837,
+      "coverage": 0.996,
+      "n_battles": 3000,
+      "spearman": null,
+      "tokens_per_battle": 2788.116666666667,
+      "cost_per_1k_battles": 0.49323416666666564,
+      "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/325aa74cc942/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_072237",
+      "arm": "uniform",
+      "config_id": "325aa74cc942",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-evidence-on",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/325aa74cc942.yaml",
+      "sha256": "12726872afd4fb2b6f0522e89956659b8aa2306b29961125e0e48cdda9760a06",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/uniform/trials/config_14_rung_2/config.yaml",
+      "source_sha256": "ada6aff42fd9fffd84e01a131a9a5b455e72aead28dcc8d41049315e627a0002",
+      "validation_agreement": 0.471815107102593,
+      "validation_cost_per1k": 0.50597289740699,
+      "cap_requests": 12,
+      "unparsed": 12,
+      "bootstrap_se": 0.009235768341895633,
+      "bootstrap_95ci": [
+        0.4597389164375109,
+        0.49599739826551037
+      ]
+    },
+    {
+      "agreement": 0.4703333333333333,
+      "cohen_kappa": 0.18171242422275236,
+      "coverage": 0.998,
+      "n_battles": 3000,
+      "spearman": null,
+      "tokens_per_battle": 2468.8816666666667,
+      "cost_per_1k_battles": 0.381694266666667,
+      "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/ea6e4bd6e590/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_084203",
+      "arm": "primo-none",
+      "config_id": "ea6e4bd6e590",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-criteria-off",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/ea6e4bd6e590.yaml",
+      "sha256": "8841cb6748b6ed14729bd54744473a32f2203006f5a184719cdb0be97b0e3bc4",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_8/config.yaml",
+      "source_sha256": "74ed886bfedbd4292e443696287bd2607d450d7d9268213d7cc60311f31d82c6",
+      "validation_agreement": 0.4774520856820744,
+      "validation_cost_per1k": 0.3916198308906426,
+      "cap_requests": 6,
+      "unparsed": 6,
+      "bootstrap_se": 0.009130296067912295,
+      "bootstrap_95ci": [
+        0.45208681135225376,
+        0.48848848848848847
+      ]
+    },
+    {
+      "agreement": 0.478,
+      "cohen_kappa": 0.19033427511941015,
+      "coverage": 0.9963333333333333,
+      "n_battles": 3000,
+      "spearman": null,
+      "tokens_per_battle": 2540.8426666666664,
+      "cost_per_1k_battles": 0.4099110066666668,
+      "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/f1d8421d913f/meta-eval-lmarena-140k-en-vllm-google-gemma-4-31b-it-fixed-test-20261016_093439",
+      "arm": "primo-prior",
+      "config_id": "f1d8421d913f",
+      "role": "primary",
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "default",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/f1d8421d913f.yaml",
+      "sha256": "b041152d4e7ffb2e990dff05f36f72f6ad4d36513cfe08dc944d523dc2dd1964",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-prior/trials/config_3/config.yaml",
+      "source_sha256": "203283dd6945bd835b7cc24ba3f2234f3e3ac1e9ba94abf650879f52313d39cc",
+      "validation_agreement": 0.4785794813979707,
+      "validation_cost_per1k": 0.41966842728297615,
+      "cap_requests": 11,
+      "unparsed": 11,
+      "bootstrap_se": 0.00910585863891387,
+      "bootstrap_95ci": [
+        0.46012561963160764,
+        0.49600293049373506
+      ]
+    },
+    {
+      "agreement": 0.43433333333333335,
+      "cohen_kappa": 0.15239580460355984,
+      "coverage": 0.9666666666666667,
+      "n_battles": 3000,
+      "spearman": null,
+      "tokens_per_battle": 2705.7413333333334,
+      "cost_per_1k_battles": 0.3166486666666659,
+      "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/88685e7dc944/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-test-20261016_095035",
+      "arm": "primo-none",
+      "config_id": "88685e7dc944",
+      "role": "secondary",
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verification-off",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/88685e7dc944.yaml",
+      "sha256": "3dd276a828c5c424fee31ba9e52cdc3e5623c3df7ccd61077672c70a16aebde6",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_4_rung_2/config.yaml",
+      "source_sha256": "efbb95c1bf9b95cd4ee696fe5a5743eccc6b2200f9a56491eb3e14e8e7faa60e",
+      "validation_agreement": 0.43404735062006766,
+      "validation_cost_per1k": 0.32202756482525513,
+      "cap_requests": 61,
+      "unparsed": 100,
+      "bootstrap_se": 0.009065069835617943,
+      "bootstrap_95ci": [
+        0.41669437978051216,
+        0.4524290757823692
+      ]
+    },
+    {
+      "agreement": 0.448,
+      "cohen_kappa": 0.15106272451973335,
+      "coverage": 0.9866666666666667,
+      "n_battles": 3000,
+      "spearman": null,
+      "tokens_per_battle": 2882.318,
+      "cost_per_1k_battles": 0.34338516666666724,
+      "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/4d39e6174e26/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-test-20261016_102235",
+      "arm": "primo-prior",
+      "config_id": "4d39e6174e26",
+      "role": "secondary",
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verdict-on",
+      "config_file": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/configs/4d39e6174e26.yaml",
+      "sha256": "387190ca5acadf3e9cd4c4ede55502b707013db01012dad4b41be11a099a2df5",
+      "source_config": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-prior/trials/config_1_rung_2/config.yaml",
+      "source_sha256": "5e05a6362893a082dd51d318d1d6cc81d958b563d27e358fd4f6d9fdc84b0bb6",
+      "validation_agreement": 0.4523675310033822,
+      "validation_cost_per1k": 0.3458016065388952,
+      "cap_requests": 40,
+      "unparsed": 40,
+      "bootstrap_se": 0.009087257416676087,
+      "bootstrap_95ci": [
+        0.4301899366877707,
+        0.46611074903506733
+      ]
+    }
+  ],
+  "pairs": [
+    {
+      "a": "f1d8421d913f",
+      "b": "ea6e4bd6e590",
+      "delta": 0.007666666666666666,
+      "paired_95ci": [
+        -0.0016661251804953906,
+        0.016955210398449386
+      ],
+      "primary": true
+    },
+    {
+      "a": "f1d8421d913f",
+      "b": "325aa74cc942",
+      "delta": 0.0003333333333333333,
+      "paired_95ci": [
+        -0.008292218310441149,
+        0.008678310089579649
+      ],
+      "primary": false
+    },
+    {
+      "a": "ea6e4bd6e590",
+      "b": "325aa74cc942",
+      "delta": -0.007333333333333333,
+      "paired_95ci": [
+        -0.01732755748083972,
+        0.002656064549507053
+      ],
+      "primary": false
+    }
+  ],
+  "interpretation": "Frozen validation-selected configs; no optimizer-seed uncertainty; no post-test selection or formal significance claims."
+}

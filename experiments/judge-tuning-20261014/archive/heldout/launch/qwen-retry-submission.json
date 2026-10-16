@@ -1,0 +1,10 @@
+[
+  {
+    "group": "qwen",
+    "job_id": "30016680",
+    "jobname": "r57d0aa",
+    "gpus": 4,
+    "max_minutes": 120,
+    "stage_cap_gpu_hours": 32
+  }
+]

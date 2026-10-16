@@ -1,0 +1,171 @@
+{
+  "arm": "primo-none",
+  "execution_attempts": [
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verdict-on",
+      "order": "fixed",
+      "fidelity": 20,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_1_rung_0/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "preset": "mid-verification-off",
+      "order": "both",
+      "fidelity": 20,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_2_rung_0/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "default",
+      "order": "fixed",
+      "fidelity": 20,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_3_rung_0/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verdict-on",
+      "order": "fixed",
+      "fidelity": 60,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_1_rung_1/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verification-off",
+      "order": "fixed",
+      "fidelity": 20,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_4_rung_0/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "default",
+      "order": "fixed",
+      "fidelity": 60,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_3_rung_1/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "preset": "mid-evidence-off",
+      "order": "fixed",
+      "fidelity": 20,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_5_rung_0/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verification-off",
+      "order": "fixed",
+      "fidelity": 60,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_4_rung_1/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-9B",
+      "preset": "mid-verification-off",
+      "order": "fixed",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_4_rung_2/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-criteria-off",
+      "order": "both",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_5/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-verdict-off",
+      "order": "both",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_6/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "preset": "mid-criteria-off",
+      "order": "both",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_7/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-criteria-off",
+      "order": "fixed",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_8/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-criteria-on",
+      "order": "fixed",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_9/config.yaml",
+      "status": "finished"
+    },
+    {
+      "model": "VLLM/google/gemma-4-31B-it",
+      "preset": "mid-evidence-off",
+      "order": "fixed",
+      "fidelity": 180,
+      "config_path": "/work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/primo-none/trials/config_10/config.yaml",
+      "status": "finished"
+    }
+  ],
+  "bo_proposals": [
+    {
+      "execution_index": 9,
+      "priors_nonnull": false
+    },
+    {
+      "execution_index": 10,
+      "priors_nonnull": false
+    },
+    {
+      "execution_index": 11,
+      "priors_nonnull": false
+    },
+    {
+      "execution_index": 12,
+      "priors_nonnull": false
+    },
+    {
+      "execution_index": 13,
+      "priors_nonnull": false
+    },
+    {
+      "execution_index": 14,
+      "priors_nonnull": false
+    }
+  ],
+  "gp_acquisitions": [
+    {
+      "prior_nonnull": false
+    },
+    {
+      "prior_nonnull": false
+    },
+    {
+      "prior_nonnull": false
+    },
+    {
+      "prior_nonnull": false
+    },
+    {
+      "prior_nonnull": false
+    },
+    {
+      "prior_nonnull": false
+    }
+  ]
+}

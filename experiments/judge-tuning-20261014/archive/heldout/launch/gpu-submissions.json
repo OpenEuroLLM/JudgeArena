@@ -1,0 +1,18 @@
+[
+  {
+    "group": "gemma",
+    "job_id": "30008000",
+    "jobname": "ra1c19e",
+    "gpus": 4,
+    "max_minutes": 300,
+    "stage_cap_gpu_hours": 32
+  },
+  {
+    "group": "qwen",
+    "job_id": "30008001",
+    "jobname": "r509b5b",
+    "gpus": 4,
+    "max_minutes": 120,
+    "stage_cap_gpu_hours": 32
+  }
+]

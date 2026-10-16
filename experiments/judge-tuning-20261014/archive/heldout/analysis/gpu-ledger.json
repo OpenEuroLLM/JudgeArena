@@ -1,0 +1,28 @@
+{
+  "jobs": [
+    {
+      "job_id": "30008000",
+      "elapsed_seconds": 11595,
+      "gpus": 4,
+      "state": "COMPLETED",
+      "allocated_gpu_hours": 12.883333333333333
+    },
+    {
+      "job_id": "30008001",
+      "elapsed_seconds": 970,
+      "gpus": 4,
+      "state": "FAILED",
+      "allocated_gpu_hours": 1.0777777777777777
+    },
+    {
+      "job_id": "30016680",
+      "elapsed_seconds": 3375,
+      "gpus": 4,
+      "state": "COMPLETED",
+      "allocated_gpu_hours": 3.75
+    }
+  ],
+  "total_allocated_gpu_hours": 17.711111111111112,
+  "cap_gpu_hours": 32,
+  "remaining_gpu_jobs": 0
+}

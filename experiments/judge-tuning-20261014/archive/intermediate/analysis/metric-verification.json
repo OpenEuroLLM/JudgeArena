@@ -1,0 +1,252 @@
+[
+  {
+    "arm": "uniform",
+    "trial": "1_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "2_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "3_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "4_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "5_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "6_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "7_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "8_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "9_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "1_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "8_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "3_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "8_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "10_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "11_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "12_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "10_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "13_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "14_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "uniform",
+    "trial": "15_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "1_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "2_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "3_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "1_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "4_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "3_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "5_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "4_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "4_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "5",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "6",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "7",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "8",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "9",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-none",
+    "trial": "10",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "1_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "2_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "3_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "1_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "4_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "3_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "5_rung_0",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "4_rung_1",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "1_rung_2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "2",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "3",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "4",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "5",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "6",
+    "metrics_recomputed": true
+  },
+  {
+    "arm": "primo-prior",
+    "trial": "7",
+    "metrics_recomputed": true
+  }
+]

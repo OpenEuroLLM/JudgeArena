@@ -1,0 +1,8 @@
+{
+  "status": "awaiting_public_raw_data_approval",
+  "repo": "judge-arena/judge-arena-cache",
+  "revision": null,
+  "artifact": "experiments/judge-tuning-20261014/run-artifacts.tar.gz",
+  "artifact_sha256": "11108d219a60c44ad7b0934db3a15257229b863037b8c078d7ab90667f694cb7",
+  "cache_manifest": "scoped-cache-manifest.json"
+}

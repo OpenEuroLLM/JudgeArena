@@ -1,0 +1,7 @@
+{
+  "job_id": "30002851",
+  "jobname": "rc48c1d",
+  "gpus": 4,
+  "max_minutes": 174,
+  "cap": 120
+}

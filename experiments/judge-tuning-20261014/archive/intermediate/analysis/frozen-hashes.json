@@ -1,0 +1,217 @@
+{
+  "files": [
+    {
+      "path": "source/judgearena/prompts/parsing.py",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/registry.py",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/__init__.py",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-criteria-off.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-evidence-off.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt-criteria.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/meta-eval-alpaca-eval-pair-score-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/alpaca-eval-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-evidence-on.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/alpaca-eval-system-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-verdict-off.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt-v2-criteria.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/system-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/meta-eval-alpaca-eval-system-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-criteria-on.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-verification-off.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt-v2-verification.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/meta-eval-alpaca-eval-json-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt-with-explanation.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/prompt-v2-evidence.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/meta-eval-pair-score-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/arena-hard-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-verification-on.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/arena-hard-creative-system-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/arena-hard-system-prompt.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mid-verdict-on.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench/user-multi-reference-block.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench/user-multi-base.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench/system-base.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench/user-single-base.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench/user-single-reference-block.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/SA.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/GR.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/SC.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/PI.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/scoring_format.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/MR.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/TS.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/AR.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/CM.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/rephrasing.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/global_system.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/CC.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/SI.txt",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/upstream.json",
+      "ok": true
+    },
+    {
+      "path": "source/judgearena/prompts/templates/mt_bench_101/IC.txt",
+      "ok": true
+    },
+    {
+      "path": "configs/primo-none.yaml",
+      "ok": true
+    },
+    {
+      "path": "configs/calibration-base.yaml",
+      "ok": true
+    },
+    {
+      "path": "configs/primo-prior.yaml",
+      "ok": true
+    },
+    {
+      "path": "configs/uniform.yaml",
+      "ok": true
+    },
+    {
+      "path": "configs/manifest.json",
+      "ok": true
+    },
+    {
+      "path": "panels/panels.json",
+      "ok": true
+    }
+  ],
+  "all_ok": true
+}

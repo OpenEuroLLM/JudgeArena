@@ -1,0 +1,33 @@
+task: meta-eval-lmarena-140k-en
+judge:
+  model: VLLM/google/gemma-4-31B-it
+  prompt_preset: default
+  swap_mode: fixed
+  temperature: 0.0
+  seed: 42
+  max_out_tokens: 8192
+  max_model_len: 65536
+  engine_kwargs:
+    tensor_parallel_size: 4
+    kv_cache_dtype: auto
+    gpu_memory_utilization: 0.9
+    enforce_eager: true
+    language_model_only: true
+    disable_thinking: false
+    thinking_token_budget: null
+    skip_special_tokens: false
+    chat_template_kwargs:
+      enable_thinking: true
+generation:
+  truncate_judge_input_chars: 8192
+meta_eval:
+  top_models: 20
+  split: validation
+  battles_per_model: 1
+  validation_fraction: 0.5
+  panel_file: /work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/panels/panels.json
+run:
+  seed: 0
+  result_folder: /work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/results
+  store_root: /work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache
+  use_tqdm: false

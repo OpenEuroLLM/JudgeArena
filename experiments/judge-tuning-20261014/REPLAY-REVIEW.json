@@ -1,0 +1,19 @@
+{
+  "source_base_commit": "ab7cc3f5c22527ba29ed2d337c92e2f689bc25b4",
+  "review": "Portable prepare and replay completed locally from the stored run bundle, with HF offline and API keys blank. No inference, API requests or GPU allocations.",
+  "intermediate_trials": 50,
+  "heldout_configs": 5,
+  "heldout_battles_per_config": 3000,
+  "prompt_clusters": 2981,
+  "exactly_matched_test_fields": [
+    "agreement",
+    "coverage",
+    "cost_per_1k_battles",
+    "cohen_kappa",
+    "bootstrap_95ci"
+  ],
+  "all_paired_intervals_identical": true,
+  "intermediate_accounting_identical": true,
+  "all_python_sources_compile": true,
+  "runtime_note": "Replay used the existing local analysis environment, not a fresh Linux/CUDA install. A fresh GPU rerun was not performed."
+}

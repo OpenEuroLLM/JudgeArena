@@ -1,3 +1,5 @@
+# Preserve byte-exact experiment provenance; these are archived execution artifacts.
+exclude: ^experiments/judge-tuning-20261014/archive/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

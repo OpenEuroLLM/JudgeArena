@@ -1,0 +1,35 @@
+{
+  "uniform": {
+    "full_configs": 5,
+    "models": [
+      "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "VLLM/Qwen/Qwen3.5-9B",
+      "VLLM/google/gemma-4-31B-it"
+    ],
+    "best_agreement": 0.471815107102593,
+    "cost_per_1k_battles": 0.50597289740699,
+    "logical_work_total": 28540
+  },
+  "primo-none": {
+    "full_configs": 6,
+    "models": [
+      "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "VLLM/Qwen/Qwen3.5-9B",
+      "VLLM/google/gemma-4-31B-it"
+    ],
+    "best_agreement": 0.4774520856820744,
+    "cost_per_1k_battles": 0.3916198308906426,
+    "logical_work_total": 30436
+  },
+  "primo-prior": {
+    "full_configs": 6,
+    "models": [
+      "VLLM/Qwen/Qwen3.5-27B-FP8",
+      "VLLM/Qwen/Qwen3.5-9B",
+      "VLLM/google/gemma-4-31B-it"
+    ],
+    "best_agreement": 0.4785794813979707,
+    "cost_per_1k_battles": 0.41966842728297615,
+    "logical_work_total": 30436
+  }
+}

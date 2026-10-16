@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "uniform",
+    "job_id": "29997142",
+    "jobname": "r1275dc",
+    "dependency": null,
+    "gpus": 4,
+    "wall_minutes": 534
+  },
+  {
+    "arm": "primo-prior",
+    "job_id": "29997147",
+    "jobname": "r31ddd2",
+    "dependency": null,
+    "gpus": 4,
+    "wall_minutes": 534
+  },
+  {
+    "arm": "primo-none",
+    "job_id": "29997148",
+    "jobname": "raf1921",
+    "dependency": "29997142",
+    "gpus": 4,
+    "wall_minutes": 534
+  }
+]

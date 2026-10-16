@@ -1,0 +1,7 @@
+{
+  "job_id": "29996798",
+  "jobname": "r45a935",
+  "gpus": 4,
+  "max_minutes": 60,
+  "cap": 120
+}

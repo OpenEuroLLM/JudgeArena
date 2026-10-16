@@ -1,0 +1,42 @@
+{
+  "cache_scope": "Only rows with model and canonical input hash referenced by intermediate search, qualification or held-out annotation artifacts. Unrelated historical rows and descriptors excluded.",
+  "annotation_rows": 133818,
+  "databases": [
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-9B/285d129c824df6db/judgements.db",
+      "model": "Qwen/Qwen3.5-9B",
+      "rows": 25408,
+      "original_rows": 29126,
+      "sha256": "a8e71fe4cd02665b3f334e483ca2f3d96f259812311f1ea003c98d3451be5253",
+      "bytes": 345505792,
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete"
+    },
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/google%2Fgemma-4-31B-it/d42b4f970128b97d/judgements.db",
+      "model": "google/gemma-4-31B-it",
+      "rows": 51582,
+      "original_rows": 57107,
+      "sha256": "ead643797c4eae0a8fdf8ea685525c8d9f726e52670dad6f81258e44074ced47",
+      "bytes": 604102656,
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete"
+    },
+    {
+      "path": "judgements/meta-eval-lmarena-140k-en/VLLM/Qwen%2FQwen3.5-27B-FP8/a9e52dc17aa08d46/judgements.db",
+      "model": "Qwen/Qwen3.5-27B-FP8",
+      "rows": 15879,
+      "original_rows": 20543,
+      "sha256": "4b80b0a79f68a2a9e6fd73d43b903426d50368a736b0ad17e7671eec64f99d47",
+      "bytes": 213131264,
+      "integrity": [
+        "ok"
+      ],
+      "journal_mode": "delete"
+    }
+  ]
+}

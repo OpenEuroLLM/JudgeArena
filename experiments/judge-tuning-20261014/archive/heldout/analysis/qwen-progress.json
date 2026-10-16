@@ -1,0 +1,142 @@
+[
+  {
+    "agreement": 0.43433333333333335,
+    "cohen_kappa": 0.15239580460355984,
+    "coverage": 0.9666666666666667,
+    "n_battles": 3000,
+    "spearman": null,
+    "tokens_per_battle": 2705.7413333333334,
+    "cost_per_1k_battles": 0.3166486666666659,
+    "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/88685e7dc944/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-test-20261016_095035",
+    "config_id": "88685e7dc944",
+    "arm": "primo-none",
+    "role": "secondary",
+    "elapsed_s": 1920.125626522,
+    "fresh_usage": {
+      "scope": "successful_model_responses_returned_by_completed_inference_calls",
+      "source": "provider_response_metadata_when_available",
+      "total": {
+        "requests": 3000,
+        "input_tokens": 5352752,
+        "output_tokens": 2764472,
+        "total_tokens": 8117224,
+        "reasoning_tokens": null,
+        "cached_tokens": null,
+        "cost_usd": null,
+        "requests_with_any_token_usage": 3000,
+        "requests_with_input_tokens": 3000,
+        "requests_with_output_tokens": 3000,
+        "requests_with_total_tokens": 3000,
+        "requests_with_reasoning_tokens": 0,
+        "requests_with_cached_tokens": 0,
+        "requests_with_cost": 0
+      },
+      "by_stage": {
+        "judging": {
+          "requests": 3000,
+          "input_tokens": 5352752,
+          "output_tokens": 2764472,
+          "total_tokens": 8117224,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      },
+      "by_model": {
+        "Qwen/Qwen3.5-9B": {
+          "requests": 3000,
+          "input_tokens": 5352752,
+          "output_tokens": 2764472,
+          "total_tokens": 8117224,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      }
+    }
+  },
+  {
+    "agreement": 0.448,
+    "cohen_kappa": 0.15106272451973335,
+    "coverage": 0.9866666666666667,
+    "n_battles": 3000,
+    "spearman": null,
+    "tokens_per_battle": 2882.318,
+    "cost_per_1k_battles": 0.34338516666666724,
+    "result_dir": "/work/dlclarge1/lushtake-hiwi/judge-tuning-heldout-3000-20261015/results/4d39e6174e26/meta-eval-lmarena-140k-en-vllm-qwen-qwen3-5-9b-fixed-test-20261016_102235",
+    "config_id": "4d39e6174e26",
+    "arm": "primo-prior",
+    "role": "secondary",
+    "elapsed_s": 1308.7662572750123,
+    "fresh_usage": {
+      "scope": "successful_model_responses_returned_by_completed_inference_calls",
+      "source": "provider_response_metadata_when_available",
+      "total": {
+        "requests": 3000,
+        "input_tokens": 5337752,
+        "output_tokens": 3309202,
+        "total_tokens": 8646954,
+        "reasoning_tokens": null,
+        "cached_tokens": null,
+        "cost_usd": null,
+        "requests_with_any_token_usage": 3000,
+        "requests_with_input_tokens": 3000,
+        "requests_with_output_tokens": 3000,
+        "requests_with_total_tokens": 3000,
+        "requests_with_reasoning_tokens": 0,
+        "requests_with_cached_tokens": 0,
+        "requests_with_cost": 0
+      },
+      "by_stage": {
+        "judging": {
+          "requests": 3000,
+          "input_tokens": 5337752,
+          "output_tokens": 3309202,
+          "total_tokens": 8646954,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      },
+      "by_model": {
+        "Qwen/Qwen3.5-9B": {
+          "requests": 3000,
+          "input_tokens": 5337752,
+          "output_tokens": 3309202,
+          "total_tokens": 8646954,
+          "reasoning_tokens": null,
+          "cached_tokens": null,
+          "cost_usd": null,
+          "requests_with_any_token_usage": 3000,
+          "requests_with_input_tokens": 3000,
+          "requests_with_output_tokens": 3000,
+          "requests_with_total_tokens": 3000,
+          "requests_with_reasoning_tokens": 0,
+          "requests_with_cached_tokens": 0,
+          "requests_with_cost": 0
+        }
+      }
+    }
+  }
+]

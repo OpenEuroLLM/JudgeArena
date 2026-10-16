@@ -1,0 +1,35 @@
+[
+  {
+    "a": "primo-prior",
+    "b": "primo-none",
+    "delta_agreement": 0.0011273957158962795,
+    "paired_battle_bootstrap_95ci": [
+      -0.007891770011273957,
+      0.009864712514092447
+    ],
+    "n": 3548,
+    "scope": "adaptive validation-selected configurations; not held-out or optimizer-seed uncertainty"
+  },
+  {
+    "a": "primo-prior",
+    "b": "uniform",
+    "delta_agreement": 0.006764374295377677,
+    "paired_battle_bootstrap_95ci": [
+      -0.0014092446448703494,
+      0.014656144306651634
+    ],
+    "n": 3548,
+    "scope": "adaptive validation-selected configurations; not held-out or optimizer-seed uncertainty"
+  },
+  {
+    "a": "primo-none",
+    "b": "uniform",
+    "delta_agreement": 0.005636978579481398,
+    "paired_battle_bootstrap_95ci": [
+      -0.0033821871476888386,
+      0.014656144306651634
+    ],
+    "n": 3548,
+    "scope": "adaptive validation-selected configurations; not held-out or optimizer-seed uncertainty"
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "uniform",
+    "horizon": 28540,
+    "native_work": 28540,
+    "completed_prefix_work": 28540,
+    "bo_inside_horizon": 0,
+    "gp_with_priors": 0
+  },
+  {
+    "arm": "primo-none",
+    "horizon": 28540,
+    "native_work": 30436,
+    "completed_prefix_work": 26888,
+    "bo_inside_horizon": 5,
+    "gp_with_priors": 0
+  },
+  {
+    "arm": "primo-prior",
+    "horizon": 28540,
+    "native_work": 30436,
+    "completed_prefix_work": 26888,
+    "bo_inside_horizon": 5,
+    "gp_with_priors": 3
+  }
+]

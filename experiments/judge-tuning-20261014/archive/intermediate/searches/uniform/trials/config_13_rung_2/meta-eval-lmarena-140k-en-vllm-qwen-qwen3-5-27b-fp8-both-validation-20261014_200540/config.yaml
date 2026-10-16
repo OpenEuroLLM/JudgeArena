@@ -1,0 +1,67 @@
+task: meta-eval-lmarena-140k-en
+model:
+  name: null
+  baseline: null
+  max_out_tokens: 32768
+  temperature: null
+  top_p: null
+  top_k: null
+  seed: null
+  max_model_len: null
+  chat_template: null
+  engine_kwargs: {}
+  baseline_max_out_tokens: null
+  baseline_temperature: null
+  baseline_top_p: null
+  baseline_top_k: null
+  baseline_seed: null
+  baseline_max_model_len: null
+  baseline_chat_template: null
+  baseline_engine_kwargs: null
+judge:
+  model: VLLM/Qwen/Qwen3.5-27B-FP8
+  max_out_tokens: 8192
+  temperature: 0.0
+  top_p: null
+  top_k: null
+  seed: 42
+  max_model_len: 65536
+  chat_template: null
+  engine_kwargs:
+    tensor_parallel_size: 4
+    kv_cache_dtype: auto
+    gpu_memory_utilization: 0.9
+    enforce_eager: true
+    language_model_only: true
+    disable_thinking: false
+    thinking_token_budget: null
+    skip_special_tokens: false
+    chat_template_kwargs:
+      enable_thinking: true
+  swap_mode: both
+  top_logprobs: null
+  prompt_preset: mid-criteria-off
+  prompt: null
+  battle_thinking_token_budget: null
+  strip_thinking_before_judging: false
+generation:
+  n_instructions: null
+  truncate_all_input_chars: 8192
+  truncate_judge_input_chars: 8192
+elo: null
+meta_eval:
+  top_models: 20
+  battles_per_model: 180
+  languages: null
+  split: validation
+  validation_fraction: 0.5
+  panel_file: /work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/panels/panels.json
+tune_judge: null
+run:
+  seed: 0
+  result_folder: /work/dlclarge1/lushtake-hiwi/judge-tuning-intermediate-20261014/searches/uniform/trials/config_13_rung_2
+  store_root: /work/dlclarge1/lushtake-hiwi/judge-tuning-local-20261012/cache
+  use_tqdm: false
+  verbosity: 0
+  log_file: null
+  no_log_file: false

@@ -1,0 +1,19 @@
+<|User Prompt|>
+{user_prompt}
+
+<|The Start of Assistant A's {completion_label}|>
+{completion_A}
+<|The End of Assistant A's {completion_label}|>
+
+<|The Start of Assistant B's {completion_label}|>
+{completion_B}
+<|The End of Assistant B's {completion_label}|>
+
+# Evaluation guidance
+Check whether each answer satisfies the instruction, then check factual errors, contradictions and logical flaws. Penalize failed requirements and clear errors more heavily than style or length.
+
+# Your output
+Return the final scores as two lines:
+score_A: <an integer from 0 to 10>
+score_B: <an integer from 0 to 10>
+First give a brief justification, then return the final scores.
