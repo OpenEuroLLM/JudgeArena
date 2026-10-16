@@ -1,4 +1,4 @@
-"""Relocate frozen experiment inputs and replay or rerun individual workers."""
+"""Relocate frozen experiment inputs, run workers and regenerate analyses."""
 
 import argparse
 import hashlib
@@ -6,13 +6,10 @@ import json
 import runpy
 import shutil
 import sys
-import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-HF_REPO = "judge-arena/judge-arena-cache"
-HF_ARTIFACT = "experiments/judge-tuning-20261014/run-artifacts.tar.gz"
 ORIGINAL_NAMES = {
     "intermediate": "judge-tuning-intermediate-20261014",
     "heldout": "judge-tuning-heldout-3000-20261015",
@@ -67,14 +64,10 @@ def execute(work, stage, script, arguments=()):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["prepare", "replay", "search", "test"])
+    parser.add_argument("action", choices=["prepare", "analyze", "search", "test"])
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--arm", choices=["uniform", "primo-none", "primo-prior"])
     parser.add_argument("--group", choices=["gemma", "qwen"])
-    parser.add_argument("--revision", help="Pinned HF publication revision for replay")
-    parser.add_argument(
-        "--artifact-file", type=Path, help="Use a previously downloaded replay bundle"
-    )
     args = parser.parse_args()
     work = args.workdir.resolve()
     if args.action == "prepare":
@@ -86,16 +79,7 @@ def main():
         return
     if not (work / "heldout/configs/manifest.json").exists():
         parser.error("Run prepare first")
-    if args.action == "replay":
-        from huggingface_hub import hf_hub_download
-
-        archive = args.artifact_file or hf_hub_download(
-            HF_REPO, HF_ARTIFACT, repo_type="dataset", revision=args.revision
-        )
-        with tarfile.open(archive, "r:gz") as bundle:
-            bundle.extractall(work, filter="data")
-        # Relocate paths in restored artifacts and refresh config digests.
-        relocate(work)
+    if args.action == "analyze":
         for script in ["analyze.py", "render_report.py", "plot_trajectories.py"]:
             execute(work, "intermediate", script)
         execute(work, "heldout", "analyze_test.py")
