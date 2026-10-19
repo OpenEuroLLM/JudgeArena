@@ -18,7 +18,7 @@ from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.cache.sqlite import JudgementCache
 from judgearena.config import RunConfig, load_config
-from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
+from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.parsing import JudgeParser, ParsedPreference
 from judgearena.tasks.registry import get_packaged_task
@@ -82,7 +82,7 @@ def mock_external_deps(monkeypatch, synthetic_arena_df):
                 "completion": [
                     f"Synthetic completion {i}" for i in range(len(instructions))
                 ],
-                "instruction_index": range(len(instructions)),
+                "instruction_index": instructions.index,
             }
         )
 
@@ -427,83 +427,74 @@ def test_run_elo_n_instructions_limits_battles(tmp_path):
     assert total_10 == 10
 
 
-def test_run_elo_swap_mode_forwarded_to_judge(monkeypatch, tmp_path):
-    """swap_mode from the run config must be forwarded to judge_and_parse_prefs.
+@pytest.mark.parametrize(
+    ("swap_mode", "strip_thinking"),
+    [("fixed", False), ("random", True), ("both", True)],
+)
+def test_run_elo_aligns_shuffled_completions_with_judged_battles(
+    monkeypatch, tmp_path, swap_mode, strip_thinking
+):
+    def generate(instructions, **_kwargs):
+        return pd.DataFrame(
+            {
+                "instruction_index": instructions.index,
+                "completion": [
+                    f"<think>private {i}</think>Answer {i}"
+                    for i in range(len(instructions))
+                ],
+            }
+        ).iloc[::-1]
 
-    Regression test: previously run_judge() called judge_and_parse_prefs without
-    swap_mode, so --swap_mode both was silently ignored.
-    """
-    captured = {}
-
-    def spy_judge(
-        judge_chat_model,
-        instructions,
-        completions_A,
-        completions_B,
-        swap_mode="fixed",
-        **kwargs,
-    ):
-        captured["swap_mode"] = swap_mode
-        n = len(instructions)
-        dummy = JudgeAnnotation(
-            judge_completion="score A: 0 score B: 10",
-            instruction="",
-            completion_A="",
-            completion_B="",
-        )
-        return [dummy] * n, None, pd.Series([1.0] * n)
-
-    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy_judge)
-    run_elo_with_task(_default_args(result_folder=str(tmp_path), swap_mode="both"))
-    assert captured.get("swap_mode") == "both"
-
-
-def _spy_judge_capturing(captured):
-    def spy_judge(
-        judge_chat_model,
-        instructions,
-        completions_A,
-        completions_B,
-        swap_mode="fixed",
-        strip_thinking_before_judging=False,
-        **kwargs,
-    ):
-        captured["strip_thinking_before_judging"] = strip_thinking_before_judging
-        n = len(instructions)
-        dummy = JudgeAnnotation(
-            judge_completion="score A: 0 score B: 10",
-            instruction="",
-            completion_A="",
-            completion_B="",
-        )
-        return [dummy] * n, None, pd.Series([1.0] * n)
-
-    return spy_judge
-
-
-def test_run_elo_strip_thinking_forwarded_to_judge(monkeypatch, tmp_path):
-    """strip_thinking_before_judging from the run config must reach the judge.
-
-    Regression test: the Elo entrypoint accepted the flag but never forwarded it
-    to judge_and_parse_prefs, so reasoning traces were judged verbatim.
-    """
-    captured = {}
-    monkeypatch.setattr(
-        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
+    monkeypatch.setattr(estimate_elo_ratings, "generate_instructions", generate)
+    cfg = _default_args(
+        result_folder=str(tmp_path),
+        store_root=str(tmp_path / "cache"),
+        n_instructions=3,
+        n_bootstraps=0,
+        swap_mode=swap_mode,
+        strip_thinking_before_judging=strip_thinking,
     )
+    cfg.run.seed = 42
+    run_elo_with_task(cfg)
+
+    with JudgementCache(next((tmp_path / "cache").rglob("judgements.db"))) as cache:
+        cached = cache.query()
+    assert len(cached) == (6 if swap_mode == "both" else 3)
+    for row in cached.itertuples():
+        i = int(row.instruction_id.rsplit("q", 1)[1])
+        assert f"Answer {i}" in row.judge_input
+        assert ("private" in row.judge_input) is not strip_thinking
+        assert row.orientation == (
+            "direct" if row.model_a == cfg.model.name else "reversed"
+        )
+
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    repeats = 2 if swap_mode == "both" else 1
+    assert battles["question_id"].tolist() == ["q0", "q1", "q2"] * repeats
+    assert (battles["model_a"] == cfg.model.name).tolist() == [
+        True,
+        True,
+        False,
+    ] * repeats
+    direct_pref = 1 / (1 + math.exp(-cfg.elo.soft_elo_temperature * 10))
+    expected = [direct_pref] * 3
+    if swap_mode == "both":
+        expected += [1 - direct_pref] * 3
+    assert battles["pref"].tolist() == pytest.approx(expected)
+
+
+def test_run_elo_keeps_battles_with_repeated_question_ids(tmp_path, synthetic_arena_df):
+    synthetic_arena_df.loc[1, "question_id"] = "q0"
     run_elo_with_task(
-        _default_args(result_folder=str(tmp_path), strip_thinking_before_judging=True)
+        _default_args(
+            result_folder=str(tmp_path),
+            n_instructions=3,
+            n_bootstraps=0,
+            swap_mode="both",
+        )
     )
-    assert captured.get("strip_thinking_before_judging") is True
-
-
-def test_run_elo_strip_thinking_defaults_off(monkeypatch, tmp_path):
-    captured = {}
-    monkeypatch.setattr(
-        estimate_elo_ratings, "judge_and_parse_prefs", _spy_judge_capturing(captured)
-    )
-    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
-    assert captured.get("strip_thinking_before_judging") is False
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    assert battles["question_id"].tolist() == ["q0", "q0", "q2"] * 2
 
 
 def _spy_generate_capturing(captured):
@@ -512,7 +503,7 @@ def _spy_generate_capturing(captured):
         return pd.DataFrame(
             {
                 "completion": [f"c{i}" for i in range(len(instructions))],
-                "instruction_index": range(len(instructions)),
+                "instruction_index": instructions.index,
             }
         )
 
@@ -648,7 +639,8 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     assert 0 < total_en < total_all
 
 
-def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
+@pytest.mark.parametrize("swap_mode", ["fixed", "both"])
+def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swap_mode):
     """Regression: the calibration path constructs its own judge model and once
     crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
     MLE fit itself is mocked."""
@@ -661,28 +653,36 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path):
     monkeypatch.setattr(elo_calibration, "fit_temperature", fake_calibrate)
     # Anchor battles require models with >= 500 appearances; the default
     # 30-battle fixture leaves the calibration pool empty.
-    monkeypatch.setattr(
-        estimate_elo_ratings, "load_battles", lambda _task: _arena_df(900)
-    )
+    arena = _arena_df(900)
+    monkeypatch.setattr(estimate_elo_ratings, "load_battles", lambda _task: arena)
 
     store_root = tmp_path / "cache"
     result = run_elo_with_task(
         _default_args(
             result_folder=str(tmp_path),
             calibrate_temperature=True,
+            swap_mode=swap_mode,
             store_root=str(store_root),
         )
     )
 
-    assert captured["n_pairs"] >= 10
+    assert captured["n_pairs"] == (arena["winner"] != "tie").sum()
     assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
     battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
-    assert battles["pref"].tolist() == pytest.approx(
-        [1 / (1 + math.exp(-0.42 * 10))] * len(battles)
-    )
+    pref = 1 / (1 + math.exp(-0.42 * 10))
+    expected = [pref] * 10 + ([1 - pref] * 10 if swap_mode == "both" else [])
+    assert battles["pref"].tolist() == pytest.approx(expected)
     judgement_db = next((store_root / "judgements").rglob("judgements.db"))
     with JudgementCache(judgement_db) as cache:
         assert cache.query()["instruction_id"].str.startswith("ComparIA:").all()
+
+
+def test_empty_calibration_keeps_configured_temperature(tmp_path):
+    run_elo_with_task(
+        _default_args(result_folder=str(tmp_path), calibrate_temperature=True)
+    )
+    battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
+    assert battles["pref"].tolist() == pytest.approx([0.9525741268224334] * 10)
 
 
 def test_extract_turn_text_tolerates_moderated_turns():
@@ -696,23 +696,6 @@ def test_extract_turn_text_tolerates_moderated_turns():
         )
         == ""
     )
-
-
-def test_run_elo_forwards_resolved_parser(tmp_path, monkeypatch):
-    from judgearena.prompts.parsing import JUDGE_PARSERS
-
-    captured = {}
-    real = estimate_elo_ratings.judge_and_parse_prefs
-
-    def spy(*args, **kwargs):
-        captured["parse"] = kwargs.get("parse")
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(estimate_elo_ratings, "judge_and_parse_prefs", spy)
-    run_elo_with_task(_default_args(result_folder=str(tmp_path)))
-
-    # The default preset's registered parser instance, not a fresh fallback.
-    assert captured["parse"] is JUDGE_PARSERS["score"]
 
 
 def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(

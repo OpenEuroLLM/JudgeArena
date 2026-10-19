@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from langchain_core.language_models.fake import FakeListLLM
 
-import judgearena.evaluate as evaluate
 from judgearena.benchmarks.meta_eval.annotate import (
     _battle_texts,
     aggregate_battle_preferences,
@@ -44,24 +44,27 @@ def _config(swap_mode):
     )
 
 
-def test_annotation_swaps_and_aggregates_battles(monkeypatch):
+def test_annotation_swaps_and_aggregates_battles():
     sample = pd.concat([_sample()] * 3, ignore_index=True)
     sample["battle_id"] = ["complete", "partial", "missing"]
     for column in ("conversation_a", "conversation_b"):
         sample[column] = sample[column].map(
             lambda turns: np.asarray(turns, dtype=object)
         )
-    responses = iter(
-        [
-            ["score_A: 9\nscore_B: 1", "score_A: 5\nscore_B: 6", "unparseable"],
-            ["score_A: 1\nscore_B: 7", "unparseable", "unparseable"],
+    judge = FakeListLLM(
+        responses=[
+            "score_A: 9\nscore_B: 1",
+            "score_A: 5\nscore_B: 6",
+            "unparseable",
+            "score_A: 1\nscore_B: 7",
+            "unparseable",
+            "unparseable",
         ]
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
     rows = annotate_sample(
         sample,
         _config("both"),
-        judge_chat_model=object(),
+        judge_chat_model=judge,
         resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
     )
 
@@ -84,15 +87,14 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
     assert battles.loc[["partial", "missing"], "pref"].isna().all()
 
 
-def test_annotation_preserves_parser_label_and_details(monkeypatch):
+def test_annotation_preserves_parser_label_and_details():
     output = (
         '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: [output])
     rows = annotate_sample(
         _sample(),
         _config("fixed"),
-        judge_chat_model=object(),
+        judge_chat_model=FakeListLLM(responses=[output]),
         resolved_prompt=resolve_judge_prompt(preset="meta-eval-alpaca-eval-json"),
     )
     assert rows.loc[0, "parsed_label"] == "M"

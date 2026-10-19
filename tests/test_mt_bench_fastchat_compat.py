@@ -4,9 +4,9 @@ import pandas as pd
 import pytest
 
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
+    FastChatVerdictParser,
     _conservative_winner,
     _map_verdict_to_winner,
-    _parse_fastchat_verdict,
     _select_prompt,
     judge_mt_bench_pairwise_fastchat,
 )
@@ -57,11 +57,11 @@ def _completions_df(prefix: str) -> pd.DataFrame:
         ("Explanation [[C]]", "tie"),
         ("No bracketed verdict", "error"),
         ("<think>Long chain of reasoning.</think>[[A]]", "A"),
-        ("<think>score_A: 0\nscore_B: 10</think>Concise [[B]]", "B"),
+        ("<think>[[A]]</think>Concise [[B]]", "B"),
     ],
 )
 def test_parse_fastchat_verdict(raw: str, expected: str):
-    assert _parse_fastchat_verdict(raw) == expected
+    assert FastChatVerdictParser().parse_result(raw) == expected
 
 
 def test_map_verdict_and_conservative_winner():
@@ -99,8 +99,20 @@ def test_select_prompt_variants(
     assert input_marker in prompt.user_prompt_template
 
 
-def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
-    judge = SequenceJudge(["[[A]]", "[[B]]"])
+@pytest.mark.parametrize(
+    ("outputs", "winner", "preference", "inconsistent"),
+    [
+        (["[[A]]", "[[B]]"], "model_A", 0.0, 0),
+        (["[[A]]", "[[A]]"], "tie", 0.5, 1),
+        (["[[C]]", "[[C]]"], "tie", 0.5, 0),
+        (["[[A]]", "no verdict"], "error", None, 0),
+        (["no verdict", "[[B]]"], "error", None, 0),
+    ],
+)
+def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative(
+    outputs, winner, preference, inconsistent
+):
+    judge = SequenceJudge(outputs)
 
     prefs, annotations, metadata, num_inconsistent = judge_mt_bench_pairwise_fastchat(
         judge_chat_model=judge,
@@ -117,11 +129,14 @@ def test_judge_mt_bench_pairwise_fastchat_swap_mode_both_is_conservative():
         reference_categories=REFERENCE_CATEGORIES,
     )
 
-    assert num_inconsistent == 0
+    assert num_inconsistent == inconsistent
     assert len(judge.calls) == 2
-    assert prefs.tolist() == [0.0]
-    assert annotations[0]["g1_winner"] == "model_A"
-    assert annotations[0]["g2_winner"] == "model_A"
-    assert annotations[0]["final_winner"] == "model_A"
+    if preference is None:
+        assert pd.isna(prefs.iloc[0])
+    else:
+        assert prefs.tolist() == [preference]
+    assert annotations[0]["g1_judgment"] == outputs[0]
+    assert annotations[0]["g2_judgment"] == outputs[1]
+    assert annotations[0]["final_winner"] == winner
     assert "B1" in annotations[0]["g2_user_prompt"]
     assert metadata == [{"question_id": 1, "category": "writing", "turn": 1}]

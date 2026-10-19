@@ -3,7 +3,6 @@ This script generates completions for a given task (dataset) and model,
 and then evaluates them using a judge model.
 """
 
-import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,11 +17,13 @@ from judgearena.benchmarks.execution import (
     build_judge,
 )
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets.pairwise import load_pairwise_task_data
-from judgearena.evaluate import judge_and_parse_prefs, resolve_run_judge_prompt
+from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
+from judgearena.prompts.registry import ResolvedJudgePrompt
 from judgearena.reports import BattleReport
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
@@ -38,8 +39,8 @@ def _build_judge_batches(
     resolved_task: ResolvedTaskSpec,
     instructions_df: pd.DataFrame,
     eval_index: pd.Index,
-    resolved_prompt,
-) -> list[tuple[object, pd.Index]]:
+    resolved_prompt: ResolvedJudgePrompt,
+) -> list[tuple[ResolvedJudgePrompt, pd.Index]]:
     """Group evaluation rows that share the same resolved judge prompt.
 
     Tasks may map categories to prompt presets (e.g. Arena-Hard v2.0 judges
@@ -64,7 +65,7 @@ def _build_judge_batches(
     from judgearena.prompts.registry import resolve_judge_prompt
 
     categories = instructions_df.loc[eval_index, "category"]
-    groups: list[tuple[object, pd.Index]] = []
+    groups: list[tuple[ResolvedJudgePrompt, pd.Index]] = []
     for category in dict.fromkeys(categories):
         group_index = categories.index[categories == category]
         preset = category_prompts.get(category)
@@ -73,19 +74,6 @@ def _build_judge_batches(
         )
         groups.append((prompt, group_index))
     return groups
-
-
-def _random_swap_mask(instructions: pd.Series) -> pd.Series:
-    """Return deterministic per-instruction pair-order flips."""
-    return pd.Series(
-        [
-            random.Random(f"is_switched_outputs{instruction}0").choices(
-                [False, True], k=1
-            )[0]
-            for instruction in instructions
-        ],
-        index=instructions.index,
-    )
 
 
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
@@ -277,140 +265,55 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         if prompt_metadata not in judge_prompt_variants:
             judge_prompt_variants.append(prompt_metadata)
 
-    # The baseline fills the first judged slot unless the deterministic mask
-    # switches the pair. Preferences are re-oriented to the canonical
-    # model/baseline frame after parsing.
-    swap_mask = (
-        _random_swap_mask(instructions) if cfg.judge.swap_mode == "random" else None
+    comparisons = pd.DataFrame(
+        {
+            "instruction": instructions,
+            "completion_A": completions_A,
+            "completion_B": completions_B,
+            "model_A": cfg.model.name,
+            "model_B": baseline_per_index,
+        }
     )
-    if swap_mask is not None:
-        judged_A = completions_B.mask(swap_mask, completions_A)
-        judged_B = completions_A.mask(swap_mask, completions_B)
-    else:
-        judged_A, judged_B = completions_A, completions_B
-    candidate_models = pd.Series(cfg.model.name, index=instructions.index)
-    if swap_mask is not None:
-        judged_model_a = baseline_per_index.mask(swap_mask, cfg.model.name)
-        judged_model_b = candidate_models.mask(swap_mask, baseline_per_index)
-    else:
-        judged_model_a, judged_model_b = baseline_per_index, candidate_models
+    judgments = judge_comparisons(
+        judge_chat_model,
+        comparisons,
+        prompt_groups,
+        swap_mode=cfg.judge.swap_mode,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=cfg.run.use_tqdm,
+    )
+    prefs = judgments["pref"].rename(None)
+    judgments["judge"] = cfg.judge.model
+    judgments.drop(columns=["pref", "orientation"]).to_csv(
+        res_folder / f"{name}-annotations.csv", index=False
+    )
 
-    annotations = []
-    annotations_reversed = [] if cfg.judge.swap_mode == "both" else None
-    direct_prefs, reversed_prefs = [], []
-    for group_prompt, group_index in prompt_groups:
-        group_annotations, group_reversed, group_prefs = judge_and_parse_prefs(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions.loc[group_index].tolist(),
-            completions_A=judged_A.loc[group_index].tolist(),
-            completions_B=judged_B.loc[group_index].tolist(),
-            swap_mode=cfg.judge.swap_mode,
-            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-            system_prompt=group_prompt.system_prompt,
-            user_prompt_template=group_prompt.user_prompt_template,
-            prompt_preset=group_prompt.preset_name,
-            parse=group_prompt.parser,
-            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            cache_row_metadata=[
-                {
-                    "instruction_id": str(index),
-                    "model_a": judged_model_a.loc[index],
-                    "model_b": judged_model_b.loc[index],
-                    "orientation": (
-                        "direct"
-                        if judged_model_a.loc[index] == cfg.model.name
-                        else "reversed"
-                    ),
-                }
-                for index in group_index
-            ],
-        )
-        annotations.extend(group_annotations)
-        if group_reversed is not None:
-            annotations_reversed.extend(group_reversed)
-            # judge_and_parse_prefs returns [direct..., reversed...] per call;
-            # split so the global order stays all-direct then all-reversed.
-            direct_prefs.append(group_prefs.iloc[: len(group_index)])
-            reversed_prefs.append(group_prefs.iloc[len(group_index) :])
-        else:
-            direct_prefs.append(group_prefs)
-    prefs = pd.concat(direct_prefs + reversed_prefs).reset_index(drop=True)
-
-    eval_instruction_index = [
-        index for _, group_index in prompt_groups for index in group_index
-    ]
-    eval_prompt_presets = [
-        group_prompt.preset_name
-        for group_prompt, group_index in prompt_groups
-        for _ in group_index
-    ]
-    baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
-    df = pd.DataFrame(annotations)
-    df["instruction_index"] = eval_instruction_index
-    if swap_mask is not None:
-        swapped_eval = swap_mask.loc[eval_instruction_index].reset_index(drop=True)
-        prefs = prefs.astype("float64")
-        # Unswitched rows judged the baseline in slot A, so P(slot B wins) is
-        # already P(model wins); invert those to the canonical P(baseline wins).
-        prefs = prefs.where(swapped_eval, 1 - prefs)
-        df["model_A"] = [
-            cfg.model.name if swapped else baseline
-            for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
-        ]
-        df["model_B"] = [
-            baseline if swapped else cfg.model.name
-            for swapped, baseline in zip(swapped_eval, baseline_per_eval, strict=True)
-        ]
-    else:
-        df["model_A"] = cfg.model.name
-        df["model_B"] = baseline_per_eval.tolist()
-    df["judge"] = cfg.judge.model
-
-    if cfg.judge.swap_mode == "both":
-        df_reversed = pd.DataFrame(annotations_reversed)
-        df_reversed["instruction_index"] = eval_instruction_index
-        df_reversed["model_A"] = baseline_per_eval.tolist()
-        df_reversed["model_B"] = cfg.model.name
-        df_reversed["judge"] = cfg.judge.model
-        df = pd.concat([df, df_reversed])
-
-    df.to_csv(res_folder / f"{name}-annotations.csv", index=False)
-
-    # Metrics see one canonically-oriented row per judgment. Under
-    # swap_mode="both", every physical battle contributes both answer orders.
-    repeats = 2 if cfg.judge.swap_mode == "both" else 1
+    # Metrics use canonical model/baseline slots, including repeated judgments.
+    judged_index = judgments["instruction_index"].tolist()
+    canonical = comparisons.loc[judged_index]
     battle_data = {
-        "instruction_index": list(eval_instruction_index) * repeats,
+        "instruction_index": judged_index,
         "model": cfg.model.name,
-        "baseline": baseline_per_eval.tolist() * repeats,
-        "completion_model": completions_A.loc[eval_instruction_index].tolist()
-        * repeats,
-        "completion_baseline": completions_B.loc[eval_instruction_index].tolist()
-        * repeats,
+        "baseline": canonical["model_B"].tolist(),
+        "completion_model": canonical["completion_A"].tolist(),
+        "completion_baseline": canonical["completion_B"].tolist(),
         "model_a": cfg.model.name,
-        "model_b": baseline_per_eval.tolist() * repeats,
-        "completion_a": completions_A.loc[eval_instruction_index].tolist() * repeats,
-        "completion_b": completions_B.loc[eval_instruction_index].tolist() * repeats,
+        "model_b": canonical["model_B"].tolist(),
+        "completion_a": canonical["completion_A"].tolist(),
+        "completion_b": canonical["completion_B"].tolist(),
         "evaluation_model": cfg.model.name,
         "source": "llm-judge",
-        "pref": pd.Series(prefs, dtype="float64").to_numpy(),
-        "orientation": (
-            ["direct"] * len(eval_instruction_index)
-            + ["reversed"] * len(eval_instruction_index)
-        )
-        if repeats == 2
-        else ["single"] * len(eval_instruction_index),
+        "pref": prefs.to_numpy(),
+        "orientation": judgments["orientation"].tolist(),
         "judge": cfg.judge.model,
-        "judge_prompt_preset": eval_prompt_presets * repeats,
+        "judge_prompt_preset": judgments["prompt_preset"].tolist(),
         "judge_temperature": cfg.judge.temperature,
         "judge_max_out_tokens": cfg.judge.max_out_tokens,
     }
     for column in instructions_df.columns:
         if column not in battle_data:
-            battle_data[column] = (
-                instructions_df.loc[eval_instruction_index, column].tolist() * repeats
-            )
+            battle_data[column] = instructions_df.loc[judged_index, column].tolist()
     battles = pd.DataFrame(battle_data)
     battles["pref_hard"] = battles["pref"].map(
         lambda pref: (
@@ -462,6 +365,10 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     report.render()
     report.save(res_folder / f"results-{name}.json")
 
+    eval_instruction_index = judgments.loc[
+        judgments["orientation"] != "reversed", "instruction_index"
+    ].tolist()
+    baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
     eval_instructions = instructions.loc[eval_instruction_index].tolist()
     eval_completions_A = completions_A.loc[eval_instruction_index].tolist()
     eval_completions_B = completions_B.loc[eval_instruction_index].tolist()

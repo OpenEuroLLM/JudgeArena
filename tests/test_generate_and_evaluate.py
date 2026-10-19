@@ -19,9 +19,10 @@ from judgearena.benchmarks.pairwise.baselines import (
 )
 from judgearena.benchmarks.pairwise.runner import run_pairwise
 from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
+from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
 from judgearena.config import RunConfig
 from judgearena.datasets.pairwise import PairwiseTaskData
-from judgearena.models import InferenceResult, make_model
+from judgearena.models import InferenceResult, prepare_model
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
@@ -482,13 +483,30 @@ def test_run_writes_roundtrippable_config(tmp_path):
     assert reloaded.model.name == "Dummy/no answer"
 
 
-def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("swap_mode", "expected_prefs"),
+    [
+        ("fixed", [0.25, np.nan, 0.25]),
+        ("random", [0.25, np.nan, 0.75]),
+        ("both", [0.25, np.nan, 0.25, 0.25, 0.75, 0.25]),
+    ],
+)
+def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
+    monkeypatch, tmp_path, swap_mode, expected_prefs
+):
     captured = {}
-    monkeypatch.setattr(
-        generate_and_evaluate,
-        "build_judge",
-        lambda _cfg: make_model("Dummy/My final verdict is tie: [[A=B]]"),
-    )
+    raw = ["[[A>B]]", "no verdict", "[[A>B]]"]
+    if swap_mode == "both":
+        raw = ["[[A>B]]", "no verdict", "[[B>A]]", "[[A>B]]", "[[A>B]]", "[[B>A]]"]
+
+    def build_judge(cfg):
+        model = prepare_model(
+            "Dummy/judge", cache=benchmark_execution.build_judgement_cache(cfg)
+        )
+        model.factory = lambda: FakeListLLM(responses=raw)
+        return model
+
+    monkeypatch.setattr(generate_and_evaluate, "build_judge", build_judge)
 
     def capture_battles(battles, *_args, **_kwargs):
         captured["battles"] = battles
@@ -497,40 +515,57 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_pat
     monkeypatch.setattr(generate_and_evaluate, "calculate_metrics", capture_battles)
     instructions = pd.DataFrame(
         {
-            "instruction": ["hard", "creative"],
-            "category": ["hard_prompt", "creative_writing"],
+            "instruction": ["hard one", "creative", "hard two"],
+            "category": ["hard_prompt", "creative_writing", "hard_prompt"],
         },
-        index=pd.Index(["qh", "qc"], name="instruction_index"),
+        index=pd.Index(["qh1", "qc", "qh2"], name="instruction_index"),
     )
     outputs = pd.DataFrame(
         {
-            "instruction_index": ["qh", "qc", "qh", "qc"],
-            "model": [
-                "candidate",
-                "candidate",
+            "instruction_index": ["qh1", "qc", "qh2", "qh1", "qc", "qh2"],
+            "model": ["candidate"] * 3
+            + [
                 "o3-mini-2025-01-31",
                 "gemini-2.0-flash-001",
+                "o3-mini-2025-01-31",
             ],
-            "output": ["candidate hard", "candidate creative", "hard", "creative"],
+            "output": [
+                "candidate hard one",
+                "candidate creative",
+                "candidate hard two",
+                "baseline hard one",
+                "baseline creative",
+                "baseline hard two",
+            ],
         }
-    )
+    ).iloc[::-1]
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
         lambda task, n_instructions=None: PairwiseTaskData(instructions, outputs),
     )
-
-    run_pairwise(
+    prefs = run_pairwise(
         RunConfig(
             task="arena-hard-v2.0",
             model={"name": "candidate"},
-            judge={"model": "OpenAI/gpt-4.1", "swap_mode": "both"},
-            generation={"n_instructions": 2},
-            run={"result_folder": str(tmp_path)},
+            judge={"model": "Dummy/judge", "swap_mode": swap_mode},
+            run={"result_folder": str(tmp_path), "store_root": str(tmp_path / "cache")},
         )
     )
 
+    assert prefs.tolist() == pytest.approx(expected_prefs, nan_ok=True)
     battles = captured["battles"]
+    ids = ["qh1", "qh2", "qc"] * (2 if swap_mode == "both" else 1)
+    assert battles["instruction_index"].tolist() == ids
+    assert battles["pref"].tolist() == pytest.approx(expected_prefs, nan_ok=True)
+    assert battles["completion_a"].tolist() == [
+        "candidate hard one",
+        "candidate hard two",
+        "candidate creative",
+    ] * (2 if swap_mode == "both" else 1)
+    assert battles["orientation"].tolist() == (
+        ["direct"] * 3 + ["reversed"] * 3 if swap_mode == "both" else ["single"] * 3
+    )
     grouped = battles.groupby("category").first()
     assert grouped["baseline"].to_dict() == {
         "creative_writing": "gemini-2.0-flash-001",
@@ -540,6 +575,47 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_pat
         "creative_writing": "arena-hard-creative",
         "hard_prompt": "arena-hard",
     }
+    annotations = pd.read_csv(next(tmp_path.glob("*/*-annotations.csv")))
+    assert annotations["instruction_index"].tolist() == ids
+    completions = outputs.set_index(["instruction_index", "model"])["output"]
+    for slot in ("A", "B"):
+        assert annotations[f"completion_{slot}"].tolist() == [
+            completions.loc[index, model]
+            for index, model in zip(ids, annotations[f"model_{slot}"], strict=True)
+        ]
+    assert annotations["judge_completion"].tolist() == (
+        ["[[A>B]]", "no verdict", "[[A>B]]", "[[B>A]]", "[[A>B]]", "[[B>A]]"]
+        if swap_mode == "both"
+        else raw
+    )
+    assert annotations.columns.tolist() == [
+        "instruction",
+        "completion_A",
+        "completion_B",
+        "judge_completion",
+        "judge_input",
+        "prompt_preset",
+        "judge_top_logprobs",
+        "parsed",
+        "instruction_index",
+        "model_A",
+        "model_B",
+        "judge",
+    ]
+    with JudgementCache(next((tmp_path / "cache").rglob(JUDGEMENT_DB_NAME))) as cache:
+        cached = cache.query()
+    assert set(
+        cached[["instruction_id", "model_a", "model_b", "judge_completion"]].itertuples(
+            index=False, name=None
+        )
+    ) == set(
+        annotations[
+            ["instruction_index", "model_A", "model_B", "judge_completion"]
+        ].itertuples(index=False, name=None)
+    )
+    assert cached["orientation"].tolist() == [
+        "direct" if model == "candidate" else "reversed" for model in cached["model_a"]
+    ]
     metadata = json.loads(next(tmp_path.glob("*/run-metadata.v1.json")).read_text())
     assert {item["judge_prompt_preset"] for item in metadata["judge_prompts"]} == {
         "arena-hard",
@@ -634,3 +710,58 @@ def test_all_missing_both_alpaca_judgments_keep_numeric_preferences(caplog):
         annotation.parsed is None for annotation in annotations + reversed_annotations
     )
     assert "1/1 judge outputs could not be parsed" in caplog.text
+
+
+def test_judge_comparisons_preserves_prepared_order_and_cache_identity(tmp_path):
+    from judgearena.benchmarks.pairwise.judging import judge_comparisons
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    cfg = RunConfig(
+        task="arena-hard-v2.0",
+        model={"name": "candidate"},
+        judge={"model": "Dummy/judge"},
+        run={"store_root": str(tmp_path)},
+    )
+    model = prepare_model(
+        "Dummy/judge", cache=benchmark_execution.build_judgement_cache(cfg)
+    )
+    model.factory = lambda: FakeListLLM(
+        responses=["[[A>B]]", "no verdict", "[[B>A]]", "[[A>B]]"]
+    )
+    comparisons = pd.DataFrame(
+        {
+            "instruction": ["first", "second"],
+            "completion_A": ["opponent first", "candidate second"],
+            "completion_B": ["candidate first", "opponent second"],
+            "model_A": ["opponent", "candidate"],
+            "model_B": ["candidate", "opponent"],
+            "instruction_id": ["arena:shared", "arena:shared"],
+            "cache_orientation": ["reversed", "direct"],
+        },
+        index=[8, 3],
+    )
+    result = judge_comparisons(
+        model,
+        comparisons,
+        [(resolve_judge_prompt(preset="arena-hard"), pd.Index([3, 8]))],
+        swap_mode="both",
+        strip_thinking_before_judging=False,
+        truncate_input_chars=None,
+        use_tqdm=False,
+    )
+    assert result["instruction_index"].tolist() == [3, 8, 3, 8]
+    assert result["completion_A"].tolist() == [
+        "candidate second",
+        "opponent first",
+        "opponent second",
+        "candidate first",
+    ]
+    assert result["pref"].tolist() == pytest.approx(
+        [0.25, np.nan, 0.25, 0.75], nan_ok=True
+    )
+    with JudgementCache(next(tmp_path.rglob(JUDGEMENT_DB_NAME))) as cache:
+        cached = cache.query()
+    assert cached["instruction_id"].tolist() == ["arena:shared"] * 4
+    assert cached["orientation"].tolist() == [
+        "direct" if name == "candidate" else "reversed" for name in cached["model_a"]
+    ]

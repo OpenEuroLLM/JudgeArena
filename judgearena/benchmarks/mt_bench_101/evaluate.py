@@ -14,7 +14,7 @@ from judgearena.datasets.mt_bench_101 import (
     MT_BENCH_101_REFERENCE_TASKS,
     MT_BENCH_101_TASK_TO_ABILITY,
 )
-from judgearena.models import do_inference
+from judgearena.judging import JudgeRequest, execute_judging
 from judgearena.prompts.parsing import PairScore, ParsedScore
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
@@ -72,6 +72,7 @@ class MTBench101ScoreParser:
     """Parse the score format associated with an MT-Bench-101 prompt preset."""
 
     name = "mt-bench-101-score"
+    requires_top_logprobs = False
 
     def __init__(self, prompt_preset: str = MT_BENCH_101_PROMPT_PRESET) -> None:
         self.prompt_preset = prompt_preset
@@ -80,7 +81,9 @@ class MTBench101ScoreParser:
         result = self.parse_result(judge_completion)
         return None if result is None else result.score
 
-    def parse_result(self, judge_completion: str) -> ParsedScore | None:
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> ParsedScore | None:
         if self.prompt_preset == MT_BENCH_101_PROMPT_PRESET:
             match = UPSTREAM_SCORE_PATTERN.search(judge_completion)
             if match is None:
@@ -241,23 +244,32 @@ def judge_mt_bench_101_single(
             for row in rows
         ]
     )
-    judge_completions = do_inference(
-        chat_model=judge_chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        stage="judging",
-        cache_row_metadata=[
-            {
+    parser = MTBench101ScoreParser(prompt_preset)
+    requests = [
+        JudgeRequest(
+            id=f"{row['dialogue_uid']}:turn-{row['turn_index']}",
+            input=judge_input,
+            parser=parser,
+            cache_metadata={
                 "instruction_id": f"{row['dialogue_uid']}:turn-{row['turn_index']}",
                 "model_a": evaluated_model,
                 "model_b": None,
-            }
-            for row in rows
-        ],
+            },
+            prompt_metadata={
+                "judge_prompt_preset": prompt_preset,
+                "judge_parser": parser.name,
+            },
+        )
+        for row, judge_input in zip(rows, inputs, strict=True)
+    ]
+    results = execute_judging(
+        judge_chat_model,
+        requests,
+        use_tqdm=use_tqdm,
     )
-    for row, judge_completion in zip(rows, judge_completions, strict=True):
-        row["judge_completion"] = judge_completion
-        row["score"] = parse_mt_bench_101_rating(judge_completion, prompt_preset)
+    for row, result in zip(rows, results, strict=True):
+        row["judge_completion"] = result.response.text
+        row["score"] = None if result.parsed is None else result.parsed.score
     return pd.DataFrame(rows)
 
 

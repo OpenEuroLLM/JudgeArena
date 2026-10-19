@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.cache.inference import JudgementCacheRowMetadata
+from judgearena.judging import JudgeRequest, execute_judging
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
@@ -19,14 +20,12 @@ from judgearena.prompts.registry import (
 )
 from judgearena.utils import strip_thinking_tags, truncate
 
-if TYPE_CHECKING:
-    from judgearena.inference import JudgementCacheRowMetadata
-
 logger = get_logger(__name__)
 
 # Re-exported for existing callers; implementations live with the presets.
 from judgearena.prompts.parsing import (  # noqa: E402
     JudgeParser,
+    OutputParser,
     PairScore,  # noqa: F401
     ParsedPreference,
     resolve_judge_parser,
@@ -118,6 +117,8 @@ def annotate_battles(
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
     cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
+    *,
+    parse: OutputParser[ParsedPreference] | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -183,21 +184,52 @@ def annotate_battles(
     inputs = prompt_template.batch(prompt_inputs)
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
-    judge_results = do_inference(
-        chat_model=judge_chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        return_top_logprobs=collect_top_logprobs,
-        stage="judging",
-        cache_row_metadata=cache_row_metadata,
-    )
-    if not collect_top_logprobs:
-        judge_results = [InferenceResult(text=text) for text in judge_results]
+    parsed_results: list[ParsedPreference | None] = [None] * len(inputs)
+    if parse is None:
+        judge_results = do_inference(
+            chat_model=judge_chat_model,
+            inputs=inputs,
+            use_tqdm=use_tqdm,
+            return_top_logprobs=collect_top_logprobs,
+            stage="judging",
+            cache_row_metadata=cache_row_metadata,
+        )
+        if not collect_top_logprobs:
+            judge_results = [InferenceResult(text=text) for text in judge_results]
+    else:
+        metadata = (
+            cache_row_metadata
+            if cache_row_metadata is not None
+            else [None] * len(inputs)
+        )
+        requests = [
+            JudgeRequest(
+                id=str(index),
+                input=judge_input,
+                parser=parse,
+                cache_metadata=row,
+                prompt_metadata=resolved_prompt.metadata(),
+            )
+            for index, (judge_input, row) in enumerate(
+                zip(inputs, metadata, strict=True)
+            )
+        ]
+        results = execute_judging(judge_chat_model, requests, use_tqdm=use_tqdm)
+        judge_results = [result.response for result in results]
+        parsed_results = [result.parsed for result in results]
 
     annotations = []
-    for judge_input, judge_result, instruction, completion_A, completion_B in zip(
+    for (
+        judge_input,
+        judge_result,
+        parsed,
+        instruction,
+        completion_A,
+        completion_B,
+    ) in zip(
         inputs,
         judge_results,
+        parsed_results,
         instructions,
         completions_A,
         completions_B,
@@ -211,7 +243,12 @@ def annotate_battles(
                 completion_A=completion_A,
                 completion_B=completion_B,
                 prompt_preset=resolved_prompt.preset_name,
-                judge_top_logprobs=judge_result.first_token_top_logprobs,
+                judge_top_logprobs=(
+                    judge_result.first_token_top_logprobs
+                    if collect_top_logprobs
+                    else None
+                ),
+                parsed=parsed,
             )
         )
     return annotations
@@ -276,6 +313,7 @@ def judge_and_parse_prefs(
         use_tqdm=use_tqdm,
         collect_top_logprobs=parse.requires_top_logprobs,
         cache_row_metadata=cache_row_metadata,
+        parse=parse,
     )
 
     annotations_reversed = None
@@ -310,21 +348,14 @@ def judge_and_parse_prefs(
             use_tqdm=use_tqdm,
             collect_top_logprobs=parse.requires_top_logprobs,
             cache_row_metadata=reversed_cache_row_metadata,
+            parse=parse,
         )
 
     def _none_to_nan(x):
         return float("nan") if x is None else x
 
-    def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        results = [
-            parse.parse_result(
-                annotation.judge_completion,
-                top_logprobs=annotation.judge_top_logprobs,
-            )
-            for annotation in ann_list
-        ]
-        for annotation, result in zip(ann_list, results, strict=True):
-            annotation.parsed = result
+    def _preferences_and_warn(ann_list: list[JudgeAnnotation], label: str) -> pd.Series:
+        results = [annotation.parsed for annotation in ann_list]
         n_failed = sum(1 for result in results if result is None)
         if n_failed:
             logger.warning(
@@ -338,10 +369,10 @@ def judge_and_parse_prefs(
             [None if result is None else result.preference for result in results]
         )
 
-    prefs = _parse_and_warn(annotations, "direct")
+    prefs = _preferences_and_warn(annotations, "direct")
 
     if swap_mode == "both":
-        prefs_reversed = _parse_and_warn(annotations_reversed, "reversed").apply(
+        prefs_reversed = _preferences_and_warn(annotations_reversed, "reversed").apply(
             _none_to_nan
         )
         prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import pandas as pd
@@ -16,18 +16,36 @@ from judgearena.benchmarks.mt_bench.common import (
 from judgearena.benchmarks.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
     build_mt_bench_pairwise_judge_items,
-    infer_pairwise_judgments_by_prompt_groups,
+    judge_pairwise_by_prompt_groups,
     swap_pairwise_answer_kwargs,
 )
 from judgearena.benchmarks.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
     render_mt_bench_prompt_text,
 )
+from judgearena.judging import JudgeResult
 from judgearena.prompts.registry import DEFAULT_JUDGE_PROMPT_PRESET
 from judgearena.utils import strip_thinking_tags
 
 FastChatVerdict = Literal["A", "B", "tie", "error"]
 PairwiseWinner = Literal["model_A", "model_B", "tie", "error"]
+
+
+class FastChatVerdictParser:
+    name = "fastchat-verdict"
+    requires_top_logprobs = False
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> FastChatVerdict:
+        stripped = strip_thinking_tags(judge_completion).strip()
+        if "[[A]]" in stripped:
+            return "A"
+        if "[[B]]" in stripped:
+            return "B"
+        if "[[C]]" in stripped:
+            return "tie"
+        return "error"
 
 
 @dataclass(frozen=True)
@@ -37,6 +55,7 @@ class FastChatPairwisePrompt:
     user_prompt_template: str
     multi_turn: bool
     ref_based: bool
+    parse: FastChatVerdictParser = field(default_factory=FastChatVerdictParser)
 
 
 _SYSTEM_BASE_FILE = "system-base.txt"
@@ -158,17 +177,6 @@ _FASTCHAT_PROMPT_PRESET_REGISTRY: dict[str, dict[str, FastChatPairwisePrompt]] =
 }
 
 
-def _parse_fastchat_verdict(judgment: str) -> FastChatVerdict:
-    stripped = strip_thinking_tags(judgment).strip()
-    if "[[A]]" in stripped:
-        return "A"
-    if "[[B]]" in stripped:
-        return "B"
-    if "[[C]]" in stripped:
-        return "tie"
-    return "error"
-
-
 def _map_verdict_to_winner(verdict: FastChatVerdict, swapped: bool) -> PairwiseWinner:
     if verdict == "tie":
         return "tie"
@@ -239,7 +247,7 @@ def _build_fastchat_judge_items(
     reference_categories: Collection[str],
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
     strip_thinking_before_judging: bool = False,
-) -> list[MTBenchJudgeItem]:
+) -> list[MTBenchJudgeItem[FastChatVerdict]]:
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
@@ -259,9 +267,9 @@ def _build_fastchat_judge_items(
 
 def _resolve_fastchat_item_result(
     *,
-    item: MTBenchJudgeItem,
-    g1_raw: str,
-    g2_raw: str | None,
+    item: MTBenchJudgeItem[FastChatVerdict],
+    g1: JudgeResult[FastChatVerdict],
+    g2: JudgeResult[FastChatVerdict] | None,
     judge_model: str,
     model_a: str,
     model_b: str,
@@ -269,7 +277,7 @@ def _resolve_fastchat_item_result(
     prompt: FastChatPairwisePrompt = item.prompt
     kwargs = item.prompt_kwargs
     g1_user_prompt = prompt.user_prompt_template.format(**kwargs)
-    g1_verdict = _parse_fastchat_verdict(g1_raw)
+    g1_verdict = g1.parsed or "error"
     g1_winner = _map_verdict_to_winner(g1_verdict, swapped=False)
 
     final_winner = g1_winner
@@ -284,15 +292,15 @@ def _resolve_fastchat_item_result(
         "prompt_name": prompt.name,
         "system_prompt": prompt.system_prompt,
         "g1_user_prompt": g1_user_prompt,
-        "g1_judgment": g1_raw,
+        "g1_judgment": g1.response.text,
         "g1_verdict": g1_verdict,
         "g1_winner": g1_winner,
     }
 
-    if g2_raw is not None:
+    if g2 is not None:
         # swap_mode="both": conservative agreement — keep a winner only if both
         # orderings agree, otherwise tie (FastChat/MT-Bench consistency).
-        g2_verdict = _parse_fastchat_verdict(g2_raw)
+        g2_verdict = g2.parsed or "error"
         g2_winner = _map_verdict_to_winner(g2_verdict, swapped=True)
         final_winner, inconsistent = _conservative_winner(g1_winner, g2_winner)
         annotation_row.update(
@@ -303,7 +311,7 @@ def _resolve_fastchat_item_result(
                         multi_turn=prompt.multi_turn,
                     )
                 ),
-                "g2_judgment": g2_raw,
+                "g2_judgment": g2.response.text,
                 "g2_verdict": g2_verdict,
                 "g2_winner": g2_winner,
                 "final_winner": final_winner,
@@ -357,7 +365,7 @@ def judge_mt_bench_pairwise_fastchat(
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
-    g1_judgments, _ = infer_pairwise_judgments_by_prompt_groups(
+    g1_judgments, _ = judge_pairwise_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
         use_tqdm=use_tqdm,
@@ -366,9 +374,9 @@ def judge_mt_bench_pairwise_fastchat(
         model_b=model_b,
     )
 
-    g2_judgments: list[str] | None = None
+    g2_judgments: list[JudgeResult[FastChatVerdict]] | None = None
     if swap_mode == "both":
-        g2_judgments, _ = infer_pairwise_judgments_by_prompt_groups(
+        g2_judgments, _ = judge_pairwise_by_prompt_groups(
             judge_chat_model=judge_chat_model,
             items=items,
             use_tqdm=use_tqdm,
@@ -383,12 +391,12 @@ def judge_mt_bench_pairwise_fastchat(
     num_inconsistent = 0
 
     for idx, item in enumerate(items):
-        g2_raw = g2_judgments[idx] if g2_judgments is not None else None
+        g2 = g2_judgments[idx] if g2_judgments is not None else None
         annotation_row, item_metadata, preference, inconsistent = (
             _resolve_fastchat_item_result(
                 item=item,
-                g1_raw=g1_judgments[idx],
-                g2_raw=g2_raw,
+                g1=g1_judgments[idx],
+                g2=g2,
                 judge_model=judge_model,
                 model_a=model_a,
                 model_b=model_b,

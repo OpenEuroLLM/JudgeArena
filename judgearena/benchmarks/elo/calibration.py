@@ -10,8 +10,8 @@ from scipy.optimize import minimize_scalar
 
 from judgearena.arenas_utils import extract_turn_text
 from judgearena.benchmarks.elo.rating import winner_to_pref
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.cache.inference import JudgementInferenceCache
-from judgearena.evaluate import judge_and_parse_prefs
 from judgearena.log import get_logger
 from judgearena.models import prepare_model
 from judgearena.prompts.parsing import PairScore
@@ -93,53 +93,47 @@ def calibrate_pairscore_temperature(
         n=n_samples,
         random_state=int(rng.integers(0, 2**31)),
     )
-    instructions = [
-        extract_turn_text(source_battles.loc[index, "conversation_a"][0])
-        for index in calibration_battles.index
-    ]
-    completions_a = [
-        extract_turn_text(source_battles.loc[index, "conversation_a"][1])
-        for index in calibration_battles.index
-    ]
-    completions_b = [
-        extract_turn_text(source_battles.loc[index, "conversation_b"][1])
-        for index in calibration_battles.index
-    ]
-
     source_rows = source_battles.loc[calibration_battles.index]
+    comparisons = pd.DataFrame(
+        {
+            "instruction": [
+                extract_turn_text(turns[0]) for turns in source_rows["conversation_a"]
+            ],
+            "completion_A": [
+                extract_turn_text(turns[1]) for turns in source_rows["conversation_a"]
+            ],
+            "completion_B": [
+                extract_turn_text(turns[1]) for turns in source_rows["conversation_b"]
+            ],
+            "model_A": source_rows["model_a"],
+            "model_B": source_rows["model_b"],
+            "instruction_id": arena + ":" + source_rows["question_id"].astype(str),
+        },
+        index=calibration_battles.index,
+    )
     calibration_judge = prepare_model(
         model=judge_model,
         cache=inference_cache,
         **dict(judge_model_kwargs),
     )
-    annotations, _, _ = judge_and_parse_prefs(
-        judge_chat_model=calibration_judge,
-        instructions=instructions,
-        completions_A=completions_a,
-        completions_B=completions_b,
-        swap_mode=swap_mode,
-        system_prompt=prompt.system_prompt,
-        user_prompt_template=prompt.user_prompt_template,
-        prompt_preset=prompt.preset_name,
-        parse=prompt.parser,
+    judgments = judge_comparisons(
+        calibration_judge,
+        comparisons,
+        [(prompt, comparisons.index)],
+        swap_mode="both" if swap_mode == "both" else "fixed",
+        strip_thinking_before_judging=False,
         truncate_input_chars=truncate_input_chars,
-        cache_row_metadata=[
-            {
-                "instruction_id": f"{arena}:{row.question_id}",
-                "model_a": row.model_a,
-                "model_b": row.model_b,
-                "orientation": "direct",
-            }
-            for row in source_rows.itertuples()
-        ],
+        use_tqdm=False,
     )
+    # Calibration historically fits only the original arena answer order.
+    annotations = judgments.loc[judgments["orientation"] != "reversed"]
 
     score_differences: list[float] = []
     outcomes: list[float] = []
-    for annotation, human_winner in zip(
-        annotations, calibration_battles["winner"].tolist(), strict=True
+    for parsed, human_winner in zip(
+        annotations["parsed"], calibration_battles["winner"], strict=True
     ):
-        scores = {} if annotation.parsed is None else annotation.parsed.scores
+        scores = {} if parsed is None else parsed["scores"]
         score_a = scores.get("A")
         score_b = scores.get("B")
         if score_a is None or score_b is None:

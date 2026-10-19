@@ -8,11 +8,13 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.benchmarks.mt_bench.common import iter_mt_bench_pairwise_rows
-from judgearena.models import do_inference
+from judgearena.judging import JudgeRequest, JudgeResult, execute_judging
+from judgearena.prompts.parsing import OutputParser
 from judgearena.utils import strip_thinking_tags
 
 
-class MTBenchPairwisePrompt(Protocol):
+class MTBenchPairwisePrompt[T](Protocol):
+    parse: OutputParser[T]
     name: str
     system_prompt: str | None
     user_prompt_template: str
@@ -21,11 +23,11 @@ class MTBenchPairwisePrompt(Protocol):
 
 
 @dataclass(frozen=True)
-class MTBenchJudgeItem:
+class MTBenchJudgeItem[T]:
     question_id: object
     category: str | None
     turn: int
-    prompt: MTBenchPairwisePrompt
+    prompt: MTBenchPairwisePrompt[T]
     prompt_kwargs: dict[str, str]
 
     @property
@@ -70,16 +72,16 @@ def build_pairwise_chat_prompt_template(
     return ChatPromptTemplate.from_messages(message_templates)
 
 
-def infer_pairwise_judgments_by_prompt_groups(
+def judge_pairwise_by_prompt_groups[T](
     *,
     judge_chat_model,
-    items: list[MTBenchJudgeItem],
+    items: list[MTBenchJudgeItem[T]],
     use_tqdm: bool,
     swap_answers: bool,
     model_a: str,
     model_b: str,
-) -> tuple[list[str], list[dict[str, str]]]:
-    judgments: list[str] = [""] * len(items)
+) -> tuple[list[JudgeResult[T]], list[dict[str, str]]]:
+    judgments: dict[int, JudgeResult[T]] = {}
     used_prompt_kwargs: list[dict[str, str]] = [{} for _ in items]
     for idxs in group_indices_by_prompt_key(items).values():
         prompt = items[idxs[0]].prompt
@@ -94,32 +96,33 @@ def infer_pairwise_judgments_by_prompt_groups(
                 )
             batch_kwargs.append(prompt_kwargs)
         prompt_inputs = prompt_template.batch(batch_kwargs)
-        outputs = do_inference(
-            chat_model=judge_chat_model,
-            inputs=prompt_inputs,
-            use_tqdm=use_tqdm,
-            stage="judging",
-            cache_row_metadata=[
-                {
+        requests = [
+            JudgeRequest(
+                id=f"{items[item_index].question_id}:turn-{items[item_index].turn}",
+                input=judge_input,
+                parser=items[item_index].prompt.parse,
+                cache_metadata={
                     "instruction_id": (
                         f"{items[item_index].question_id}:turn-{items[item_index].turn}"
                     ),
                     "model_a": model_b if swap_answers else model_a,
                     "model_b": model_a if swap_answers else model_b,
                     "orientation": "reversed" if swap_answers else "direct",
-                }
-                for item_index in idxs
-            ],
-        )
+                },
+                prompt_metadata={"prompt_name": items[item_index].prompt_name},
+            )
+            for item_index, judge_input in zip(idxs, prompt_inputs, strict=True)
+        ]
+        outputs = execute_judging(judge_chat_model, requests, use_tqdm=use_tqdm)
         for item_index, output, prompt_kwargs in zip(
             idxs, outputs, batch_kwargs, strict=True
         ):
-            judgments[item_index] = str(output)
+            judgments[item_index] = output
             used_prompt_kwargs[item_index] = prompt_kwargs
-    return judgments, used_prompt_kwargs
+    return [judgments[i] for i in range(len(items))], used_prompt_kwargs
 
 
-def build_mt_bench_pairwise_judge_items(
+def build_mt_bench_pairwise_judge_items[T](
     *,
     questions: pd.DataFrame,
     completions_a: pd.DataFrame,
@@ -127,13 +130,13 @@ def build_mt_bench_pairwise_judge_items(
     eval_single: bool,
     eval_multi: bool,
     truncate_input_chars: int | None,
-    select_prompt: Callable[[str | None, bool], MTBenchPairwisePrompt],
+    select_prompt: Callable[[str | None, bool], MTBenchPairwisePrompt[T]],
     strip_thinking_before_judging: bool = False,
-) -> list[MTBenchJudgeItem]:
+) -> list[MTBenchJudgeItem[T]]:
     def _answer(text: str) -> str:
         return strip_thinking_tags(text) if strip_thinking_before_judging else text
 
-    items: list[MTBenchJudgeItem] = []
+    items: list[MTBenchJudgeItem[T]] = []
     for pair_row in iter_mt_bench_pairwise_rows(
         questions=questions,
         completions_a=completions_a,

@@ -14,12 +14,13 @@ from judgearena.benchmarks.mt_bench.common import (
 from judgearena.benchmarks.mt_bench.pairwise_judging import (
     MTBenchJudgeItem,
     build_mt_bench_pairwise_judge_items,
-    infer_pairwise_judgments_by_prompt_groups,
+    judge_pairwise_by_prompt_groups,
 )
 from judgearena.benchmarks.mt_bench.prompt_templates import (
     build_mt_bench_user_prompt_template,
 )
-from judgearena.prompts.parsing import JudgeParser, parser_name
+from judgearena.judging import JudgeResult
+from judgearena.prompts.parsing import JudgeParser, ParsedPreference, parser_name
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
@@ -115,7 +116,7 @@ def _build_mt_bench_preset_items(
     user_file: str | None = None,
     parser: str | None = None,
     strip_thinking_before_judging: bool = False,
-) -> list[MTBenchJudgeItem]:
+) -> list[MTBenchJudgeItem[ParsedPreference]]:
     return build_mt_bench_pairwise_judge_items(
         questions=questions,
         completions_a=completions_a,
@@ -173,7 +174,7 @@ def judge_mt_bench_with_preset(
         parser=parser,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
-    judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(
+    judgments, prompt_kwargs_used = judge_pairwise_by_prompt_groups(
         judge_chat_model=judge_chat_model,
         items=items,
         use_tqdm=use_tqdm,
@@ -187,16 +188,16 @@ def judge_mt_bench_with_preset(
     preferences: list[float] = []
 
     def _append_results(
-        raw_judgments: list[str],
+        judgments: list[JudgeResult[ParsedPreference]],
         used_prompt_kwargs: list[dict[str, str]],
         *,
         swapped: bool,
     ) -> None:
-        for item, raw_judgment, prompt_kwargs in zip(
-            items, raw_judgments, used_prompt_kwargs, strict=True
+        for item, result, prompt_kwargs in zip(
+            items, judgments, used_prompt_kwargs, strict=True
         ):
             prompt: MTBenchPresetPrompt = item.prompt
-            parsed = prompt.parse.parse_result(raw_judgment)
+            parsed = result.parsed
             slot_preference = math.nan if parsed is None else float(parsed.preference)
             normalized_preference = (
                 1.0 - slot_preference if swapped else slot_preference
@@ -215,7 +216,7 @@ def judge_mt_bench_with_preset(
                     "system_prompt": prompt.system_prompt,
                     "user_prompt_template": prompt.user_prompt_template,
                     "user_prompt": prompt.user_prompt_template.format(**prompt_kwargs),
-                    "judge_completion": raw_judgment,
+                    "judge_completion": result.response.text,
                     "preference": slot_preference,
                     "parsed": None if parsed is None else asdict(parsed),
                     "swapped": swapped,
@@ -242,15 +243,13 @@ def judge_mt_bench_with_preset(
     if swap_mode == "both":
         # Append swapped-order judgments as additional, canonically oriented
         # preferences.
-        swapped_judgments, swapped_prompt_kwargs = (
-            infer_pairwise_judgments_by_prompt_groups(
-                judge_chat_model=judge_chat_model,
-                items=items,
-                use_tqdm=use_tqdm,
-                swap_answers=True,
-                model_a=model_a,
-                model_b=model_b,
-            )
+        swapped_judgments, swapped_prompt_kwargs = judge_pairwise_by_prompt_groups(
+            judge_chat_model=judge_chat_model,
+            items=items,
+            use_tqdm=use_tqdm,
+            swap_answers=True,
+            model_a=model_a,
+            model_b=model_b,
         )
         _append_results(swapped_judgments, swapped_prompt_kwargs, swapped=True)
 

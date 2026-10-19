@@ -7,6 +7,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import numpy as np
 
@@ -39,6 +40,17 @@ class ParsedScore:
     score: float
     label: str | None = None
     details: dict[str, object] = field(default_factory=dict)
+
+
+class OutputParser[T](Protocol):
+    """Parse a judge response without prescribing the result's meaning."""
+
+    name: str
+    requires_top_logprobs: bool
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> T | None: ...
 
 
 class JudgeParser(abc.ABC):

@@ -10,6 +10,11 @@ import pytest
 
 import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
+from judgearena.benchmarks.mt_bench.pairwise_judging import (
+    build_pairwise_chat_prompt_template,
+    judge_pairwise_by_prompt_groups,
+    swap_pairwise_answer_kwargs,
+)
 from judgearena.benchmarks.mt_bench.preset_judging import (
     _build_mt_bench_preset_items,
     _select_preset_prompt,
@@ -19,7 +24,9 @@ from judgearena.benchmarks.mt_bench.runner import _build_mt_bench_battles
 from judgearena.benchmarks.pairwise.scoring.metrics import (
     LengthControlledWinrateMetric,
 )
+from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.config import RunConfig
+from judgearena.models import do_inference, prepare_model
 from judgearena.prompts.registry import (
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
     resolve_judge_prompt,
@@ -333,3 +340,90 @@ def test_select_preset_prompt_forwards_named_parser(tmp_path, monkeypatch):
     )
 
     assert prompt.parse is sentinel
+
+
+@pytest.mark.parametrize("swapped", [False, True])
+def test_grouped_judging_reuses_raw_cache_and_restores_item_order(tmp_path, swapped):
+    questions = pd.concat(
+        [_questions_df("math"), _questions_df(), _questions_df("math")]
+    )
+    questions.index = pd.Index([1, 2, 3], name="instruction_index")
+    questions["turn_1"] = ["Question one", "Question two", "Question three"]
+    completions = pd.concat([_completions_df("A")] * 3)
+    completions.index = questions.index
+    items = _build_mt_bench_preset_items(
+        questions=questions,
+        completions_a=completions,
+        completions_b=completions.replace({"A1": "B1", "A2": "B2"}),
+        eval_single=True,
+        eval_multi=True,
+        truncate_input_chars=None,
+        reference_categories=REFERENCE_CATEGORIES,
+        prompt_preset="default",
+    )
+    kwargs = [
+        swap_pairwise_answer_kwargs(item.prompt_kwargs, multi_turn=item.turn == 2)
+        if swapped
+        else item.prompt_kwargs
+        for item in items
+    ]
+    raw = [
+        "score_A: 10\nscore_B: 0",
+        "no verdict",
+        "score_A: 0\nscore_B: 10",
+        "score_A: 5\nscore_B: 5",
+        "score_A: 8\nscore_B: 2",
+        "score_A: 2\nscore_B: 8",
+    ]
+    cache = JudgementInferenceCache(tmp_path, "mt-bench")
+    model = prepare_model("Dummy/judge", cache=cache)
+    model.factory = lambda: SequenceJudge(raw)
+    metadata = [
+        {
+            "instruction_id": f"{question}:turn-{turn}",
+            "model_a": "b" if swapped else "a",
+            "model_b": "a" if swapped else "b",
+            "orientation": "reversed" if swapped else "direct",
+        }
+        for question in [1, 2, 3]
+        for turn in [1, 2]
+    ]
+    # Seed the pre-executor inference format, in item order rather than prompt groups.
+    do_inference(
+        model,
+        [
+            build_pairwise_chat_prompt_template(item.prompt).invoke(values)
+            for item, values in zip(items, kwargs, strict=True)
+        ],
+        stage="judging",
+        cache_row_metadata=metadata,
+    )
+    cached_model = prepare_model("Dummy/judge", cache=cache)
+
+    def unavailable():
+        raise AssertionError("Existing MT-Bench judgments should be cache hits")
+
+    cached_model.factory = unavailable
+    results, used_kwargs = judge_pairwise_by_prompt_groups(
+        judge_chat_model=cached_model,
+        items=items,
+        use_tqdm=False,
+        swap_answers=swapped,
+        model_a="a",
+        model_b="b",
+    )
+    assert [result.response.text for result in results] == raw
+    assert [
+        None if result.parsed is None else result.parsed.scores for result in results
+    ] == [
+        {"A": 10, "B": 0},
+        None,
+        {"A": 0, "B": 10},
+        {"A": 5, "B": 5},
+        {"A": 8, "B": 2},
+        {"A": 2, "B": 8},
+    ]
+    assert [result.request.cache_metadata for result in results] == metadata
+    assert used_kwargs == kwargs
+    assert used_kwargs[1]["answer_a_2"] == ("B2" if swapped else "A2")
+    assert items[1].prompt_kwargs["answer_a_2"] == "A2"

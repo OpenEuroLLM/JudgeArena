@@ -4,6 +4,7 @@ import re
 
 import pandas as pd
 import pytest
+from langchain_core.language_models.fake import FakeListLLM
 
 import judgearena.benchmarks.mt_bench_101.runner as runner
 import judgearena.datasets.mt_bench_101 as mt_bench_101
@@ -143,6 +144,45 @@ def test_parse_mt_bench_101_rating():
         parse_mt_bench_101_rating("Rating: [6]", MT_BENCH_101_CLEAN_PROMPT_PRESET)
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [(MT_BENCH_101_PROMPT_PRESET, 2.0), (MT_BENCH_101_CLEAN_PROMPT_PRESET, 9.0)],
+)
+def test_mt_bench_101_judging_keeps_turn_alignment_with_missing_rating(
+    preset, expected
+):
+    items = expand_mt_bench_101_records(
+        [
+            {
+                "task": "PI",
+                "id": 1,
+                "history": [{"user": f"q{i}", "bot": f"ref{i}"} for i in range(1, 4)],
+            }
+        ]
+    ).set_index("instruction_index")
+    completions = pd.DataFrame(
+        {
+            "instruction_index": items.index,
+            "completion": ["answer1", "answer2", "answer3"],
+        }
+    ).iloc[::-1]
+    outputs = ["<think>[[2]]</think> Rating: [[9]]", "no rating", "Rating: [[3]]"]
+    scored = judge_mt_bench_101_single(
+        judge_chat_model=FakeListLLM(responses=outputs),
+        eval_items=items,
+        completions=completions,
+        evaluated_model="candidate",
+        prompt_preset=preset,
+    )
+    assert scored["turn_index"].tolist() == [1, 2, 3]
+    assert scored["model_completion"].tolist() == ["answer1", "answer2", "answer3"]
+    assert scored["judge_completion"].tolist() == outputs
+    assert scored.loc[[0, 2], "score"].tolist() == [expected, 3.0]
+    assert pd.isna(scored.loc[1, "score"])
+    assert "ref1" in scored.loc[1, "user_prompt"]
+    assert "answer1" not in scored.loc[1, "user_prompt"]
 
 
 def test_mt_bench_101_default_prompt_matches_pinned_upstream():

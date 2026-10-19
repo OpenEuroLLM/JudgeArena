@@ -24,12 +24,11 @@ from judgearena.benchmarks.execution import (
     build_generation_kwargs,
     build_judgement_cache,
 )
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_battles
 from judgearena.evaluate import (
     PairScore,
-    combine_swapped_prefs,
-    judge_and_parse_prefs,
     resolve_run_judge_prompt,
 )
 from judgearena.generate import generate_instructions
@@ -134,7 +133,12 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         inference_cache=build_completion_cache(cfg),
         **extra_kwargs,
     ).set_index("instruction_index")
-    completions = completions_df.loc[:, "completion"]
+    # Repeated question IDs can represent distinct battles already in input order.
+    completions = (
+        completions_df["completion"]
+        if completions_df.index.equals(instructions.index)
+        else completions_df.loc[instructions.index, "completion"]
+    )
 
     logger.debug("First completion:\n%s", completions.iloc[0])
 
@@ -159,17 +163,33 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         for i, (_, row) in enumerate(df_battles.iterrows())
     ]
 
-    our_completions = completions.tolist()
+    comparisons = pd.DataFrame(
+        {
+            "instruction_id": instructions.index,
+            "cache_orientation": np.where(
+                our_model_is_position_a, "direct", "reversed"
+            ),
+            "instruction": instructions.tolist(),
+            "completion_A": completions.tolist(),
+            "completion_B": opponent_completions,
+            "model_A": cfg.model.name,
+            "model_B": opponent_models,
+            "opponent_model": opponent_models,
+            "our_model_is_position_a": our_model_is_position_a,
+            "question_id": (
+                df_battles["question_id"].tolist()
+                if "question_id" in df_battles
+                else None
+            ),
+        }
+    )
+    for prefix in ("completion", "model"):
+        comparisons.loc[~our_model_is_position_a, [f"{prefix}_A", f"{prefix}_B"]] = (
+            comparisons.loc[
+                ~our_model_is_position_a, [f"{prefix}_B", f"{prefix}_A"]
+            ].to_numpy()
+        )
     resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
-
-    completions_A = [
-        our_completions[i] if our_model_is_position_a[i] else opponent_completions[i]
-        for i in range(n)
-    ]
-    completions_B = [
-        opponent_completions[i] if our_model_is_position_a[i] else our_completions[i]
-        for i in range(n)
-    ]
 
     judge_extra_kwargs = build_default_judge_model_kwargs(
         cfg.judge.model,
@@ -179,94 +199,25 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         ),
     )
 
-    def run_judge() -> pd.DataFrame:
-        judge_chat_model = prepare_model(
-            model=cfg.judge.model,
-            cache=build_judgement_cache(cfg),
-            **judge_extra_kwargs,
-        )
-        annotations, annotations_reversed, prefs = judge_and_parse_prefs(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions.tolist(),
-            completions_A=completions_A,
-            completions_B=completions_B,
-            swap_mode=cfg.judge.swap_mode,
-            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-            system_prompt=resolved_prompt.system_prompt,
-            user_prompt_template=resolved_prompt.user_prompt_template,
-            prompt_preset=resolved_prompt.preset_name,
-            parse=resolved_prompt.parser,
-            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-            use_tqdm=use_tqdm,
-            cache_row_metadata=[
-                {
-                    "instruction_id": str(instructions.index[index]),
-                    "model_a": (
-                        cfg.model.name
-                        if our_model_is_position_a[index]
-                        else opponent_models[index]
-                    ),
-                    "model_b": (
-                        opponent_models[index]
-                        if our_model_is_position_a[index]
-                        else cfg.model.name
-                    ),
-                    "orientation": (
-                        "direct" if our_model_is_position_a[index] else "reversed"
-                    ),
-                }
-                for index in range(n)
-            ],
-        )
-        if annotations_reversed is None:
-            row_annotations = list(annotations)
-            row_use_model_a = use_model_a_as_opponent
-            row_our_pos_a = our_model_is_position_a
-            row_opponents = list(opponent_models)
-        else:
-            # swap_mode="both": dataframe carries 2n rows (AB then BA).
-            # Position metadata is duplicated; prefs are already oriented
-            # consistently by judge_and_parse_prefs as [pref_AB, 1 - pref_BA].
-            row_annotations = list(annotations) + list(annotations_reversed)
-            row_use_model_a = np.concatenate(
-                [use_model_a_as_opponent, use_model_a_as_opponent]
-            )
-            row_our_pos_a = np.concatenate(
-                [our_model_is_position_a, our_model_is_position_a]
-            )
-            row_opponents = list(opponent_models) + list(opponent_models)
-        frame = pd.DataFrame(
-            {
-                "judge_completion": [a.judge_completion for a in row_annotations],
-                "instruction": [a.instruction for a in row_annotations],
-                "completion_A": [a.completion_A for a in row_annotations],
-                "completion_B": [a.completion_B for a in row_annotations],
-                "pref": prefs,
-                "use_model_a_as_opponent": row_use_model_a,
-                "our_model_is_position_a": row_our_pos_a,
-                "opponent_model": row_opponents,
-            }
-        )
-        return frame
-
-    df_judge = run_judge()
-
-    # Restore position arrays and prefs from cache (in case loaded from disk)
-    use_model_a_as_opponent = df_judge["use_model_a_as_opponent"].to_numpy()
-    our_model_is_position_a = df_judge["our_model_is_position_a"].to_numpy()
-    opponent_models = df_judge["opponent_model"].tolist()
-    prefs = df_judge["pref"].tolist()
-
-    # Instruction-index join key per judged battle, so the saved battles link
-    # back to the arena initial table / completion cache without copying text.
-    # df_judge repeats the n sampled battles once (AB) or twice (AB then BA for
-    # swap_mode="both"), so tile the ids to its actual length.
-    if "question_id" in df_battles.columns and len(df_battles):
-        qids = df_battles["question_id"].tolist()
-        n_rep = (len(df_judge) + len(qids) - 1) // len(qids)
-        question_ids = (qids * n_rep)[: len(df_judge)]
-    else:
-        question_ids = [None] * len(df_judge)
+    judge_chat_model = prepare_model(
+        model=cfg.judge.model,
+        cache=build_judgement_cache(cfg),
+        **judge_extra_kwargs,
+    )
+    df_judge = judge_comparisons(
+        judge_chat_model,
+        comparisons,
+        [(resolved_prompt, comparisons.index)],
+        # Elo already chose its initial slots using the run RNG.
+        swap_mode="both" if cfg.judge.swap_mode == "both" else "fixed",
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=use_tqdm,
+    )
+    # Ratings retain the first judge order, including for reversed judgments.
+    comparison_rows = comparisons.loc[df_judge["instruction_index"]].reset_index(
+        drop=True
+    )
 
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
@@ -306,50 +257,25 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 completion, temperature=temperature
             )
             reparsed_prefs.append(float("nan") if parsed is None else parsed.preference)
-        new_prefs_ab = pd.Series(reparsed_prefs, dtype=float)
+        reparsed = pd.Series(reparsed_prefs, dtype=float)
+        df_judge["pref"] = reparsed.where(
+            df_judge["orientation"] != "reversed", 1 - reparsed
+        )
 
-        if cfg.judge.swap_mode == "both":
-            # df_judge stores AB then BA completions; re-orient the halves the
-            # same way run_judge() did.
-            n_half = len(df_judge) // 2
-            prefs = combine_swapped_prefs(
-                new_prefs_ab[:n_half], new_prefs_ab[n_half:]
-            ).tolist()
-        else:
-            prefs = new_prefs_ab.tolist()
-
-    # Map the final canonical preferences to model-name-level battle results.
     df_llm_judge = prefs_to_battle_results(
-        prefs,
-        our_model_is_position_a,
-        opponent_models,
+        df_judge["pref"],
+        comparison_rows["our_model_is_position_a"],
+        comparison_rows["opponent_model"],
         model_name,
         judge_model=cfg.judge.model,
-        question_ids=question_ids,
+        question_ids=comparison_rows["question_id"],
     )
-
-    # Mark and enrich the rows created for the model under evaluation. Human
-    # anchors keep these columns null. Focal metrics can therefore consume the
-    # same combined battle table as Bradley-Terry without knowing this runner.
-    repeats = max(1, len(df_llm_judge) // max(1, len(our_completions)))
-    row_our_completions = (list(our_completions) * repeats)[: len(df_llm_judge)]
-    row_opponent_completions = (list(opponent_completions) * repeats)[
-        : len(df_llm_judge)
-    ]
-    focal_is_a = pd.Series(our_model_is_position_a, dtype="bool")
+    # Focal metrics consume the original completions in the same frame as prefs.
     df_llm_judge["evaluation_model"] = model_name
-    df_llm_judge["completion_a"] = pd.Series(row_our_completions).where(
-        focal_is_a, row_opponent_completions
-    )
-    df_llm_judge["completion_b"] = pd.Series(row_opponent_completions).where(
-        focal_is_a, row_our_completions
-    )
-    df_llm_judge["instruction_index"] = question_ids
-    if cfg.judge.swap_mode == "both":
-        half = len(df_llm_judge) // 2
-        df_llm_judge["orientation"] = ["direct"] * half + ["reversed"] * half
-    else:
-        df_llm_judge["orientation"] = "single"
+    df_llm_judge["completion_a"] = comparison_rows["completion_A"]
+    df_llm_judge["completion_b"] = comparison_rows["completion_B"]
+    df_llm_judge["instruction_index"] = comparison_rows["question_id"]
+    df_llm_judge["orientation"] = df_judge["orientation"]
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
