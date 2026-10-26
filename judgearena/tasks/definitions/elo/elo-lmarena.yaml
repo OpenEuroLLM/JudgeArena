@@ -3,7 +3,7 @@ task: elo-lmarena
 description: Arena-anchored ELO evaluation using the combined LMSYS Chatbot Arena datasets.
 
 variants:
-  selector: language
+  selector: lang
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
 
 dataset:

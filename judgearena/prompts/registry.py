@@ -4,7 +4,10 @@ import hashlib
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
@@ -169,9 +172,11 @@ PRESETS: dict[str, JudgePromptPreset] = {
 JUDGE_PROMPT_PRESETS = tuple(PRESETS)
 
 
-def default_preset_for_task(task: str | None) -> str:
+def default_preset_for_task(task: str | ResolvedTaskSpec | None) -> str:
     if task is None:
         return DEFAULT_JUDGE_PROMPT_PRESET
+    if not isinstance(task, str):
+        return task.spec.protocol.judge.default_prompt_preset
     # Import lazily: task validation uses the prompt catalog in this module.
     from judgearena.tasks.registry import get_packaged_task
 
@@ -237,7 +242,7 @@ def _resolve_file_prompt(
 
 def resolve_judge_prompt(
     *,
-    task: str | None = None,
+    task: str | ResolvedTaskSpec | None = None,
     preset: str | None = None,
     system_file: str | Path | None = None,
     user_file: str | Path | None = None,
@@ -308,7 +313,7 @@ def resolve_judge_prompt(
 
 
 def resolve_run_judge_prompt(
-    task: str | None,
+    task: str | ResolvedTaskSpec | None,
     judge_cfg,
     *,
     multi_turn: bool = False,

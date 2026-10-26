@@ -5,14 +5,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from judgearena.arenas_utils import extract_turn_text
 from judgearena.artifacts import (
     prepare_run_directory,
     safe_filename,
     write_run_metadata_safely,
 )
-from judgearena.battles import Leaderboard, RatingEntry, write_battles
-from judgearena.benchmarks.arena import resolve_task_languages
+from judgearena.battles import (
+    Leaderboard,
+    RatingEntry,
+    write_battles,
+)
 from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
@@ -20,13 +22,13 @@ from judgearena.benchmarks.elo.rating import (
     select_seeded_random_arena_battles,
 )
 from judgearena.benchmarks.execution import (
-    build_completion_cache,
-    build_generation_kwargs,
     build_judgement_cache,
+    load_or_generate_completions,
 )
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
-from judgearena.datasets import load_battles
+from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import PreferenceData
 from judgearena.evaluate import (
     PairScore,
     resolve_run_judge_prompt,
@@ -45,7 +47,9 @@ logger = get_logger(__name__)
 
 def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     """Rate one model against the human battles defined by an ELO task."""
-    protocol = task.spec.protocol if task is not None else None
+    cfg = cfg.for_task(task)
+    task = cfg.resolved_task
+    protocol = task.spec.protocol
     if not isinstance(protocol, EloProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define an ELO protocol.")
     if cfg.elo is None:
@@ -54,19 +58,20 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     arena = protocol.arena
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
-
     # Step 1: Load arena battles
     logger.info("Step 1: Loading battles from %s", arena)
-    df_arena_all = load_battles(task)
+    task_data = load_task_data(task)
+    if not isinstance(task_data, PreferenceData):
+        raise ValueError("Anchored Elo requires PreferenceData with human labels.")
+    df_arena_all = task_data.human_battles()
 
-    # A task variant preselects languages; elo.languages may narrow it further.
-    selected_languages = resolve_task_languages(
-        task, cfg.elo.languages, setting="elo.languages"
+    filters = resolve_dataset_filters(
+        task,
+        cfg.run.filters,
+        {"lang": cfg.elo.languages} if cfg.elo.languages else {},
     )
-
-    df_battles = df_arena_all
-    if selected_languages:
-        df_battles = df_battles[df_battles["lang"].isin(selected_languages)]
+    # Selection narrows evaluated rows; human anchors retain the original arena pool.
+    df_battles = task_data.select(filters).human_battles()
 
     random_sampling = cfg.elo.elo_random_battles is not None
     sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
@@ -101,16 +106,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     n = len(df_battles)
     logger.info("Loaded %d battles.", n)
 
-    # Extract user instructions (first turn of conversation_a)
     instructions = pd.Series(
-        [
-            extract_turn_text(row["conversation_a"][0])
-            for _, row in df_battles.iterrows()
-        ],
-        index=(
-            arena + ":" + df_battles["question_id"].astype(str)
-            if "question_id" in df_battles
-            else df_battles.index.astype(str)
+        df_battles["instruction"].tolist(),
+        index=df_battles.get(
+            "instruction_id", df_battles["instruction_index"].astype(str)
         ),
         name="instruction",
     )
@@ -119,25 +118,17 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # Step 2: Generate completions for the model under evaluation
     logger.info("Step 2: Generating completions with %s", cfg.model.name)
 
-    # Mirror the benchmark generation path so Elo battles honor the
-    # thinking-token sub-budget for thinking models (the Elo entrypoint
-    # previously called evaluated_generation_kwargs() directly and silently
-    # dropped battle_thinking_token_budget).
-    extra_kwargs = build_generation_kwargs(cfg, cfg.model.name, role="A")
     use_tqdm = False
-    completions_df = generate_instructions(
-        instructions=instructions,
-        model=cfg.model.name,
-        truncate_input_chars=cfg.generation.truncate_all_input_chars,
+    completions = load_or_generate_completions(
+        cfg,
+        cfg.model.name,
+        instructions,
+        task_data.model_completion(
+            cfg.model.name, instruction_ids=pd.Index(df_battles["instruction_index"])
+        ),
+        role="A",
+        generate=generate_instructions,
         use_tqdm=use_tqdm,
-        inference_cache=build_completion_cache(cfg),
-        **extra_kwargs,
-    ).set_index("instruction_index")
-    # Repeated question IDs can represent distinct battles already in input order.
-    completions = (
-        completions_df["completion"]
-        if completions_df.index.equals(instructions.index)
-        else completions_df.loc[instructions.index, "completion"]
     )
 
     logger.debug("First completion:\n%s", completions.iloc[0])
@@ -150,18 +141,16 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # Randomly decide if our model is in position A or B for the judge
     our_model_is_position_a = rng.choice([True, False], size=n)
 
-    opponent_completions = [
-        (
-            extract_turn_text(row["conversation_a"][1])
-            if use_model_a_as_opponent[i]
-            else extract_turn_text(row["conversation_b"][1])
-        )
-        for i, (_, row) in enumerate(df_battles.iterrows())
-    ]
-    opponent_models = [
-        row["model_a"] if use_model_a_as_opponent[i] else row["model_b"]
-        for i, (_, row) in enumerate(df_battles.iterrows())
-    ]
+    opponent_completions = (
+        df_battles["completion_a"]
+        .where(use_model_a_as_opponent, df_battles["completion_b"])
+        .tolist()
+    )
+    opponent_models = (
+        df_battles["model_a"]
+        .where(use_model_a_as_opponent, df_battles["model_b"])
+        .tolist()
+    )
 
     comparisons = pd.DataFrame(
         {
@@ -176,11 +165,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             "model_B": opponent_models,
             "opponent_model": opponent_models,
             "our_model_is_position_a": our_model_is_position_a,
-            "question_id": (
-                df_battles["question_id"].tolist()
-                if "question_id" in df_battles
-                else None
-            ),
+            "question_id": df_battles.get(
+                "question_id", df_battles["instruction_index"]
+            ).tolist(),
         }
     )
     for prefix in ("completion", "model"):
@@ -189,7 +176,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 ~our_model_is_position_a, [f"{prefix}_B", f"{prefix}_A"]
             ].to_numpy()
         )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
 
     judge_extra_kwargs = build_default_judge_model_kwargs(
         cfg.judge.model,
@@ -214,6 +201,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=use_tqdm,
     )
+
     # Ratings retain the first judge order, including for reversed judgments.
     comparison_rows = comparisons.loc[df_judge["instruction_index"]].reset_index(
         drop=True
@@ -304,9 +292,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     )
     results = report.to_dict()
     report.render()
-    # ELO artifacts (ratings, battles, bootstrap CSV, metadata) are judge-specific,
-    # so key the folder on the judge too — otherwise re-running the same
-    # arena/model under a different judge silently overwrites the previous run.
     res_dir = prepare_run_directory(
         cfg,
         Path(cfg.run.result_folder)
@@ -354,6 +339,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # with the other entrypoints, all of which write run-metadata. Best-effort:
     # a metadata-write failure should not sink an already-completed run.
     write_run_metadata_safely(
+        task=cfg.resolved_task,
         output_dir=res_dir,
         entrypoint="judgearena.benchmarks.elo.runner.run_elo",
         run=cfg.model_dump(),

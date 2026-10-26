@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -395,18 +397,33 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_registry_rejects_dataset_adapter_from_another_protocol(tmp_path):
-    definition = _task_definition()
-    definition["dataset"]["adapter"] = "arena_battles"
-    _write_family(
-        tmp_path,
-        family="example",
-        filename="test-task.yaml",
-        definition=definition,
-    )
+@pytest.mark.parametrize(
+    "first_import",
+    [
+        "judgearena.datasets.registry",
+        "judgearena.datasets.mt_bench",
+        "judgearena.tasks.registry",
+    ],
+)
+def test_dataset_registration_preserves_builtins_on_fresh_import(first_import):
+    code = (
+        f"import {first_import}\n"
+        + """
+from judgearena.datasets.registry import register_dataset, dataset_names
+from judgearena.datasets.judgearena_tables import TableAdapter
+import pytest
 
-    with pytest.raises(TaskDefinitionError, match="unknown dataset adapter"):
-        load_tasks(tmp_path)
+register_dataset("custom_tables")(TableAdapter)
+for name in ("mt_bench", "custom_tables"):
+    with pytest.raises(ValueError, match="already registered"):
+        register_dataset(name)(TableAdapter)
+assert {"custom_tables", "mt_bench", "arena_hard"} <= dataset_names()
+"""
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_registry_rejects_unknown_metric_id(tmp_path):
@@ -459,9 +476,12 @@ def test_official_outputs_must_reference_declared_source(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_category_baseline_uses_declared_category_field(tmp_path):
+@pytest.mark.parametrize("with_fields", [False, True])
+def test_category_baseline_uses_declared_category_field(tmp_path, with_fields):
     definition = _task_definition()
     definition["dataset"]["fields"]["category"] = "category"
+    if not with_fields:
+        del definition["dataset"]["fields"]
     definition["protocol"]["baseline"] = {
         "strategy": "category_defaults",
         "category_field": "other_category",
@@ -474,8 +494,11 @@ def test_category_baseline_uses_declared_category_field(tmp_path):
         definition=definition,
     )
 
-    with pytest.raises(TaskDefinitionError, match="dataset.fields.category"):
-        load_tasks(tmp_path)
+    if with_fields:
+        with pytest.raises(TaskDefinitionError, match="dataset.fields.category"):
+            load_tasks(tmp_path)
+    else:
+        assert load_tasks(tmp_path)["test-task"].spec.dataset.fields is None
 
 
 def test_resolved_hash_ignores_yaml_formatting(tmp_path):

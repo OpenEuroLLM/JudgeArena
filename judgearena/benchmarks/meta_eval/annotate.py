@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-import numpy as np
 import pandas as pd
 
-from judgearena.arenas_utils import extract_turn_text
+from judgearena.datasets.arena_battles import validate_conversations
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 
 if TYPE_CHECKING:
@@ -23,51 +22,6 @@ def serialize_judge_input(judge_input: object) -> str:
     if callable(to_string):
         return to_string()
     return str(judge_input)
-
-
-def _battle_texts(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
-    """Validate each conversation pair and return the text sent to the judge."""
-    instructions, completions_a, completions_b = [], [], []
-    for _, battle in df.iterrows():
-        battle_id = battle.get("battle_id", battle.get("question_id", "unknown"))
-        conversations = []
-        for column in ("conversation_a", "conversation_b"):
-            conversation = battle[column]
-            if (
-                not isinstance(conversation, (list, tuple, np.ndarray))
-                or len(conversation) < 2
-            ):
-                raise ValueError(
-                    f"Battle {battle_id!r} requires user and assistant turns in "
-                    f"{column}."
-                )
-            user_turn, assistant_turn = conversation[:2]
-            if (
-                not isinstance(user_turn, dict)
-                or not isinstance(assistant_turn, dict)
-                or user_turn.get("role") != "user"
-                or assistant_turn.get("role") != "assistant"
-            ):
-                raise ValueError(
-                    f"Battle {battle_id!r} requires user and assistant turns in "
-                    f"{column}."
-                )
-            try:
-                conversations.append(
-                    (extract_turn_text(user_turn), extract_turn_text(assistant_turn))
-                )
-            except (AttributeError, TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"Battle {battle_id!r} has invalid turn content in {column}."
-                ) from exc
-        if conversations[0][0] != conversations[1][0]:
-            raise ValueError(
-                f"Battle {battle_id!r} has different user prompts across conversations."
-            )
-        instructions.append(conversations[0][0])
-        completions_a.append(conversations[0][1])
-        completions_b.append(conversations[1][1])
-    return instructions, completions_a, completions_b
 
 
 def _serialize_mapping(value: dict[str, object] | None) -> str | None:
@@ -147,7 +101,11 @@ def annotate_sample(
 ) -> pd.DataFrame:
     parser = resolved_prompt.parser
     assert parser is not None
-    instructions, completions_a, completions_b = _battle_texts(df_sample)
+    if {"conversation_a", "conversation_b"} & set(df_sample.columns):
+        validate_conversations(df_sample)
+    instructions = df_sample["instruction"].tolist()
+    completions_a = df_sample["completion_a"].tolist()
+    completions_b = df_sample["completion_b"].tolist()
     annotations, reversed_annotations, preferences = judge_and_parse_prefs(
         judge_chat_model=judge_chat_model,
         instructions=instructions,

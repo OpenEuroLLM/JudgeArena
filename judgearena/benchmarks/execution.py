@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+import pandas as pd
 
 from judgearena.cache.inference import (
     CompletionInferenceCache,
@@ -63,3 +66,58 @@ def build_judgement_cache(cfg: RunConfig) -> JudgementInferenceCache | None:
     if cfg.run.store_root is None:
         return None
     return JudgementInferenceCache(Path(cfg.run.store_root), cfg.task)
+
+
+def complete_missing[Rows: (pd.Series, pd.DataFrame)](
+    rows: Rows,
+    existing: pd.Series | None,
+    generate_missing: Callable[[Rows], pd.Series],
+) -> pd.Series:
+    """Fill missing answers by row ID; empty strings are already-complete answers."""
+    if existing is not None and not existing.index.equals(rows.index):
+        existing = existing.reindex(rows.index)
+    completions = pd.Series(
+        None if existing is None else existing.to_numpy(),
+        index=rows.index,
+        name="completion",
+        dtype=object,
+        copy=True,
+    )
+    missing = completions.isna().to_numpy()
+    if missing.any():
+        pending = rows.iloc[missing]
+        generated = generate_missing(pending)
+        # Repeated cache IDs can represent distinct rows already in input order.
+        if not generated.index.equals(pending.index):
+            generated = generated.loc[pending.index]
+        completions.iloc[missing] = generated.to_numpy()
+    return completions
+
+
+def load_or_generate_completions(
+    cfg: RunConfig,
+    model: str,
+    instructions: pd.Series,
+    preloaded: pd.Series | None,
+    *,
+    role: Literal["A", "B"],
+    generate: Callable[..., pd.DataFrame],
+    use_tqdm: bool,
+) -> pd.Series:
+    """Reuse supplied rows and generate missing ones in the same input order."""
+    if instructions.isna().any():
+        raise ValueError("Cannot generate completions for missing instruction text.")
+
+    def generate_missing(pending: pd.Series) -> pd.Series:
+        return generate(
+            instructions=pending,
+            model=model,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            use_tqdm=use_tqdm,
+            inference_cache=build_completion_cache(cfg),
+            **build_generation_kwargs(cfg, model, role=role),
+        ).set_index("instruction_index")["completion"]
+
+    # Elo's dataset row IDs and generation cache IDs can differ.
+    existing = None if preloaded is None else preloaded.set_axis(instructions.index)
+    return complete_missing(instructions, existing, generate_missing)

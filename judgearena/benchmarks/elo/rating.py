@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
+from judgearena.battles import hard_preferences
+
 
 def winner_to_pref(winner: str) -> float | None:
     """Convert a hard winner label to a continuous preference value."""
@@ -76,7 +78,7 @@ def _sample_fingerprint(sampled: pd.DataFrame) -> str:
     rows = [
         {
             "index": int(index) if isinstance(index, int | np.integer) else str(index),
-            "question_id": str(row["question_id"]),
+            "question_id": str(row.get("question_id", row.get("instruction_index"))),
             "model_a": str(row["model_a"]),
             "model_b": str(row["model_b"]),
         }
@@ -105,7 +107,10 @@ def select_seeded_random_arena_battles(
             for index in sampled.index
         ],
         "sampled_question_ids": [
-            str(value) for value in sampled["question_id"].tolist()
+            str(value)
+            for value in sampled[
+                "question_id" if "question_id" in sampled else "instruction_index"
+            ].tolist()
         ],
         "sample_fingerprint": _sample_fingerprint(sampled),
     }
@@ -177,15 +182,13 @@ def prefs_to_battle_results(
 
 
 def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
-    """Build deterministic human-anchor battles from a loaded arena frame."""
-    frame = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
+    """Select human anchors from normalized PreferenceData.human_battles() rows."""
+    frame = df_arena_all.loc[:, ["model_a", "model_b", "pref", "source"]].copy()
     counts = pd.concat([frame["model_a"], frame["model_b"]]).value_counts()
     well_represented = set(counts[counts >= 500].index)
     frame = frame[
         frame["model_a"].isin(well_represented)
         & frame["model_b"].isin(well_represented)
     ]
-    frame["pref"] = frame["winner"].map(winner_to_pref)
-    frame["pref_hard"] = frame["pref"]
-    frame["source"] = "human"
+    frame["pref_hard"] = hard_preferences(frame["pref"])
     return frame

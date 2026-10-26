@@ -8,8 +8,6 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 
-from judgearena.arenas_utils import extract_turn_text
-from judgearena.benchmarks.elo.rating import winner_to_pref
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.log import get_logger
@@ -94,22 +92,13 @@ def calibrate_pairscore_temperature(
         random_state=int(rng.integers(0, 2**31)),
     )
     source_rows = source_battles.loc[calibration_battles.index]
-    comparisons = pd.DataFrame(
-        {
-            "instruction": [
-                extract_turn_text(turns[0]) for turns in source_rows["conversation_a"]
-            ],
-            "completion_A": [
-                extract_turn_text(turns[1]) for turns in source_rows["conversation_a"]
-            ],
-            "completion_B": [
-                extract_turn_text(turns[1]) for turns in source_rows["conversation_b"]
-            ],
-            "model_A": source_rows["model_a"],
-            "model_B": source_rows["model_b"],
-            "instruction_id": arena + ":" + source_rows["question_id"].astype(str),
-        },
-        index=calibration_battles.index,
+    comparisons = source_rows.rename(
+        columns={
+            "completion_a": "completion_A",
+            "completion_b": "completion_B",
+            "model_a": "model_A",
+            "model_b": "model_B",
+        }
     )
     calibration_judge = prepare_model(
         model=judge_model,
@@ -130,16 +119,15 @@ def calibrate_pairscore_temperature(
 
     score_differences: list[float] = []
     outcomes: list[float] = []
-    for parsed, human_winner in zip(
-        annotations["parsed"], calibration_battles["winner"], strict=True
+    for parsed, human_preference in zip(
+        annotations["parsed"], calibration_battles["pref"], strict=True
     ):
         scores = {} if parsed is None else parsed["scores"]
         score_a = scores.get("A")
         score_b = scores.get("B")
         if score_a is None or score_b is None:
             continue
-        human_preference = winner_to_pref(human_winner)
-        if human_preference is None or human_preference == 0.5:
+        if human_preference not in (0.0, 1.0):
             continue
         score_differences.append(score_a - score_b)
         outcomes.append(1.0 - human_preference)

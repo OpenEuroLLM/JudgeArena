@@ -9,10 +9,12 @@ import pytest
 from langchain_core.language_models.fake import FakeListLLM
 
 from judgearena.benchmarks.meta_eval.annotate import (
-    _battle_texts,
     aggregate_battle_preferences,
     annotate_sample,
 )
+from judgearena.cache.inference import JudgementInferenceCache
+from judgearena.cache.sqlite import JudgementCache
+from judgearena.models import prepare_model
 from judgearena.prompts.registry import resolve_judge_prompt
 
 
@@ -21,6 +23,9 @@ def _sample():
         [
             {
                 "battle_id": "arena:q1",
+                "instruction": "Same prompt",
+                "completion_a": "Alpha answer",
+                "completion_b": "Beta answer",
                 "model_a": "alpha",
                 "model_b": "beta",
                 "conversation_a": [
@@ -47,6 +52,7 @@ def _config(swap_mode):
 def test_annotation_swaps_and_aggregates_battles():
     sample = pd.concat([_sample()] * 3, ignore_index=True)
     sample["battle_id"] = ["complete", "partial", "missing"]
+    sample.index = [8, 3, 11]
     for column in ("conversation_a", "conversation_b"):
         sample[column] = sample[column].map(
             lambda turns: np.asarray(turns, dtype=object)
@@ -87,20 +93,31 @@ def test_annotation_swaps_and_aggregates_battles():
     assert battles.loc[["partial", "missing"], "pref"].isna().all()
 
 
-def test_annotation_preserves_parser_label_and_details():
+def test_annotation_preserves_parser_label_and_details(tmp_path):
     output = (
         '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
     )
+    judge = prepare_model(
+        "Dummy/judge", cache=JudgementInferenceCache(tmp_path, "meta-eval")
+    )
+    judge.factory = lambda: FakeListLLM(responses=[output])
+    sample = _sample().drop(columns=["conversation_a", "conversation_b"])
+    sample["instruction_id"] = "upstream-id"
     rows = annotate_sample(
-        _sample(),
+        sample,
         _config("fixed"),
-        judge_chat_model=FakeListLLM(responses=[output]),
+        judge_chat_model=judge,
         resolved_prompt=resolve_judge_prompt(preset="meta-eval-alpaca-eval-json"),
     )
     assert rows.loc[0, "parsed_label"] == "M"
     assert json.loads(rows.loc[0, "parsed_details_json"]) == {"ranks": {"M": 1, "m": 2}}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
     assert battles["pref"].tolist() == [1.0]
+    with JudgementCache(next(tmp_path.rglob("judgements.db"))) as cache:
+        cached = cache.query()
+    assert cached[
+        ["instruction_id", "model_a", "model_b", "orientation"]
+    ].values.tolist() == [["arena:q1", "alpha", "beta", "direct"]]
 
 
 def test_aggregate_rejects_incomplete_orientation_sets():
@@ -115,4 +132,9 @@ def test_conversation_validation_requires_matching_prompts():
     sample = _sample()
     sample.at[0, "conversation_b"][0]["content"] = "Different prompt"
     with pytest.raises(ValueError, match="different user prompts"):
-        _battle_texts(sample)
+        annotate_sample(
+            sample,
+            _config("fixed"),
+            judge_chat_model=FakeListLLM(responses=["score_A: 9\nscore_B: 1"]),
+            resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
+        )

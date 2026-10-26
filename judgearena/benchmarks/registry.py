@@ -20,18 +20,10 @@ class BenchmarkRunner(Protocol):
 
 @dataclass(frozen=True)
 class BenchmarkAdapter:
-    """Route a set of task names to one benchmark runner.
-
-    ``tasks=None`` defines the fallback adapter and should therefore be last.
-    Adding a benchmark only requires its runner and one registry entry.
-    """
+    """Associate a task protocol runner ID with its implementation."""
 
     name: str
-    tasks: frozenset[str] | None
     runner: BenchmarkRunner
-
-    def supports(self, task: str) -> bool:
-        return self.tasks is None or task in self.tasks
 
 
 @dataclass(frozen=True)
@@ -39,11 +31,11 @@ class ResolvedBenchmark:
     """Runner selection and the task definition resolved during dispatch."""
 
     adapter: BenchmarkAdapter
-    task: ResolvedTaskSpec | None
+    task: ResolvedTaskSpec
 
 
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
-    """Return registered benchmark implementations, specific first."""
+    """Return registered benchmark implementations."""
     from judgearena.benchmarks.elo.runner import run_elo
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
     from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
@@ -51,11 +43,11 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     from judgearena.benchmarks.pairwise.runner import run_pairwise
 
     return (
-        BenchmarkAdapter("elo", frozenset(), run_elo),
-        BenchmarkAdapter("meta_eval", frozenset(), run_meta_eval),
-        BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
-        BenchmarkAdapter("mt_bench_101", frozenset(), run_mt_bench_101_benchmark),
-        BenchmarkAdapter("pairwise", None, run_pairwise),
+        BenchmarkAdapter("elo", run_elo),
+        BenchmarkAdapter("meta_eval", run_meta_eval),
+        BenchmarkAdapter("mt_bench", run_mt_bench_benchmark),
+        BenchmarkAdapter("mt_bench_101", run_mt_bench_101_benchmark),
+        BenchmarkAdapter("pairwise", run_pairwise),
     )
 
 
@@ -64,21 +56,18 @@ def benchmark_runner_names() -> frozenset[str]:
     return frozenset(adapter.name for adapter in benchmark_adapters())
 
 
-def resolve_benchmark(task: str) -> ResolvedBenchmark:
-    """Resolve a runner and task definition with one registry lookup."""
-    adapters = benchmark_adapters()
-    resolved = get_packaged_task(task)
-    if resolved is not None:
-        runner_id = resolved.spec.protocol.runner
-        for adapter in adapters:
-            if adapter.name == runner_id:
-                return ResolvedBenchmark(adapter=adapter, task=resolved)
-        raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
-
-    for adapter in adapters:
-        if adapter.supports(task):
-            return ResolvedBenchmark(adapter=adapter, task=None)
-    raise ValueError(f"No generate-and-evaluate adapter supports task {task!r}.")
+def resolve_benchmark(task: str | ResolvedTaskSpec) -> ResolvedBenchmark:
+    """Select the runner declared by a resolved task or packaged task name."""
+    resolved = get_packaged_task(task) if isinstance(task, str) else task
+    if resolved is None:
+        raise ValueError(f"Unknown task {task!r}.")
+    runner_id = resolved.spec.protocol.runner
+    for adapter in benchmark_adapters():
+        if adapter.name == runner_id:
+            return ResolvedBenchmark(adapter=adapter, task=resolved)
+    raise ValueError(
+        f"Task {resolved.task!r} selects unavailable runner {runner_id!r}."
+    )
 
 
 def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:

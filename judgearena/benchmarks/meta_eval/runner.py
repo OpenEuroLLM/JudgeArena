@@ -15,8 +15,7 @@ from judgearena.artifacts import (
     safe_filename,
     write_run_metadata_safely,
 )
-from judgearena.benchmarks.arena import resolve_task_languages
-from judgearena.benchmarks.elo.rating import winner_to_pref
+from judgearena.battles import winner_labels
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
@@ -28,7 +27,8 @@ from judgearena.benchmarks.meta_eval.sampling import (
     select_top_models,
 )
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
-from judgearena.datasets import load_battles
+from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import PreferenceData
 from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.log import get_logger
 from judgearena.reports import MetaEvalReport
@@ -39,29 +39,27 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_REQUIRED_COLUMNS = {
-    "question_id",
-    "model_a",
-    "model_b",
-    "winner",
-    "lang",
-    "conversation_a",
-    "conversation_b",
-}
-
 
 def _prepare_arena_battles(
-    battles: pd.DataFrame, *, task: str, arena: str, languages: list[str]
+    data: PreferenceData, *, task: str, arena: str
 ) -> pd.DataFrame:
-    """Validate arena identity fields and add the metric reference preference."""
-    missing = sorted(_REQUIRED_COLUMNS - set(battles.columns))
-    if missing:
+    """Validate human comparison labels and retain physical battle identities."""
+    if not isinstance(data, PreferenceData):
         raise MetaEvalSamplingError(
-            f"Task {task!r} is missing required battle columns: {missing}."
+            "Meta-evaluation requires PreferenceData with human labels."
         )
-
-    battles = battles.copy()
-    identity_columns = ("question_id", "model_a", "model_b", "winner", "lang")
+    battles = data.battles.copy()
+    if "question_id" not in battles:
+        battles["question_id"] = battles["instruction_index"]
+    if "lang" not in battles:
+        battles["lang"] = ""
+    if not battles["source"].eq("human").all():
+        raise MetaEvalSamplingError(f"Task {task!r} requires human labels.")
+    if not battles["pref"].isin([0.0, 0.5, 1.0]).all():
+        raise MetaEvalSamplingError(
+            f"Task {task!r} requires observed human preferences of 0, 0.5, or 1."
+        )
+    identity_columns = ("question_id", "model_a", "model_b")
     for column in identity_columns:
         if battles[column].isna().any():
             raise MetaEvalSamplingError(
@@ -82,24 +80,12 @@ def _prepare_arena_battles(
             f"Task {task!r} contains duplicate physical battle IDs."
         )
 
-    battles["reference_pref"] = battles["winner"].map(winner_to_pref)
-    invalid_winners = sorted(
-        {
-            str(value)
-            for value in battles.loc[battles["reference_pref"].isna(), "winner"]
-        }
-    )
-    if invalid_winners:
-        raise MetaEvalSamplingError(
-            f"Task {task!r} contains invalid human winners: {invalid_winners}."
-        )
+    battles["reference_pref"] = battles["pref"]
 
-    if languages:
-        battles = battles.loc[battles["lang"].isin(languages)]
     battles = battles.loc[battles["model_a"] != battles["model_b"]]
     if battles.empty:
         raise MetaEvalSamplingError(
-            f"Task {task!r} has no battles in languages {languages}."
+            f"Task {task!r} has no selected battles between different models."
         )
     return battles.reset_index(drop=True)
 
@@ -114,22 +100,25 @@ def run_meta_eval(
     cfg: RunConfig, task: ResolvedTaskSpec | None = None
 ) -> dict[str, object]:
     """Sample arena battles, judge them, and run configured meta metrics."""
-    protocol = task.spec.protocol if task is not None else None
+    cfg = cfg.for_task(task)
+    task = cfg.resolved_task
+    protocol = task.spec.protocol
     if not isinstance(protocol, MetaEvalProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define a meta-eval protocol.")
     if cfg.meta_eval is None:
         raise ValueError(f"Task {cfg.task!r} requires meta-eval runtime settings.")
 
     run_started_at = datetime.now(UTC)
-    languages = resolve_task_languages(
-        task, cfg.meta_eval.languages, setting="meta_eval.languages"
+    filters = resolve_dataset_filters(
+        task,
+        cfg.run.filters,
+        {"lang": cfg.meta_eval.languages} if cfg.meta_eval.languages else {},
     )
     metrics = build_metrics(protocol.scoring.metrics)
 
     logger.info("Loading human battles from %s", protocol.arena)
-    arena_battles = _prepare_arena_battles(
-        load_battles(task), task=cfg.task, arena=protocol.arena, languages=languages
-    )
+    data = load_task_data(task).select(filters)
+    arena_battles = _prepare_arena_battles(data, task=cfg.task, arena=protocol.arena)
     top_models, top_pool = select_top_models(
         arena_battles, top_models=cfg.meta_eval.top_models
     )
@@ -139,7 +128,7 @@ def run_meta_eval(
         battles_per_model=cfg.meta_eval.battles_per_model,
         seed=cfg.run.seed,
     )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
             "Meta-evaluation cannot use delegated prompt preset "
@@ -158,7 +147,7 @@ def run_meta_eval(
         f"{cfg.judge.swap_mode}-{timestamp}"
     )
     result_dir = prepare_run_directory(cfg, Path(cfg.run.result_folder) / result_name)
-    sample.loc[
+    sample.assign(winner=winner_labels(sample["pref"])).loc[
         :, ("battle_id", "question_id", "model_a", "model_b", "winner", "lang")
     ].to_parquet(result_dir / "sample.parquet", index=False)
 
@@ -194,7 +183,7 @@ def run_meta_eval(
         arena=protocol.arena,
         judge_model=cfg.judge.model,
         prompt_preset=resolved_prompt.preset_name,
-        languages=languages,
+        languages=filters.get("lang", []),
         top_models=top_models,
         n_sampled_battles=len(sample),
         swap_mode=cfg.judge.swap_mode,
@@ -204,6 +193,7 @@ def run_meta_eval(
     report.render()
     result_path = report.save(result_dir / "results.json")
     write_run_metadata_safely(
+        task=cfg.resolved_task,
         output_dir=result_dir,
         entrypoint="judgearena.benchmarks.meta_eval.runner.run_meta_eval",
         run=cfg.model_dump(),

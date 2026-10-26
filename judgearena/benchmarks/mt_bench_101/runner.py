@@ -9,11 +9,15 @@ from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
-from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.artifacts import (
+    prepare_run_directory,
+    write_run_metadata_safely,
+)
 from judgearena.benchmarks.execution import (
     build_completion_cache,
     build_generation_kwargs,
     build_judge,
+    complete_missing,
 )
 from judgearena.benchmarks.mt_bench_101.evaluate import (
     aggregate_mt_bench_101_dialogues,
@@ -24,7 +28,7 @@ from judgearena.benchmarks.mt_bench_101.generate import (
     generate_mt_bench_101_completions,
 )
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
-from judgearena.datasets import load_instructions
+from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.log import get_logger
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBench101Protocol
@@ -45,21 +49,25 @@ def _select_complete_dialogues(
     return eval_items.loc[eval_items["dialogue_uid"].isin(selected)]
 
 
-def _generate_completions(
+def _load_or_generate_completions(
     *,
     cfg: RunConfig,
     eval_items: pd.DataFrame,
+    preloaded: pd.Series | None,
     model_name: str,
     role: Literal["A", "B"],
 ) -> pd.DataFrame:
-    return generate_mt_bench_101_completions(
-        eval_items=eval_items,
-        model=model_name,
-        truncate_input_chars=cfg.generation.truncate_all_input_chars,
-        use_tqdm=cfg.run.use_tqdm,
-        inference_cache=build_completion_cache(cfg),
-        **build_generation_kwargs(cfg, model_name, role=role),
-    )
+    def generate_missing(pending: pd.DataFrame) -> pd.Series:
+        return generate_mt_bench_101_completions(
+            eval_items=pending,
+            model=model_name,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
+            inference_cache=build_completion_cache(cfg),
+            **build_generation_kwargs(cfg, model_name, role=role),
+        ).set_index("instruction_index")["completion"]
+
+    return complete_missing(eval_items, preloaded, generate_missing).to_frame()
 
 
 def run_mt_bench_101_benchmark(
@@ -67,7 +75,9 @@ def run_mt_bench_101_benchmark(
 ) -> pd.Series:
     """Generate golden-context answers, grade each turn, then derive pairwise prefs."""
     run_started_at = datetime.now(UTC)
-    protocol = task.spec.protocol if task is not None else None
+    cfg = cfg.for_task(task)
+    task = cfg.resolved_task
+    protocol = task.spec.protocol
     if not isinstance(protocol, MTBench101Protocol):
         raise ValueError(f"Task {cfg.task!r} does not define an MT-Bench-101 protocol.")
     if cfg.model.baseline is None:
@@ -83,20 +93,34 @@ def run_mt_bench_101_benchmark(
         Path(cfg.run.result_folder)
         / f"{result_name}-{run_started_at.strftime('%Y%m%d_%H%M%S')}",
     )
+    task_data = load_task_data(task).select(
+        resolve_dataset_filters(task, cfg.run.filters)
+    )
     eval_items = _select_complete_dialogues(
-        load_instructions(task if task is not None else cfg.task, n_instructions=None),
-        cfg.generation.n_instructions,
+        task_data.instructions, cfg.generation.n_instructions
     )
     logger.info(
         "Generating golden-context completions for MT-Bench-101 with %s and %s.",
         cfg.model.name,
         cfg.model.baseline,
     )
-    completions_a = _generate_completions(
-        cfg=cfg, eval_items=eval_items, model_name=cfg.model.name, role="A"
+    completions_a = _load_or_generate_completions(
+        cfg=cfg,
+        eval_items=eval_items,
+        preloaded=task_data.model_completion(
+            cfg.model.name, instruction_ids=eval_items.index
+        ),
+        model_name=cfg.model.name,
+        role="A",
     )
-    completions_b = _generate_completions(
-        cfg=cfg, eval_items=eval_items, model_name=cfg.model.baseline, role="B"
+    completions_b = _load_or_generate_completions(
+        cfg=cfg,
+        eval_items=eval_items,
+        preloaded=task_data.model_completion(
+            cfg.model.baseline, instruction_ids=eval_items.index
+        ),
+        model_name=cfg.model.baseline,
+        role="B",
     )
     judge_chat_model = build_judge(cfg)
     judge_prompt_preset = (
@@ -179,6 +203,7 @@ def run_mt_bench_101_benchmark(
     )
     annotations.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
     write_run_metadata_safely(
+        task=cfg.resolved_task,
         output_dir=res_folder,
         entrypoint="judgearena.benchmarks.mt_bench_101.runner.run_mt_bench_101_benchmark",
         run=cfg.model_dump(),

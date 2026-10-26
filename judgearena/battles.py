@@ -22,6 +22,31 @@ from judgearena.artifacts import to_jsonable
 WINNERS = frozenset({"model_a", "model_b", "tie", "tie (bothbad)"})
 
 
+def preference_values(values: pd.Series) -> pd.Series:
+    """Validate continuous preferences; missing judgments remain missing."""
+    try:
+        prefs = values.astype("float64")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Battle preferences must be numeric.") from exc
+    if (~prefs.dropna().between(0, 1)).any():
+        raise ValueError(
+            "Battle preferences must be missing or finite values in [0, 1]."
+        )
+    return prefs
+
+
+def hard_preferences(values: pd.Series) -> pd.Series:
+    prefs = preference_values(values)
+    return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
+
+
+def winner_labels(preferences: pd.Series) -> pd.Series:
+    """Derive legacy winner labels for exported artifacts."""
+    return hard_preferences(preferences).map(
+        {0.0: "model_a", 0.5: "tie", 1.0: "model_b"}
+    )
+
+
 @dataclass(frozen=True)
 class Battle:
     """One pairwise outcome. ``source`` records its provenance."""

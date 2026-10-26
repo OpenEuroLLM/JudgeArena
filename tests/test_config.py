@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,42 @@ from judgearena.config import (
     dump_config,
     load_config,
 )
+from judgearena.prompts.registry import resolve_run_judge_prompt
+from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloScoringSpec, MetricSpec
+
+
+@pytest.mark.parametrize("override", [None, 0.8])
+def test_supplied_task_owns_defaults_and_prompt(override, monkeypatch):
+    task = get_packaged_task("alpaca-eval")
+    spec = task.spec.model_dump()
+    spec["task"] = "custom-task"
+    spec["protocol"]["judge"].update(
+        default_temperature=0.2, default_prompt_preset="default"
+    )
+    task = replace(task, spec=type(task.spec).model_validate(spec))
+    monkeypatch.setattr(
+        config_module,
+        "get_packaged_task",
+        lambda _: pytest.fail("task was looked up again"),
+    )
+    judge = {"model": "Dummy/j"}
+    if override is not None:
+        judge["temperature"] = override
+    cfg = RunConfig(
+        task="custom-task", resolved_task=task, model={"name": "Dummy/a"}, judge=judge
+    )
+    assert cfg.judge.temperature == (0.2 if override is None else override)
+    assert (
+        resolve_run_judge_prompt(cfg.resolved_task, cfg.judge).preset_name == "default"
+    )
+    assert "resolved_task" not in cfg.model_dump()
+
+    spec["protocol"]["judge"]["default_temperature"] = 0.4
+    updated = replace(task, spec=type(task.spec).model_validate(spec))
+    rebound = cfg.for_task(updated)
+    assert rebound.judge.temperature == (0.4 if override is None else override)
+    assert cfg.judge.temperature == (0.2 if override is None else override)
 
 
 def _base_generate() -> dict:
@@ -110,6 +146,7 @@ def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
 
 
 def _registered_task(
+    task_id: str,
     *,
     default_swap_mode: str = "both",
     default_temperature: float | None = 0.25,
@@ -117,6 +154,7 @@ def _registered_task(
     default_top_logprobs: int | None = 5,
 ):
     return SimpleNamespace(
+        task=task_id,
         spec=SimpleNamespace(
             protocol=SimpleNamespace(
                 generation=SimpleNamespace(
@@ -130,26 +168,14 @@ def _registered_task(
                     default_top_logprobs=default_top_logprobs,
                 ),
             )
-        )
+        ),
     )
-
-
-def test_registered_task_applies_judge_defaults(monkeypatch):
-    monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-
-    cfg = RunConfig(**data)
-
-    assert cfg.judge.swap_mode == "both"
-    assert cfg.judge.temperature == 0.25
 
 
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
+        ({}, ("both", 0.25, 4096, 5)),
         (
             {
                 "swap_mode": "random",
@@ -161,11 +187,11 @@ def test_registered_task_applies_judge_defaults(monkeypatch):
         ),
     ],
 )
-def test_registered_task_defaults_do_not_replace_explicit_judge_config(
+def test_registered_task_judge_defaults_preserve_explicit_overrides(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     data = _base_generate()
     data["task"] = "yaml-task"
@@ -208,7 +234,7 @@ def test_generation_settings_prefer_dedicated_then_engine_then_task(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     data = _base_generate()
     data["model"].update(overrides)
@@ -243,7 +269,7 @@ def test_judge_settings_include_inherited_engine_kwargs(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
     data = _base_generate()

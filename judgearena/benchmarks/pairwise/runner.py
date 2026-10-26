@@ -10,22 +10,23 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.artifacts import (
+    prepare_run_directory,
+    write_run_metadata_safely,
+)
 from judgearena.benchmarks.execution import (
-    build_completion_cache,
-    build_generation_kwargs,
     build_judge,
+    load_or_generate_completions,
 )
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
-from judgearena.datasets.pairwise import load_pairwise_task_data
+from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.evaluate import resolve_run_judge_prompt
 from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
 from judgearena.prompts.registry import ResolvedJudgePrompt
 from judgearena.reports import BattleReport
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import ResolvedTaskSpec
 
 if TYPE_CHECKING:
@@ -90,15 +91,15 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     run_started_at = datetime.now(UTC)
 
-    resolved_task = resolved_task or get_packaged_task(cfg.task)
-    if resolved_task is None:
-        raise ValueError(f"Unknown task {cfg.task!r}.")
-    task_data = load_pairwise_task_data(
-        resolved_task,
-        n_instructions=cfg.generation.n_instructions,
+    cfg = cfg.for_task(resolved_task)
+    resolved_task = cfg.resolved_task
+    resolved_prompt = resolve_run_judge_prompt(resolved_task, cfg.judge)
+    task_data = load_task_data(resolved_task).select(
+        resolve_dataset_filters(resolved_task, cfg.run.filters)
     )
     instructions_df = task_data.instructions
     instructions = instructions_df.loc[:, "instruction"]
+
     metric_columns = {
         "instruction_index",
         "model",
@@ -179,67 +180,40 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         else generate_instructions
     )
 
-    def _run_generation(
-        model_spec: str, *, generation_kwargs: dict[str, object]
-    ) -> pd.DataFrame:
-        return generation_function(
-            instructions=instructions,
-            model=model_spec,
-            truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            inference_cache=build_completion_cache(cfg),
-            **generation_kwargs,
-        )
-
-    def _align_completion_series(df: pd.DataFrame) -> pd.Series:
-        return df.set_index("instruction_index").loc[instructions.index, "completion"]
-
     def _load_or_generate_completions(
         model_spec: str,
         *,
         role: str,
         instruction_ids: pd.Index | None = None,
     ) -> pd.Series:
-        preloaded = task_data.model_completion(
-            model_spec,
-            instruction_ids=instruction_ids,
+        selected = (
+            instructions
+            if instruction_ids is None
+            else instructions.loc[instruction_ids]
         )
-        if preloaded is not None:
-            return preloaded
-        generation_kwargs = build_generation_kwargs(cfg, model_spec, role=role)
-        generated = _run_generation(
+        return load_or_generate_completions(
+            cfg,
             model_spec,
-            generation_kwargs=generation_kwargs,
-        )
-        completions = _align_completion_series(generated)
-        return (
-            completions if instruction_ids is None else completions.loc[instruction_ids]
+            selected,
+            task_data.model_completion(model_spec, instruction_ids=selected.index),
+            role=role,
+            generate=generation_function,
+            use_tqdm=cfg.run.use_tqdm,
         )
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
     baseline_per_index = baseline_plan.aligned_to(instructions.index)
-    if baseline_plan.is_single_model:
-        completions_B = _load_or_generate_completions(
-            baseline_plan.single_model, role="B"
-        )
-    else:
-        per_baseline_completions = {
-            model: _load_or_generate_completions(
+    completions_B = pd.concat(
+        [
+            _load_or_generate_completions(
                 model,
                 role="B",
                 instruction_ids=baseline_per_index.index[baseline_per_index == model],
             )
             for model in baseline_plan.unique_models
-        }
-        completions_B = pd.Series(
-            [
-                per_baseline_completions[model].loc[instruction_index]
-                for instruction_index, model in baseline_per_index.items()
-            ],
-            index=instructions.index,
-            name="completion",
-        )
+        ]
+    ).reindex(instructions.index)
 
     logger.debug("First instruction/context: %s", instructions.values[0])
     logger.debug("First completion of %s:\n%s", cfg.model.name, completions_A.values[0])
@@ -253,7 +227,6 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     judge_chat_model = build_judge(cfg)
 
     logger.info("Saving results to %s", res_folder)
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
 
     eval_index = instructions.head(n_instructions).index
     prompt_groups = _build_judge_batches(
@@ -374,6 +347,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     eval_completions_B = completions_B.loc[eval_instruction_index].tolist()
 
     write_run_metadata_safely(
+        task=cfg.resolved_task,
         output_dir=res_folder,
         entrypoint="judgearena.benchmarks.pairwise.runner.run_pairwise",
         run=cfg.model_dump(),

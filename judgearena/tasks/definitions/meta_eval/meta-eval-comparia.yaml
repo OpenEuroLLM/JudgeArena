@@ -3,7 +3,7 @@ task: meta-eval-comparia
 description: Score a judge against human votes from the ComparIA arena.
 
 variants:
-  selector: language
+  selector: lang
   values: [fr, en]
 
 dataset:

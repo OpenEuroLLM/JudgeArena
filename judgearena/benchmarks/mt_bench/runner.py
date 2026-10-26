@@ -9,29 +9,31 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import pandas as pd
 
-from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
+from judgearena.artifacts import (
+    prepare_run_directory,
+    write_run_metadata_safely,
+)
 from judgearena.benchmarks.execution import (
     build_completion_cache,
+    build_generation_kwargs,
     build_judgement_cache,
 )
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
 from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
-from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
-from judgearena.datasets import load_instructions
-from judgearena.datasets.mt_bench import (
-    load_mt_bench_model_answers,
-)
+from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import CompletionData, _require_columns
 from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
-from judgearena.models import is_thinking_model, prepare_model
+from judgearena.models import prepare_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBenchProtocol
@@ -48,6 +50,9 @@ def _align_mt_bench_completions(
 ) -> pd.DataFrame:
     """Align cached or generated MT-Bench completions to the question order."""
     indexed = completions.set_index("instruction_index")
+    _require_columns(
+        indexed, {"completion_turn_1", "completion_turn_2"}, "Two-turn completions"
+    )
     missing_ids = questions_df.index.difference(indexed.index)
     if not missing_ids.empty:
         missing_ids_preview = ", ".join(str(x) for x in missing_ids[:5])
@@ -58,35 +63,14 @@ def _align_mt_bench_completions(
     return indexed.loc[questions_df.index]
 
 
-def _build_mt_bench_generation_kwargs(
-    *, cfg: RunConfig, model_spec: str, role: str
-) -> dict[str, object]:
-    """Battle-model kwargs, adding a thinking-token sub-budget when requested."""
-    if role == "A":
-        generation_kwargs = cfg.model.evaluated_generation_kwargs()
-    elif role == "B":
-        generation_kwargs = cfg.model.baseline_generation_kwargs()
-    else:
-        raise ValueError(f"Unknown generation role: {role!r}")
-    provider, _, model_name = model_spec.partition("/")
-    if (
-        cfg.judge.battle_thinking_token_budget is not None
-        and provider == "VLLM"
-        and is_thinking_model(model_name)
-    ):
-        max_tokens = int(generation_kwargs.get("max_tokens", cfg.model.max_out_tokens))
-        generation_kwargs["thinking_token_budget"] = min(
-            int(cfg.judge.battle_thinking_token_budget),
-            max_tokens,
-        )
-    return generation_kwargs
-
-
 def _generate_mt_bench_completions(
     cfg: RunConfig,
-    protocol: MTBenchProtocol,
+    task: ResolvedTaskSpec,
     questions_df: pd.DataFrame,
+    task_data: CompletionData,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    protocol = task.spec.protocol
+
     def _run_generation(
         model_name: str, *, generation_kwargs: dict[str, object]
     ) -> pd.DataFrame:
@@ -109,19 +93,15 @@ def _generate_mt_bench_completions(
             **generation_kwargs,
         )
 
-    def _load_or_generate(model_name: str, *, role: str) -> pd.DataFrame:
-        loaded_answers = load_mt_bench_model_answers(
-            model_name, n_instructions=cfg.generation.n_instructions
-        )
+    def _load_or_generate(model_name: str, *, role: Literal["A", "B"]) -> pd.DataFrame:
+        loaded_answers = task_data.model_outputs_for(model_name)
         if loaded_answers is not None:
             return _align_mt_bench_completions(
                 questions_df=questions_df,
                 completions=loaded_answers,
                 model_name=model_name,
             )
-        generation_kwargs = _build_mt_bench_generation_kwargs(
-            cfg=cfg, model_spec=model_name, role=role
-        )
+        generation_kwargs = build_generation_kwargs(cfg, model_name, role=role)
         generated_answers = _run_generation(
             model_name,
             generation_kwargs=generation_kwargs,
@@ -170,6 +150,7 @@ def _save_mt_bench_results(
     annotations_df.to_csv(res_folder / f"{result_name}-annotations.csv", index=False)
 
     write_run_metadata_safely(
+        task=cfg.resolved_task,
         output_dir=res_folder,
         entrypoint="judgearena.benchmarks.mt_bench.runner.run_mt_bench_benchmark",
         run=cfg.model_dump(),
@@ -392,7 +373,9 @@ def _run_mt_bench_preset(
 def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None):
     """Run the registered MT-Bench generation, judging, and reporting lifecycle."""
     run_started_at = datetime.now(UTC)
-    protocol = task.spec.protocol if task is not None else None
+    cfg = cfg.for_task(task)
+    task = cfg.resolved_task
+    protocol = task.spec.protocol
     if not isinstance(protocol, MTBenchProtocol):
         raise ValueError(f"Task {cfg.task!r} does not define an MT-Bench protocol.")
     if cfg.judge.swap_mode not in ("fixed", "both"):
@@ -400,7 +383,9 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench supports only swap_mode='fixed' or 'both'; "
             f"got {cfg.judge.swap_mode!r}."
         )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+    resolved_prompt = resolve_run_judge_prompt(
+        cfg.resolved_task, cfg.judge, multi_turn=True
+    )
     if (
         resolved_prompt.parser is not None
         and resolved_prompt.parser.requires_top_logprobs
@@ -409,14 +394,17 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench does not support parsers that require logprobs. "
             "Use a text-based judge parser."
         )
-    if cfg.model.baseline is None:
-        baseline = native_pairwise_baseline(cfg.task)
-        cfg.model.baseline = baseline if isinstance(baseline, str) else None
-    if cfg.model.baseline is None:
-        raise ValueError(
-            f"--model_B is required for dataset '{cfg.task}'; "
-            "no dataset-native baseline registered."
-        )
+    task_data = load_task_data(task).select(
+        resolve_dataset_filters(task, cfg.run.filters)
+    )
+    questions_df = task_data.instructions.head(cfg.generation.n_instructions)
+    _require_columns(questions_df, {"turn_1", "turn_2"}, "Two-turn instructions")
+    cfg.model.baseline = resolve_baseline_plan(
+        task_id=cfg.task,
+        task=task,
+        runtime_baseline=cfg.model.baseline,
+        instructions=questions_df,
+    ).single_model
     result_name = (
         f"{cfg.task}-{cfg.model.name}-{cfg.model.baseline}-{cfg.judge.model}-"
         f"{cfg.judge.swap_mode}"
@@ -427,9 +415,6 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         Path(cfg.run.result_folder) / f"{result_name}-{run_timestamp}",
     )
 
-    questions_df = load_instructions(
-        cfg.task, n_instructions=cfg.generation.n_instructions
-    )
     logger.info(
         "Generating multi-turn completions for MT-Bench with %s and %s.",
         cfg.model.name,
@@ -437,8 +422,9 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
     )
     completions_a, completions_b = _generate_mt_bench_completions(
         cfg=cfg,
-        protocol=protocol,
+        task=task,
         questions_df=questions_df,
+        task_data=task_data,
     )
     if resolved_prompt.delegated:
         logger.info(

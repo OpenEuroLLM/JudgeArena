@@ -1,6 +1,8 @@
 import json
+from dataclasses import replace
 
 import judgearena.artifacts.metadata as repro
+from judgearena.tasks.registry import get_packaged_task
 
 
 def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
@@ -14,10 +16,15 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
     (tmp_path / "results.json").write_text("{}")
 
+    task = get_packaged_task("alpaca-eval")
+    task = replace(
+        task, provenance=replace(task.provenance, resolved_sha256="custom-hash")
+    )
     metadata_path = repro.write_run_metadata(
         output_dir=tmp_path,
         entrypoint="judgearena.test.entrypoint",
-        run={"dataset": "alpaca-eval"},
+        run={"task": "alpaca-eval"},
+        task=task,
         results={
             "num_battles": 3,
             "preferences": [0.0, 0.5, 1.0],
@@ -41,6 +48,7 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
 
     metadata = json.loads(metadata_path.read_text())
+    assert metadata["task_definition"]["resolved_sha256"] == "custom-hash"
     assert metadata["schema_version"] == repro.METADATA_SCHEMA_VERSION
     assert metadata["entrypoint"] == "judgearena.test.entrypoint"
     assert metadata["results"]["num_battles"] == 3
