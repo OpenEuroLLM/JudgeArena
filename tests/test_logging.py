@@ -20,7 +20,9 @@ def _reset_root_logger():
     """Remove handlers added by configure_logging so tests don't leak state."""
     root = logging.getLogger(_ROOT_LOGGER_NAME)
     yield
-    root.handlers.clear()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
     root.setLevel(logging.WARNING)
 
 
@@ -156,3 +158,40 @@ def test_make_run_log_path_format(tmp_path):
     assert path.suffix == ".log"
     # Timestamp portion: YYYYMMDD_HHMMSS (15 chars)
     assert len(path.stem) == len("run-") + 15
+
+
+def test_run_logging_isolates_runs_and_preserves_explicit_log(tmp_path):
+    from judgearena.artifacts import prepare_run_directory, run_logging
+    from judgearena.config import RunConfig
+
+    explicit_log = tmp_path / "explicit.log"
+    configure_logging(log_file=explicit_log)
+    previous_handlers = get_logger().handlers.copy()
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={"model": "Dummy/j"},
+    )
+
+    @run_logging()
+    def run(name, *, fail=False):
+        prepare_run_directory(cfg, tmp_path / name)
+        get_logger().warning("message from %s", name)
+        if fail:
+            raise ValueError("run failed")
+
+    with pytest.raises(ValueError, match="run failed"):
+        run("first", fail=True)
+    assert get_logger().handlers == previous_handlers
+    run("second")
+    assert get_logger().handlers == previous_handlers
+
+    first_log = next((tmp_path / "first").glob("run-*.log")).read_text()
+    assert "message from first" in first_log
+    assert "message from second" not in first_log
+    assert (
+        "message from second"
+        in next((tmp_path / "second").glob("run-*.log")).read_text()
+    )
+    assert "message from first" in explicit_log.read_text()
+    assert "message from second" in explicit_log.read_text()

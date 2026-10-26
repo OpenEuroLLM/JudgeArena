@@ -365,10 +365,19 @@ def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path):
     assert saved["metrics"]["bradley_terry"]["bootstrap_ratings"] == expected
 
 
-def test_run_writes_roundtrippable_config(tmp_path):
+@pytest.mark.parametrize("failure", [None, "calculate", "render"])
+def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure):
+    from judgearena.benchmarks.pairwise.scoring import PairwiseWinRateMetric
     from judgearena.config import load_config
 
-    run_pairwise(
+    if failure:
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("scorer unavailable")
+
+        monkeypatch.setattr(PairwiseWinRateMetric, failure, fail)
+
+    prefs = run_pairwise(
         _cfg(
             task="alpaca-eval-ja",
             model_A="Dummy/no answer",
@@ -376,12 +385,24 @@ def test_run_writes_roundtrippable_config(tmp_path):
             judge_model="Dummy/score A: 0 score B: 10",
             n_instructions=2,
             result_folder=str(tmp_path),
-        )
+        ),
+        _task_with_metric(
+            MetricSpec(metric="pairwise_win_rate", breakdown_by=("model_a",))
+        ),
     )
+    assert len(prefs) == 2 and (prefs > 0.5).all()
+    assert len(pd.read_csv(next(tmp_path.glob("*/*-annotations.csv")))) == 2
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
     result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
-    assert result["metrics"]["pairwise_win_rate"]["num_battles"] == 2
+    if failure == "calculate":
+        assert result["metrics"] == {}
+    else:
+        metric = result["metrics"]["pairwise_win_rate"]
+        assert metric["num_battles"] == 2
+        assert metric["groups"]["model_a"][0]["group"] == "Dummy/no answer"
+    if failure:
+        assert "scorer unavailable" in caplog.text
     assert "winrate" not in result
     reloaded = load_config(written[0])
     assert reloaded.task == "alpaca-eval-ja"
@@ -449,16 +470,6 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
         "load_task_data",
         lambda task, n_instructions=None: CompletionData(instructions, outputs),
     )
-    task = get_packaged_task("arena-hard-v2.0")
-    scoring = ScoringSpec(metrics=(MetricSpec(metric="pairwise_win_rate"),))
-    task = replace(
-        task,
-        spec=task.spec.model_copy(
-            update={
-                "protocol": task.spec.protocol.model_copy(update={"scoring": scoring})
-            }
-        ),
-    )
     prefs = run_pairwise(
         RunConfig(
             task="arena-hard-v2.0",
@@ -466,8 +477,7 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
             judge={"model": "Dummy/judge", "swap_mode": swap_mode},
             generation={"n_instructions": 3},
             run={"result_folder": str(tmp_path), "store_root": str(tmp_path / "cache")},
-        ),
-        resolved_task=task,
+        )
     )
 
     assert prefs.tolist() == pytest.approx(expected_prefs, nan_ok=True)
@@ -592,15 +602,15 @@ def test_judge_comparisons_preserves_prepared_order_and_cache_identity(tmp_path)
         "Dummy/judge", cache=benchmark_execution.build_judgement_cache(cfg)
     )
     model.factory = lambda: FakeListLLM(
-        responses=["[[A>B]]", "no verdict", "[[B>A]]", "[[A>B]]"]
+        responses=["[[A>B]]", "[[B>A]]", "no verdict", "[[A>B]]"]
     )
     comparisons = pd.DataFrame(
         {
             "instruction": ["first", "second"],
-            "completion_A": ["opponent first", "candidate second"],
-            "completion_B": ["candidate first", "opponent second"],
-            "model_A": ["opponent", "candidate"],
-            "model_B": ["candidate", "opponent"],
+            "completion_a": ["opponent first", "candidate second"],
+            "completion_b": ["candidate first", "opponent second"],
+            "model_a": ["opponent", "candidate"],
+            "model_b": ["candidate", "opponent"],
             "instruction_id": ["arena:shared", "arena:shared"],
             "cache_orientation": ["reversed", "direct"],
         },
@@ -609,7 +619,10 @@ def test_judge_comparisons_preserves_prepared_order_and_cache_identity(tmp_path)
     result = judge_comparisons(
         model,
         comparisons,
-        [(resolve_judge_prompt(preset="arena-hard"), pd.Index([3, 8]))],
+        [
+            (resolve_judge_prompt(preset="arena-hard"), pd.Index([3])),
+            (resolve_judge_prompt(preset="arena-hard-creative"), pd.Index([8])),
+        ],
         swap_mode="both",
         strip_thinking_before_judging=False,
         truncate_input_chars=None,

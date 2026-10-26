@@ -12,7 +12,6 @@ from judgearena.benchmarks.pairwise.scoring import (
     collapse_pairwise_battles,
 )
 from judgearena.benchmarks.scoring import (
-    build_metric,
     build_metrics,
     calculate_metrics,
     render_metrics,
@@ -44,15 +43,6 @@ def _battle_rows(
             "orientation": "single",
         }
     )
-
-
-def test_pairwise_win_rate_scorer_owns_metric_semantics():
-    scorer = PairwiseWinRateMetric()
-
-    summary = scorer.calculate(pd.DataFrame({"pref": pd.Series([0.0, 1.0, 0.5])}))
-
-    assert summary["num_battles"] == 3
-    assert summary["winrate"] == pytest.approx(0.5)
 
 
 def test_pairwise_win_rate_reports_candidate_results():
@@ -208,11 +198,6 @@ def test_shared_registry_calculates_and_renders_point_bradley_terry():
     assert "b:" in rendered
 
 
-def test_metric_builder_rejects_invalid_parameters():
-    with pytest.raises(ValueError, match="soft must be a boolean"):
-        build_metric("bradley_terry", {"soft": "false"})
-
-
 def test_empty_metric_results_render_as_unavailable():
     results = {
         "alpaca_eval_length_controlled": {
@@ -224,19 +209,39 @@ def test_empty_metric_results_render_as_unavailable():
     assert "category=missing:" in rendered
 
 
-def test_build_metrics_preserves_order_and_applies_overrides():
-    requests = (
-        MetricSpec(metric="pairwise_win_rate"),
-        MetricSpec(metric="bradley_terry", parameters={"n_bootstraps": 2}),
+@pytest.mark.parametrize(
+    "parameters, message",
+    [({"soft": "false"}, "soft must be a boolean"), ({}, "model_a")],
+)
+def test_failed_metric_does_not_block_other_metrics(parameters, message, caplog):
+    results = _calculate_metrics(
+        pd.DataFrame({"pref": [0.0, 1.0]}),
+        (
+            MetricSpec(metric="bradley_terry", parameters=parameters),
+            MetricSpec(metric="pairwise_win_rate"),
+        ),
     )
 
-    configured = build_metrics(
-        requests, parameter_overrides_by_metric={"bradley_terry": {"n_bootstraps": 3}}
+    assert set(results) == {"pairwise_win_rate"}
+    assert results["pairwise_win_rate"]["winrate"] == 0.5
+    assert "bradley_terry" in caplog.text
+    assert message in caplog.text
+
+
+@pytest.mark.parametrize("bad_column", [None, [["a"], ["b"]]])
+def test_failed_breakdown_preserves_overall_and_other_breakdowns(bad_column, caplog):
+    battles = pd.DataFrame({"pref": [0.0, 1.0], "turn": [1, 2]})
+    if bad_column is not None:
+        battles["category"] = bad_column
+
+    results = _calculate_metrics(
+        battles,
+        (MetricSpec(metric="pairwise_win_rate", breakdown_by=("category", "turn")),),
     )
 
-    assert [request.metric for request, _ in configured] == [
-        "pairwise_win_rate",
-        "bradley_terry",
-    ]
-    assert configured[1][1].n_bootstraps == 3
-    assert configured[1][0].parameters == {"n_bootstraps": 2}
+    metric = results["pairwise_win_rate"]
+    assert metric["winrate"] == 0.5
+    assert set(metric["groups"]) == {"turn"}
+    assert [group["values"]["winrate"] for group in metric["groups"]["turn"]] == [1, 0]
+    assert "pairwise_win_rate" in caplog.text
+    assert "category" in caplog.text

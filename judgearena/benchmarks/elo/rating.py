@@ -12,21 +12,6 @@ from sklearn.linear_model import LogisticRegression
 from judgearena.battles import hard_preferences
 
 
-def winner_to_pref(winner: str) -> float | None:
-    """Convert a hard winner label to a continuous preference value."""
-    if winner == "model_a":
-        return 0.0
-    if winner == "model_b":
-        return 1.0
-    if winner in ("tie", "tie (bothbad)"):
-        return 0.5
-    return None
-
-
-def _is_nan_pref(pref) -> bool:
-    return pref is None or (isinstance(pref, float) and np.isnan(pref))
-
-
 def fit_bradley_terry(
     df: pd.DataFrame,
     pref_col: str = "pref",
@@ -115,70 +100,6 @@ def select_seeded_random_arena_battles(
         "sample_fingerprint": _sample_fingerprint(sampled),
     }
     return sampled.reset_index(drop=True), metadata
-
-
-def sampling_cache_token(
-    sampling_metadata: dict[str, object],
-    *,
-    n_instructions: int | None,
-    n_instructions_per_language: int | None,
-) -> str:
-    if sampling_metadata.get("sampling_mode") == "seeded_random":
-        return (
-            "seeded-random_"
-            f"{sampling_metadata['requested_rows']}_"
-            f"seed-{sampling_metadata['random_seed']}_"
-            f"{str(sampling_metadata['sample_fingerprint'])[:12]}"
-        )
-    return f"head_{n_instructions}_{n_instructions_per_language}"
-
-
-def prefs_to_battle_results(
-    prefs,
-    our_model_is_position_a,
-    opponent_models,
-    model_name: str,
-    *,
-    judge_model: str | None = None,
-    question_ids=None,
-) -> pd.DataFrame:
-    """Map position-oriented preferences into model-name-level battle rows."""
-    records = []
-    for pref, is_pos_a, opponent in zip(
-        prefs, our_model_is_position_a, opponent_models, strict=True
-    ):
-        if _is_nan_pref(pref):
-            winner = None
-        elif pref == 0.5:
-            winner = "tie"
-        elif pref < 0.5:
-            winner = "model_a"
-        else:
-            winner = "model_b"
-
-        if is_pos_a:
-            record = {
-                "model_a": model_name,
-                "model_b": opponent,
-                "winner": winner,
-                "pref": pref,
-            }
-        else:
-            record = {
-                "model_a": opponent,
-                "model_b": model_name,
-                "winner": winner,
-                "pref": None if _is_nan_pref(pref) else pref,
-            }
-        record["pref_hard"] = winner_to_pref(winner)
-        records.append(record)
-
-    frame = pd.DataFrame(records)
-    frame["source"] = "llm-judge"
-    frame["judge_model"] = judge_model
-    if question_ids is not None:
-        frame["question_id"] = question_ids
-    return frame
 
 
 def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:

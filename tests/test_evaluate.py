@@ -110,18 +110,29 @@ def test_executor_rejects_partial_cache_metadata_before_inference():
         )
 
 
-@pytest.mark.parametrize("parse", [None, JUDGE_PARSERS["arena-hard-verdict"]])
-def test_pairwise_annotation_can_parse_without_changing_rendered_inputs(parse):
-    (annotation,) = evaluate.annotate_battles(
-        FakeListLLM(responses=["[[A>B]]"]),
-        ["Question {x}"],
-        ["<think>private</think>ABCDE"],
-        ["FGHIJ"],
-        system_prompt="Compare",
-        user_prompt_template="{user_prompt}|{completion_A}|{completion_B}",
+@pytest.mark.parametrize("mode", ["raw", "parser", "resolved"])
+def test_pairwise_annotation_can_parse_without_changing_rendered_inputs(mode):
+    parse = None if mode == "raw" else JUDGE_PARSERS["arena-hard-verdict"]
+    prompt_args = {
+        "system_prompt": "Compare",
+        "user_prompt_template": "{user_prompt}|{completion_A}|{completion_B}",
+    }
+    if mode == "resolved":
+        prompt_args = {
+            "prompt": replace(
+                evaluate.resolve_judge_prompts(**prompt_args), parser=parse
+            )
+        }
+    else:
+        prompt_args["parse"] = parse
+    annotation, failed = evaluate.annotate_battles(
+        FakeListLLM(responses=["[[A>B]]", "no verdict"]),
+        ["Question {x}", "Second question"],
+        ["<think>private</think>ABCDE", "Answer A"],
+        ["FGHIJ", "Answer B"],
         truncate_input_chars=3,
         strip_thinking_before_judging=True,
-        parse=parse,
+        **prompt_args,
     )
     assert (
         annotation.judge_input.to_string()
@@ -132,3 +143,18 @@ def test_pairwise_annotation_can_parse_without_changing_rendered_inputs(parse):
     assert annotation.parsed == (
         None if parse is None else evaluate.ParsedPreference(0.25, label="A>B")
     )
+    assert failed.instruction == "Second question"
+    assert (failed.completion_A, failed.completion_B) == ("Answer A", "Answer B")
+    assert failed.judge_completion == "no verdict"
+    assert failed.parsed is None
+
+
+@pytest.mark.parametrize("resolved", [False, True])
+def test_pairwise_annotation_rejects_delegated_prompts_before_inference(resolved):
+    prompt_args = (
+        {"prompt": evaluate.resolve_judge_prompt(preset="fastchat-pairwise")}
+        if resolved
+        else {"prompt_preset": "fastchat-pairwise"}
+    )
+    with pytest.raises(ValueError, match="delegated"):
+        evaluate.annotate_battles(object(), ["Q"], ["A"], ["B"], **prompt_args)

@@ -2,11 +2,33 @@
 
 import random
 from dataclasses import fields
+from typing import Literal
 
 import pandas as pd
 
+from judgearena.battles import swap_comparison_slots
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.prompts.registry import ResolvedJudgePrompt
+
+
+def _annotation_frame(
+    annotations: list[JudgeAnnotation],
+    comparisons: pd.DataFrame,
+    preferences: pd.Series,
+    *,
+    orientation: Literal["single", "direct", "reversed"],
+) -> pd.DataFrame:
+    """Attach row identity and actual judge slots without reorienting preferences."""
+    slot_a, slot_b = ("b", "a") if orientation == "reversed" else ("a", "b")
+    return pd.DataFrame(
+        annotations, columns=[field.name for field in fields(JudgeAnnotation)]
+    ).assign(
+        instruction_index=comparisons.index,
+        model_A=comparisons[f"model_{slot_a}"].to_numpy(),
+        model_B=comparisons[f"model_{slot_b}"].to_numpy(),
+        pref=preferences.to_numpy(dtype="float64"),
+        orientation=orientation,
+    )
 
 
 def judge_comparisons(
@@ -19,16 +41,17 @@ def judge_comparisons(
     truncate_input_chars: int | None,
     use_tqdm: bool,
 ) -> pd.DataFrame:
-    """Judge indexed instruction/completion_A/B/model_A/B rows.
+    """Judge indexed instruction/completion_a/b/model_a/b rows.
 
-    Returned annotations retain the actual judge slots; ``pref`` is always in
-    the original A/B frame. For ``both``, all direct rows precede reversed rows.
+    Returned annotations keep the existing export columns and actual judge slots;
+    ``pref`` is always in the original A/B frame. For ``both``, all direct rows
+    precede reversed rows.
     ``orientation`` describes scoring repetitions: single, direct, or reversed.
     Fixed/both preserve the supplied initial order. Optional ``instruction_id``
     and ``cache_orientation`` columns override cache identity and initial
     orientation; the unique table index remains the returned row identity.
     """
-    judged = comparisons.copy()
+    judged = comparisons
     reverse_order = pd.Series(False, index=judged.index)
     if swap_mode == "random":
         # Preserve the historical seed and mask: False puts the baseline first.
@@ -41,10 +64,7 @@ def judge_comparisons(
             ],
             index=judged.index,
         )
-        for prefix in ("completion", "model"):
-            judged.loc[reverse_order, [f"{prefix}_A", f"{prefix}_B"]] = judged.loc[
-                reverse_order, [f"{prefix}_B", f"{prefix}_A"]
-            ].to_numpy()
+        judged = swap_comparison_slots(comparisons, reverse_order)
 
     cache_orientation = judged.get(
         "cache_orientation", pd.Series("direct", index=judged.index)
@@ -54,52 +74,53 @@ def judge_comparisons(
         cache_orientation.map({"direct": "reversed", "reversed": "direct"}),
     )
 
-    annotation_columns = [field.name for field in fields(JudgeAnnotation)]
     direct_frames, reversed_frames = [], []
     for prompt, index in prompt_groups:
         group = judged.loc[index]
+        if group[["instruction", "completion_a", "completion_b"]].isna().any().any():
+            raise ValueError(
+                "Cannot judge comparisons with missing instruction/completion text."
+            )
         annotations, reversed_annotations, prefs = judge_and_parse_prefs(
             judge_chat_model=judge_chat_model,
             instructions=group["instruction"].tolist(),
-            completions_A=group["completion_A"].tolist(),
-            completions_B=group["completion_B"].tolist(),
+            completions_A=group["completion_a"].tolist(),
+            completions_B=group["completion_b"].tolist(),
             swap_mode=swap_mode,
             strip_thinking_before_judging=strip_thinking_before_judging,
-            system_prompt=prompt.system_prompt,
-            user_prompt_template=prompt.user_prompt_template,
-            prompt_preset=prompt.preset_name,
-            parse=prompt.parser,
+            prompt=prompt,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
             cache_row_metadata=[
                 {
                     "instruction_id": str(getattr(row, "instruction_id", row.Index)),
-                    "model_a": row.model_A,
-                    "model_b": row.model_B,
+                    "model_a": row.model_a,
+                    "model_b": row.model_b,
                     "orientation": cache_orientation.loc[row.Index],
                 }
                 for row in group.itertuples()
             ],
         )
-        frame = pd.DataFrame(annotations, columns=annotation_columns)
-        frame["instruction_index"] = index
-        frame["model_A"] = group["model_A"].to_numpy()
-        frame["model_B"] = group["model_B"].to_numpy()
-        frame["pref"] = prefs.iloc[: len(group)].astype("float64").to_numpy()
+        frame = _annotation_frame(
+            annotations,
+            group,
+            prefs.iloc[: len(group)],
+            orientation="direct" if swap_mode == "both" else "single",
+        )
         frame["pref"] = frame["pref"].where(
             ~reverse_order.loc[index].to_numpy(), 1 - frame["pref"]
         )
-        frame["orientation"] = "direct" if swap_mode == "both" else "single"
         direct_frames.append(frame)
 
         if reversed_annotations is not None:
-            frame = pd.DataFrame(reversed_annotations, columns=annotation_columns)
-            frame["instruction_index"] = index
-            frame["model_A"] = group["model_B"].to_numpy()
-            frame["model_B"] = group["model_A"].to_numpy()
             # judge_and_parse_prefs already reorients reversed preferences.
-            frame["pref"] = prefs.iloc[len(group) :].astype("float64").to_numpy()
-            frame["orientation"] = "reversed"
-            reversed_frames.append(frame)
+            reversed_frames.append(
+                _annotation_frame(
+                    reversed_annotations,
+                    group,
+                    prefs.iloc[len(group) :],
+                    orientation="reversed",
+                )
+            )
 
     return pd.concat(direct_frames + reversed_frames, ignore_index=True)

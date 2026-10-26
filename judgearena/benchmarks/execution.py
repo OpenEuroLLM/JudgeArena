@@ -13,7 +13,6 @@ from judgearena.cache.inference import (
     JudgementInferenceCache,
 )
 from judgearena.models import (
-    build_default_judge_model_kwargs,
     is_thinking_model,
     prepare_model,
 )
@@ -41,18 +40,18 @@ def build_generation_kwargs(
     return generation_kwargs
 
 
-def build_judge(cfg: RunConfig):
-    """Construct the configured judge consistently across benchmark runners."""
+def build_judge(cfg: RunConfig, *, default_temperature: float | None = None):
+    """Prepare the judge and cache, retaining explicit settings over defaults."""
+    kwargs = cfg.judge.model_kwargs(
+        base_engine_kwargs=cfg.judge_engine_kwargs(),
+        fallback_chat_template=cfg.model.chat_template,
+    )
+    if default_temperature is not None:
+        kwargs.setdefault("temperature", default_temperature)
     return prepare_model(
         model=cfg.judge.model,
         cache=build_judgement_cache(cfg),
-        **build_default_judge_model_kwargs(
-            cfg.judge.model,
-            cfg.model.engine_kwargs,
-            judge_engine_kwargs_override=cfg.judge.model_kwargs(
-                fallback_chat_template=cfg.model.chat_template,
-            ),
-        ),
+        **kwargs,
     )
 
 

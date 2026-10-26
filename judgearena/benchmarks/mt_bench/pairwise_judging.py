@@ -109,7 +109,6 @@ def judge_pairwise_by_prompt_groups[T](
                     "model_b": model_a if swap_answers else model_b,
                     "orientation": "reversed" if swap_answers else "direct",
                 },
-                prompt_metadata={"prompt_name": items[item_index].prompt_name},
             )
             for item_index, judge_input in zip(idxs, prompt_inputs, strict=True)
         ]

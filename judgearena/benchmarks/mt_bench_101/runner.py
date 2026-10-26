@@ -11,6 +11,7 @@ import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
+    run_logging,
     write_run_metadata_safely,
 )
 from judgearena.benchmarks.execution import (
@@ -70,6 +71,7 @@ def _load_or_generate_completions(
     return complete_missing(eval_items, preloaded, generate_missing).to_frame()
 
 
+@run_logging()
 def run_mt_bench_101_benchmark(
     cfg: RunConfig, task: ResolvedTaskSpec | None = None
 ) -> pd.Series:

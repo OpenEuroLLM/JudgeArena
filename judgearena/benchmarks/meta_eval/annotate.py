@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.datasets.arena_battles import validate_conversations
-from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -30,36 +30,24 @@ def _serialize_mapping(value: dict[str, object] | None) -> str | None:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _annotation_frame(
-    original: pd.DataFrame,
-    annotations: list[JudgeAnnotation],
-    preferences: pd.Series,
-    *,
-    orientation: str,
-) -> pd.DataFrame:
-    """Store one judge pass with preferences in the arena's A/B orientation."""
+def _annotation_frame(annotations: pd.DataFrame) -> pd.DataFrame:
+    """Keep the meta-evaluation artifact schema over shared judge annotations."""
     rows = []
-    for annotation, battle_id, preference in zip(
-        annotations, original["battle_id"], preferences, strict=True
-    ):
-        parsed = annotation.parsed
+    for annotation in annotations.itertuples():
+        parsed = annotation.parsed or {}
         rows.append(
             {
-                "battle_id": battle_id,
-                "orientation": orientation,
-                "pref": preference,
+                "battle_id": annotation.instruction_index,
+                "orientation": annotation.orientation,
+                "pref": annotation.pref,
                 "judge_input": serialize_judge_input(annotation.judge_input),
                 "judge_completion": annotation.judge_completion,
                 "judge_top_logprobs_json": _serialize_mapping(
                     annotation.judge_top_logprobs
                 ),
-                "parsed_label": None if parsed is None else parsed.label,
-                "parsed_scores_json": (
-                    None if parsed is None else _serialize_mapping(parsed.scores)
-                ),
-                "parsed_details_json": (
-                    None if parsed is None else _serialize_mapping(parsed.details)
-                ),
+                "parsed_label": parsed.get("label"),
+                "parsed_scores_json": _serialize_mapping(parsed.get("scores")),
+                "parsed_details_json": _serialize_mapping(parsed.get("details")),
             }
         )
     return pd.DataFrame(rows)
@@ -99,53 +87,19 @@ def annotate_sample(
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
 ) -> pd.DataFrame:
-    parser = resolved_prompt.parser
-    assert parser is not None
+    assert resolved_prompt.parser is not None
     if {"conversation_a", "conversation_b"} & set(df_sample.columns):
         validate_conversations(df_sample)
-    instructions = df_sample["instruction"].tolist()
-    completions_a = df_sample["completion_a"].tolist()
-    completions_b = df_sample["completion_b"].tolist()
-    annotations, reversed_annotations, preferences = judge_and_parse_prefs(
-        judge_chat_model=judge_chat_model,
-        instructions=instructions,
-        completions_A=completions_a,
-        completions_B=completions_b,
+    comparisons = df_sample.set_index("battle_id").assign(
+        instruction_id=df_sample["battle_id"].to_numpy(), cache_orientation="direct"
+    )
+    annotations = judge_comparisons(
+        judge_chat_model,
+        comparisons,
+        [(resolved_prompt, comparisons.index)],
         swap_mode=cfg.judge.swap_mode,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=resolved_prompt.user_prompt_template,
-        prompt_preset=resolved_prompt.preset_name,
-        parse=parser,
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
-        cache_row_metadata=[
-            {
-                "instruction_id": battle["battle_id"],
-                "model_a": battle["model_a"],
-                "model_b": battle["model_b"],
-                "orientation": "direct",
-            }
-            for _, battle in df_sample.iterrows()
-        ],
     )
-
-    n_battles = len(df_sample)
-    parts = [
-        _annotation_frame(
-            df_sample,
-            annotations,
-            preferences.iloc[:n_battles],
-            orientation="direct" if reversed_annotations is not None else "single",
-        )
-    ]
-    if reversed_annotations is not None:
-        parts.append(
-            _annotation_frame(
-                df_sample,
-                reversed_annotations,
-                preferences.iloc[n_battles:],
-                orientation="reversed",
-            )
-        )
-    return pd.concat(parts, ignore_index=True)
+    return _annotation_frame(annotations)

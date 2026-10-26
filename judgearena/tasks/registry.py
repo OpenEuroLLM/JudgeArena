@@ -20,7 +20,6 @@ from judgearena.benchmarks.scoring import available_metrics, build_metric
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
-    MTBenchProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
@@ -323,13 +322,6 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
                 f"{resolved.provenance.source_path}: invalid metric "
                 f"{request.metric!r}: {exc}"
             ) from exc
-        if isinstance(spec.protocol, MTBenchProtocol):
-            unsupported = sorted(set(request.breakdown_by) - {"category", "turn"})
-            if unsupported:
-                raise TaskDefinitionError(
-                    f"{resolved.provenance.source_path}: MT-Bench cannot group "
-                    f"metrics by {unsupported}"
-                )
     judge = spec.protocol.judge
     references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
     for kind, (adapter_id, available) in references.items():

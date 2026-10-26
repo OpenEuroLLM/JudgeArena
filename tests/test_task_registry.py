@@ -602,14 +602,20 @@ def test_scoring_metrics_reject_duplicate_names():
         TaskSpec.model_validate(definition)
 
 
-def test_mt_bench_preserves_registered_metric_parameters(tmp_path):
+def test_mt_bench_accepts_custom_metric_parameters_and_breakdowns(tmp_path):
     definition = _task_definition("mt-test")
     protocol = definition["protocol"]
     protocol["runner"] = "mt_bench"
     protocol["generation"] = {"mode": "multi_turn_chat"}
     protocol["judge"].update(fastchat_prompt_preset="default", fastchat_temperature=0.0)
     protocol["scoring"] = {
-        "metrics": [{"metric": "bradley_terry", "parameters": {"n_bootstraps": 2}}]
+        "metrics": [
+            {
+                "metric": "bradley_terry",
+                "parameters": {"n_bootstraps": 2},
+                "breakdown_by": ["model", "custom_metadata"],
+            }
+        ]
     }
     _write_family(
         tmp_path,

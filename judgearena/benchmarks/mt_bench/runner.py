@@ -16,24 +16,30 @@ import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
+    run_logging,
     write_run_metadata_safely,
 )
+from judgearena.battles import hard_preferences, pairwise_aliases
 from judgearena.benchmarks.execution import (
     build_completion_cache,
     build_generation_kwargs,
-    build_judgement_cache,
+    build_judge,
 )
+from judgearena.benchmarks.mt_bench.common import resolve_mt_bench_turn_flags
 from judgearena.benchmarks.mt_bench.fastchat_compat import (
     judge_mt_bench_pairwise_fastchat,
 )
-from judgearena.benchmarks.mt_bench.preset_judging import judge_mt_bench_with_preset
+from judgearena.benchmarks.mt_bench.preset_judging import (
+    MTBenchPresetPrompt,
+    build_mt_bench_preset_prompts,
+    judge_mt_bench_with_preset,
+)
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.datasets.data import CompletionData, _require_columns
 from judgearena.generate import generate_multiturn
 from judgearena.log import get_logger
-from judgearena.models import prepare_model
 from judgearena.prompts.registry import ResolvedJudgePrompt, resolve_run_judge_prompt
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import MTBenchProtocol
@@ -176,21 +182,10 @@ def _build_mt_bench_battles(
         question_id = metadata["question_id"]
         turn = int(metadata["turn"])
         completion_column = f"completion_turn_{turn}"
-        pref_hard = pref
-        if pref < 0.5:
-            pref_hard = 0.0
-        elif pref > 0.5:
-            pref_hard = 1.0
         rows.append(
             {
                 **metadata,
                 "instruction_index": f"{question_id}:turn-{turn}",
-                "model": cfg.model.name,
-                "baseline": cfg.model.baseline,
-                "completion_model": completions_a.loc[question_id, completion_column],
-                "completion_baseline": completions_b.loc[
-                    question_id, completion_column
-                ],
                 "model_a": cfg.model.name,
                 "model_b": cfg.model.baseline,
                 "completion_a": completions_a.loc[question_id, completion_column],
@@ -200,10 +195,13 @@ def _build_mt_bench_battles(
                 "orientation": metadata.get("orientation", "single"),
                 "judge": cfg.judge.model,
                 "pref": pref,
-                "pref_hard": pref_hard,
             }
         )
-    return pd.DataFrame(rows)
+    battles = pd.DataFrame(rows)
+    return battles.assign(
+        **pairwise_aliases(battles, model_is_a=pd.Series(True, index=battles.index)),
+        pref_hard=hard_preferences(battles["pref"]),
+    )
 
 
 def _finalize_mt_bench_run(
@@ -333,6 +331,7 @@ def _run_mt_bench_preset(
     completions_b: pd.DataFrame,
     judge_chat_model,
     resolved_prompt: ResolvedJudgePrompt,
+    prompts: dict[tuple[bool, bool], MTBenchPresetPrompt],
     started_at_utc: datetime,
 ) -> pd.Series:
     prefs, annotations, combined_metadata = judge_mt_bench_with_preset(
@@ -348,10 +347,7 @@ def _run_mt_bench_preset(
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
-        prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
-        system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
-        user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
-        parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
+        prompts=prompts,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
@@ -370,6 +366,7 @@ def _run_mt_bench_preset(
     )
 
 
+@run_logging()
 def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None):
     """Run the registered MT-Bench generation, judging, and reporting lifecycle."""
     run_started_at = datetime.now(UTC)
@@ -394,6 +391,18 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench does not support parsers that require logprobs. "
             "Use a text-based judge parser."
         )
+    preset_prompts = None
+    if not resolved_prompt.delegated:
+        eval_single, eval_multi = resolve_mt_bench_turn_flags(protocol.judge.turns_mode)
+        resolved_by_turn = {}
+        if eval_single:
+            resolved_by_turn[False] = resolve_run_judge_prompt(
+                cfg.resolved_task, cfg.judge, multi_turn=False
+            )
+        if eval_multi:
+            resolved_by_turn[True] = resolved_prompt
+        preset_prompts = build_mt_bench_preset_prompts(resolved_by_turn)
+
     task_data = load_task_data(task).select(
         resolve_dataset_filters(task, cfg.run.filters)
     )
@@ -431,18 +440,11 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench keeps the original FastChat-style explanation-plus-verdict "
             "prompt when delegated to FastChat compatibility mode."
         )
-    judge_model_kwargs = cfg.judge.model_kwargs(
-        base_engine_kwargs=cfg.model.engine_kwargs,
-        fallback_chat_template=cfg.model.chat_template,
-    )
-    if resolved_prompt.delegated and cfg.judge.temperature is None:
-        judge_model_kwargs.setdefault(
-            "temperature", protocol.judge.fastchat_temperature
-        )
-    judge_chat_model = prepare_model(
-        model=cfg.judge.model,
-        cache=build_judgement_cache(cfg),
-        **judge_model_kwargs,
+    judge_chat_model = build_judge(
+        cfg,
+        default_temperature=(
+            protocol.judge.fastchat_temperature if resolved_prompt.delegated else None
+        ),
     )
     if resolved_prompt.delegated:
         return _run_mt_bench_fastchat(
@@ -467,5 +469,6 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
         completions_b=completions_b,
         judge_chat_model=judge_chat_model,
         resolved_prompt=resolved_prompt,
+        prompts=preset_prompts,
         started_at_utc=run_started_at,
     )

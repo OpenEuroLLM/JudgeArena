@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from langchain_core.prompt_values import PromptValue
 
@@ -17,7 +17,6 @@ class JudgeRequest[T]:
     input: str | PromptValue
     parser: OutputParser[T]
     cache_metadata: JudgementCacheRowMetadata | None = None
-    prompt_metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

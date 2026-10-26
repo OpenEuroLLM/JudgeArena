@@ -12,6 +12,7 @@ import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
+    run_logging,
     safe_filename,
     write_run_metadata_safely,
 )
@@ -96,6 +97,7 @@ def _metric_rng(seed: int, metric_name: str) -> np.random.Generator:
     return np.random.default_rng(metric_seed)
 
 
+@run_logging()
 def run_meta_eval(
     cfg: RunConfig, task: ResolvedTaskSpec | None = None
 ) -> dict[str, object]:

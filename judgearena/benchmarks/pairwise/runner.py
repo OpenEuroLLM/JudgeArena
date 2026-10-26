@@ -12,8 +12,10 @@ import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
+    run_logging,
     write_run_metadata_safely,
 )
+from judgearena.battles import judged_battles
 from judgearena.benchmarks.execution import (
     build_judge,
     load_or_generate_completions,
@@ -67,16 +69,18 @@ def _build_judge_batches(
 
     categories = instructions_df.loc[eval_index, "category"]
     groups: list[tuple[ResolvedJudgePrompt, pd.Index]] = []
-    for category in dict.fromkeys(categories):
-        group_index = categories.index[categories == category]
-        preset = category_prompts.get(category)
+    for category, rows in categories.groupby(
+        categories, sort=False, dropna=False, observed=True
+    ):
+        preset = None if pd.isna(category) else category_prompts.get(category)
         prompt = (
             resolved_prompt if preset is None else resolve_judge_prompt(preset=preset)
         )
-        groups.append((prompt, group_index))
+        groups.append((prompt, rows.index))
     return groups
 
 
+@run_logging()
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
     """
     1) take as input:
@@ -94,45 +98,12 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     cfg = cfg.for_task(resolved_task)
     resolved_task = cfg.resolved_task
     resolved_prompt = resolve_run_judge_prompt(resolved_task, cfg.judge)
+    metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = load_task_data(resolved_task).select(
         resolve_dataset_filters(resolved_task, cfg.run.filters)
     )
     instructions_df = task_data.instructions
     instructions = instructions_df.loc[:, "instruction"]
-
-    metric_columns = {
-        "instruction_index",
-        "model",
-        "baseline",
-        "completion_model",
-        "completion_baseline",
-        "pref",
-        "orientation",
-        "judge",
-        "judge_prompt_preset",
-        "judge_temperature",
-        "judge_max_out_tokens",
-        "model_a",
-        "model_b",
-        "completion_a",
-        "completion_b",
-        "evaluation_model",
-        "source",
-        "pref_hard",
-        *instructions_df.columns,
-    }
-    missing_groups = sorted(
-        {
-            field
-            for request in resolved_task.spec.protocol.scoring.metrics
-            for field in request.breakdown_by
-        }
-        - metric_columns
-    )
-    if missing_groups:
-        raise ValueError(
-            f"Metric breakdown_by columns are unavailable: {missing_groups}."
-        )
 
     n_instructions = (
         cfg.generation.n_instructions
@@ -142,6 +113,20 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     if cfg.generation.n_instructions is not None:
         instructions_df = instructions_df.head(n_instructions)
         instructions = instructions.head(n_instructions)
+
+    prompt_groups = _build_judge_batches(
+        cfg, resolved_task, instructions_df, instructions.index, resolved_prompt
+    )
+    judge_prompt_variants = []
+    for group_prompt, _ in prompt_groups:
+        if group_prompt.delegated:
+            raise ValueError(
+                f"Judge prompt preset '{group_prompt.preset_name}' is delegated and "
+                "cannot be used for generic pairwise judging."
+            )
+        prompt_metadata = group_prompt.metadata()
+        if prompt_metadata not in judge_prompt_variants:
+            judge_prompt_variants.append(prompt_metadata)
 
     baseline_plan = resolve_baseline_plan(
         task_id=cfg.task,
@@ -228,24 +213,11 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
 
     logger.info("Saving results to %s", res_folder)
 
-    eval_index = instructions.head(n_instructions).index
-    prompt_groups = _build_judge_batches(
-        cfg, resolved_task, instructions_df, eval_index, resolved_prompt
-    )
-    judge_prompt_variants = []
-    for group_prompt, _ in prompt_groups:
-        prompt_metadata = group_prompt.metadata()
-        if prompt_metadata not in judge_prompt_variants:
-            judge_prompt_variants.append(prompt_metadata)
-
-    comparisons = pd.DataFrame(
-        {
-            "instruction": instructions,
-            "completion_A": completions_A,
-            "completion_B": completions_B,
-            "model_A": cfg.model.name,
-            "model_B": baseline_per_index,
-        }
+    comparisons = instructions.to_frame().assign(
+        completion_a=completions_A,
+        completion_b=completions_B,
+        model_a=cfg.model.name,
+        model_b=baseline_per_index,
     )
     judgments = judge_comparisons(
         judge_chat_model,
@@ -262,44 +234,18 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         res_folder / f"{name}-annotations.csv", index=False
     )
 
-    # Metrics use canonical model/baseline slots, including repeated judgments.
-    judged_index = judgments["instruction_index"].tolist()
-    canonical = comparisons.loc[judged_index]
-    battle_data = {
-        "instruction_index": judged_index,
-        "model": cfg.model.name,
-        "baseline": canonical["model_B"].tolist(),
-        "completion_model": canonical["completion_A"].tolist(),
-        "completion_baseline": canonical["completion_B"].tolist(),
-        "model_a": cfg.model.name,
-        "model_b": canonical["model_B"].tolist(),
-        "completion_a": canonical["completion_A"].tolist(),
-        "completion_b": canonical["completion_B"].tolist(),
-        "evaluation_model": cfg.model.name,
-        "source": "llm-judge",
-        "pref": prefs.to_numpy(),
-        "orientation": judgments["orientation"].tolist(),
-        "judge": cfg.judge.model,
-        "judge_prompt_preset": judgments["prompt_preset"].tolist(),
-        "judge_temperature": cfg.judge.temperature,
-        "judge_max_out_tokens": cfg.judge.max_out_tokens,
-    }
-    for column in instructions_df.columns:
-        if column not in battle_data:
-            battle_data[column] = instructions_df.loc[judged_index, column].tolist()
-    battles = pd.DataFrame(battle_data)
-    battles["pref_hard"] = battles["pref"].map(
-        lambda pref: (
-            float("nan")
-            if pd.isna(pref)
-            else 0.0
-            if pref < 0.5
-            else 1.0
-            if pref > 0.5
-            else 0.5
-        )
+    # Source metadata must not override judge cache identity.
+    scoring_comparisons = comparisons.join(
+        instructions_df.drop(columns=comparisons.columns, errors="ignore")
     )
-    metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
+    battles = judged_battles(
+        scoring_comparisons,
+        judgments,
+        evaluation_model=cfg.model.name,
+        judge=cfg.judge.model,
+        judge_temperature=cfg.judge.temperature,
+        judge_max_out_tokens=cfg.judge.max_out_tokens,
+    )
     metric_results = calculate_metrics(
         battles,
         metrics,

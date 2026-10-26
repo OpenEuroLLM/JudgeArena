@@ -280,7 +280,7 @@ def test_judge_settings_include_inherited_engine_kwargs(
     }
     data["judge"].update(model="VLLM/j", **overrides)
 
-    kwargs = execution_module.build_judge(RunConfig(**data))
+    kwargs = execution_module.build_judge(RunConfig(**data), default_temperature=0.3)
 
     assert (
         kwargs["temperature"],
@@ -293,9 +293,11 @@ def test_judge_settings_include_inherited_engine_kwargs(
 @pytest.mark.parametrize(
     ("task", "judge_model", "expected"),
     [
-        ("alpaca-eval", "OpenRouter/j", 1),
-        ("alpaca-eval", "VLLM/j", 128),
-        ("mt-bench", "OpenRouter/j", 128),
+        ("alpaca-eval", "OpenRouter/j", (1, None, None, None)),
+        ("alpaca-eval", "VLLM/j", (128, 2, None, None)),
+        ("mt-bench", "OpenRouter/j", (128, 2, None, None)),
+        ("alpaca-eval", "VLLM/Qwen3-fp8", (128, 2, 512, "fp8")),
+        ("mt-bench", "VLLM/Qwen3-fp8", (128, 2, None, None)),
     ],
 )
 def test_judge_engine_inheritance_matches_the_runner(
@@ -303,17 +305,20 @@ def test_judge_engine_inheritance_matches_the_runner(
 ):
     data = _base_generate()
     data["task"] = task
-    data["model"]["engine_kwargs"] = {"max_tokens": 128}
+    data["model"]["engine_kwargs"] = {"max_tokens": 128, "tensor_parallel_size": 2}
     data["judge"]["model"] = judge_model
     monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
 
     cfg = RunConfig(**data)
-    if task == "mt-bench":
-        kwargs = cfg.judge.model_kwargs(base_engine_kwargs=cfg.model.engine_kwargs)
-    else:
-        kwargs = execution_module.build_judge(cfg)
+    kwargs = execution_module.build_judge(cfg)
 
-    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected
+    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected[0]
+    assert (
+        kwargs["max_tokens"],
+        kwargs.get("tensor_parallel_size"),
+        kwargs.get("thinking_token_budget"),
+        kwargs.get("kv_cache_dtype"),
+    ) == expected
 
 
 @pytest.mark.parametrize("role", ["model", "judge"])

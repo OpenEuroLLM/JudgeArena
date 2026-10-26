@@ -18,9 +18,6 @@ import pandas as pd
 
 from judgearena.artifacts import to_jsonable
 
-# Winners accepted by compute_bradley_terry.
-WINNERS = frozenset({"model_a", "model_b", "tie", "tie (bothbad)"})
-
 
 def preference_values(values: pd.Series) -> pd.Series:
     """Validate continuous preferences; missing judgments remain missing."""
@@ -40,11 +37,91 @@ def hard_preferences(values: pd.Series) -> pd.Series:
     return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
 
 
-def winner_labels(preferences: pd.Series) -> pd.Series:
-    """Derive legacy winner labels for exported artifacts."""
-    return hard_preferences(preferences).map(
-        {0.0: "model_a", 0.5: "tie", 1.0: "model_b"}
-    )
+def swap_comparison_slots(
+    comparisons: pd.DataFrame, reverse_order: pd.Series | np.ndarray
+) -> pd.DataFrame:
+    """Swap selected model/answer pairs, preserving row identity and metadata."""
+    swapped = comparisons.copy()
+    for prefix in ("completion", "model"):
+        columns = [f"{prefix}_a", f"{prefix}_b"]
+        swapped.loc[reverse_order, columns] = comparisons.loc[
+            reverse_order, columns[::-1]
+        ].to_numpy()
+    return swapped
+
+
+def pairwise_aliases(
+    battles: pd.DataFrame,
+    *,
+    model_is_a: pd.Series,
+) -> dict[str, pd.Series]:
+    """Derive metric aliases from explicitly selected model slots."""
+    aliases = {
+        "model": battles["model_a"].where(model_is_a, battles["model_b"]),
+        "baseline": battles["model_b"].where(model_is_a, battles["model_a"]),
+    }
+    if {"completion_a", "completion_b"} <= set(battles.columns):
+        aliases.update(
+            completion_model=battles["completion_a"].where(
+                model_is_a, battles["completion_b"]
+            ),
+            completion_baseline=battles["completion_b"].where(
+                model_is_a, battles["completion_a"]
+            ),
+        )
+    return aliases
+
+
+def focal_battles(battles: pd.DataFrame) -> pd.DataFrame:
+    """Normalize rows carrying an evaluation model to the focal/opponent view."""
+    if "evaluation_model" not in battles:
+        return battles
+    frame = battles.loc[battles["evaluation_model"].notna()].copy()
+    required = {"model_a", "model_b", "pref"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"Evaluation battles are missing columns: {missing}.")
+    focal_is_a = frame["model_a"] == frame["evaluation_model"]
+    focal_is_b = frame["model_b"] == frame["evaluation_model"]
+    if not (focal_is_a ^ focal_is_b).all():
+        raise ValueError(
+            "Each evaluation battle must contain its evaluation model exactly once."
+        )
+    frame = frame.assign(**pairwise_aliases(frame, model_is_a=focal_is_a))
+    frame["pref"] = frame["pref"].where(focal_is_a, 1 - frame["pref"])
+    return frame
+
+
+def judged_battles(
+    comparisons: pd.DataFrame,
+    judgments: pd.DataFrame,
+    *,
+    evaluation_model: str,
+    judge: str,
+    judge_temperature: float | None = None,
+    judge_max_out_tokens: int | None = None,
+) -> pd.DataFrame:
+    """Build scoring rows in the original comparison frame, including repeats."""
+    if not comparisons.index.is_unique:
+        raise ValueError("Comparisons require unique row IDs.")
+    ids = judgments["instruction_index"].tolist()
+    frame = comparisons.loc[ids].reset_index(drop=True)
+    frame["instruction_index"] = ids
+    frame["pref"] = preference_values(judgments["pref"]).to_numpy()
+    frame["pref_hard"] = hard_preferences(frame["pref"])
+    frame["orientation"] = judgments["orientation"].to_numpy()
+    frame["evaluation_model"] = evaluation_model
+    frame["source"] = "llm-judge"
+    frame["judge"] = judge
+    frame["judge_model"] = judge
+    frame["judge_prompt_preset"] = judgments["prompt_preset"].to_numpy()
+    frame["judge_temperature"] = judge_temperature
+    frame["judge_max_out_tokens"] = judge_max_out_tokens
+    # Legacy metric/grouping aliases are derived centrally from the focal model.
+    focal = focal_battles(frame)
+    for column in ("model", "baseline", "completion_model", "completion_baseline"):
+        frame[column] = focal[column]
+    return frame
 
 
 @dataclass(frozen=True)
@@ -53,7 +130,7 @@ class Battle:
 
     model_a: str
     model_b: str
-    winner: str  # one of WINNERS
+    winner: str | None  # persisted label: model_a, model_b, tie, or missing
     source: str  # "llm-judge" | "human"
     pref: float | None = (
         None  # soft preference (0=A wins, 1=B wins); None if unparseable
@@ -68,8 +145,17 @@ class Battle:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
+def winner_labels(preferences: pd.Series) -> pd.Series:
+    """Derive legacy winner labels for exported artifacts."""
+    return hard_preferences(preferences).map(
+        {0.0: "model_a", 0.5: "tie", 1.0: "model_b"}
+    )
+
+
 def write_battles(path: str | Path, battles: pd.DataFrame) -> None:
-    """Write the battle frame to Parquet."""
+    """Write the battle frame to Parquet, including legacy winner labels."""
+    if "winner" not in battles:
+        battles = battles.assign(winner=winner_labels(battles["pref"]))
     battles.to_parquet(path, index=False)
 
 

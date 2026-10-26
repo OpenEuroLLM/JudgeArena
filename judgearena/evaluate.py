@@ -16,7 +16,7 @@ from judgearena.prompts.registry import (
     resolve_judge_prompt,
 )
 from judgearena.prompts.registry import (
-    resolve_run_judge_prompt as _resolve_run_judge_prompt,
+    resolve_run_judge_prompt as resolve_run_judge_prompt,
 )
 from judgearena.utils import strip_thinking_tags, truncate
 
@@ -82,15 +82,6 @@ def resolve_judge_prompts(
     return resolved
 
 
-def resolve_run_judge_prompt(
-    task: str | None,
-    cli_args,
-    *,
-    multi_turn: bool = False,
-) -> ResolvedJudgePrompt:
-    return _resolve_run_judge_prompt(task, cli_args, multi_turn=multi_turn)
-
-
 @dataclass
 class JudgeAnnotation:
     instruction: str  # instruction from the user
@@ -119,6 +110,7 @@ def annotate_battles(
     cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
     *,
     parse: OutputParser[ParsedPreference] | None = None,
+    prompt: ResolvedJudgePrompt | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -150,11 +142,22 @@ def annotate_battles(
     # alternatively pass list of tuples
     assert len(instructions) == len(completions_A) == len(completions_B)
 
-    resolved_prompt = resolve_judge_prompts(
-        prompt_preset=prompt_preset,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
-    )
+    resolved_prompt = prompt
+    if resolved_prompt is None:
+        resolved_prompt = resolve_judge_prompts(
+            prompt_preset=prompt_preset,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+        )
+    else:
+        parse = parse if parse is not None else resolved_prompt.parser
+        if parse is not None:
+            collect_top_logprobs |= parse.requires_top_logprobs
+    if resolved_prompt.delegated:
+        raise ValueError(
+            f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
+            "cannot be used for generic pairwise judging."
+        )
 
     message_templates: list[tuple[str, str]] = []
     if resolved_prompt.system_prompt is not None:
@@ -184,7 +187,6 @@ def annotate_battles(
     inputs = prompt_template.batch(prompt_inputs)
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
-    parsed_results: list[ParsedPreference | None] = [None] * len(inputs)
     if parse is None:
         judge_results = do_inference(
             chat_model=judge_chat_model,
@@ -196,6 +198,7 @@ def annotate_battles(
         )
         if not collect_top_logprobs:
             judge_results = [InferenceResult(text=text) for text in judge_results]
+        outcomes = ((response, None) for response in judge_results)
     else:
         metadata = (
             cache_row_metadata
@@ -208,50 +211,42 @@ def annotate_battles(
                 input=judge_input,
                 parser=parse,
                 cache_metadata=row,
-                prompt_metadata=resolved_prompt.metadata(),
             )
             for index, (judge_input, row) in enumerate(
                 zip(inputs, metadata, strict=True)
             )
         ]
         results = execute_judging(judge_chat_model, requests, use_tqdm=use_tqdm)
-        judge_results = [result.response for result in results]
-        parsed_results = [result.parsed for result in results]
+        outcomes = ((result.response, result.parsed) for result in results)
 
-    annotations = []
-    for (
-        judge_input,
-        judge_result,
-        parsed,
-        instruction,
-        completion_A,
-        completion_B,
-    ) in zip(
-        inputs,
-        judge_results,
-        parsed_results,
-        instructions,
-        completions_A,
-        completions_B,
-        strict=True,
-    ):
-        annotations.append(
-            JudgeAnnotation(
-                judge_input=judge_input,
-                judge_completion=judge_result.text,
-                instruction=instruction,
-                completion_A=completion_A,
-                completion_B=completion_B,
-                prompt_preset=resolved_prompt.preset_name,
-                judge_top_logprobs=(
-                    judge_result.first_token_top_logprobs
-                    if collect_top_logprobs
-                    else None
-                ),
-                parsed=parsed,
-            )
+    return [
+        JudgeAnnotation(
+            judge_input=judge_input,
+            judge_completion=response.text,
+            instruction=instruction,
+            completion_A=completion_A,
+            completion_B=completion_B,
+            prompt_preset=resolved_prompt.preset_name,
+            judge_top_logprobs=(
+                response.first_token_top_logprobs if collect_top_logprobs else None
+            ),
+            parsed=parsed,
         )
-    return annotations
+        for (
+            judge_input,
+            (response, parsed),
+            instruction,
+            completion_A,
+            completion_B,
+        ) in zip(
+            inputs,
+            outcomes,
+            instructions,
+            completions_A,
+            completions_B,
+            strict=True,
+        )
+    ]
 
 
 def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
@@ -275,6 +270,8 @@ def judge_and_parse_prefs(
     use_tqdm: bool = False,
     parse: JudgeParser | None = None,
     cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
+    *,
+    prompt: ResolvedJudgePrompt | None = None,
 ) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
     """Run judge annotation and parse preferences, handling swap_mode='both'.
 
@@ -284,12 +281,15 @@ def judge_and_parse_prefs(
         prefs: canonical A/B preferences. With swap_mode="both", the direct
                block is followed by the reoriented reversed block.
     """
-    if parse is None:
-        parse = resolve_judge_prompts(
+    if prompt is None:
+        prompt = resolve_judge_prompts(
             prompt_preset=prompt_preset,
             system_prompt=system_prompt,
             user_prompt_template=user_prompt_template,
-        ).parser
+        )
+    parse = parse if parse is not None else prompt.parser
+    if parse is None:
+        raise ValueError("Pairwise judging requires a preference parser.")
 
     if swap_mode == "both":
         logger.info(
@@ -306,9 +306,7 @@ def judge_and_parse_prefs(
         completions_A=completions_A,
         completions_B=completions_B,
         strip_thinking_before_judging=strip_thinking_before_judging,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
-        prompt_preset=prompt_preset,
+        prompt=prompt,
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
         collect_top_logprobs=parse.requires_top_logprobs,
@@ -341,18 +339,13 @@ def judge_and_parse_prefs(
             completions_A=completions_B,
             completions_B=completions_A,
             strip_thinking_before_judging=strip_thinking_before_judging,
-            system_prompt=system_prompt,
-            user_prompt_template=user_prompt_template,
-            prompt_preset=prompt_preset,
+            prompt=prompt,
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
             collect_top_logprobs=parse.requires_top_logprobs,
             cache_row_metadata=reversed_cache_row_metadata,
             parse=parse,
         )
-
-    def _none_to_nan(x):
-        return float("nan") if x is None else x
 
     def _preferences_and_warn(ann_list: list[JudgeAnnotation], label: str) -> pd.Series:
         results = [annotation.parsed for annotation in ann_list]
@@ -366,15 +359,14 @@ def judge_and_parse_prefs(
                 label,
             )
         return pd.Series(
-            [None if result is None else result.preference for result in results]
+            [None if result is None else result.preference for result in results],
+            dtype=float,
         )
 
     prefs = _preferences_and_warn(annotations, "direct")
 
     if swap_mode == "both":
-        prefs_reversed = _preferences_and_warn(annotations_reversed, "reversed").apply(
-            _none_to_nan
-        )
-        prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
+        prefs_reversed = _preferences_and_warn(annotations_reversed, "reversed")
+        prefs = combine_swapped_prefs(prefs, prefs_reversed)
 
     return annotations, annotations_reversed, prefs

@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
-from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.log import get_logger
-from judgearena.models import prepare_model
 from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import ResolvedJudgePrompt
 
@@ -48,30 +44,17 @@ def fit_temperature(
 
 
 def calibrate_pairscore_temperature(
-    arena_battles: pd.DataFrame,
-    source_battles: pd.DataFrame,
+    battles: pd.DataFrame,
     *,
-    enabled: bool,
-    soft_elo: bool,
     sample_size: int | None,
     rng: np.random.Generator,
-    judge_model: str,
-    judge_model_kwargs: Mapping[str, object],
+    judge_chat_model,
     swap_mode: str,
     prompt: ResolvedJudgePrompt,
     truncate_input_chars: int | None,
     default_temperature: float,
-    arena: str,
-    inference_cache: JudgementInferenceCache | None = None,
 ) -> float | None:
-    """Judge sampled human battles and return a fitted PairScore temperature."""
-    if not enabled:
-        return None
-    if not soft_elo:
-        logger.warning(
-            "--calibrate-temperature has no effect with --no-soft-elo; skipping."
-        )
-        return None
+    """Sample validated human comparisons and fit their PairScore temperature."""
     if not isinstance(prompt.parser, PairScore):
         parser_name = getattr(prompt.parser, "name", type(prompt.parser).__name__)
         logger.warning(
@@ -83,32 +66,16 @@ def calibrate_pairscore_temperature(
 
     logger.info("Calibrating PairScore temperature against human annotations.")
     n_samples = (
-        min(sample_size, len(arena_battles))
-        if sample_size is not None
-        else len(arena_battles)
+        min(sample_size, len(battles)) if sample_size is not None else len(battles)
     )
-    calibration_battles = arena_battles.sample(
+    sample = battles.sample(
         n=n_samples,
         random_state=int(rng.integers(0, 2**31)),
     )
-    source_rows = source_battles.loc[calibration_battles.index]
-    comparisons = source_rows.rename(
-        columns={
-            "completion_a": "completion_A",
-            "completion_b": "completion_B",
-            "model_a": "model_A",
-            "model_b": "model_B",
-        }
-    )
-    calibration_judge = prepare_model(
-        model=judge_model,
-        cache=inference_cache,
-        **dict(judge_model_kwargs),
-    )
     judgments = judge_comparisons(
-        calibration_judge,
-        comparisons,
-        [(prompt, comparisons.index)],
+        judge_chat_model,
+        sample,
+        [(prompt, sample.index)],
         swap_mode="both" if swap_mode == "both" else "fixed",
         strip_thinking_before_judging=False,
         truncate_input_chars=truncate_input_chars,
@@ -120,7 +87,7 @@ def calibrate_pairscore_temperature(
     score_differences: list[float] = []
     outcomes: list[float] = []
     for parsed, human_preference in zip(
-        annotations["parsed"], calibration_battles["pref"], strict=True
+        annotations["parsed"], sample["pref"], strict=True
     ):
         scores = {} if parsed is None else parsed["scores"]
         score_a = scores.get("A")

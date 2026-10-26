@@ -11,6 +11,8 @@ import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 
+from judgearena.battles import focal_battles as _pairwise_view
+from judgearena.battles import preference_values
 from judgearena.utils.eval import compute_pref_summary
 
 BOOTSTRAP_ROUNDS = 1000
@@ -21,45 +23,7 @@ CONFIDENCE_LEVEL = 0.95
 def _preferences(battles: pd.DataFrame, column: str = "pref") -> pd.Series:
     if column not in battles:
         raise ValueError(f"Pairwise metrics require a {column!r} column.")
-    try:
-        preferences = pd.Series(battles[column], dtype="float64")
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Pairwise preferences must be numeric.") from exc
-    parsed = preferences.dropna()
-    invalid = ~np.isfinite(parsed) | ~parsed.between(0, 1)
-    if invalid.any():
-        raise ValueError(
-            "Pairwise preferences must be missing or finite values in [0, 1]."
-        )
-    return preferences
-
-
-def _pairwise_view(battles: pd.DataFrame) -> pd.DataFrame:
-    """Normalize rows carrying an evaluation model to the focal/opponent view."""
-    if "evaluation_model" not in battles:
-        return battles
-    frame = battles.loc[battles["evaluation_model"].notna()].copy()
-    required = {"model_a", "model_b", "pref"}
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"Evaluation battles are missing columns: {missing}.")
-    focal_is_a = frame["model_a"] == frame["evaluation_model"]
-    focal_is_b = frame["model_b"] == frame["evaluation_model"]
-    if not (focal_is_a ^ focal_is_b).all():
-        raise ValueError(
-            "Each evaluation battle must contain its evaluation model exactly once."
-        )
-    frame["model"] = frame["evaluation_model"]
-    frame["baseline"] = frame["model_b"].where(focal_is_a, frame["model_a"])
-    frame["pref"] = frame["pref"].where(focal_is_a, 1 - frame["pref"])
-    if {"completion_a", "completion_b"} <= set(frame.columns):
-        frame["completion_model"] = frame["completion_a"].where(
-            focal_is_a, frame["completion_b"]
-        )
-        frame["completion_baseline"] = frame["completion_b"].where(
-            focal_is_a, frame["completion_a"]
-        )
-    return frame
+    return preference_values(battles[column])
 
 
 def _format_winrate(value: object) -> str:

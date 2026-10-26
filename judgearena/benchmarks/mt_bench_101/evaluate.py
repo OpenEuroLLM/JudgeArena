@@ -15,7 +15,7 @@ from judgearena.datasets.mt_bench_101 import (
     MT_BENCH_101_TASK_TO_ABILITY,
 )
 from judgearena.judging import JudgeRequest, execute_judging
-from judgearena.prompts.parsing import PairScore, ParsedScore
+from judgearena.prompts.parsing import ParsedScore, score_preference
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
@@ -255,10 +255,6 @@ def judge_mt_bench_101_single(
                 "model_a": evaluated_model,
                 "model_b": None,
             },
-            prompt_metadata={
-                "judge_prompt_preset": prompt_preset,
-                "judge_parser": parser.name,
-            },
         )
         for row, judge_input in zip(rows, inputs, strict=True)
     ]
@@ -271,6 +267,13 @@ def judge_mt_bench_101_single(
         row["judge_completion"] = result.response.text
         row["score"] = None if result.parsed is None else result.parsed.score
     return pd.DataFrame(rows)
+
+
+def _preferences_from_scores(scores: pd.DataFrame) -> list[float | None]:
+    return [
+        score_preference(score_a, score_b)
+        for score_a, score_b in zip(scores["score_A"], scores["score_B"], strict=True)
+    ]
 
 
 def derive_mt_bench_101_pairwise_preferences(
@@ -295,13 +298,7 @@ def derive_mt_bench_101_pairwise_preferences(
             how="inner",
         )
     )
-    scorer = PairScore()
-    merged["preference"] = [
-        None
-        if pd.isna(score_a) or pd.isna(score_b)
-        else float(scorer.preference_from_scores(score_a, score_b))
-        for score_a, score_b in zip(merged["score_A"], merged["score_B"], strict=True)
-    ]
+    merged["preference"] = _preferences_from_scores(merged)
     return merged
 
 
@@ -311,13 +308,5 @@ def aggregate_mt_bench_101_dialogues(pairwise_turns: pd.DataFrame) -> pd.DataFra
     dialogues = pairwise_turns.groupby(group_columns, as_index=False)[
         ["score_A", "score_B"]
     ].min()
-    scorer = PairScore()
-    dialogues["preference"] = [
-        None
-        if pd.isna(score_a) or pd.isna(score_b)
-        else float(scorer.preference_from_scores(score_a, score_b))
-        for score_a, score_b in zip(
-            dialogues["score_A"], dialogues["score_B"], strict=True
-        )
-    ]
+    dialogues["preference"] = _preferences_from_scores(dialogues)
     return dialogues

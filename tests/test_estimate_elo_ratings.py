@@ -8,6 +8,7 @@ import pytest
 import judgearena.benchmarks.elo.calibration as elo_calibration
 import judgearena.benchmarks.elo.runner as estimate_elo_ratings
 import judgearena.benchmarks.pairwise.runner as pairwise_runner
+import judgearena.models as models
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     fit_bradley_terry,
@@ -18,7 +19,7 @@ from judgearena.cache.sqlite import JudgementCache
 from judgearena.config import RunConfig, load_config
 from judgearena.datasets.arena_battles import normalize_battles
 from judgearena.datasets.data import PreferenceData
-from judgearena.models import DummyModel
+from judgearena.models import DummyModel, make_model
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec
 
@@ -299,6 +300,14 @@ def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
     )
     protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
     task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "calibrate_pairscore_temperature",
+        lambda *args, **kwargs: pytest.fail(
+            "Disabled or hard Elo must not invoke calibration"
+        ),
+    )
+
     result = run_elo(cfg, task)
 
     metric = _rating_metric(result)
@@ -321,7 +330,11 @@ def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
     cfg = _default_args(result_folder=str(tmp_path))
     task = get_packaged_task(cfg.task)
     scoring = task.spec.protocol.scoring.model_copy(
-        update={"metrics": (MetricSpec(metric="pairwise_win_rate"),)}
+        update={
+            "metrics": (
+                MetricSpec(metric="pairwise_win_rate", breakdown_by=("missing",)),
+            )
+        }
     )
     protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
     task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
@@ -331,6 +344,8 @@ def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
     assert set(result["metrics"]) == {"pairwise_win_rate"}
     assert not list(tmp_path.rglob("bootstrap_ratings.csv"))
     assert not list(tmp_path.rglob("elo_ratings.json"))
+    log_text = next(tmp_path.rglob("run-*.log")).read_text()
+    assert "Skipping metric 'pairwise_win_rate' breakdown 'missing'" in log_text
 
 
 def test_run_elo_winrate_depends_on_judge(tmp_path):
@@ -517,11 +532,15 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
 
 
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])
-def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swap_mode):
-    """Regression: the calibration path constructs its own judge model and once
-    crashed on a duplicate max_tokens kwarg; nothing else exercises it. The
-    MLE fit itself is mocked."""
+def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_mode):
     captured = {}
+    loaded_models = []
+
+    def load_model(model, **kwargs):
+        loaded_models.append(model)
+        return make_model(model, **kwargs)
+
+    monkeypatch.setattr(models, "make_model", load_model)
 
     def fake_calibrate(delta_s, y):
         captured["n_pairs"] = len(delta_s)
@@ -530,7 +549,8 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swa
     monkeypatch.setattr(elo_calibration, "fit_temperature", fake_calibrate)
     # Anchor battles require models with >= 500 appearances; the default
     # 30-battle fixture leaves the calibration pool empty.
-    arena = _arena_df(900)
+    arena = _arena_df(901)
+    arena.loc[900, ["model_a", "model_b", "winner"]] = ["rare-a", "rare-b", "model_a"]
     monkeypatch.setattr(
         estimate_elo_ratings,
         "load_task_data",
@@ -538,16 +558,16 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swa
     )
 
     store_root = tmp_path / "cache"
-    result = run_elo_with_task(
-        _default_args(
-            result_folder=str(tmp_path),
-            calibrate_temperature=True,
-            swap_mode=swap_mode,
-            store_root=str(store_root),
-        )
+    cfg = _default_args(
+        result_folder=str(tmp_path),
+        calibrate_temperature=True,
+        swap_mode=swap_mode,
+        store_root=str(store_root),
     )
+    result = run_elo_with_task(cfg)
 
-    assert captured["n_pairs"] == (arena["winner"] != "tie").sum()
+    assert captured["n_pairs"] == (arena.iloc[:900]["winner"] != "tie").sum()
+    assert loaded_models == ["Dummy/score A: 0 score B: 10"]
     assert 0.0 <= _pairwise_metric(result)["winrate"] <= 1.0
     battles = pd.read_parquet(next(tmp_path.rglob("battles.parquet")))
     pref = 1 / (1 + math.exp(-0.42 * 10))
@@ -556,6 +576,14 @@ def test_run_elo_temperature_calibration_builds_judge(monkeypatch, tmp_path, swa
     judgement_db = next((store_root / "judgements").rglob("judgements.db"))
     with JudgementCache(judgement_db) as cache:
         assert cache.query()["instruction_id"].str.startswith("ComparIA:").all()
+
+    def unavailable(*args, **kwargs):
+        raise AssertionError("Cached judging and calibration must not load a model")
+
+    monkeypatch.setattr(models, "make_model", unavailable)
+    cfg.run.result_folder = str(tmp_path / "replay")
+    replay = run_elo_with_task(cfg)
+    assert _pairwise_metric(replay) == _pairwise_metric(result)
 
 
 def test_empty_calibration_keeps_configured_temperature(tmp_path):
@@ -593,10 +621,14 @@ def test_run_elo_preserves_soft_preferences_from_non_pairscore_parser(tmp_path):
     assert battles["pref"].tolist() == [0.75] * 10
 
 
-def test_run_elo_temperature_preserves_selected_parser(monkeypatch, tmp_path):
+def test_run_elo_temperature_reuses_validated_scores(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
     from judgearena.prompts.parsing import JUDGE_PARSERS
 
     parser = JUDGE_PARSERS["meta-eval-score"]
+    parse = Mock(wraps=parser.parse_result)
+    monkeypatch.setattr(parser, "parse_result", parse)
     monkeypatch.setattr(
         DummyModel,
         "batch",
@@ -620,3 +652,4 @@ def test_run_elo_temperature_preserves_selected_parser(monkeypatch, tmp_path):
     assert battles.loc[battles["pref"].isna(), "pref_hard"].isna().all()
     assert _pairwise_metric(result)["num_missing"] == 2
     assert parser.temperature == 0.5
+    assert parse.call_count == len(battles)

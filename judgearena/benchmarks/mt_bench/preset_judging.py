@@ -61,45 +61,35 @@ def _build_mt_bench_preset_user_prompt_template(
     return f"{base_template}\n\n{output_section}"
 
 
-def _select_preset_prompt(
-    category: str | None,
-    multi_turn: bool,
-    *,
-    reference_categories: Collection[str],
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    system_file: str | None = None,
-    user_file: str | None = None,
-    parser: str | None = None,
-) -> MTBenchPresetPrompt:
-    ref_based = is_reference_based_category(category, reference_categories)
-    resolved_prompt = resolve_judge_prompt(
-        preset=prompt_preset,
-        system_file=system_file,
-        user_file=user_file,
-        multi_turn=multi_turn,
-        parser=parser,
-    )
-    if resolved_prompt.delegated:
-        raise ValueError(
-            f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
-            "cannot be used for MT-Bench preset judging."
-        )
-    suffix = "multi" if multi_turn else "single"
-    if ref_based:
-        suffix += "_ref"
-    return MTBenchPresetPrompt(
-        name=f"{resolved_prompt.preset_name}-{suffix}",
-        preset_name=resolved_prompt.preset_name,
-        parse=resolved_prompt.parser,
-        system_prompt=resolved_prompt.system_prompt,
-        user_prompt_template=_build_mt_bench_preset_user_prompt_template(
-            resolved_prompt=resolved_prompt,
-            multi_turn=multi_turn,
-            ref_based=ref_based,
-        ),
-        multi_turn=multi_turn,
-        ref_based=ref_based,
-    )
+def build_mt_bench_preset_prompts(
+    resolved_by_turn: dict[bool, ResolvedJudgePrompt],
+) -> dict[tuple[bool, bool], MTBenchPresetPrompt]:
+    """Prepare variants keyed by (multi_turn, ref_based) before model work."""
+    prompts = {}
+    for multi_turn, resolved in resolved_by_turn.items():
+        if resolved.delegated:
+            raise ValueError(
+                f"Judge prompt preset '{resolved.preset_name}' is delegated and "
+                "cannot be used for MT-Bench preset judging."
+            )
+        for ref_based in (False, True):
+            suffix = "multi" if multi_turn else "single"
+            if ref_based:
+                suffix += "_ref"
+            prompts[multi_turn, ref_based] = MTBenchPresetPrompt(
+                name=f"{resolved.preset_name}-{suffix}",
+                preset_name=resolved.preset_name,
+                parse=resolved.parser,
+                system_prompt=resolved.system_prompt,
+                user_prompt_template=_build_mt_bench_preset_user_prompt_template(
+                    resolved_prompt=resolved,
+                    multi_turn=multi_turn,
+                    ref_based=ref_based,
+                ),
+                multi_turn=multi_turn,
+                ref_based=ref_based,
+            )
+    return prompts
 
 
 def _build_mt_bench_preset_items(
@@ -111,10 +101,7 @@ def _build_mt_bench_preset_items(
     eval_multi: bool,
     truncate_input_chars: int | None,
     reference_categories: Collection[str],
-    prompt_preset: str,
-    system_file: str | None = None,
-    user_file: str | None = None,
-    parser: str | None = None,
+    prompts: dict[tuple[bool, bool], MTBenchPresetPrompt],
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem[ParsedPreference]]:
     return build_mt_bench_pairwise_judge_items(
@@ -124,15 +111,10 @@ def _build_mt_bench_preset_items(
         eval_single=eval_single,
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
-        select_prompt=lambda category, multi_turn: _select_preset_prompt(
-            category,
-            multi_turn=multi_turn,
-            reference_categories=reference_categories,
-            prompt_preset=prompt_preset,
-            system_file=system_file,
-            user_file=user_file,
-            parser=parser,
-        ),
+        select_prompt=lambda category, multi_turn: prompts[
+            multi_turn,
+            is_reference_based_category(category, reference_categories),
+        ],
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
 
@@ -155,10 +137,25 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
     parser: str | None = None,
+    prompts: dict[tuple[bool, bool], MTBenchPresetPrompt] | None = None,
     strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
     eval_single, eval_multi = resolve_mt_bench_turn_flags(turns_mode)
+    if prompts is None:
+        prompts = build_mt_bench_preset_prompts(
+            {
+                multi_turn: resolve_judge_prompt(
+                    preset=prompt_preset,
+                    system_file=system_file,
+                    user_file=user_file,
+                    multi_turn=multi_turn,
+                    parser=parser,
+                )
+                for multi_turn, enabled in ((False, eval_single), (True, eval_multi))
+                if enabled
+            }
+        )
 
     items = _build_mt_bench_preset_items(
         questions=questions,
@@ -168,10 +165,7 @@ def judge_mt_bench_with_preset(
         eval_multi=eval_multi,
         truncate_input_chars=truncate_input_chars,
         reference_categories=reference_categories,
-        prompt_preset=prompt_preset,
-        system_file=system_file,
-        user_file=user_file,
-        parser=parser,
+        prompts=prompts,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
     judgments, prompt_kwargs_used = judge_pairwise_by_prompt_groups(

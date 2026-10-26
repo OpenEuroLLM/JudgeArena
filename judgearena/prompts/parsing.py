@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 import numpy as np
+import pandas as pd
 
 from judgearena.utils import strip_thinking_tags
 
@@ -214,6 +215,22 @@ def weighted_token_preference(
     return float(weights[1] / weights.sum())
 
 
+def score_preference(
+    score_a: float | None,
+    score_b: float | None,
+    *,
+    temperature: float = 0.3,
+) -> float | None:
+    """0 favors A; 1 favors B. Missing scores give no preference."""
+    if pd.isna(score_a) or pd.isna(score_b):
+        return None
+    logit = temperature * (score_b - score_a)
+    if logit >= 0:
+        return 1.0 / (1.0 + math.exp(-logit))
+    exp_logit = math.exp(logit)
+    return exp_logit / (1.0 + exp_logit)
+
+
 class PairScore(JudgeParser):
     """Score-format parser: temperature-softened preference from A/B scores."""
 
@@ -224,19 +241,17 @@ class PairScore(JudgeParser):
 
     def preference_from_scores(
         self,
-        score_a: float,
-        score_b: float,
+        score_a: float | None,
+        score_b: float | None,
         *,
         temperature: float | None = None,
-    ) -> float:
-        """Return a bounded preference using a per-call or default temperature."""
-        if temperature is None:
-            temperature = self.temperature
-        logit = temperature * (score_b - score_a)
-        if logit >= 0:
-            return 1.0 / (1.0 + math.exp(-logit))
-        exp_logit = math.exp(logit)
-        return exp_logit / (1.0 + exp_logit)
+    ) -> float | None:
+        """Convert scores using a per-call or default temperature."""
+        return score_preference(
+            score_a,
+            score_b,
+            temperature=self.temperature if temperature is None else temperature,
+        )
 
     def parse_result(
         self,
@@ -246,12 +261,13 @@ class PairScore(JudgeParser):
         temperature: float | None = None,
     ) -> ParsedPreference | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
-        if score_a is None or score_b is None:
+        preference = self.preference_from_scores(
+            score_a, score_b, temperature=temperature
+        )
+        if preference is None:
             return None
         return ParsedPreference(
-            preference=float(
-                self.preference_from_scores(score_a, score_b, temperature=temperature)
-            ),
+            preference=preference,
             scores={"A": score_a, "B": score_b},
         )
 

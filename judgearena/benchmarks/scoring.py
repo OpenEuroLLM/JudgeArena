@@ -25,6 +25,9 @@ from judgearena.benchmarks.pairwise.scoring.metrics import (
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
 )
+from judgearena.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class _Metric(Protocol):
@@ -90,13 +93,16 @@ def build_metrics(
     *,
     parameter_overrides_by_metric: Mapping[str, Mapping[str, object]] | None = None,
 ) -> ConfiguredMetrics:
-    """Build requested metrics in order, applying temporary runtime overrides."""
+    """Build requested metrics in order, warning and skipping failed construction."""
     overrides = parameter_overrides_by_metric or {}
     configured: list[tuple[MetricRequest, _Metric]] = []
     for request in requests:
         parameters = dict(request.parameters)
         parameters.update(overrides.get(request.metric, {}))
-        configured.append((request, build_metric(request.metric, parameters)))
+        try:
+            configured.append((request, build_metric(request.metric, parameters)))
+        except Exception as exc:
+            logger.warning("Skipping metric %r: %s", request.metric, exc)
     return tuple(configured)
 
 
@@ -112,27 +118,36 @@ def calculate_metrics(
     *,
     runtime_by_metric: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Run configured metrics over one battle table."""
+    """Run metrics, warning and skipping failed metrics or breakdowns."""
     runtime_by_metric = runtime_by_metric or {}
     calculated: dict[str, dict[str, object]] = {}
     for request, metric in metrics:
         runtime = dict(runtime_by_metric.get(request.metric, {}))
-        values = dict(metric.calculate(battles, **runtime))
+        try:
+            values = dict(metric.calculate(battles, **runtime))
+        except Exception as exc:
+            logger.warning("Skipping metric %r: %s", request.metric, exc)
+            continue
         if request.breakdown_by:
             groups: dict[str, list[dict[str, object]]] = {}
             for field in request.breakdown_by:
-                if field not in battles:
-                    raise ValueError(
-                        f"Metric {request.metric!r} cannot group by missing column "
-                        f"{field!r}."
+                try:
+                    groups[field] = [
+                        {
+                            "group": _group_value(key),
+                            "values": metric.calculate(group, **runtime),
+                        }
+                        for key, group in battles.groupby(
+                            field, sort=False, dropna=False
+                        )
+                    ]
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping metric %r breakdown %r: %s",
+                        request.metric,
+                        field,
+                        exc,
                     )
-                groups[field] = [
-                    {
-                        "group": _group_value(key),
-                        "values": metric.calculate(group, **runtime),
-                    }
-                    for key, group in battles.groupby(field, sort=False, dropna=False)
-                ]
             values["groups"] = groups
         calculated[request.metric] = values
     return calculated
@@ -146,17 +161,20 @@ def render_metrics(results: Mapping[str, dict[str, object]]) -> str:
     """Render metric results in their configured dictionary order."""
     sections: list[str] = []
     for name, result in results.items():
-        metric_type = _metric_type(name)
-        overall = {key: value for key, value in result.items() if key != "groups"}
-        sections.append(
-            metric_type.render(overall) if overall else f"{name}: unavailable"
-        )
-        for field, groups in result.get("groups", {}).items():
-            for group in groups:
-                rendered = (
-                    metric_type.render(group["values"])
-                    if group["values"]
-                    else f"{name}: unavailable"
-                )
-                sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
+        try:
+            metric_type = _metric_type(name)
+            overall = {key: value for key, value in result.items() if key != "groups"}
+            sections.append(
+                metric_type.render(overall) if overall else f"{name}: unavailable"
+            )
+            for field, groups in result.get("groups", {}).items():
+                for group in groups:
+                    rendered = (
+                        metric_type.render(group["values"])
+                        if group["values"]
+                        else f"{name}: unavailable"
+                    )
+                    sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
+        except Exception as exc:
+            logger.warning("Skipping rendering for metric %r: %s", name, exc)
     return "\n\n".join(sections)

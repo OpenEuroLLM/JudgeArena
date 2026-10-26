@@ -7,22 +7,24 @@ import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
+    run_logging,
     safe_filename,
     write_run_metadata_safely,
 )
 from judgearena.battles import (
     Leaderboard,
     RatingEntry,
+    judged_battles,
+    swap_comparison_slots,
     write_battles,
 )
 from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
-    prefs_to_battle_results,
     select_seeded_random_arena_battles,
 )
 from judgearena.benchmarks.execution import (
-    build_judgement_cache,
+    build_judge,
     load_or_generate_completions,
 )
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
@@ -35,7 +37,7 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
-from judgearena.models import build_default_judge_model_kwargs, prepare_model
+from judgearena.prompts.parsing import score_preference
 from judgearena.reports import EloReport
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+@run_logging()
 def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     """Rate one model against the human battles defined by an ELO task."""
     cfg = cfg.for_task(task)
@@ -58,6 +61,16 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     arena = protocol.arena
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
+    # ELO artifacts (ratings, battles, bootstrap CSV, metadata) are judge-specific,
+    # so key the folder on the judge too — otherwise re-running the same
+    # arena/model under a different judge silently overwrites the previous run.
+    res_dir = prepare_run_directory(
+        cfg,
+        Path(cfg.run.result_folder)
+        / f"elo-{safe_filename(arena)}-{safe_filename(cfg.model.name)}-"
+        f"{safe_filename(cfg.judge.model)}",
+    )
+
     # Step 1: Load arena battles
     logger.info("Step 1: Loading battles from %s", arena)
     task_data = load_task_data(task)
@@ -159,10 +172,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
                 our_model_is_position_a, "direct", "reversed"
             ),
             "instruction": instructions.tolist(),
-            "completion_A": completions.tolist(),
-            "completion_B": opponent_completions,
-            "model_A": cfg.model.name,
-            "model_B": opponent_models,
+            "completion_a": completions.tolist(),
+            "completion_b": opponent_completions,
+            "model_a": cfg.model.name,
+            "model_b": opponent_models,
             "opponent_model": opponent_models,
             "our_model_is_position_a": our_model_is_position_a,
             "question_id": df_battles.get(
@@ -170,27 +183,10 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             ).tolist(),
         }
     )
-    for prefix in ("completion", "model"):
-        comparisons.loc[~our_model_is_position_a, [f"{prefix}_A", f"{prefix}_B"]] = (
-            comparisons.loc[
-                ~our_model_is_position_a, [f"{prefix}_B", f"{prefix}_A"]
-            ].to_numpy()
-        )
+    comparisons = swap_comparison_slots(comparisons, ~our_model_is_position_a)
     resolved_prompt = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
 
-    judge_extra_kwargs = build_default_judge_model_kwargs(
-        cfg.judge.model,
-        cfg.model.engine_kwargs,
-        judge_engine_kwargs_override=cfg.judge.model_kwargs(
-            fallback_chat_template=cfg.model.chat_template,
-        ),
-    )
-
-    judge_chat_model = prepare_model(
-        model=cfg.judge.model,
-        cache=build_judgement_cache(cfg),
-        **judge_extra_kwargs,
-    )
+    judge_chat_model = build_judge(cfg)
     df_judge = judge_comparisons(
         judge_chat_model,
         comparisons,
@@ -201,12 +197,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=use_tqdm,
     )
-
-    # Ratings retain the first judge order, including for reversed judgments.
-    comparison_rows = comparisons.loc[df_judge["instruction_index"]].reset_index(
-        drop=True
-    )
-
     logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
 
     model_name = cfg.model.name
@@ -214,56 +204,52 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # rebuilt from the (revision-pinned) arena, not persisted per run.
     df_arena = arena_anchor_battles(df_arena_all)
 
-    calibrated_temperature = calibrate_pairscore_temperature(
-        df_arena,
-        df_arena_all,
-        enabled=cfg.elo.calibrate_temperature,
-        soft_elo=cfg.elo.soft_elo,
-        sample_size=cfg.elo.calibration_size,
-        rng=rng,
-        judge_model=cfg.judge.model,
-        judge_model_kwargs=judge_extra_kwargs,
-        swap_mode=cfg.judge.swap_mode,
-        prompt=resolved_prompt,
-        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-        default_temperature=cfg.elo.soft_elo_temperature,
-        arena=arena,
-        inference_cache=build_judgement_cache(cfg),
-    )
+    calibrated_temperature = None
+    if cfg.elo.calibrate_temperature:
+        if not cfg.elo.soft_elo:
+            logger.warning(
+                "--calibrate-temperature has no effect with --no-soft-elo; skipping."
+            )
+        else:
+            calibrated_temperature = calibrate_pairscore_temperature(
+                df_arena_all.loc[df_arena.index],
+                sample_size=cfg.elo.calibration_size,
+                rng=rng,
+                judge_chat_model=judge_chat_model,
+                swap_mode=cfg.judge.swap_mode,
+                prompt=resolved_prompt,
+                truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+                default_temperature=cfg.elo.soft_elo_temperature,
+            )
 
-    # Reparse cached responses at this run's temperature, keeping the selected
-    # parser's validation rules.
+    # Apply this run's temperature to the selected parser's validated scores.
     if cfg.elo.soft_elo and isinstance(resolved_prompt.parser, PairScore):
         temperature = (
             calibrated_temperature
             if calibrated_temperature is not None
             else cfg.elo.soft_elo_temperature
         )
-        reparsed_prefs: list[float] = []
-        for completion in df_judge["judge_completion"]:
-            parsed = resolved_prompt.parser.parse_result(
-                completion, temperature=temperature
+        adjusted_prefs: list[float | None] = []
+        for parsed in df_judge["parsed"]:
+            scores = {} if parsed is None else parsed["scores"]
+            adjusted_prefs.append(
+                score_preference(
+                    scores.get("A"), scores.get("B"), temperature=temperature
+                )
             )
-            reparsed_prefs.append(float("nan") if parsed is None else parsed.preference)
-        reparsed = pd.Series(reparsed_prefs, dtype=float)
-        df_judge["pref"] = reparsed.where(
-            df_judge["orientation"] != "reversed", 1 - reparsed
+        adjusted = pd.Series(adjusted_prefs, index=df_judge.index, dtype=float)
+        df_judge["pref"] = adjusted.where(
+            df_judge["orientation"] != "reversed", 1 - adjusted
         )
 
-    df_llm_judge = prefs_to_battle_results(
-        df_judge["pref"],
-        comparison_rows["our_model_is_position_a"],
-        comparison_rows["opponent_model"],
-        model_name,
-        judge_model=cfg.judge.model,
-        question_ids=comparison_rows["question_id"],
+    df_llm_judge = judged_battles(
+        comparisons,
+        df_judge,
+        evaluation_model=model_name,
+        judge=cfg.judge.model,
+        judge_temperature=cfg.judge.temperature,
+        judge_max_out_tokens=cfg.judge.max_out_tokens,
     )
-    # Focal metrics consume the original completions in the same frame as prefs.
-    df_llm_judge["evaluation_model"] = model_name
-    df_llm_judge["completion_a"] = comparison_rows["completion_A"]
-    df_llm_judge["completion_b"] = comparison_rows["completion_B"]
-    df_llm_judge["instruction_index"] = comparison_rows["question_id"]
-    df_llm_judge["orientation"] = df_judge["orientation"]
 
     df_results = pd.concat([df_llm_judge, df_arena], ignore_index=True)
 
@@ -292,12 +278,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     )
     results = report.to_dict()
     report.render()
-    res_dir = prepare_run_directory(
-        cfg,
-        Path(cfg.run.result_folder)
-        / f"elo-{safe_filename(arena)}-{safe_filename(model_name)}-"
-        f"{safe_filename(cfg.judge.model)}",
-    )
     result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
 
     # Persist only the run's own llm-judge battles (a few KB). The human arena
@@ -309,7 +289,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     battle_cols = [
         "model_a",
         "model_b",
-        "winner",
         "pref",
         "pref_hard",
         "source",
