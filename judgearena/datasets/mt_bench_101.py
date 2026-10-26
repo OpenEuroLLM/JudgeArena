@@ -60,7 +60,15 @@ def _git_raw_url(source: GitRawSource) -> str:
 
 
 def expand_mt_bench_101_records(records: list[dict]) -> pd.DataFrame:
-    """Expand dialogue JSONL records into golden-context turn rows."""
+    """Expand dialogues into independently generated and scored turn rows.
+
+    ``instruction_index`` identifies dataset rows; ``instruction_id`` identifies
+    turns in both caches. ``messages`` contains reference history followed by the
+    current user request, as role/content dictionaries. Generation uses it as-is.
+    Judging uses ``task``, ``golden_context`` (user/bot pairs), ``user_message``,
+    and ``reference_answer``. Scoring groups by ``dialogue_uid``, ``dialogue_id``,
+    ``task``, ``ability``, and ``domain``, retaining ``turn_index`` for turn scores.
+    """
     rows: list[dict] = []
     for rec in records:
         task_name = rec.get("task")
@@ -95,6 +103,7 @@ def expand_mt_bench_101_records(records: list[dict]) -> pd.DataFrame:
             rows.append(
                 {
                     "instruction_index": len(rows),
+                    "instruction_id": f"{task_name}:{dialogue_id}:turn-{turn_pos}",
                     "dialogue_id": dialogue_id,
                     "dialogue_uid": f"{task_name}:{dialogue_id}",
                     "task": task_name,
@@ -102,6 +111,15 @@ def expand_mt_bench_101_records(records: list[dict]) -> pd.DataFrame:
                     "domain": MT_BENCH_101_TASK_TO_DOMAIN[task_name],
                     "turn_index": turn_pos,
                     "golden_context": golden_context,
+                    "messages": [
+                        message
+                        for previous in golden_context
+                        for message in (
+                            {"role": "user", "content": previous["user"]},
+                            {"role": "assistant", "content": previous["bot"]},
+                        )
+                    ]
+                    + [{"role": "user", "content": user_message}],
                     "user_message": user_message,
                     "reference_answer": reference_answer,
                     "requires_reference": task_name in MT_BENCH_101_REFERENCE_TASKS,
@@ -129,10 +147,6 @@ class MTBench101Adapter(DatasetAdapter):
 
     def download(self) -> None:
         """Download the pinned MT-Bench-101 JSONL if it is missing."""
-        if self.task.spec.dataset.adapter != "mt_bench_101":
-            raise ValueError(
-                f"Task {self.task.task!r} does not use the MT-Bench-101 adapter."
-            )
         dataset_path = self._dataset_path()
         if dataset_path.exists():
             return

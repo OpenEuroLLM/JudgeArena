@@ -12,6 +12,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from judgearena.prompts.criteria import SCALE_MAX, SCALE_MIN
 from judgearena.utils import strip_thinking_tags
 
 
@@ -84,6 +85,23 @@ class JudgeParser(abc.ABC):
     ) -> ParsedPreference | None: ...
 
 
+class FastChatVerdictParser(JudgeParser):
+    name = "fastchat-verdict"
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> ParsedPreference | None:
+        text = strip_thinking_tags(judge_completion).strip()
+        for token, preference, label in (
+            ("A", 0.0, "A"),
+            ("B", 1.0, "B"),
+            ("C", 0.5, "tie"),
+        ):
+            if f"[[{token}]]" in text:
+                return ParsedPreference(preference, label=label)
+        return None
+
+
 # Graded preferences for the official Arena-Hard verdict labels. The spacing
 # keeps decisiveness recoverable downstream (< 0.5 is an A win either way,
 # but 0.0 marks a significant [[A>>B]] win vs 0.25 for [[A>B]]), and the
@@ -118,15 +136,6 @@ class ArenaHardVerdict(JudgeParser):
 
     name = "arena-hard-verdict"
 
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
-
     def parse_result(
         self,
         judge_completion: str,
@@ -157,15 +166,6 @@ class AlpacaEvalToken(JudgeParser):
     name = "alpaca-eval-token"
     requires_top_logprobs = True
     _TOKENS = ("m", "M")
-
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
 
     def parse_result(
         self,
@@ -296,6 +296,73 @@ class PairScore(JudgeParser):
             return float(m.group(group_index).strip(" "))
 
 
+class CriteriaParser(PairScore):
+    """Compare equally weighted criterion means, retaining every judge-slot score."""
+
+    name = "criteria"
+
+    def __init__(self, names: list[str], *, temperature: float = 0.3):
+        super().__init__(temperature=temperature)
+        if (
+            not names
+            or len(set(names)) != len(names)
+            or any(
+                not name.strip() or name != name.strip() or "\n" in name or "\r" in name
+                for name in names
+            )
+        ):
+            raise ValueError("Expected nonempty, unique, single-line criterion names.")
+        self.names = tuple(names)
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+        temperature: float | None = None,
+    ) -> ParsedPreference | None:
+        text = strip_thinking_tags(judge_completion).strip()
+        if text.startswith("```\n") and text.endswith("```"):
+            text = text[4:-3].strip()
+        criteria = {}
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            match = re.fullmatch(
+                r"(.+?):\s*A\s*=\s*(\d+)\s*,\s*B\s*=\s*(\d+)", line.strip()
+            )
+            if match is None:
+                return None
+            name, raw_a, raw_b = match.groups()
+            if name not in self.names or name in criteria:
+                return None
+            scores = {"A": int(raw_a), "B": int(raw_b)}
+            if any(not SCALE_MIN <= score <= SCALE_MAX for score in scores.values()):
+                return None
+            criteria[name] = scores
+        if set(criteria) != set(self.names):
+            return None
+        means = {
+            slot: sum(scores[slot] for scores in criteria.values()) / len(criteria)
+            for slot in ("A", "B")
+        }
+        return ParsedPreference(
+            preference=self.preference_from_scores(
+                means["A"], means["B"], temperature=temperature
+            ),
+            scores=means,
+            details={"criteria": criteria},
+        )
+
+    def parse_raw_scores(
+        self, judge_completion: str
+    ) -> tuple[float | None, float | None]:
+        parsed = self.parse_result(judge_completion)
+        return (
+            (None, None) if parsed is None else (parsed.scores["A"], parsed.scores["B"])
+        )
+
+
 class MetaEvalPairScore(PairScore):
     """Parse complete integer score pairs in the meta-evaluation format."""
 
@@ -331,15 +398,6 @@ class AlpacaEvalJSON(JudgeParser):
     """Parse the ordered-model JSON emitted by the meta-eval Alpaca prompt."""
 
     name = "alpaca-eval-json"
-
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
 
     def parse_result(
         self,
@@ -404,6 +462,7 @@ def parser_name(parse) -> str:
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, JudgeParser] = {
     "score": PairScore(),
+    "fastchat-verdict": FastChatVerdictParser(),
     "meta-eval-score": MetaEvalPairScore(),
     "arena-hard-verdict": ArenaHardVerdict(),
     "alpaca-eval-json": AlpacaEvalJSON(),

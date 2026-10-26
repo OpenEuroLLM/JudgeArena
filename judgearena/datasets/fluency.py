@@ -97,10 +97,6 @@ class FluencyAdapter(DatasetAdapter):
 
     def download(self) -> None:
         """Download the pinned fluency contexts declared by the task."""
-        if self.task.spec.dataset.adapter != "fluency":
-            raise ValueError(
-                f"Task {self.task.task!r} does not use the fluency adapter."
-            )
         source = self._source()
         snapshot_download(
             repo_id=source.repo_id,

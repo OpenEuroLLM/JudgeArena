@@ -1,14 +1,3 @@
-<|User Prompt|>
-{user_prompt}
-
-<|The Start of Assistant A's {completion_label}|>
-{completion_A}
-<|The End of Assistant A's {completion_label}|>
-
-<|The Start of Assistant B's {completion_label}|>
-{completion_B}
-<|The End of Assistant B's {completion_label}|>
-
 # Your output
 
 ## Format description

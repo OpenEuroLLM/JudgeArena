@@ -38,11 +38,6 @@ class TableAdapter(DatasetAdapter):
 
     def download(self) -> None:
         """Download every Hugging Face source declared by a table-backed task."""
-        if self.task.spec.dataset.adapter != "judgearena_tables":
-            raise ValueError(
-                f"Task {self.task.task!r} uses dataset adapter "
-                f"{self.task.spec.dataset.adapter!r}, not 'judgearena_tables'."
-            )
         if not self.task.spec.dataset.sources:
             raise ValueError("Table adapter requires dataset.sources.")
         self.cache_dir.mkdir(exist_ok=True, parents=True)

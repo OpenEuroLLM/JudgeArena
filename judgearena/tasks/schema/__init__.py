@@ -17,17 +17,9 @@ from judgearena.tasks.schema.dataset import DatasetFields, DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol, EloScoringSpec
 from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.metrics import MetricSpec, ScoringSpec
-from judgearena.tasks.schema.mt_bench import (
-    MTBenchJudgeSpec,
-    MTBenchProtocol,
-    MultiTurnGeneration,
-)
-from judgearena.tasks.schema.mt_bench_101 import (
-    GoldenContextGeneration,
-    MTBench101JudgeSpec,
-    MTBench101Protocol,
-)
 from judgearena.tasks.schema.pairwise import (
+    MTBenchJudgeSpec,
+    MultiTurnGeneration,
     PairwiseJudgeSpec,
     PairwiseProtocol,
     SingleTurnGeneration,
@@ -60,13 +52,9 @@ __all__ = [
     "EloProtocol",
     "EloScoringSpec",
     "GitRawSource",
-    "GoldenContextGeneration",
     "HuggingFaceDatasetSource",
     "HuggingFaceSpaceSource",
-    "MTBench101JudgeSpec",
-    "MTBench101Protocol",
     "MTBenchJudgeSpec",
-    "MTBenchProtocol",
     "MetaEvalProtocol",
     "MetricSpec",
     "MultiTurnGeneration",

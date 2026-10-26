@@ -13,6 +13,7 @@ from sklearn.linear_model import LogisticRegression
 
 from judgearena.battles import focal_battles as _pairwise_view
 from judgearena.battles import preference_values
+from judgearena.prompts.parsing import score_preference
 from judgearena.utils.eval import compute_pref_summary
 
 BOOTSTRAP_ROUNDS = 1000
@@ -246,3 +247,54 @@ class LengthControlledWinrateMetric:
         if interval is not None:
             line += f" [{interval[0]:.2%}, {interval[1]:.2%}]"
         return line
+
+
+def score_outcomes(
+    scores: pd.DataFrame, *, minimum_by: tuple[str, ...] = ()
+) -> pd.DataFrame:
+    """Compare scalar candidate scores, optionally after taking each group's minima.
+
+    Grouped outcomes retain the grouping columns and model identities. Missing
+    scores follow pandas minimum semantics; wholly unscored groups stay missing.
+    """
+    frame = scores.copy()
+    if minimum_by:
+        keys = list(dict.fromkeys([*minimum_by, "model_a", "model_b"]))
+        frame = frame.groupby(keys, as_index=False)[["score_A", "score_B"]].min()
+        frame["instruction_index"] = frame.index
+    frame["pref"] = [
+        score_preference(a, b)
+        for a, b in zip(frame["score_A"], frame["score_B"], strict=True)
+    ]
+    return frame
+
+
+@dataclass(frozen=True, kw_only=True)
+class AbsoluteScoreMetric:
+    """Average candidate scores, optionally weighting each metadata group equally."""
+
+    macro_by: str | None = None
+
+    def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
+        scores = battles[["score_A", "score_B"]]
+        if self.macro_by is not None:
+            scores = battles.groupby(self.macro_by)[["score_A", "score_B"]].mean()
+        means = scores.mean()
+        return {
+            "model_A_score": float(means["score_A"])
+            if pd.notna(means["score_A"])
+            else None,
+            "model_B_score": float(means["score_B"])
+            if pd.notna(means["score_B"])
+            else None,
+            "num_comparisons": len(battles),
+            "num_scored_A": int(battles["score_A"].notna().sum()),
+            "num_scored_B": int(battles["score_B"].notna().sum()),
+        }
+
+    @staticmethod
+    def render(result: dict[str, object]) -> str:
+        return (
+            "Absolute score: "
+            f"Model A={result['model_A_score']}, Model B={result['model_B_score']}"
+        )

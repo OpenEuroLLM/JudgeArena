@@ -28,7 +28,7 @@ dataset:
     category: category
 
 protocol:
-  runner: mt_bench
+  runner: pairwise
   generation:
     mode: multi_turn_chat
     default_max_out_tokens: 1024
@@ -47,10 +47,11 @@ protocol:
     strategy: task_default
     reference_id: gpt-3.5-turbo
   judge:
+    format: mt_bench
     default_prompt_preset: fastchat-pairwise
     default_swap_mode: both
     default_max_out_tokens: 2048
-    turns_mode: both
+    turns: [1, 2]
     fastchat_prompt_preset: default
     fastchat_temperature: 0.0
     reference_categories: [math, reasoning, coding, arena-hard-200]

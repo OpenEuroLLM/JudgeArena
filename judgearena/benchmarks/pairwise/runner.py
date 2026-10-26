@@ -8,26 +8,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
 
 from judgearena.artifacts import (
     prepare_run_directory,
     run_logging,
+    write_annotations,
     write_run_metadata_safely,
 )
 from judgearena.battles import judged_battles
-from judgearena.benchmarks.execution import (
-    build_judge,
-    load_or_generate_completions,
-)
+from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
-from judgearena.benchmarks.pairwise.judging import judge_comparisons
+from judgearena.benchmarks.pairwise.comparisons import prepare_comparisons
+from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.evaluate import resolve_run_judge_prompt
-from judgearena.generate import generate_base, generate_instructions
 from judgearena.log import get_logger
-from judgearena.prompts.registry import ResolvedJudgePrompt
 from judgearena.reports import BattleReport
 from judgearena.tasks.schema import ResolvedTaskSpec
 
@@ -37,96 +33,38 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def _build_judge_batches(
-    cfg: "RunConfig",
-    resolved_task: ResolvedTaskSpec,
-    instructions_df: pd.DataFrame,
-    eval_index: pd.Index,
-    resolved_prompt: ResolvedJudgePrompt,
-) -> list[tuple[ResolvedJudgePrompt, pd.Index]]:
-    """Group evaluation rows that share the same resolved judge prompt.
-
-    Tasks may map categories to prompt presets (e.g. Arena-Hard v2.0 judges
-    creative writing with a different system prompt). Runtime prompt overrides
-    (an explicit preset or prompt files) disable the per-category mapping.
-    """
-    category_prompts = getattr(
-        resolved_task.spec.protocol.judge, "category_prompts", {}
-    )
-    if (
-        not category_prompts
-        or (
-            cfg.judge.prompt_preset is not None
-            and cfg.judge.prompt_preset
-            != resolved_task.spec.protocol.judge.default_prompt_preset
-        )
-        or resolved_prompt.source != "preset"
-        or "category" not in instructions_df.columns
-    ):
-        return [(resolved_prompt, eval_index)]
-
-    from judgearena.prompts.registry import resolve_judge_prompt
-
-    categories = instructions_df.loc[eval_index, "category"]
-    groups: list[tuple[ResolvedJudgePrompt, pd.Index]] = []
-    for category, rows in categories.groupby(
-        categories, sort=False, dropna=False, observed=True
-    ):
-        preset = None if pd.isna(category) else category_prompts.get(category)
-        prompt = (
-            resolved_prompt if preset is None else resolve_judge_prompt(preset=preset)
-        )
-        groups.append((prompt, rows.index))
-    return groups
-
-
 @run_logging()
 def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None):
-    """
-    1) take as input:
-     * task (dataset), make sure instruct-completion works
-     * model to generate output from
-     * llm used for judge
-     * number of annotations
-     * path to save annotations
-    2) create completions
-    3) create annotations
-    """
+    """Load or generate candidates, judge pairs, and save annotations and metrics."""
 
     run_started_at = datetime.now(UTC)
 
     cfg = cfg.for_task(resolved_task)
     resolved_task = cfg.resolved_task
-    resolved_prompt = resolve_run_judge_prompt(resolved_task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(
+        resolved_task,
+        cfg.judge,
+        multi_turn=resolved_task.spec.protocol.generation.mode == "multi_turn_chat",
+    )
     metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = load_task_data(resolved_task).select(
         resolve_dataset_filters(resolved_task, cfg.run.filters)
     )
     instructions_df = task_data.instructions
-    instructions = instructions_df.loc[:, "instruction"]
+    n_instructions = cfg.generation.n_instructions
+    if n_instructions is not None:
+        limit_by = resolved_task.spec.protocol.limit_by
+        if limit_by is None:
+            instructions_df = instructions_df.head(n_instructions)
+        else:
+            selected = instructions_df[limit_by].drop_duplicates().head(n_instructions)
+            instructions_df = instructions_df.loc[
+                instructions_df[limit_by].isin(selected)
+            ]
 
-    n_instructions = (
-        cfg.generation.n_instructions
-        if cfg.generation.n_instructions
-        else len(instructions)
+    judge, default_temperature = prepare_pairwise_judging(
+        cfg, resolved_prompt, instructions_df
     )
-    if cfg.generation.n_instructions is not None:
-        instructions_df = instructions_df.head(n_instructions)
-        instructions = instructions.head(n_instructions)
-
-    prompt_groups = _build_judge_batches(
-        cfg, resolved_task, instructions_df, instructions.index, resolved_prompt
-    )
-    judge_prompt_variants = []
-    for group_prompt, _ in prompt_groups:
-        if group_prompt.delegated:
-            raise ValueError(
-                f"Judge prompt preset '{group_prompt.preset_name}' is delegated and "
-                "cannot be used for generic pairwise judging."
-            )
-        prompt_metadata = group_prompt.metadata()
-        if prompt_metadata not in judge_prompt_variants:
-            judge_prompt_variants.append(prompt_metadata)
 
     baseline_plan = resolve_baseline_plan(
         task_id=cfg.task,
@@ -158,89 +96,16 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         baseline_plan.display_name,
     )
 
-    # TODO currently we just support base models for fluency, we could also support instruction-tuned models
-    generation_function = (
-        generate_base
-        if resolved_task.spec.protocol.generation.mode == "base_completion"
-        else generate_instructions
-    )
+    comparisons = prepare_comparisons(cfg, task_data, instructions_df, baseline_plan)
+    judge_chat_model = build_judge(cfg, default_temperature=default_temperature)
+    annotations, outcomes, judgment_metadata = judge(judge_chat_model, comparisons)
+    judge_prompt_variants = judgment_metadata["judge_prompts"]
+    prefs = outcomes["pref"].rename(None)
+    annotations["judge"] = cfg.judge.model
+    write_annotations(annotations, res_folder / f"{name}-annotations.csv")
 
-    def _load_or_generate_completions(
-        model_spec: str,
-        *,
-        role: str,
-        instruction_ids: pd.Index | None = None,
-    ) -> pd.Series:
-        selected = (
-            instructions
-            if instruction_ids is None
-            else instructions.loc[instruction_ids]
-        )
-        return load_or_generate_completions(
-            cfg,
-            model_spec,
-            selected,
-            task_data.model_completion(model_spec, instruction_ids=selected.index),
-            role=role,
-            generate=generation_function,
-            use_tqdm=cfg.run.use_tqdm,
-        )
-
-    completions_A = _load_or_generate_completions(cfg.model.name, role="A")
-
-    baseline_per_index = baseline_plan.aligned_to(instructions.index)
-    completions_B = pd.concat(
-        [
-            _load_or_generate_completions(
-                model,
-                role="B",
-                instruction_ids=baseline_per_index.index[baseline_per_index == model],
-            )
-            for model in baseline_plan.unique_models
-        ]
-    ).reindex(instructions.index)
-
-    logger.debug("First instruction/context: %s", instructions.values[0])
-    logger.debug("First completion of %s:\n%s", cfg.model.name, completions_A.values[0])
-    logger.debug(
-        "First completion of %s:\n%s",
-        baseline_plan.display_name,
-        completions_B.values[0],
-    )
-    logger.info("Evaluating completions with judge %s.", cfg.judge.model)
-
-    judge_chat_model = build_judge(cfg)
-
-    logger.info("Saving results to %s", res_folder)
-
-    comparisons = instructions.to_frame().assign(
-        completion_a=completions_A,
-        completion_b=completions_B,
-        model_a=cfg.model.name,
-        model_b=baseline_per_index,
-    )
-    judgments = judge_comparisons(
-        judge_chat_model,
-        comparisons,
-        prompt_groups,
-        swap_mode=cfg.judge.swap_mode,
-        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
-        use_tqdm=cfg.run.use_tqdm,
-    )
-    prefs = judgments["pref"].rename(None)
-    judgments["judge"] = cfg.judge.model
-    judgments.drop(columns=["pref", "orientation"]).to_csv(
-        res_folder / f"{name}-annotations.csv", index=False
-    )
-
-    # Source metadata must not override judge cache identity.
-    scoring_comparisons = comparisons.join(
-        instructions_df.drop(columns=comparisons.columns, errors="ignore")
-    )
     battles = judged_battles(
-        scoring_comparisons,
-        judgments,
+        outcomes,
         evaluation_model=cfg.model.name,
         judge=cfg.judge.model,
         judge_temperature=cfg.judge.temperature,
@@ -269,7 +134,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
             else "flat",
             "baseline_models": baseline_plan.unique_models,
             **resolved_prompt.metadata(),
-            "judge_prompts": judge_prompt_variants,
+            **judgment_metadata,
             "strip_thinking_before_judging": cfg.judge.strip_thinking_before_judging,
             "battle_thinking_token_budget": cfg.judge.battle_thinking_token_budget,
         },
@@ -284,13 +149,8 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     report.render()
     report.save(res_folder / f"results-{name}.json")
 
-    eval_instruction_index = judgments.loc[
-        judgments["orientation"] != "reversed", "instruction_index"
-    ].tolist()
-    baseline_per_eval = baseline_per_index.loc[eval_instruction_index]
-    eval_instructions = instructions.loc[eval_instruction_index].tolist()
-    eval_completions_A = completions_A.loc[eval_instruction_index].tolist()
-    eval_completions_B = completions_B.loc[eval_instruction_index].tolist()
+    eval_instruction_index = annotations["instruction_index"].drop_duplicates().tolist()
+    evaluated = comparisons.loc[eval_instruction_index]
 
     write_run_metadata_safely(
         task=cfg.resolved_task,
@@ -300,10 +160,15 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         results=results,
         input_payloads={
             "instruction_index": eval_instruction_index,
-            "instructions": eval_instructions,
-            "completions_A": eval_completions_A,
-            "completions_B": eval_completions_B,
-            "baseline_model_B": baseline_per_eval.tolist(),
+            "instructions": evaluated["instruction"].tolist(),
+            "completions_A": evaluated["completion_a"].tolist(),
+            "completions_B": evaluated["completion_b"].tolist(),
+            "baseline_model_B": evaluated["model_b"].tolist(),
+            **{
+                column: evaluated[column].tolist()
+                for column in ("messages", "messages_a", "messages_b")
+                if column in evaluated
+            },
         },
         judge_system_prompt=resolved_prompt.system_prompt,
         judge_user_prompt_template=resolved_prompt.user_prompt_template,

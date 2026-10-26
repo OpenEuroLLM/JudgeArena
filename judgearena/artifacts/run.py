@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -10,7 +11,9 @@ from logging import FileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from judgearena.artifacts.metadata import write_run_metadata
+import pandas as pd
+
+from judgearena.artifacts.metadata import to_jsonable, write_run_metadata
 from judgearena.log import attach_file_handler, get_logger, make_run_log_path
 
 if TYPE_CHECKING:
@@ -68,3 +71,26 @@ def write_run_metadata_safely(**kwargs):
     except OSError as exc:
         logger.warning("Failed to write run metadata: %s", exc)
         return None
+
+
+def write_annotations(annotations: pd.DataFrame, path: str | Path) -> None:
+    """Save canonical columns, encoding nested evidence and metadata as JSON."""
+    path = Path(path)
+    if path.suffix not in (".csv", ".parquet"):
+        raise ValueError("Annotations require a .csv or .parquet path.")
+    frame = annotations.copy()
+    for column in frame:
+        if pd.api.types.infer_dtype(frame[column], skipna=True).startswith("mixed"):
+            frame[column] = frame[column].map(
+                lambda value: (
+                    None
+                    if pd.api.types.is_scalar(value) and pd.isna(value)
+                    else json.dumps(
+                        to_jsonable(value), ensure_ascii=False, allow_nan=False
+                    )
+                )
+            )
+    if path.suffix == ".csv":
+        frame.to_csv(path, index=False)
+    else:
+        frame.to_parquet(path, index=False)

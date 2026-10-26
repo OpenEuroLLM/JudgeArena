@@ -32,6 +32,42 @@ def preference_values(values: pd.Series) -> pd.Series:
     return prefs
 
 
+def require_agreement(direct: float | None, reversed: float | None) -> float | None:
+    """Combine preferences already oriented to the same candidates; missing stays missing."""
+    if direct is None or reversed is None:
+        return None
+    return direct if direct == reversed else 0.5
+
+
+def agreement_outcomes(annotations: pd.DataFrame) -> pd.DataFrame:
+    """Reduce canonical answer-order preferences, requiring both verdicts to agree."""
+    outcomes = annotations.loc[annotations["orientation"] != "reversed"].copy()
+    outcomes["inconsistent"] = False
+    reverse = annotations.loc[annotations["orientation"] == "reversed"]
+    if not reverse.empty:
+        reverse_prefs = (
+            reverse.set_index("instruction_index")
+            .loc[outcomes["instruction_index"], "pref"]
+            .to_numpy()
+        )
+        direct_prefs = outcomes["pref"]
+        outcomes["inconsistent"] = (
+            direct_prefs.notna()
+            & pd.notna(reverse_prefs)
+            & (direct_prefs != reverse_prefs)
+        )
+        outcomes["pref"] = pd.Series(
+            [
+                require_agreement(None if pd.isna(a) else a, None if pd.isna(b) else b)
+                for a, b in zip(direct_prefs, reverse_prefs, strict=True)
+            ],
+            index=outcomes.index,
+            dtype=float,
+        )
+    outcomes["orientation"] = "single"
+    return outcomes
+
+
 def hard_preferences(values: pd.Series) -> pd.Series:
     prefs = preference_values(values)
     return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
@@ -42,11 +78,13 @@ def swap_comparison_slots(
 ) -> pd.DataFrame:
     """Swap selected model/answer pairs, preserving row identity and metadata."""
     swapped = comparisons.copy()
-    for prefix in ("completion", "model"):
+    for prefix in ("completion", "model", "messages"):
         columns = [f"{prefix}_a", f"{prefix}_b"]
-        swapped.loc[reverse_order, columns] = comparisons.loc[
-            reverse_order, columns[::-1]
-        ].to_numpy()
+        if not set(columns) <= set(comparisons.columns):
+            continue
+        a, b = columns
+        swapped[a] = comparisons[a].where(~reverse_order, comparisons[b])
+        swapped[b] = comparisons[b].where(~reverse_order, comparisons[a])
     return swapped
 
 
@@ -93,7 +131,6 @@ def focal_battles(battles: pd.DataFrame) -> pd.DataFrame:
 
 
 def judged_battles(
-    comparisons: pd.DataFrame,
     judgments: pd.DataFrame,
     *,
     evaluation_model: str,
@@ -101,12 +138,8 @@ def judged_battles(
     judge_temperature: float | None = None,
     judge_max_out_tokens: int | None = None,
 ) -> pd.DataFrame:
-    """Build scoring rows in the original comparison frame, including repeats."""
-    if not comparisons.index.is_unique:
-        raise ValueError("Comparisons require unique row IDs.")
-    ids = judgments["instruction_index"].tolist()
-    frame = comparisons.loc[ids].reset_index(drop=True)
-    frame["instruction_index"] = ids
+    """Add shared scoring fields to complete outcome rows, including repeats."""
+    frame = judgments.reset_index(drop=True).copy()
     frame["pref"] = preference_values(judgments["pref"]).to_numpy()
     frame["pref_hard"] = hard_preferences(frame["pref"])
     frame["orientation"] = judgments["orientation"].to_numpy()
@@ -118,10 +151,9 @@ def judged_battles(
     frame["judge_temperature"] = judge_temperature
     frame["judge_max_out_tokens"] = judge_max_out_tokens
     # Legacy metric/grouping aliases are derived centrally from the focal model.
-    focal = focal_battles(frame)
-    for column in ("model", "baseline", "completion_model", "completion_baseline"):
-        frame[column] = focal[column]
-    return frame
+    return frame.assign(
+        **pairwise_aliases(frame, model_is_a=frame["model_a"] == evaluation_model)
+    )
 
 
 @dataclass(frozen=True)

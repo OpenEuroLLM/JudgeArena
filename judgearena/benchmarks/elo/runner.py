@@ -243,7 +243,6 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
         )
 
     df_llm_judge = judged_battles(
-        comparisons,
         df_judge,
         evaluation_model=model_name,
         judge=cfg.judge.model,

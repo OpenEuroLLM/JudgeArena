@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,6 @@ from judgearena.benchmarks.pairwise.baselines import (
     resolve_baseline_plan,
 )
 from judgearena.benchmarks.pairwise.runner import run_pairwise
-from judgearena.benchmarks.registry import resolve_benchmark_adapter
 from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
@@ -172,18 +172,6 @@ def test_resolve_plan_explicit_model_b_overrides_native():
 )
 def test_native_pairwise_baseline_resolves_registered_tasks(task: str, expected: str):
     assert native_pairwise_baseline(task) == expected
-
-
-@pytest.mark.parametrize(
-    ("task", "expected"),
-    [
-        ("alpaca-eval", "pairwise"),
-        ("mt-bench", "mt_bench"),
-        ("elo-comparia", "elo"),
-    ],
-)
-def test_benchmark_adapter_resolution(task: str, expected: str):
-    assert resolve_benchmark_adapter(task).name == expected
 
 
 def test_resolve_plan_task_without_native_baseline_requires_model_b():
@@ -424,7 +412,7 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
     if swap_mode == "both":
         raw = ["[[A>B]]", "no verdict", "[[B>A]]", "[[A>B]]", "[[A>B]]", "[[B>A]]"]
 
-    def build_judge(cfg):
+    def build_judge(cfg, **kwargs):
         model = prepare_model(
             "Dummy/judge", cache=benchmark_execution.build_judgement_cache(cfg)
         )
@@ -490,7 +478,7 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
         "arena-hard-creative",
     ] * (2 if swap_mode == "both" else 1)
     completions = outputs.set_index(["instruction_index", "model"])["output"]
-    for slot in ("A", "B"):
+    for slot in ("a", "b"):
         assert annotations[f"completion_{slot}"].tolist() == [
             completions.loc[index, model]
             for index, model in zip(ids, annotations[f"model_{slot}"], strict=True)
@@ -507,9 +495,16 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(
             index=False, name=None
         )
     ) == set(
-        annotations[
-            ["instruction_index", "model_A", "model_B", "judge_completion"]
-        ].itertuples(index=False, name=None)
+        annotations.assign(
+            judge_a=annotations.model_a.where(
+                ~annotations.swapped, annotations.model_b
+            ),
+            judge_b=annotations.model_b.where(
+                ~annotations.swapped, annotations.model_a
+            ),
+        )[["instruction_index", "judge_a", "judge_b", "judge_completion"]].itertuples(
+            index=False, name=None
+        )
     )
     assert cached["orientation"].tolist() == [
         "direct" if model == "candidate" else "reversed" for model in cached["model_a"]
@@ -629,12 +624,7 @@ def test_judge_comparisons_preserves_prepared_order_and_cache_identity(tmp_path)
         use_tqdm=False,
     )
     assert result["instruction_index"].tolist() == [3, 8, 3, 8]
-    assert result["completion_A"].tolist() == [
-        "candidate second",
-        "opponent first",
-        "opponent second",
-        "candidate first",
-    ]
+    assert result["completion_a"].tolist() == ["candidate second", "opponent first"] * 2
     assert result["pref"].tolist() == pytest.approx(
         [0.25, np.nan, 0.25, 0.75], nan_ok=True
     )
@@ -656,3 +646,97 @@ def test_complete_missing_preserves_repeated_cache_ids():
     assert result.index.tolist() == ["shared"] * 3
     assert existing.iloc[0] == ""
     assert existing.iloc[1:].isna().all()
+
+
+def test_text_pairwise_uses_current_answers_despite_source_histories(
+    tmp_path, monkeypatch
+):
+    from judgearena.datasets.data import PreferenceData
+
+    data = PreferenceData.from_battles(
+        pd.DataFrame(
+            [
+                dict(
+                    instruction="question",
+                    model_a="source-a",
+                    model_b="source-b",
+                    completion_a="old answer",
+                    completion_b="baseline answer",
+                    messages_a=[
+                        {"role": "user", "content": "question"},
+                        {"role": "assistant", "content": "stale source history"},
+                    ],
+                    messages_b=[
+                        {"role": "user", "content": "question"},
+                        {"role": "assistant", "content": "stale baseline history"},
+                    ],
+                    pref=0.5,
+                    source="human",
+                    category="coding",
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(generate_and_evaluate, "load_task_data", lambda _: data)
+    run_pairwise(
+        _cfg(
+            task="arena-hard-v0.1",
+            model_A="Dummy/current answer",
+            model_B="source-b",
+            judge_model="Dummy/[[A>B]]",
+            result_folder=str(tmp_path),
+        )
+    )
+    annotations = pd.read_csv(next(tmp_path.rglob("*-annotations.csv")))
+    prompt = annotations.iloc[0].judge_input
+    assert "current answer" in prompt and "baseline answer" in prompt
+    assert "stale" not in prompt
+    assert "coding" not in prompt
+    assert annotations.iloc[0].category == "coding"
+
+
+def test_multiturn_generation_batches_active_turns_and_reuses_history_cache(
+    tmp_path, monkeypatch
+):
+    import judgearena.generate as generation
+    from judgearena.cache.inference import CompletionInferenceCache
+
+    calls = []
+
+    def make_model(*args, **kwargs):
+        model = prepare_model(*args, **kwargs)
+
+        def batch(inputs, **_):
+            calls.append([value.to_messages() for value in inputs])
+            return ["<think>hidden</think>answer"] * len(inputs)
+
+        model.factory = lambda: SimpleNamespace(batch=batch)
+        return model
+
+    monkeypatch.setattr(generation, "prepare_model", make_model)
+    questions = pd.DataFrame(
+        {"user_turns": [["q1", "q2", "q3"], ["short"]]}, index=[7, 9]
+    )
+    kwargs = dict(
+        questions=questions,
+        model="Dummy/answer",
+        use_tqdm=False,
+        truncate_input_chars=None,
+        strip_thinking_before_history=True,
+        inference_cache=CompletionInferenceCache(tmp_path, "conversations"),
+    )
+    answers = generation.generate_multiturn(**kwargs)
+    assert [len(batch) for batch in calls] == [2, 1, 1]
+    assert [message.content for message in calls[2][0]] == [
+        "You are a helpful assistant.",
+        "q1",
+        "answer",
+        "q2",
+        "answer",
+        "q3",
+    ]
+    assert answers.instruction_index.tolist() == [7, 9]
+    assert answers.messages.map(len).tolist() == [6, 2]
+    assert answers.iloc[0].messages[1]["content"] == "<think>hidden</think>answer"
+    pd.testing.assert_frame_equal(generation.generate_multiturn(**kwargs), answers)
+    assert len(calls) == 3

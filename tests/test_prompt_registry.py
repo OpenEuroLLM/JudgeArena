@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+import pandas as pd
 import pytest
 
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.evaluate import (
-    judge_and_parse_prefs,
     resolve_judge_prompts,
     resolve_run_judge_prompt,
 )
@@ -58,6 +59,8 @@ def test_mt_bench_default_is_delegated_fastchat():
     assert resolved.delegated is True
     assert resolved.system_prompt is None
     assert resolved.user_prompt_template == ""
+    assert resolved.aggregation == "agreement"
+    assert resolved.metadata()["judge_aggregation"] == "agreement"
 
 
 def test_mt_bench_101_prompt_presets_are_delegated():
@@ -94,6 +97,9 @@ def test_explanation_preset_renders_explanation_suffix():
 
     assert resolved.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
     assert "explanation of your judgement" in resolved.user_prompt_template
+    assert "explanation of your judgement" in resolved.output_format
+    assert resolved.user_prompt_template.endswith(resolved.output_format)
+    assert resolved.aggregation == "individual"
 
 
 def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
@@ -197,19 +203,30 @@ def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expect
         replace(PRESETS["default"], name="test-score", parser=PairScore(temperature=1)),
     )
 
-    annotations, reversed_annotations, prefs = judge_and_parse_prefs(
-        judge_chat_model=DummyModel("Dummy/score_A: 6\nscore_B: 8"),
-        instructions=["Question"],
-        completions_A=["Answer A"],
-        completions_B=["Answer B"],
-        prompt_preset="test-score",
+    prompt = resolve_judge_prompt(preset="test-score")
+    if parse is not None:
+        prompt = replace(prompt, parser=parse)
+    comparisons = pd.DataFrame(
+        {
+            "instruction": ["Question"],
+            "completion_a": ["Answer A"],
+            "completion_b": ["Answer B"],
+            "model_a": ["a"],
+            "model_b": ["b"],
+        }
+    )
+    annotations = judge_comparisons(
+        DummyModel("Dummy/score_A: 6\nscore_B: 8"),
+        comparisons,
+        [(prompt, comparisons.index)],
         swap_mode="fixed",
-        parse=parse,
+        strip_thinking_before_judging=False,
+        truncate_input_chars=None,
+        use_tqdm=False,
     )
 
-    assert annotations[0].parsed.preference == pytest.approx(expected)
-    assert reversed_annotations is None
-    assert prefs.tolist() == pytest.approx([expected])
+    assert annotations.iloc[0]["parsed"]["preference"] == pytest.approx(expected)
+    assert annotations["pref"].tolist() == pytest.approx([expected])
 
 
 def test_every_preset_resolves_or_delegates():

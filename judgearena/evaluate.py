@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompt_values import PromptValue
 
 from judgearena.cache.inference import JudgementCacheRowMetadata
-from judgearena.judging import JudgeRequest, execute_judging
+from judgearena.judging import (
+    JudgeRequest,
+    execute_judging,
+)
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
+    build_pairwise_chat_prompt_template,
     resolve_judge_prompt,
 )
 from judgearena.prompts.registry import (
@@ -24,22 +27,11 @@ logger = get_logger(__name__)
 
 # Re-exported for existing callers; implementations live with the presets.
 from judgearena.prompts.parsing import (  # noqa: E402
-    JudgeParser,
     OutputParser,
     PairScore,  # noqa: F401
     ParsedPreference,
     resolve_judge_parser,
 )
-
-
-def load_judge_system_and_user_prompt(
-    multi_turn: bool = False,
-) -> tuple[str, str]:
-    resolved = resolve_judge_prompt(
-        preset=DEFAULT_JUDGE_PROMPT_PRESET,
-        multi_turn=multi_turn,
-    )
-    return resolved.system_prompt or "", resolved.user_prompt_template
 
 
 def resolve_judge_prompts(
@@ -95,6 +87,35 @@ class JudgeAnnotation:
     parsed: ParsedPreference | None = None
 
 
+def render_battle_inputs(
+    instructions: list[str],
+    completions_A: list[str],
+    completions_B: list[str],
+    prompt: ResolvedJudgePrompt,
+    truncate_input_chars: int | None,
+) -> list[PromptValue]:
+    """Render text comparisons, preserving JSON escaping and answer truncation."""
+    prompt_template = build_pairwise_chat_prompt_template(prompt)
+
+    prompt_inputs = []
+    for user_prompt, completion_A, completion_B in zip(
+        instructions, completions_A, completions_B, strict=True
+    ):
+        completion_A = truncate(completion_A, max_len=truncate_input_chars)
+        completion_B = truncate(completion_B, max_len=truncate_input_chars)
+        prompt_inputs.append(
+            {
+                "user_prompt": user_prompt,
+                "completion_A": completion_A,
+                "completion_B": completion_B,
+                "user_prompt_json": json.dumps(user_prompt, ensure_ascii=False),
+                "completion_A_json": json.dumps(completion_A, ensure_ascii=False),
+                "completion_B_json": json.dumps(completion_B, ensure_ascii=False),
+            }
+        )
+    return prompt_template.batch(prompt_inputs)
+
+
 def annotate_battles(
     judge_chat_model,
     instructions: list[str],
@@ -115,14 +136,13 @@ def annotate_battles(
     """
     Directly evaluate from list of instructions and completions
     Can also pass custom LLM judge prompts, if not passed uses defaults
-    `system_prompt, user_prompt_template = load_judge_system_and_user_prompt()`
     Example usage:
     ```python
     annotations = annotate_battles(
         # can be any langchain ChatModel, supports OpenAI, Together, vLLM, ...
         judge_chat_model=Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         # the instructions we want to evaluate
-        user_prompts=["Write numbers between 1 and 5."],
+        instructions=["Write numbers between 1 and 5."],
         # the completions we want to evaluate for the first model
         completions_A=["1 2 3 4 5."],
         # the completions we want to evaluate for the second model
@@ -159,32 +179,16 @@ def annotate_battles(
             "cannot be used for generic pairwise judging."
         )
 
-    message_templates: list[tuple[str, str]] = []
-    if resolved_prompt.system_prompt is not None:
-        message_templates.append(("system", resolved_prompt.system_prompt))
-    message_templates.append(("user", resolved_prompt.user_prompt_template))
-    prompt_template = ChatPromptTemplate.from_messages(message_templates)
     if strip_thinking_before_judging:
         completions_A = [strip_thinking_tags(c) for c in completions_A]
         completions_B = [strip_thinking_tags(c) for c in completions_B]
-
-    prompt_inputs = []
-    for user_prompt, completion_A, completion_B in zip(
-        instructions, completions_A, completions_B, strict=True
-    ):
-        completion_A = truncate(completion_A, max_len=truncate_input_chars)
-        completion_B = truncate(completion_B, max_len=truncate_input_chars)
-        prompt_inputs.append(
-            {
-                "user_prompt": user_prompt,
-                "completion_A": completion_A,
-                "completion_B": completion_B,
-                "user_prompt_json": json.dumps(user_prompt, ensure_ascii=False),
-                "completion_A_json": json.dumps(completion_A, ensure_ascii=False),
-                "completion_B_json": json.dumps(completion_B, ensure_ascii=False),
-            }
-        )
-    inputs = prompt_template.batch(prompt_inputs)
+    inputs = render_battle_inputs(
+        instructions,
+        completions_A,
+        completions_B,
+        resolved_prompt,
+        truncate_input_chars,
+    )
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
     if parse is None:
@@ -249,124 +253,20 @@ def annotate_battles(
     ]
 
 
-def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
-    """Stack direct preferences before reversed preferences reoriented to A/B."""
-    return pd.concat(
-        [prefs_ab.reset_index(drop=True), 1 - prefs_ba.reset_index(drop=True)]
-    ).reset_index(drop=True)
-
-
-def judge_and_parse_prefs(
-    judge_chat_model,
-    instructions: list[str],
-    completions_A: list[str],
-    completions_B: list[str],
-    swap_mode: str = "fixed",
-    strip_thinking_before_judging: bool = False,
-    system_prompt: str | None = None,
-    user_prompt_template: str | None = None,
-    prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET,
-    truncate_input_chars: int = 8192,
-    use_tqdm: bool = False,
-    parse: JudgeParser | None = None,
-    cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
-    *,
-    prompt: ResolvedJudgePrompt | None = None,
-) -> tuple[list[JudgeAnnotation], list[JudgeAnnotation] | None, pd.Series]:
-    """Run judge annotation and parse preferences, handling swap_mode='both'.
-
-    Returns:
-        annotations: original-order JudgeAnnotations
-        annotations_reversed: reversed-order JudgeAnnotations (None if swap_mode != "both")
-        prefs: canonical A/B preferences. With swap_mode="both", the direct
-               block is followed by the reoriented reversed block.
-    """
-    if prompt is None:
-        prompt = resolve_judge_prompts(
-            prompt_preset=prompt_preset,
-            system_prompt=system_prompt,
-            user_prompt_template=user_prompt_template,
-        )
-    parse = parse if parse is not None else prompt.parser
-    if parse is None:
-        raise ValueError("Pairwise judging requires a preference parser.")
-
-    if swap_mode == "both":
-        logger.info(
-            "Correction for judge bias towards a certain model position is set."
-        )
-        logger.info(
-            "Evaluating completions with models reversed with judge %s.",
-            judge_chat_model,
-        )
-
-    annotations = annotate_battles(
-        judge_chat_model=judge_chat_model,
-        instructions=instructions,
-        completions_A=completions_A,
-        completions_B=completions_B,
-        strip_thinking_before_judging=strip_thinking_before_judging,
-        prompt=prompt,
-        truncate_input_chars=truncate_input_chars,
-        use_tqdm=use_tqdm,
-        collect_top_logprobs=parse.requires_top_logprobs,
-        cache_row_metadata=cache_row_metadata,
-        parse=parse,
+def render_comparison_requests(comparisons, prompt, truncate_input_chars):
+    """Render a text batch for the shared executor."""
+    if prompt.parser is None or prompt.delegated:
+        raise ValueError("Pairwise judging requires a resolved preference parser.")
+    inputs = render_battle_inputs(
+        comparisons.instruction.tolist(),
+        comparisons.completion_a.tolist(),
+        comparisons.completion_b.tolist(),
+        prompt,
+        truncate_input_chars,
     )
-
-    annotations_reversed = None
-    if swap_mode == "both":
-        reversed_cache_row_metadata = (
-            [
-                {
-                    **metadata,
-                    "model_a": metadata["model_b"],
-                    "model_b": metadata["model_a"],
-                    "orientation": (
-                        "reversed"
-                        if metadata.get("orientation") == "direct"
-                        else "direct"
-                    ),
-                }
-                for metadata in cache_row_metadata
-            ]
-            if cache_row_metadata is not None
-            else None
-        )
-        annotations_reversed = annotate_battles(
-            judge_chat_model=judge_chat_model,
-            instructions=instructions,
-            completions_A=completions_B,
-            completions_B=completions_A,
-            strip_thinking_before_judging=strip_thinking_before_judging,
-            prompt=prompt,
-            truncate_input_chars=truncate_input_chars,
-            use_tqdm=use_tqdm,
-            collect_top_logprobs=parse.requires_top_logprobs,
-            cache_row_metadata=reversed_cache_row_metadata,
-            parse=parse,
-        )
-
-    def _preferences_and_warn(ann_list: list[JudgeAnnotation], label: str) -> pd.Series:
-        results = [annotation.parsed for annotation in ann_list]
-        n_failed = sum(1 for result in results if result is None)
-        if n_failed:
-            logger.warning(
-                "%d/%d judge outputs could not be parsed (%s) — "
-                "those outputs are treated as missing preferences.",
-                n_failed,
-                len(results),
-                label,
-            )
-        return pd.Series(
-            [None if result is None else result.preference for result in results],
-            dtype=float,
-        )
-
-    prefs = _preferences_and_warn(annotations, "direct")
-
-    if swap_mode == "both":
-        prefs_reversed = _preferences_and_warn(annotations_reversed, "reversed")
-        prefs = combine_swapped_prefs(prefs, prefs_reversed)
-
-    return annotations, annotations_reversed, prefs
+    return [
+        [
+            JudgeRequest(str(identity), value, prompt.parser)
+            for identity, value in zip(comparisons.index, inputs, strict=True)
+        ]
+    ]

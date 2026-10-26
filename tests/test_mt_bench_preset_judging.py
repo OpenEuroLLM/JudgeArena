@@ -1,206 +1,28 @@
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-from types import SimpleNamespace
+from functools import partial
 
-import numpy as np
 import pandas as pd
 import pytest
+from langchain_core.language_models.fake import FakeListLLM
 
-import judgearena.benchmarks.mt_bench.runner as mt_bench_runner
-from judgearena.benchmarks.elo.rating import fit_bradley_terry
-from judgearena.benchmarks.mt_bench.pairwise_judging import (
-    build_pairwise_chat_prompt_template,
-    judge_pairwise_by_prompt_groups,
-    swap_pairwise_answer_kwargs,
-)
-from judgearena.benchmarks.mt_bench.preset_judging import (
-    _build_mt_bench_preset_items,
-    build_mt_bench_preset_prompts,
-    judge_mt_bench_with_preset,
-)
-from judgearena.benchmarks.mt_bench.runner import _build_mt_bench_battles
-from judgearena.benchmarks.pairwise.scoring.metrics import (
-    LengthControlledWinrateMetric,
-)
+from judgearena.benchmarks.pairwise.comparisons import conversation_comparisons
 from judgearena.cache.inference import JudgementInferenceCache
-from judgearena.config import RunConfig
+from judgearena.judging import execute_pairwise
 from judgearena.models import do_inference, prepare_model
+from judgearena.prompts.mt_bench import (
+    build_mt_bench_preset_prompts,
+    render_mt_bench_requests,
+)
 from judgearena.prompts.registry import (
     resolve_judge_prompt,
 )
-from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import MetricSpec, ScoringSpec
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
 
 
-class SequenceJudge:
-    def __init__(self, outputs: list[str]):
-        self.outputs = outputs
-        self.calls = []
-
-    def batch(self, inputs, **_kwargs):
-        self.calls.append(inputs)
-        batch_outputs = self.outputs[: len(inputs)]
-        self.outputs = self.outputs[len(inputs) :]
-        return batch_outputs
-
-
-def _questions_df(category: str = "writing") -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "category": [category],
-            "turn_1": ["Q1"],
-            "turn_2": ["Q2"],
-            "reference_turn_1": ["R1"],
-            "reference_turn_2": ["R2"],
-        },
-        index=pd.Index([1], name="instruction_index"),
-    )
-
-
-def _completions_df(prefix: str) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "completion_turn_1": [f"{prefix}1"],
-            "completion_turn_2": [f"{prefix}2"],
-        },
-        index=pd.Index([1], name="instruction_index"),
-    )
-
-
-def test_judge_mt_bench_with_preset_parses_and_inverts_swapped_scores():
-    judge = SequenceJudge(
-        [
-            "score_A: 10\nscore_B: 0",
-            "score_A: 0\nscore_B: 10",
-        ]
-    )
-
-    prefs, annotations, metadata = judge_mt_bench_with_preset(
-        judge_chat_model=judge,
-        judge_model="judge",
-        questions=_questions_df(category="writing"),
-        completions_a=_completions_df("A"),
-        completions_b=_completions_df("B"),
-        model_a="model-a",
-        model_b="model-b",
-        turns_mode="single",
-        swap_mode="both",
-        truncate_input_chars=None,
-        use_tqdm=False,
-        reference_categories=REFERENCE_CATEGORIES,
-        prompt_preset="default",
-    )
-
-    assert len(judge.calls) == 2
-    assert len(prefs) == 2
-    assert prefs.iloc[0] == pytest.approx(prefs.iloc[1])
-    assert prefs.iloc[0] < 0.5
-    assert annotations[0]["model_A"] == "model-a"
-    assert annotations[0]["parsed"]["scores"] == {"A": 10.0, "B": 0.0}
-    assert annotations[0]["preference"] < 0.5
-    assert annotations[1]["model_A"] == "model-b"
-    assert annotations[1]["parsed"]["scores"] == {"A": 0.0, "B": 10.0}
-    assert annotations[1]["preference"] > 0.5
-    assert annotations[1]["swapped"] is True
-    assert "B1" in annotations[1]["user_prompt"]
-    assert metadata == [
-        {
-            "question_id": 1,
-            "category": "writing",
-            "turn": 1,
-            "orientation": "direct",
-        },
-        {
-            "question_id": 1,
-            "category": "writing",
-            "turn": 1,
-            "orientation": "reversed",
-        },
-    ]
-    battles = _build_mt_bench_battles(
-        cfg=SimpleNamespace(
-            model=SimpleNamespace(name="model-a", baseline="model-b"),
-            judge=SimpleNamespace(model="judge"),
-        ),
-        prefs=prefs,
-        combined_metadata=metadata,
-        completions_a=_completions_df("A"),
-        completions_b=_completions_df("B"),
-    )
-    metric = LengthControlledWinrateMetric().calculate(battles)
-    assert metric == {"num_pairs": 1, "num_scored": 1, "winrate": None}
-
-
-def test_mt_bench_hard_bootstraps_use_run_seed(monkeypatch, tmp_path):
-    seed = 17
-    monkeypatch.setattr(
-        mt_bench_runner, "write_run_metadata_safely", lambda **_kwargs: None
-    )
-    cfg = RunConfig(
-        task="mt-bench",
-        model={"name": "candidate", "baseline": "reference"},
-        judge={"model": "judge", "prompt_preset": "default", "swap_mode": "fixed"},
-        run={"seed": seed, "use_tqdm": False},
-    )
-    protocol = get_packaged_task(cfg.task).spec.protocol.model_copy(
-        update={
-            "scoring": ScoringSpec(
-                metrics=(
-                    MetricSpec(
-                        metric="bradley_terry",
-                        parameters={"soft": False, "n_bootstraps": 3},
-                    ),
-                )
-            )
-        }
-    )
-
-    mt_bench_runner._run_mt_bench_preset(
-        cfg=cfg,
-        protocol=protocol,
-        res_folder=tmp_path,
-        result_name="result",
-        questions_df=_questions_df(),
-        completions_a=_completions_df("A"),
-        completions_b=_completions_df("B"),
-        judge_chat_model=SequenceJudge(
-            ["score A: 10 score B: 0", "score A: 0 score B: 10"]
-        ),
-        resolved_prompt=resolve_judge_prompt(preset="default"),
-        prompts=build_mt_bench_preset_prompts(
-            {
-                multi: resolve_judge_prompt(preset="default", multi_turn=multi)
-                for multi in (False, True)
-            }
-        ),
-        started_at_utc=datetime.now(UTC),
-    )
-
-    battles = pd.DataFrame(
-        {"model_a": "candidate", "model_b": "reference", "pref": [0.0, 1.0]}
-    )
-    rng = np.random.default_rng(seed)
-    expected = [
-        fit_bradley_terry(
-            battles.sample(
-                n=len(battles), replace=True, random_state=int(rng.integers(0, 2**31))
-            )
-        )
-        for _ in range(3)
-    ]
-    saved = json.loads((tmp_path / "results-result.json").read_text())
-    metric = saved["metrics"]["bradley_terry"]
-    assert metric["method"] == "ELO"
-    assert metric["bootstrap_ratings"] == expected
-
-
-@pytest.mark.parametrize("swapped", [False, True])
 def test_grouped_judging_reuses_raw_cache_and_restores_item_order(
-    tmp_path, swapped, monkeypatch
+    tmp_path, monkeypatch
 ):
     from judgearena.prompts.parsing import JUDGE_PARSERS, PairScore
 
@@ -209,71 +31,65 @@ def test_grouped_judging_reuses_raw_cache_and_restores_item_order(
     system_file.write_text("Custom system")
     user_file = tmp_path / "prompt.txt"
     user_file.write_text(
-        "{user_prompt}\n# Your output\nCustom rubric for {completion_label}."
+        "Custom rubric: {question} {answer_a} {answer_b} {ref_answer_1} Score each {completion_label}."
     )
-    questions = pd.concat(
-        [_questions_df("math"), _questions_df(), _questions_df("math")]
+    prompt = resolve_judge_prompt(
+        system_file=system_file, user_file=user_file, parser="custom"
     )
-    questions.index = pd.Index([1, 2, 3], name="instruction_index")
-    questions["turn_1"] = ["Question one", "Question two", "Question three"]
-    completions = pd.concat([_completions_df("A")] * 3)
-    completions.index = questions.index
-    items = _build_mt_bench_preset_items(
-        questions=questions,
-        completions_a=completions,
-        completions_b=completions.replace({"A1": "B1", "A2": "B2"}),
-        eval_single=True,
-        eval_multi=True,
-        truncate_input_chars=None,
-        reference_categories=REFERENCE_CATEGORIES,
-        prompts=build_mt_bench_preset_prompts(
-            {
-                multi: resolve_judge_prompt(
-                    system_file=system_file,
-                    user_file=user_file,
-                    parser="custom",
-                    multi_turn=multi,
-                )
-                for multi in (False, True)
-            }
-        ),
-    )
+    prompts = build_mt_bench_preset_prompts({False: prompt})
     system_file.unlink()
     user_file.unlink()
-    kwargs = [
-        swap_pairwise_answer_kwargs(item.prompt_kwargs, multi_turn=item.turn == 2)
-        if swapped
-        else item.prompt_kwargs
-        for item in items
+    comparisons = conversation_comparisons(
+        pd.DataFrame(
+            {
+                "category": ["math", "writing", "math"],
+                "reference_turn_1": "R1",
+                "model_a": "a",
+                "model_b": "b",
+                **{
+                    f"messages_{slot}": [
+                        [
+                            {"role": "user", "content": f"Question {i}"},
+                            {"role": "assistant", "content": slot},
+                        ]
+                        for i in [1, 2, 3]
+                    ]
+                    for slot in ["a", "b"]
+                },
+            },
+            index=[1, 2, 3],
+        ),
+        [1],
+    )
+    render = partial(
+        render_mt_bench_requests,
+        select_prompt=lambda category, multi: prompts[
+            multi, category in REFERENCE_CATEGORIES
+        ],
+    )
+    batches = list(render(comparisons))
+    assert [[r.id for r in batch] for batch in batches] == [
+        ["1:turn-1", "3:turn-1"],
+        ["2:turn-1"],
     ]
-    raw = [
-        "score_A: 10\nscore_B: 0",
-        "no verdict",
-        "score_A: 0\nscore_B: 10",
-        "score_A: 5\nscore_B: 5",
-        "score_A: 8\nscore_B: 2",
-        "score_A: 2\nscore_B: 8",
-    ]
+    requests = {r.id: r for batch in batches for r in batch}
+    raw = ["score_A: 10\nscore_B: 0", "no verdict", "score_A: 8\nscore_B: 2"]
     cache = JudgementInferenceCache(tmp_path, "mt-bench")
     model = prepare_model("Dummy/judge", cache=cache)
-    model.factory = lambda: SequenceJudge(raw)
+    model.factory = lambda: FakeListLLM(responses=raw)
     metadata = [
         {
-            "instruction_id": f"{question}:turn-{turn}",
-            "model_a": "b" if swapped else "a",
-            "model_b": "a" if swapped else "b",
-            "orientation": "reversed" if swapped else "direct",
+            "instruction_id": identity,
+            "model_a": "a",
+            "model_b": "b",
+            "orientation": "direct",
         }
-        for question in [1, 2, 3]
-        for turn in [1, 2]
+        for identity in comparisons.index
     ]
     # Seed the pre-executor inference format, in item order rather than prompt groups.
     do_inference(
         model,
-        [
-            build_pairwise_chat_prompt_template(item.prompt).invoke(values)
-            for item, values in zip(items, kwargs, strict=True)
-        ],
+        [requests[i].input for i in comparisons.index],
         stage="judging",
         cache_row_metadata=metadata,
     )
@@ -283,34 +99,13 @@ def test_grouped_judging_reuses_raw_cache_and_restores_item_order(
         raise AssertionError("Existing MT-Bench judgments should be cache hits")
 
     cached_model.factory = unavailable
-    results, used_kwargs = judge_pairwise_by_prompt_groups(
-        judge_chat_model=cached_model,
-        items=items,
-        use_tqdm=False,
-        swap_answers=swapped,
-        model_a="a",
-        model_b="b",
-    )
+    results, _ = execute_pairwise(cached_model, comparisons, render)
     assert [result.response.text for result in results] == raw
     assert [
         None if result.parsed is None else result.parsed.scores for result in results
-    ] == [
-        {"A": 10, "B": 0},
-        None,
-        {"A": 0, "B": 10},
-        {"A": 5, "B": 5},
-        {"A": 8, "B": 2},
-        {"A": 2, "B": 8},
-    ]
+    ] == [{"A": 10, "B": 0}, None, {"A": 8, "B": 2}]
     assert [result.request.cache_metadata for result in results] == metadata
-    prompts = [result.request.input.to_string() for result in results]
-    assert "R1" in prompts[0] and "R2" in prompts[1]
-    assert "R1" not in prompts[2] and "R2" not in prompts[3]
-    assert all(
-        part in prompts[1] for part in ("Question one", "Q2", "A1", "A2", "B1", "B2")
-    )
-    assert all("Custom rubric for" in prompt for prompt in prompts)
-    assert results[4].parsed.preference == pytest.approx(0.0474258732)
-    assert used_kwargs == kwargs
-    assert used_kwargs[1]["answer_a_2"] == ("B2" if swapped else "A2")
-    assert items[1].prompt_kwargs["answer_a_2"] == "A2"
+    inputs = [result.request.input.to_string() for result in results]
+    assert all("Custom rubric:" in text for text in inputs)
+    assert "R1" in inputs[0]
+    assert results[2].parsed.preference == pytest.approx(0.0474258732)

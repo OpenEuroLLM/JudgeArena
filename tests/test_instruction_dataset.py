@@ -10,7 +10,8 @@ import judgearena.datasets.fluency as fluency
 import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.datasets.m_arenahard as m_arenahard
 from judgearena.datasets.arena_hard import (
-    normalize_official_arena_hard,
+    _build_instructions,
+    _build_model_outputs,
 )
 from judgearena.tasks.registry import get_packaged_task
 
@@ -187,7 +188,7 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
     pd.testing.assert_frame_equal(loaded, expected)
 
 
-def test_normalize_official_arena_hard_v01_drops_no_category():
+def test_arena_hard_v01_normalization_without_category():
     raw_df = pd.DataFrame(
         {
             "question_id": ["q1", "q2"],
@@ -196,9 +197,8 @@ def test_normalize_official_arena_hard_v01_drops_no_category():
             "output": ["a1", "a2"],
         }
     )
-    df_instructions, df_outputs = normalize_official_arena_hard(
-        raw_df=raw_df, dataset="arena-hard-v0.1"
-    )
+    df_instructions = _build_instructions(raw_df)
+    df_outputs = _build_model_outputs(raw_df)
 
     assert df_instructions.columns.tolist() == ["instruction_index", "instruction"]
     assert df_instructions["instruction_index"].tolist() == ["q1", "q2"]
@@ -245,7 +245,8 @@ def test_arena_hard_normalizes_mixed_questions_and_answers():
         ]
     )
 
-    instructions, df_outputs = normalize_official_arena_hard(raw_df, "arena-hard-v2.0")
+    instructions = _build_instructions(raw_df)
+    df_outputs = _build_model_outputs(raw_df)
     assert instructions[
         ["instruction_index", "instruction", "category"]
     ].values.tolist() == [["q1", "real prompt", "hard_prompt"]]

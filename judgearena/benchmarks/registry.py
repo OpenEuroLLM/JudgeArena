@@ -38,15 +38,11 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations."""
     from judgearena.benchmarks.elo.runner import run_elo
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
-    from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
-    from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
     from judgearena.benchmarks.pairwise.runner import run_pairwise
 
     return (
         BenchmarkAdapter("elo", run_elo),
         BenchmarkAdapter("meta_eval", run_meta_eval),
-        BenchmarkAdapter("mt_bench", run_mt_bench_benchmark),
-        BenchmarkAdapter("mt_bench_101", run_mt_bench_101_benchmark),
         BenchmarkAdapter("pairwise", run_pairwise),
     )
 
@@ -68,8 +64,3 @@ def resolve_benchmark(task: str | ResolvedTaskSpec) -> ResolvedBenchmark:
     raise ValueError(
         f"Task {resolved.task!r} selects unavailable runner {runner_id!r}."
     )
-
-
-def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
-    """Return only the selected adapter for compatibility and inspection."""
-    return resolve_benchmark(task).adapter

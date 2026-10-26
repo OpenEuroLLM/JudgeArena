@@ -9,24 +9,15 @@ from urllib.request import urlretrieve
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.datasets.data import CompletionData
+from judgearena.datasets.data import CompletionData, validate_messages
 from judgearena.datasets.registry import DatasetAdapter, register_dataset
 from judgearena.datasets.registry import source_cache_dir as _task_cache_dir
-from judgearena.paths import data_root
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
     GitRawSource,
     HuggingFaceSpaceSource,
     ResolvedTaskSpec,
     TaskDefaultBaseline,
 )
-
-
-def _task(task_id: str = "mt-bench") -> ResolvedTaskSpec:
-    task = get_packaged_task(task_id)
-    if task is None or task.spec.dataset.adapter != "mt_bench":
-        raise ValueError(f"Unsupported MT-Bench task: {task_id!r}.")
-    return task
 
 
 def _normalize_question_id(question_id: object) -> object:
@@ -79,12 +70,9 @@ def _extract_answer_turns(record: dict, source_name: str) -> tuple[object, list[
 class MTBenchAdapter(DatasetAdapter):
     source_dir: Path
 
-    def __init__(
-        self, task: ResolvedTaskSpec, cache_dir: Path, *, source_dir: Path | None = None
-    ) -> None:
+    def __init__(self, task: ResolvedTaskSpec, cache_dir: Path) -> None:
         super().__init__(task, cache_dir)
-        # Public legacy loaders use a different cache layout from registered tasks.
-        self.source_dir = source_dir or _task_cache_dir(task, cache_dir)
+        self.source_dir = _task_cache_dir(task, cache_dir)
 
     def _space_source(self) -> HuggingFaceSpaceSource:
         source = self.task.spec.dataset.sources.get("benchmark")
@@ -182,19 +170,13 @@ class MTBenchAdapter(DatasetAdapter):
 
     def download(self) -> None:
         """Download every source required by the registered MT-Bench task."""
-        if self.task.spec.dataset.adapter != "mt_bench":
-            raise ValueError(
-                f"Task {self.task.task!r} does not use the MT-Bench adapter."
-            )
         self._download_questions()
         baseline = self.task.spec.protocol.baseline
         if isinstance(baseline, TaskDefaultBaseline):
             self.download_model_answer(baseline.reference_id)
 
-    def load_model_answers(
-        self, model: str, n_instructions: int | None = None
-    ) -> pd.DataFrame | None:
-        """Load pre-generated MT-Bench answers from a path or cached model ID."""
+    def _load_answer_turns(self, model: str) -> pd.DataFrame | None:
+        """Read all answer turns, preserving their source order."""
         local_path = Path(model)
         if local_path.exists():
             answer_path = local_path
@@ -210,8 +192,7 @@ class MTBenchAdapter(DatasetAdapter):
             rows.append(
                 {
                     "instruction_index": question_id,
-                    "completion_turn_1": turns[0] if turns else "",
-                    "completion_turn_2": turns[1] if len(turns) > 1 else "",
+                    "answer_turns": turns,
                 }
             )
 
@@ -219,11 +200,7 @@ class MTBenchAdapter(DatasetAdapter):
         if df_answers.empty:
             raise ValueError(f"MT-Bench answer file {answer_path} contained no rows.")
         df_answers.sort_values("instruction_index", inplace=True)
-        return (
-            df_answers.head(n_instructions)
-            if n_instructions is not None
-            else df_answers
-        )
+        return df_answers
 
     def load_instructions(self) -> pd.DataFrame:
         fields = self.fields
@@ -295,6 +272,9 @@ class MTBenchAdapter(DatasetAdapter):
                         if fields.category is not None
                         else None
                     ),
+                    "user_turns": turns
+                    if isinstance(turns, list)
+                    else [t for t in (turn_1, turn_2) if t is not None],
                     "turn_1": turn_1,
                     "turn_2": turn_2,
                     "reference_turn_1": (
@@ -317,50 +297,26 @@ class MTBenchAdapter(DatasetAdapter):
         )
 
     def load_model_outputs(self, model: str) -> pd.DataFrame | None:
-        answers = self.load_model_answers(model)
+        answers = self._load_answer_turns(model)
         if answers is None:
             return None
-        return answers.assign(model=model, output=answers["completion_turn_1"])
-
-
-def download_mt_bench(local_dir: Path | None = None) -> tuple[Path, Path | None]:
-    """Compatibility wrapper downloading the registered MT-Bench sources."""
-    return MTBenchAdapter(
-        _task(), data_root / "tables", source_dir=local_dir or data_root / "mt-bench"
-    )._download_questions()
-
-
-def download_mt_bench_model_answer(
-    model_id: str,
-    local_dir: Path | None = None,
-    *,
-    task: ResolvedTaskSpec | None = None,
-) -> Path:
-    """Download a cached MT-Bench model-answer file if missing."""
-    return MTBenchAdapter(
-        task or _task(),
-        data_root / "tables",
-        source_dir=local_dir or (data_root / "mt-bench" if task is None else None),
-    ).download_model_answer(model_id)
-
-
-def load_mt_bench_model_answers(
-    model: str,
-    n_instructions: int | None = None,
-    local_dir: Path | None = None,
-    *,
-    task: ResolvedTaskSpec | None = None,
-) -> pd.DataFrame | None:
-    """Load pre-generated MT-Bench answers from a path or cached model ID."""
-    return MTBenchAdapter(
-        task or _task(),
-        data_root / "tables",
-        source_dir=local_dir or (data_root / "mt-bench" if task is None else None),
-    ).load_model_answers(model, n_instructions)
-
-
-def load_mt_bench() -> pd.DataFrame:
-    """Compatibility wrapper loading the registered MT-Bench task."""
-    return MTBenchAdapter(
-        _task(), data_root / "tables", source_dir=data_root / "mt-bench"
-    ).load_instructions()
+        questions = self.load_instructions().set_index("instruction_index")
+        conversations = []
+        for row in answers.itertuples():
+            turns = questions.loc[row.instruction_index, "user_turns"]
+            if len(turns) != len(row.answer_turns):
+                raise ValueError(
+                    f"Saved answers for {row.instruction_index!r} do not cover the question's turns."
+                )
+            messages = [
+                {"role": role, "content": text}
+                for question, answer in zip(turns, row.answer_turns, strict=True)
+                for role, text in (("user", question), ("assistant", answer))
+            ]
+            validate_messages(messages)
+            conversations.append(messages)
+        return answers.drop(columns="answer_turns").assign(
+            model=model,
+            output=[messages[1]["content"] for messages in conversations],
+            messages=conversations,
+        )

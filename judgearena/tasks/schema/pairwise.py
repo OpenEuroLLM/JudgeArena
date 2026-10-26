@@ -1,10 +1,10 @@
-"""Schema for the common single-turn pairwise evaluation protocol."""
+"""Schema for the shared text and conversation pairwise evaluation protocol."""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import BaselineSpec
@@ -12,17 +12,47 @@ from judgearena.tasks.schema.metrics import ScoringSpec
 
 
 class SingleTurnGeneration(StrictFrozenModel):
-    # "single_turn_chat" prompts an instruction-tuned model through its chat
-    # template; "base_completion" lets a base model continue the raw text.
-    mode: Literal["single_turn_chat", "base_completion"]
+    """Generate one answer from instruction text or adapter-supplied messages.
+
+    provided_messages uses each row's role/content history without appending
+    generated answers to other rows. instruction_id optionally sets its cache ID.
+    """
+
+    mode: Literal["single_turn_chat", "base_completion", "provided_messages"]
+    default_temperature: float | None = Field(default=None, ge=0)
+    default_max_out_tokens: int | None = Field(default=None, gt=0)
     default_truncate_input: bool = True
     """Whether generation uses the default input cap when none is specified."""
+
+
+class MultiTurnGeneration(StrictFrozenModel):
+    mode: Literal["multi_turn_chat"]
+    category_temperatures: dict[str, float] = Field(default_factory=dict)
+    default_max_out_tokens: int | None = Field(default=None, gt=0)
+    default_seed: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_temperatures(self) -> MultiTurnGeneration:
+        invalid = {
+            category: temperature
+            for category, temperature in self.category_temperatures.items()
+            if not category or temperature < 0
+        }
+        if invalid:
+            raise ValueError(
+                f"category temperatures require names and non-negative values: {invalid}"
+            )
+        return self
 
 
 SwapMode = Literal["fixed", "both", "random"]
 
 
 class PairwiseJudgeSpec(StrictFrozenModel):
+    format: Literal["standard", "independent_scores"] = "standard"
+    minimum_score_by: tuple[str, ...] = ()
+    """Group candidate scores by these metadata columns before comparing minima."""
+    turns: Literal["all", "last"] | tuple[Annotated[int, Field(gt=0)], ...] = "all"
     default_prompt_preset: str = Field(min_length=1)
     default_swap_mode: SwapMode = "fixed"
     default_temperature: float | None = None
@@ -32,12 +62,45 @@ class PairwiseJudgeSpec(StrictFrozenModel):
     """Per-category prompt presets overriding ``default_prompt_preset`` (e.g. the
     Arena-Hard v2.0 creative-writing judge prompt)."""
 
+    @model_validator(mode="after")
+    def _validate_score_grouping(self) -> PairwiseJudgeSpec:
+        if self.minimum_score_by and self.format != "independent_scores":
+            raise ValueError("minimum_score_by requires independent_scores judging.")
+        return self
+
+    def prepare_prompts(self, cfg, prompt, instructions):
+        from judgearena.benchmarks.pairwise.judging import prepare_standard_prompts
+
+        return prepare_standard_prompts(cfg, prompt, instructions)
+
+
+class MTBenchJudgeSpec(PairwiseJudgeSpec):
+    format: Literal["mt_bench"] = "mt_bench"
+    fastchat_prompt_preset: str = Field(min_length=1)
+    fastchat_temperature: float = Field(ge=0)
+    reference_categories: tuple[str, ...] = ()
+
+    def prepare_prompts(self, cfg, prompt, instructions):
+        from judgearena.prompts.mt_bench import prepare_mt_bench_prompts
+
+        return prepare_mt_bench_prompts(cfg, prompt)
+
+    @model_validator(mode="after")
+    def _validate_reference_categories(self) -> MTBenchJudgeSpec:
+        if any(not category for category in self.reference_categories):
+            raise ValueError("reference categories must not be empty")
+        if len(set(self.reference_categories)) != len(self.reference_categories):
+            raise ValueError("reference categories must not contain duplicates")
+        return self
+
 
 class PairwiseProtocol(StrictFrozenModel):
     """Task-owned generation, baseline, judging, and scoring behavior."""
 
     runner: Literal["pairwise"]
-    generation: SingleTurnGeneration
+    limit_by: str | None = Field(default=None, min_length=1)
+    """Count complete groups in this column when applying n_instructions."""
+    generation: SingleTurnGeneration | MultiTurnGeneration
     baseline: BaselineSpec
-    judge: PairwiseJudgeSpec
+    judge: PairwiseJudgeSpec | MTBenchJudgeSpec
     scoring: ScoringSpec

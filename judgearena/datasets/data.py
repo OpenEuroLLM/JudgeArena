@@ -56,9 +56,14 @@ class CompletionData:
         )
 
     Pipelines check the returned data for their additional requirements. For
-    example, two-turn judging also needs ``turn_1``/``turn_2`` instructions and
-    ``completion_turn_1``/``completion_turn_2`` in saved outputs; human preference
-    evaluation needs ``PreferenceData`` with observed human labels.
+    example, conversation generation needs ``user_turns``: a nonempty list of
+    user prompt strings per instruction. Saved conversation outputs carry
+    ``messages``: a list of role/content dictionaries alternating user and
+    assistant, optionally preceded by a system message, ending in an assistant
+    answer. ``output`` provides a text view for text-only consumers. Metadata and
+    each model's complete history are preserved. These optional fields are
+    validated on construction and when lazy outputs are loaded. Human preference
+    evaluation uses ``PreferenceData`` with observed human labels.
     """
 
     instructions: pd.DataFrame
@@ -74,6 +79,9 @@ class CompletionData:
             or self.instructions.index.isna().any()
         ):
             raise ValueError("Instructions require unique, nonmissing row IDs.")
+        if "user_turns" in self.instructions:
+            for turns in self.instructions["user_turns"]:
+                validate_user_turns(turns)
         if self.model_outputs is None:
             return
         _validate_model_outputs(self.model_outputs)
@@ -198,6 +206,36 @@ class CompletionData:
         return completions.reindex(target_index).rename("completion")
 
 
+def validate_user_turns(turns: object) -> None:
+    """Validate the planned user prompts needed for sequential generation."""
+    if (
+        not isinstance(turns, list)
+        or not turns
+        or any(not isinstance(turn, str) for turn in turns)
+    ):
+        raise ValueError(
+            "Generation requires a nonempty list of text user_turns per row."
+        )
+
+
+def validate_messages(messages: object) -> None:
+    """Validate a completed text conversation, optionally starting with a system message."""
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("Conversation messages must be a nonempty list.")
+    expected = "user"
+    for i, message in enumerate(messages):
+        if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+            raise ValueError("Conversation messages require role and text content.")
+        role = message.get("role")
+        if i == 0 and role == "system":
+            continue
+        if role != expected:
+            raise ValueError(f"Conversation expected {expected!r}, got {role!r}.")
+        expected = "assistant" if role == "user" else "user"
+    if messages[-1]["role"] != "assistant":
+        raise ValueError("Completed conversations must end with an assistant answer.")
+
+
 def _require_columns(frame: pd.DataFrame, required: set[str], label: str) -> None:
     if not frame.columns.is_unique:
         raise ValueError(f"{label} has duplicate column names after mapping.")
@@ -208,6 +246,9 @@ def _require_columns(frame: pd.DataFrame, required: set[str], label: str) -> Non
 
 def _validate_model_outputs(outputs: pd.DataFrame) -> None:
     _require_columns(outputs, {"instruction_index", "model", "output"}, "Model outputs")
+    if "messages" in outputs:
+        for messages in outputs["messages"]:
+            validate_messages(messages)
     if outputs["model"].isna().any():
         raise ValueError("Model outputs require model identities.")
 

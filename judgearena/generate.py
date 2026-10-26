@@ -1,9 +1,71 @@
 import pandas as pd
+from langchain_core.messages import convert_to_messages
+from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.cache.inference import CompletionInferenceCache
+from judgearena.datasets.data import _require_columns, validate_user_turns
 from judgearena.models import PreparedModel, do_inference, prepare_model
 from judgearena.utils import strip_thinking_tags, truncate
+
+
+def _chat_input(
+    messages,
+    *,
+    system_prompt=None,
+    truncate_input_chars=None,
+    strip_thinking=False,
+):
+    rendered = [] if system_prompt is None else [("system", system_prompt)]
+    for message in messages:
+        content = message["content"]
+        if strip_thinking and message["role"] == "assistant":
+            content = strip_thinking_tags(content)
+        rendered.append(
+            (message["role"], truncate(content, max_len=truncate_input_chars))
+        )
+    return ChatPromptValue(messages=convert_to_messages(rendered))
+
+
+def generate_messages(
+    instructions: pd.Series,
+    model: str,
+    truncate_input_chars: int | None = 8192,
+    max_tokens: int | None = 8192,
+    use_tqdm: bool = True,
+    system_prompt: str | None = None,
+    inference_cache: CompletionInferenceCache | None = None,
+    **model_kwargs,
+) -> pd.DataFrame:
+    """Generate one answer per supplied conversation, without extending other rows.
+
+    Each Series value is a list of role/content messages ending with the user's
+    request. Its index supplies the completion and cache IDs. No system message
+    is added unless supplied. Message text is literal, including braces.
+    """
+    chat_model = prepare_model(
+        model, max_tokens=max_tokens, cache=inference_cache, **model_kwargs
+    )
+    inputs = [
+        _chat_input(
+            messages,
+            system_prompt=system_prompt,
+            truncate_input_chars=truncate_input_chars,
+        )
+        for messages in instructions
+    ]
+    completions = do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=use_tqdm,
+        stage="generation",
+        cache_row_metadata=[
+            {"instruction_id": str(index)} for index in instructions.index
+        ],
+    )
+    return pd.DataFrame(
+        {"instruction_index": instructions.index, "completion": completions}
+    )
 
 
 def generate_instructions(
@@ -128,11 +190,15 @@ def generate_multiturn(
     max_tokens: int | None = 8192,
     use_tqdm: bool = True,
     temperature_config: dict[str, float] | None = None,
-    strip_thinking_before_turn_2_prompt: bool = False,
+    strip_thinking_before_history: bool = False,
     inference_cache: CompletionInferenceCache | None = None,
     **model_kwargs,
 ) -> pd.DataFrame:
-    """Generate two-turn completions for MT-Bench style questions."""
+    """Generate each row's user_turns sequentially, retaining full model histories."""
+    _require_columns(questions, {"user_turns"}, "Conversation generation")
+    turns = questions["user_turns"].tolist()
+    for row in turns:
+        validate_user_turns(row)
     provider = model.split("/")[0]
     use_category_temperatures = temperature_config is not None
     local_provider = provider in {"VLLM", "LlamaCpp"}
@@ -163,104 +229,49 @@ def generate_multiturn(
             for idx in idxs
         ]
 
-    turn1_template = ChatPromptTemplate.from_messages(
-        [("system", system_prompt), ("user", "{user_prompt}")]
-    )
-    turn1_inputs = turn1_template.batch(
-        [
-            {"user_prompt": truncate(row["turn_1"], max_len=truncate_input_chars)}
-            for _, row in questions.iterrows()
-        ]
-    )
-
-    if use_category_temperatures:
-        completions_turn_1 = _infer_grouped_by_temperature(
-            model_spec=model,
-            max_tokens=max_tokens,
-            model_kwargs=model_kwargs,
-            base_model=base_model,
-            inputs=turn1_inputs,
-            instruction_ids=[f"{index}:turn-1" for index in idxs],
-            temperatures=temperatures,
-            use_tqdm=use_tqdm,
-            inference_cache=inference_cache,
-        )
-    else:
-        completions_turn_1 = do_inference(
-            chat_model=chat_model,
-            inputs=turn1_inputs,
-            use_tqdm=use_tqdm,
-            stage="generation",
-            cache_row_metadata=[
-                {"instruction_id": f"{index}:turn-1"} for index in idxs
-            ],
-        )
-
-    turn2_inputs = []
-    for (_, row), t1_answer in zip(
-        questions.iterrows(), completions_turn_1, strict=True
-    ):
-        if row["turn_2"] is None:
-            turn2_inputs.append(
-                turn1_template.invoke({"user_prompt": "No follow-up question."})
-            )
-        else:
-            multi_turn_template = ChatPromptTemplate.from_messages(
-                [
-                    ("system", system_prompt),
-                    ("user", "{turn_1}"),
-                    ("assistant", "{turn_1_answer}"),
-                    ("user", "{turn_2}"),
-                ]
-            )
-            # Strip <think>...</think> from the turn-1 answer before the
-            # character cap fires so a long cap lands on the visible answer
-            # rather than deep inside a reasoning block (which would destroy
-            # the </think> closer and push the thinking fragment into turn 2).
-            t1_answer_str = str(t1_answer)
-            if strip_thinking_before_turn_2_prompt:
-                t1_answer_str = strip_thinking_tags(t1_answer_str)
-            turn2_inputs.append(
-                multi_turn_template.invoke(
-                    {
-                        "turn_1": truncate(row["turn_1"], max_len=truncate_input_chars),
-                        "turn_1_answer": truncate(
-                            t1_answer_str, max_len=truncate_input_chars
-                        ),
-                        "turn_2": truncate(row["turn_2"], max_len=truncate_input_chars),
-                    }
+    histories: list[list[dict[str, str]]] = [[] for _ in turns]
+    for turn in range(max(map(len, turns), default=0)):
+        active = [i for i, row in enumerate(turns) if turn < len(row)]
+        inputs = []
+        for i in active:
+            histories[i].append({"role": "user", "content": turns[i][turn]})
+            inputs.append(
+                _chat_input(
+                    histories[i],
+                    system_prompt=system_prompt,
+                    truncate_input_chars=truncate_input_chars,
+                    strip_thinking=strip_thinking_before_history,
                 )
             )
-
-    if use_category_temperatures:
-        completions_turn_2 = _infer_grouped_by_temperature(
-            model_spec=model,
-            max_tokens=max_tokens,
-            model_kwargs=model_kwargs,
-            base_model=base_model,
-            inputs=turn2_inputs,
-            instruction_ids=[f"{index}:turn-2" for index in idxs],
-            temperatures=temperatures,
-            use_tqdm=use_tqdm,
-            inference_cache=inference_cache,
-        )
-    else:
-        completions_turn_2 = do_inference(
-            chat_model=chat_model,
-            inputs=turn2_inputs,
-            use_tqdm=use_tqdm,
-            stage="generation",
-            cache_row_metadata=[
-                {"instruction_id": f"{index}:turn-2"} for index in idxs
-            ],
-        )
-
+        ids = [f"{idxs[i]}:turn-{turn + 1}" for i in active]
+        if use_category_temperatures:
+            answers = _infer_grouped_by_temperature(
+                model_spec=model,
+                max_tokens=max_tokens,
+                model_kwargs=model_kwargs,
+                base_model=base_model,
+                inputs=inputs,
+                instruction_ids=ids,
+                temperatures=[temperatures[i] for i in active],
+                use_tqdm=use_tqdm,
+                inference_cache=inference_cache,
+            )
+        else:
+            answers = do_inference(
+                chat_model=chat_model,
+                inputs=inputs,
+                use_tqdm=use_tqdm,
+                stage="generation",
+                cache_row_metadata=[{"instruction_id": i} for i in ids],
+            )
+        for i, answer in zip(active, answers, strict=True):
+            histories[i].append({"role": "assistant", "content": str(answer)})
     return pd.DataFrame(
-        data={
+        {
             "instruction_index": idxs,
-            "completion_turn_1": completions_turn_1,
-            "completion_turn_2": completions_turn_2,
-        },
+            "messages": histories,
+            "output": [row[-1]["content"] for row in histories],
+        }
     )
 
 

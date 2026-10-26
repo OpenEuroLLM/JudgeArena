@@ -13,7 +13,6 @@ from judgearena.benchmarks.meta_eval.scoring import (
     MetaEvalEloGapMetric,
     MetaEvalRankingMetric,
 )
-from judgearena.benchmarks.mt_bench_101.scoring import MTBench101AbsoluteScoreMetric
 from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     AlpacaEvalLengthControlledMetric,
 )
@@ -22,6 +21,7 @@ from judgearena.benchmarks.pairwise.scoring.arena_hard import (
     ArenaHardV20Metric,
 )
 from judgearena.benchmarks.pairwise.scoring.metrics import (
+    AbsoluteScoreMetric,
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
 )
@@ -59,7 +59,7 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "meta_eval_agreement": MetaEvalAgreementMetric,
     "meta_eval_elo_gap": MetaEvalEloGapMetric,
     "meta_eval_ranking": MetaEvalRankingMetric,
-    "mt_bench_101_absolute_score": MTBench101AbsoluteScoreMetric,
+    "absolute_score": AbsoluteScoreMetric,
 }
 
 ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric], ...]

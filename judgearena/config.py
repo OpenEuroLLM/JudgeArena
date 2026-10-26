@@ -26,7 +26,7 @@ from judgearena.tasks.schema import (
     EloProtocol,
     EloScoringSpec,
     MetaEvalProtocol,
-    MTBenchProtocol,
+    MTBenchJudgeSpec,
     ResolvedTaskSpec,
     TaskDefaultBaseline,
 )
@@ -260,6 +260,12 @@ class JudgeArgs(BaseModel):
     prompt_preset: str | None = None
     """Named judge prompt preset to use (see ``judgearena.prompts``). Defaults
     to the task's preset when unset."""
+
+    criteria_name: str | None = None
+    """Built-in rubric for the ``criteria`` prompt preset; defaults to ``default``."""
+
+    criteria_file: Path | None = None
+    """Criteria YAML for the ``criteria`` preset, overriding ``criteria_name``."""
 
     prompt: JudgePromptSpec | None = None
     """Custom judge prompt bundle (system/user template files plus the parser
@@ -589,7 +595,7 @@ class RunConfig(BaseSettings):
     def judge_engine_kwargs(self) -> dict[str, object]:
         """Resolve engine inheritance and defaults for this task's judge."""
         assert self.resolved_task is not None
-        if isinstance(self.resolved_task.spec.protocol, MTBenchProtocol):
+        if isinstance(self.resolved_task.spec.protocol.judge, MTBenchJudgeSpec):
             # Preserve MT-Bench's engine inheritance without automatic VLLM defaults.
             return {**self.model.engine_kwargs, **self.judge.engine_kwargs}
         return build_default_judge_model_kwargs(

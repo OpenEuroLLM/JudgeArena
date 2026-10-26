@@ -23,14 +23,17 @@ dataset:
     category: task
 
 protocol:
-  runner: mt_bench_101
+  runner: pairwise
+  limit_by: dialogue_uid
   generation:
-    mode: golden_context_chat
+    mode: provided_messages
     default_temperature: 0.0
     default_max_out_tokens: 4096
   baseline:
     strategy: runtime_required
   judge:
+    format: independent_scores
+    minimum_score_by: [dialogue_uid, dialogue_id, task, ability, domain]
     default_prompt_preset: mt-bench-101
     default_temperature: 0.6
     default_max_out_tokens: 4096
@@ -38,7 +41,8 @@ protocol:
     metrics:
       - metric: pairwise_win_rate
         breakdown_by: [task, ability, domain]
-      - metric: mt_bench_101_absolute_score
+      - metric: absolute_score
+        parameters: {macro_by: task}
         breakdown_by: [task, ability, domain]
 
 metadata:

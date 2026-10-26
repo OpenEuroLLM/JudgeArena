@@ -142,7 +142,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "ro",
         "uk",
     )
-    assert mt_bench.spec.protocol.runner == "mt_bench"
+    assert mt_bench.spec.protocol.runner == "pairwise"
     assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
     assert mt_bench.spec.protocol.baseline.reference_id == "gpt-3.5-turbo"
     assert mt_bench.spec.protocol.generation.default_max_out_tokens == 1024
@@ -160,9 +160,9 @@ def test_packaged_registry_discovers_versioned_tasks():
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
     mt_bench_101 = tasks["mt-bench-101"]
-    assert mt_bench_101.spec.protocol.runner == "mt_bench_101"
+    assert mt_bench_101.spec.protocol.runner == "pairwise"
     assert mt_bench_101.spec.dataset.adapter == "mt_bench_101"
-    assert mt_bench_101.spec.protocol.generation.mode == "golden_context_chat"
+    assert mt_bench_101.spec.protocol.generation.mode == "provided_messages"
     assert mt_bench_101.spec.protocol.generation.default_temperature == 0.0
     assert mt_bench_101.spec.protocol.generation.default_max_out_tokens == 4096
     assert mt_bench_101.spec.protocol.baseline.strategy == "runtime_required"
@@ -605,9 +605,11 @@ def test_scoring_metrics_reject_duplicate_names():
 def test_mt_bench_accepts_custom_metric_parameters_and_breakdowns(tmp_path):
     definition = _task_definition("mt-test")
     protocol = definition["protocol"]
-    protocol["runner"] = "mt_bench"
+    protocol["runner"] = "pairwise"
     protocol["generation"] = {"mode": "multi_turn_chat"}
-    protocol["judge"].update(fastchat_prompt_preset="default", fastchat_temperature=0.0)
+    protocol["judge"].update(
+        format="mt_bench", fastchat_prompt_preset="default", fastchat_temperature=0.0
+    )
     protocol["scoring"] = {
         "metrics": [
             {
@@ -642,3 +644,12 @@ def test_meta_eval_language_variant_preserves_the_dataset_and_protocol():
     )
     assert english.spec == task.spec
     assert english.selection.values == ("en",)
+
+
+def test_minimum_score_grouping_requires_independent_judging():
+    from judgearena.tasks.schema import PairwiseJudgeSpec
+
+    with pytest.raises(
+        ValueError, match="minimum_score_by requires independent_scores"
+    ):
+        PairwiseJudgeSpec(default_prompt_preset="default", minimum_score_by=("group",))

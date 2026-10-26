@@ -10,35 +10,12 @@ from judgearena.datasets.registry import (
     register_dataset,
     source_cache_dir,
 )
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import HuggingFaceDatasetSource
-
-
-def is_arena_hard_dataset(dataset: str) -> bool:
-    task = get_packaged_task(dataset)
-    return task is not None and task.spec.dataset.adapter == "arena_hard"
-
-
-def normalize_official_arena_hard(
-    raw_df: pd.DataFrame, dataset: str
-) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    if not is_arena_hard_dataset(dataset):
-        raise ValueError(f"Unsupported Arena-Hard dataset: {dataset}")
-    df_instructions = _build_instructions(raw_df)
-    df_model_outputs = _build_model_outputs(raw_df)
-    return df_instructions, df_model_outputs
 
 
 def _read_model_outputs(path: Path) -> pd.DataFrame | None:
     outputs = pd.read_csv(path)
     return None if outputs.empty else outputs
-
-
-def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
-    """Compatibility wrapper around the registered Arena-Hard adapter."""
-    task = get_packaged_task(dataset)
-    if task is not None and task.spec.dataset.adapter == "arena_hard":
-        ArenaHardAdapter(task, local_tables_path).download()
 
 
 def _read_arena_hard_jsonl_frames(variant_dir: Path) -> pd.DataFrame:
@@ -183,10 +160,6 @@ class ArenaHardAdapter(DatasetAdapter):
         string and dict across answer files, so `datasets.load_dataset` can't
         materialize them into a single Arrow schema.
         """
-        if self.task.spec.dataset.adapter != "arena_hard":
-            raise ValueError(
-                f"Task {self.task.task!r} does not use the Arena-Hard adapter."
-            )
         instructions_path, model_outputs_path = self._table_paths()
         if instructions_path.exists() and model_outputs_path.exists():
             return

@@ -2,23 +2,17 @@ import hashlib
 import json
 import re
 from dataclasses import replace
+from functools import partial
 
 import pandas as pd
 import pytest
 from langchain_core.language_models.fake import FakeListLLM
 
-import judgearena.benchmarks.mt_bench_101.runner as runner
+import judgearena.benchmarks.pairwise.runner as runner
 import judgearena.datasets.mt_bench_101 as mt_bench_101
 import judgearena.models as models
-from judgearena.benchmarks.mt_bench_101.evaluate import (
-    MTBench101ScoreParser,
-    aggregate_mt_bench_101_dialogues,
-    derive_mt_bench_101_pairwise_preferences,
-    judge_mt_bench_101_single,
-    load_mt_bench_101_prompts,
-    parse_mt_bench_101_rating,
-)
-from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
+from judgearena.benchmarks.pairwise.runner import run_pairwise
+from judgearena.benchmarks.pairwise.scoring.metrics import score_outcomes
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.cache.sqlite import (
     COMPLETION_DB_NAME,
@@ -29,6 +23,12 @@ from judgearena.cache.sqlite import (
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
 from judgearena.datasets.mt_bench_101 import expand_mt_bench_101_records
+from judgearena.judging import judge_single_answers
+from judgearena.prompts.mt_bench_101 import (
+    MTBench101ScoreParser,
+    load_mt_bench_101_prompts,
+    render_mt_bench_101_requests,
+)
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
@@ -106,6 +106,7 @@ def test_download_mt_bench_101_uses_pinned_revision(tmp_path, monkeypatch):
 
 
 def test_parse_mt_bench_101_rating():
+    parse_mt_bench_101_rating = MTBench101ScoreParser()
     assert parse_mt_bench_101_rating("Reasoning...\nRating: [[7]]") == pytest.approx(
         7.0
     )
@@ -118,8 +119,7 @@ def test_parse_mt_bench_101_rating():
     assert parse_mt_bench_101_rating("Rating: [[0]]") == pytest.approx(0.0)
     assert parse_mt_bench_101_rating("Rating: [6]") == pytest.approx(6.0)
     assert (
-        parse_mt_bench_101_rating("Rating: [6]", MT_BENCH_101_CLEAN_PROMPT_PRESET)
-        is None
+        MTBench101ScoreParser(MT_BENCH_101_CLEAN_PROMPT_PRESET)("Rating: [6]") is None
     )
 
 
@@ -146,14 +146,25 @@ def test_mt_bench_101_judging_keeps_turn_alignment_with_missing_rating(
         }
     ).iloc[::-1]
     outputs = ["<think>[[2]]</think> Rating: [[9]]", "no rating", "Rating: [[3]]"]
-    scored = judge_mt_bench_101_single(
-        judge_chat_model=FakeListLLM(responses=outputs),
-        eval_items=items,
-        completions=completions,
-        evaluated_model="candidate",
-        prompt_preset=preset,
-        strip_thinking_before_judging=True,
+    scored, _ = judge_single_answers(
+        FakeListLLM(responses=outputs),
+        items.assign(
+            completion=completions.set_index("instruction_index")["completion"],
+            model="candidate",
+            language=["tr", "en", "de"],
+            judge_completion="source metadata",
+            parsed="source metadata",
+        ),
+        partial(
+            render_mt_bench_101_requests,
+            prompt_preset=preset,
+            strip_thinking_before_judging=True,
+        ),
     )
+    assert scored["language"].tolist() == ["tr", "en", "de"]
+    assert scored.loc[0, "parsed"]["score"] == expected
+    assert scored.loc[1, "parsed"] is None
+    assert "ref1" in scored.loc[1, "judge_input"]
     assert scored["turn_index"].tolist() == [1, 2, 3]
     assert scored["model_completion"].tolist() == ["answer1", "answer2", "answer3"]
     assert scored["judge_completion"].tolist() == outputs
@@ -202,22 +213,29 @@ def test_mt_bench_101_min_dialogue_and_pairwise():
         }
     )
     # Each model's minimum occurs on a different turn of the first dialogue.
-    scored_b = scored_a.assign(score=[1.0, 8.0, 6.0, 5.0])
-    pairwise_turns = derive_mt_bench_101_pairwise_preferences(scored_a, scored_b)
-    pairwise = aggregate_mt_bench_101_dialogues(pairwise_turns)
-    absolute_scores = build_metric("mt_bench_101_absolute_score").calculate(pairwise)
+    pairwise_turns = score_outcomes(
+        scored_a.rename(columns={"score": "score_A"}).assign(
+            score_B=[1.0, 8.0, 6.0, 5.0],
+            model_a="a",
+            model_b="b",
+        )
+    )
+    pairwise = score_outcomes(pairwise_turns, minimum_by=("dialogue_uid", "task"))
+    absolute_scores = build_metric(
+        "absolute_score", parameters={"macro_by": "task"}
+    ).calculate(pairwise)
     assert absolute_scores["model_A_score"] == pytest.approx(3.0)
     assert len(pairwise) == 3
     assert pairwise["score_A"].iloc[:2].tolist() == [2.0, 4.0]
     assert pairwise["score_B"].tolist() == [1.0, 6.0, 5.0]
-    assert pairwise_turns["preference"].iloc[:3].tolist() == pytest.approx(
+    assert pairwise_turns["pref"].iloc[:3].tolist() == pytest.approx(
         [0.0831726965, 0.8581489351, 0.6456563062]
     )
-    assert pairwise["preference"].iloc[:2].tolist() == pytest.approx(
+    assert pairwise["pref"].iloc[:2].tolist() == pytest.approx(
         [0.4255574832, 0.6456563062]
     )
-    assert pd.isna(pairwise_turns["preference"].iloc[3])
-    assert pd.isna(pairwise["preference"].iloc[2])
+    assert pd.isna(pairwise_turns["pref"].iloc[3])
+    assert pd.isna(pairwise["pref"].iloc[2])
 
 
 def test_mt_bench_101_resolves_upstream_sampling_defaults():
@@ -260,7 +278,7 @@ def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch, with_preload
                 "task": "PI",
                 "id": 1,
                 "history": [
-                    {"user": "q", "bot": "golden"},
+                    {"user": "q{1}", "bot": "golden"},
                     {"user": "follow-up", "bot": "a2"},
                 ],
             },
@@ -294,8 +312,14 @@ def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch, with_preload
         },
     )
     task = get_packaged_task("mt-bench-101")
-    prefs = run_mt_bench_101_benchmark(cfg, task)
+    prefs = run_pairwise(cfg, task)
     assert prefs.tolist() == pytest.approx([0.5])
+    report = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    variants = report["metadata"]["judge_prompts"]
+    assert len(variants) == 1
+    assert variants[0]["judge_parser"] == "mt-bench-101-score"
+    assert "{history}" in variants[0]["user_prompt_template"]
+    assert "follow-up" not in variants[0]["user_prompt_template"]
 
     for kind, db_name, store_type in (
         ("completions", COMPLETION_DB_NAME, CompletionCache),
@@ -325,15 +349,14 @@ def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch, with_preload
         ) as cache:
             cached = cache.query()
         assert cached["instruction_id"].tolist() == ["PI:1:turn-2"]
-        messages = json.loads(cached.iloc[0]["input_text"])["messages"]
-        assert [(m["role"], m["content"]) for m in messages] == [
-            ("user", "q"),
-            ("assistant", "golden"),
-            ("user", "follow-up"),
+        assert json.loads(cached.iloc[0]["input_text"])["messages"] == [
+            {"role": "user", "content": "q{1}"},
+            {"role": "assistant", "content": "golden"},
+            {"role": "user", "content": "follow-up"},
         ]
 
     def fail_if_materialized(*_args, **_kwargs):
         raise AssertionError("cache hit materialized a model")
 
     monkeypatch.setattr(models, "make_model", fail_if_materialized)
-    assert run_mt_bench_101_benchmark(cfg, task).tolist() == prefs.tolist()
+    assert run_pairwise(cfg, task).tolist() == prefs.tolist()

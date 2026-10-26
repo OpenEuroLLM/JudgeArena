@@ -9,35 +9,12 @@ from huggingface_hub import snapshot_download
 
 from judgearena.datasets.data import CompletionData
 from judgearena.datasets.registry import DatasetAdapter, register_dataset
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import HuggingFaceDatasetSource
-
-
-def split_m_arena_hard_dataset(dataset: str) -> tuple[str, str | None] | None:
-    """Return the YAML definition ID and optional selected language view."""
-    task = get_packaged_task(dataset)
-    if task is None or task.spec.dataset.adapter != "m_arena_hard":
-        return None
-    selection = task.selection.name if task.selection is not None else None
-    return task.definition_task, selection
 
 
 def _source_local_dir(source: HuggingFaceDatasetSource, root: Path) -> Path:
     """Keep raw source snapshots separate from normalized JudgeArena tables."""
     return root / "_sources" / source.repo_id.replace("/", "--")
-
-
-def load_m_arenahard(
-    local_path: Path,
-    version: str,
-    language: str | None = None,
-) -> pd.DataFrame:
-    """Compatibility wrapper returning the former source-shaped DataFrame."""
-    task_id = version if language is None else f"{version}-{language}"
-    task = get_packaged_task(task_id)
-    if task is None or task.spec.dataset.adapter != "m_arena_hard":
-        raise ValueError(f"Unsupported m-ArenaHard task: {task_id!r}.")
-    return MArenaHardAdapter(task, local_path)._load_source_frames()
 
 
 @register_dataset("m_arena_hard")
@@ -53,11 +30,6 @@ class MArenaHardAdapter(DatasetAdapter):
 
     def download(self) -> None:
         """Download the pinned examples and optional packaged model outputs."""
-        if self.task.spec.dataset.adapter != "m_arena_hard":
-            raise ValueError(
-                f"Task {self.task.task!r} does not use the m-ArenaHard adapter."
-            )
-
         self._source()
         for name in self.task.spec.dataset.sources:
             self._download_source(name)
@@ -161,9 +133,3 @@ class MArenaHardAdapter(DatasetAdapter):
             "outputs", allow_patterns=[path.relative_to(self.cache_dir).as_posix()]
         )
         return pd.read_csv(path) if path.exists() else None
-
-
-if __name__ == "__main__":
-    from judgearena.paths import data_root
-
-    load_m_arenahard(local_path=data_root, version="m-arena-hard-v0.1", language="EU")
