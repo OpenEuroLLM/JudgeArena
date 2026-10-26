@@ -289,6 +289,9 @@ Independent-score annotations contain `model`, `completion` and `score`;
 derived preferences appear in the scoring rows. Nested or mixed-value columns
 are JSON-encoded in CSV and Parquet exports.
 
+Elo writes raw preferences to `annotations.parquet` and scoring preferences to
+`battles.parquet`, including any PairScore temperature adjustment.
+
 ### Generate + judge (pairwise)
 
 | Task                         | Description                                                                                                                                                                     |

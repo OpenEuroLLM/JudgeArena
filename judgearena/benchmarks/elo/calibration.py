@@ -8,10 +8,26 @@ from scipy.optimize import minimize_scalar
 
 from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.log import get_logger
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import PairScore, score_preference
 from judgearena.prompts.registry import ResolvedJudgePrompt
 
 logger = get_logger(__name__)
+
+
+def apply_pairscore_temperature(
+    annotations: pd.DataFrame, *, temperature: float
+) -> pd.DataFrame:
+    """Recompute canonical preferences without changing the raw judge annotations."""
+    preferences = []
+    for parsed in annotations["parsed"]:
+        scores = {} if parsed is None else parsed["scores"]
+        preferences.append(
+            score_preference(scores.get("A"), scores.get("B"), temperature=temperature)
+        )
+    preferences = pd.Series(preferences, index=annotations.index, dtype=float)
+    return annotations.assign(
+        pref=preferences.where(~annotations["swapped"], 1 - preferences)
+    )
 
 
 def fit_temperature(

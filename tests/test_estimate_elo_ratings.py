@@ -20,6 +20,8 @@ from judgearena.config import RunConfig, load_config
 from judgearena.datasets.arena_battles import normalize_battles
 from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
+from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.registry import ResolvedJudgePrompt
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec
 
@@ -404,6 +406,12 @@ def test_run_elo_n_instructions_limits_battles(tmp_path):
 def test_run_elo_aligns_shuffled_completions_with_judged_battles(
     monkeypatch, tmp_path, synthetic_arena_df, swap_mode, strip_thinking
 ):
+    for slot in ("a", "b"):
+        synthetic_arena_df[f"messages_{slot}"] = synthetic_arena_df[
+            f"conversation_{slot}"
+        ]
+    synthetic_arena_df["reference_pref"] = 0.5
+    synthetic_arena_df["topic"] = ["coding", "math", "writing"] * (N_BATTLES // 3)
     battles = normalize_battles(synthetic_arena_df, "ComparIA").battles
     data = PreferenceData.from_battles(
         battles.drop(columns=["conversation_a", "conversation_b", "question_id"])
@@ -420,7 +428,9 @@ def test_run_elo_aligns_shuffled_completions_with_judged_battles(
     monkeypatch.setattr(
         estimate_elo_ratings,
         "load_task_data",
-        lambda _: replace(data, model_outputs=preloaded),
+        lambda _: replace(
+            data, model_outputs=pd.concat([data.model_outputs, preloaded])
+        ),
     )
 
     def generate(instructions, **_kwargs):
@@ -450,6 +460,12 @@ def test_run_elo_aligns_shuffled_completions_with_judged_battles(
     for row in cached.itertuples():
         i = int(row.instruction_id.rsplit("q", 1)[1])
         assert f"Answer {i}" in row.judge_input
+        opponent_slot = ("a", "b", "b")[i]
+        expected_model = synthetic_arena_df.iloc[i][f"model_{opponent_slot}"]
+        assert expected_model == (
+            row.model_b if row.model_a == cfg.model.name else row.model_a
+        )
+        assert f"Response {opponent_slot.upper()} {i}" in row.judge_input
         assert ("private" in row.judge_input) is not strip_thinking
         assert row.orientation == (
             "direct" if row.model_a == cfg.model.name else "reversed"
@@ -469,6 +485,21 @@ def test_run_elo_aligns_shuffled_completions_with_judged_battles(
     if swap_mode == "both":
         expected += [1 - direct_pref] * 3
     assert battles["pref"].tolist() == pytest.approx(expected)
+    annotations = pd.read_parquet(next(tmp_path.rglob("annotations.parquet")))
+    assert "reference_pref" not in annotations
+    assert annotations["topic"].tolist() == ["coding", "math", "writing"] * repeats
+    assert (
+        annotations["lang"].tolist()
+        == synthetic_arena_df["lang"].iloc[:3].tolist() * repeats
+    )
+    assert annotations["source"].eq("llm-judge").all()
+    assert (
+        annotations["winner"].tolist()
+        == synthetic_arena_df["winner"].iloc[:3].tolist() * repeats
+    )
+    assert not {"messages_a", "messages_b", "conversation_a", "conversation_b"} & set(
+        annotations
+    )
 
 
 def test_run_elo_keeps_battles_with_repeated_question_ids(tmp_path, synthetic_arena_df):
@@ -653,3 +684,35 @@ def test_run_elo_temperature_reuses_validated_scores(monkeypatch, tmp_path):
     assert _pairwise_metric(result)["num_missing"] == 2
     assert parser.temperature == 0.5
     assert parse.call_count == len(battles)
+    annotations = pd.read_parquet(next(tmp_path.rglob("annotations.parquet")))
+    assert annotations["pref"].tolist() == pytest.approx(
+        [0.7310585786, float("nan"), 0.2689414214, float("nan")], nan_ok=True
+    )
+    assert annotations["judge"].eq(cfg.judge.model).all()
+
+
+@pytest.mark.parametrize("delegated", [False, True])
+def test_run_elo_rejects_unusable_prompt_before_generation(
+    monkeypatch, tmp_path, delegated
+):
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "resolve_run_judge_prompt",
+        lambda *_args: ResolvedJudgePrompt(
+            parser=PairScore() if delegated else None,
+            preset_name="unsupported",
+            system_prompt="",
+            user_prompt_template="",
+            source="delegated" if delegated else "override",
+            delegated=delegated,
+        ),
+    )
+    monkeypatch.setattr(
+        estimate_elo_ratings,
+        "generate_instructions",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Prompt validation must precede generation"
+        ),
+    )
+    with pytest.raises(ValueError, match="resolved preference parser"):
+        run_elo_with_task(_default_args(result_folder=str(tmp_path)))

@@ -96,6 +96,9 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     battles = pd.read_parquet(result_path.parent / "battles.parquet")
     assert set(sample["battle_id"]) == set(annotations["battle_id"])
     assert sample["lang"].eq("en").all()
+    assert "winner" not in sample
+    assert sample["reference_pref"].equals(sample["pref"])
+    assert sample["completion_a"].eq("answer a").all()
     sampled = battles.loc[battles["sampled"]].set_index("battle_id")
     pd.testing.assert_series_equal(
         sampled["pref"].sort_index(),
@@ -106,7 +109,7 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
 
     saved = json.loads(result_path.read_text())
     agreement = saved["metrics"]["meta_eval_agreement"]["all"]
-    correct = sample.iloc[1:]["winner"].eq("model_a").sum()
+    correct = sample.iloc[1:]["pref"].eq(0.0).sum()
     assert agreement["accuracy_attempted"] == pytest.approx(correct / len(sample))
     assert saved["metrics"]["meta_eval_elo_gap"]["soft"][0]["n_seeds_valid"] == 2
     assert f"complete {len(sample) - 1}/{len(sample)}" in capsys.readouterr().out

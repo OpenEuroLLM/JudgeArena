@@ -23,6 +23,28 @@ def test_fit_temperature_matches_observed_odds():
     assert fit_temperature(score_differences, outcomes) == pytest.approx(-np.log(3))
 
 
+def test_temperature_preserves_raw_annotations_and_uses_actual_swap():
+    annotations = pd.DataFrame(
+        {
+            "parsed": [{"scores": {"A": 6, "B": 8}}] * 2 + [None],
+            "pref": [0.75, 0.25, float("nan")],
+            "swapped": [False, True, False],
+            "orientation": "single",
+        },
+        index=[9, 2, 7],
+    )
+    original = annotations.copy(deep=True)
+
+    outcomes = calibration.apply_pairscore_temperature(annotations, temperature=0.8)
+
+    preference = 1 / (1 + np.exp(-1.6))
+    assert outcomes.index.tolist() == [9, 2, 7]
+    assert outcomes["pref"].tolist() == pytest.approx(
+        [preference, 1 - preference, float("nan")], nan_ok=True
+    )
+    pd.testing.assert_frame_equal(annotations, original)
+
+
 def test_non_pairscore_calibration_does_not_consume_rng_or_use_judge():
     rng = np.random.default_rng(7)
     state = deepcopy(rng.bit_generator.state)

@@ -14,13 +14,13 @@ from judgearena.artifacts import (
     prepare_run_directory,
     run_logging,
     safe_filename,
+    write_annotations,
     write_run_metadata_safely,
 )
-from judgearena.battles import winner_labels
-from judgearena.benchmarks.execution import build_judge
+from judgearena.benchmarks.execution import build_judge, judge_prepared_comparisons
 from judgearena.benchmarks.meta_eval.annotate import (
-    aggregate_battle_preferences,
-    annotate_sample,
+    prepare_reference_comparisons,
+    reference_scoring_battles,
 )
 from judgearena.benchmarks.meta_eval.sampling import (
     MetaEvalSamplingError,
@@ -60,12 +60,10 @@ def _prepare_arena_battles(
         raise MetaEvalSamplingError(
             f"Task {task!r} requires observed human preferences of 0, 0.5, or 1."
         )
-    identity_columns = ("question_id", "model_a", "model_b")
-    for column in identity_columns:
-        if battles[column].isna().any():
-            raise MetaEvalSamplingError(
-                f"Task {task!r} contains null values in {column}."
-            )
+    if battles["question_id"].isna().any():
+        raise MetaEvalSamplingError(
+            f"Task {task!r} contains null values in question_id."
+        )
     for column in ("model_a", "model_b"):
         valid = battles[column].map(
             lambda value: isinstance(value, str) and bool(value)
@@ -149,29 +147,22 @@ def run_meta_eval(
         f"{cfg.judge.swap_mode}-{timestamp}"
     )
     result_dir = prepare_run_directory(cfg, Path(cfg.run.result_folder) / result_name)
-    sample.assign(winner=winner_labels(sample["pref"])).loc[
-        :, ("battle_id", "question_id", "model_a", "model_b", "winner", "lang")
-    ].to_parquet(result_dir / "sample.parquet", index=False)
+    write_annotations(sample, result_dir / "sample.parquet")
 
-    annotations = annotate_sample(
-        sample,
+    judge = build_judge(cfg)
+    comparisons = prepare_reference_comparisons(sample)
+    annotations = judge_prepared_comparisons(
         cfg,
-        judge_chat_model=build_judge(cfg),
-        resolved_prompt=resolved_prompt,
+        judge,
+        comparisons,
+        resolved_prompt,
+        swap_mode=cfg.judge.swap_mode,
+        use_tqdm=cfg.run.use_tqdm,
     )
-    annotations.to_parquet(result_dir / "annotations.parquet", index=False)
-    judged_battles = aggregate_battle_preferences(
-        annotations, swap_mode=cfg.judge.swap_mode
+    write_annotations(annotations, result_dir / "annotations.parquet")
+    metric_battles = reference_scoring_battles(
+        top_pool, annotations, swap_mode=cfg.judge.swap_mode
     )
-    metric_battles = top_pool.loc[
-        :, ("battle_id", "model_a", "model_b", "reference_pref")
-    ].copy()
-    metric_battles["sampled"] = metric_battles["battle_id"].isin(
-        judged_battles["battle_id"]
-    )
-    metric_battles = metric_battles.merge(
-        judged_battles, on="battle_id", how="left"
-    ).sort_values("battle_id", kind="stable", ignore_index=True)
     metric_battles.to_parquet(result_dir / "battles.parquet", index=False)
     runtime_by_metric = {
         request.metric: {"rng": _metric_rng(cfg.run.seed, request.metric)}

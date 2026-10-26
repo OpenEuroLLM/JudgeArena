@@ -1,6 +1,5 @@
 """Canonical annotation rows and physical-battle aggregation."""
 
-import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,9 +7,10 @@ import pandas as pd
 import pytest
 from langchain_core.language_models.fake import FakeListLLM
 
+from judgearena.benchmarks.execution import judge_prepared_comparisons
 from judgearena.benchmarks.meta_eval.annotate import (
     aggregate_battle_preferences,
-    annotate_sample,
+    prepare_reference_comparisons,
 )
 from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.cache.sqlite import JudgementCache
@@ -49,7 +49,8 @@ def _config(swap_mode):
     )
 
 
-def test_annotation_swaps_and_aggregates_battles():
+@pytest.mark.parametrize("strip_thinking", [False, True])
+def test_annotation_swaps_and_aggregates_battles(strip_thinking):
     sample = pd.concat([_sample()] * 3, ignore_index=True)
     sample["battle_id"] = ["complete", "partial", "missing"]
     sample.index = [8, 3, 11]
@@ -67,24 +68,29 @@ def test_annotation_swaps_and_aggregates_battles():
             "unparseable",
         ]
     )
-    rows = annotate_sample(
-        sample,
-        _config("both"),
-        judge_chat_model=judge,
-        resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
+    sample["completion_a"] = "<think>private reasoning</think>Alpha answer"
+    cfg = _config("both")
+    cfg.judge.strip_thinking_before_judging = strip_thinking
+    rows = judge_prepared_comparisons(
+        cfg,
+        judge,
+        prepare_reference_comparisons(sample),
+        resolve_judge_prompt(preset="meta-eval-pair-score"),
+        swap_mode="both",
+        use_tqdm=False,
     )
 
     assert rows["orientation"].tolist() == ["direct"] * 3 + ["reversed"] * 3
+    assert rows["battle_id"].tolist() == ["complete", "partial", "missing"] * 2
     rendered = rows["judge_input"]
+    assert ("private reasoning" in rendered[0]) is not strip_thinking
     assert rendered[0].index("Alpha answer") < rendered[0].index("Beta answer")
     assert rendered[3].index("Beta answer") < rendered[3].index("Alpha answer")
     assert rows.loc[[0, 3], "pref"].tolist() == pytest.approx(
         [0.01798620996, 0.04742587318]
     )
-    assert json.loads(rows.loc[3, "parsed_scores_json"]) == {"A": 1.0, "B": 7.0}
-    evidence = rows.loc[
-        2, ["pref", "parsed_label", "parsed_scores_json", "parsed_details_json"]
-    ]
+    assert rows.loc[3, "parsed"]["scores"] == {"A": 1.0, "B": 7.0}
+    evidence = rows.loc[2, ["pref", "parsed"]]
     assert evidence.isna().all()
     battles = aggregate_battle_preferences(rows, swap_mode="both").set_index(
         "battle_id"
@@ -103,14 +109,16 @@ def test_annotation_preserves_parser_label_and_details(tmp_path):
     judge.factory = lambda: FakeListLLM(responses=[output])
     sample = _sample().drop(columns=["conversation_a", "conversation_b"])
     sample["instruction_id"] = "upstream-id"
-    rows = annotate_sample(
-        sample,
+    rows = judge_prepared_comparisons(
         _config("fixed"),
-        judge_chat_model=judge,
-        resolved_prompt=resolve_judge_prompt(preset="meta-eval-alpaca-eval-json"),
+        judge,
+        prepare_reference_comparisons(sample),
+        resolve_judge_prompt(preset="meta-eval-alpaca-eval-json"),
+        swap_mode="fixed",
+        use_tqdm=False,
     )
-    assert rows.loc[0, "parsed_label"] == "M"
-    assert json.loads(rows.loc[0, "parsed_details_json"]) == {"ranks": {"M": 1, "m": 2}}
+    assert rows.loc[0, "parsed"]["label"] == "M"
+    assert rows.loc[0, "parsed"]["details"] == {"ranks": {"M": 1, "m": 2}}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
     assert battles["pref"].tolist() == [1.0]
     with JudgementCache(next(tmp_path.rglob("judgements.db"))) as cache:
@@ -132,9 +140,4 @@ def test_conversation_validation_requires_matching_prompts():
     sample = _sample()
     sample.at[0, "conversation_b"][0]["content"] = "Different prompt"
     with pytest.raises(ValueError, match="different user prompts"):
-        annotate_sample(
-            sample,
-            _config("fixed"),
-            judge_chat_model=FakeListLLM(responses=["score_A: 9\nscore_B: 1"]),
-            resolved_prompt=resolve_judge_prompt(preset="meta-eval-pair-score"),
-        )
+        prepare_reference_comparisons(sample)

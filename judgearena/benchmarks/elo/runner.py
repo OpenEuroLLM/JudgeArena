@@ -9,6 +9,7 @@ from judgearena.artifacts import (
     prepare_run_directory,
     run_logging,
     safe_filename,
+    write_annotations,
     write_run_metadata_safely,
 )
 from judgearena.battles import (
@@ -18,16 +19,19 @@ from judgearena.battles import (
     swap_comparison_slots,
     write_battles,
 )
-from judgearena.benchmarks.elo.calibration import calibrate_pairscore_temperature
+from judgearena.benchmarks.elo.calibration import (
+    apply_pairscore_temperature,
+    calibrate_pairscore_temperature,
+)
 from judgearena.benchmarks.elo.rating import (
     arena_anchor_battles,
     select_seeded_random_arena_battles,
 )
 from judgearena.benchmarks.execution import (
     build_judge,
+    judge_prepared_comparisons,
     load_or_generate_completions,
 )
-from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.datasets.data import PreferenceData
@@ -37,7 +41,6 @@ from judgearena.evaluate import (
 )
 from judgearena.generate import generate_instructions
 from judgearena.log import get_logger
-from judgearena.prompts.parsing import score_preference
 from judgearena.reports import EloReport
 from judgearena.tasks.schema import EloProtocol, ResolvedTaskSpec
 
@@ -58,6 +61,9 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     if cfg.elo is None:
         raise ValueError(f"Task {cfg.task!r} requires ELO runtime settings.")
     cfg.elo = cfg.elo.resolve(protocol.scoring)
+    resolved_prompt = resolve_run_judge_prompt(task, cfg.judge)
+    if resolved_prompt.delegated or resolved_prompt.parser is None:
+        raise ValueError("Elo judging requires a resolved preference parser.")
     arena = protocol.arena
     run_started_at = datetime.now(UTC)
     rng = np.random.default_rng(cfg.run.seed)
@@ -154,50 +160,46 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     # Randomly decide if our model is in position A or B for the judge
     our_model_is_position_a = rng.choice([True, False], size=n)
 
-    opponent_completions = (
-        df_battles["completion_a"]
-        .where(use_model_a_as_opponent, df_battles["completion_b"])
-        .tolist()
-    )
-    opponent_models = (
-        df_battles["model_a"]
-        .where(use_model_a_as_opponent, df_battles["model_b"])
-        .tolist()
-    )
+    opponents = swap_comparison_slots(df_battles, use_model_a_as_opponent)
 
-    comparisons = pd.DataFrame(
-        {
-            "instruction_id": instructions.index,
-            "cache_orientation": np.where(
-                our_model_is_position_a, "direct", "reversed"
-            ),
-            "instruction": instructions.tolist(),
-            "completion_a": completions.tolist(),
-            "completion_b": opponent_completions,
-            "model_a": cfg.model.name,
-            "model_b": opponent_models,
-            "opponent_model": opponent_models,
-            "our_model_is_position_a": our_model_is_position_a,
-            "question_id": df_battles.get(
-                "question_id", df_battles["instruction_index"]
-            ).tolist(),
-        }
+    # Original pair labels and histories do not describe the replacement candidate.
+    comparisons = opponents.drop(
+        columns=[
+            "pref",
+            "pref_hard",
+            "reference_pref",
+            "messages_a",
+            "messages_b",
+            "conversation_a",
+            "conversation_b",
+        ],
+        errors="ignore",
+    ).assign(
+        model_a=cfg.model.name,
+        completion_a=completions.to_numpy(),
+        instruction_id=instructions.index,
+        cache_orientation=np.where(our_model_is_position_a, "direct", "reversed"),
+        question_id=df_battles.get("question_id", df_battles["instruction_index"]),
+        source="llm-judge",
     )
     comparisons = swap_comparison_slots(comparisons, ~our_model_is_position_a)
-    resolved_prompt = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
 
     judge_chat_model = build_judge(cfg)
-    df_judge = judge_comparisons(
+    annotations = judge_prepared_comparisons(
+        cfg,
         judge_chat_model,
         comparisons,
-        [(resolved_prompt, comparisons.index)],
+        resolved_prompt,
         # Elo already chose its initial slots using the run RNG.
         swap_mode="both" if cfg.judge.swap_mode == "both" else "fixed",
-        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
-        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=use_tqdm,
     )
-    logger.debug("First judge output:\n%s", df_judge["judge_completion"].iloc[0][:500])
+    write_annotations(
+        annotations.assign(judge=cfg.judge.model), res_dir / "annotations.parquet"
+    )
+    logger.debug(
+        "First judge output:\n%s", annotations["judge_completion"].iloc[0][:500]
+    )
 
     model_name = cfg.model.name
     # Anchor the llm-judge battles against the human arena battles. These are
@@ -223,27 +225,17 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
             )
 
     # Apply this run's temperature to the selected parser's validated scores.
+    outcomes = annotations
     if cfg.elo.soft_elo and isinstance(resolved_prompt.parser, PairScore):
         temperature = (
             calibrated_temperature
             if calibrated_temperature is not None
             else cfg.elo.soft_elo_temperature
         )
-        adjusted_prefs: list[float | None] = []
-        for parsed in df_judge["parsed"]:
-            scores = {} if parsed is None else parsed["scores"]
-            adjusted_prefs.append(
-                score_preference(
-                    scores.get("A"), scores.get("B"), temperature=temperature
-                )
-            )
-        adjusted = pd.Series(adjusted_prefs, index=df_judge.index, dtype=float)
-        df_judge["pref"] = adjusted.where(
-            df_judge["orientation"] != "reversed", 1 - adjusted
-        )
+        outcomes = apply_pairscore_temperature(annotations, temperature=temperature)
 
     df_llm_judge = judged_battles(
-        df_judge,
+        outcomes,
         evaluation_model=model_name,
         judge=cfg.judge.model,
         judge_temperature=cfg.judge.temperature,

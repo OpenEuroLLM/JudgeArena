@@ -1,4 +1,4 @@
-"""Shared model setup for benchmark runners."""
+"""Shared model setup and execution for benchmark runners."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
 
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.cache.inference import (
     CompletionInferenceCache,
     JudgementInferenceCache,
@@ -19,6 +20,7 @@ from judgearena.models import (
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+    from judgearena.prompts.registry import ResolvedJudgePrompt
 
 
 def build_generation_kwargs(
@@ -52,6 +54,27 @@ def build_judge(cfg: RunConfig, *, default_temperature: float | None = None):
         model=cfg.judge.model,
         cache=build_judgement_cache(cfg),
         **kwargs,
+    )
+
+
+def judge_prepared_comparisons(
+    cfg: RunConfig,
+    judge,
+    comparisons: pd.DataFrame,
+    prompt: ResolvedJudgePrompt,
+    *,
+    swap_mode: str,
+    use_tqdm: bool,
+) -> pd.DataFrame:
+    """Judge prepared pairs with run settings and an explicit answer-order policy."""
+    return judge_comparisons(
+        judge,
+        comparisons,
+        [(prompt, comparisons.index)],
+        swap_mode=swap_mode,
+        strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+        use_tqdm=use_tqdm,
     )
 
 
