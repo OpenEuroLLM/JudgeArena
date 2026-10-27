@@ -72,16 +72,15 @@ def loaded_mt_instructions(monkeypatch):
     monkeypatch.setattr(mt_bench_runner, "load_task_data", lambda _: data)
 
 
-@pytest.mark.parametrize("prompt_preset", [FASTCHAT_PAIRWISE_PROMPT_PRESET, "default"])
 def test_run_mt_bench_rejects_random_before_preparation(
-    monkeypatch, prompt_preset, loaded_mt_instructions
+    monkeypatch, loaded_mt_instructions
 ):
     cfg = RunConfig(
         task="mt-bench",
         model={"name": "Dummy/model"},
         judge={
             "model": "Dummy/judge",
-            "prompt_preset": prompt_preset,
+            "prompt_preset": FASTCHAT_PAIRWISE_PROMPT_PRESET,
             "swap_mode": "random",
         },
     )
@@ -97,15 +96,26 @@ def test_run_mt_bench_rejects_random_before_preparation(
         mt_bench_runner.run_pairwise(cfg, get_packaged_task("mt-bench"))
 
 
-def test_run_mt_bench_rejects_logprob_parser_before_preparation(
+def test_mt_renderer_rejects_logprob_parser_before_preparation(
     monkeypatch, loaded_mt_instructions
 ):
+    from judgearena.prompts.registry import PRESETS
+
+    monkeypatch.setitem(
+        PRESETS,
+        "fastchat-logprob",
+        replace(
+            PRESETS["alpaca-eval"],
+            name="fastchat-logprob",
+            prepare_prompts=PRESETS["fastchat-pairwise"].prepare_prompts,
+        ),
+    )
     cfg = RunConfig(
         task="mt-bench",
         model={"name": "Dummy/model"},
         judge={
             "model": "Dummy/judge",
-            "prompt_preset": "alpaca-eval",
+            "prompt_preset": "fastchat-logprob",
             "top_logprobs": 5,
         },
     )
@@ -125,22 +135,36 @@ def test_run_mt_bench_rejects_logprob_parser_before_preparation(
     "preset,response,preference,turns",
     [
         ("fastchat-pairwise", "[[A]]", 0.0, (1, 2)),
-        ("default", "score A: 10 score B: 0", 0.0474258732, (1, 2)),
+        ("mt-score", "score A: 10 score B: 0", 0.0474258732, (1, 2)),
+        ("default", "score A: 10 score B: 0", 0.0474258732, (1, 2, 3)),
         ("criteria", "clarity: A=8, B=4\ncorrectness: A=6, B=8", 0.4255574832, (2,)),
     ],
 )
-def test_mt_bench_uses_pairwise_lifecycle_and_preserves_judging(
+def test_prompt_bundle_controls_custom_conversation_judging(
     tmp_path, monkeypatch, preset, response, preference, turns
 ):
     import judgearena.datasets.registry as registry
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
+    from judgearena.prompts.registry import PRESETS
 
+    monkeypatch.setitem(
+        PRESETS,
+        "mt-score",
+        replace(
+            PRESETS["default"],
+            name="mt-score",
+            prepare_prompts=PRESETS["fastchat-pairwise"].prepare_prompts,
+        ),
+    )
     questions = pd.DataFrame(
         {
             "instruction_index": [9, 3],
             "instruction": ["Question {one}", "Skip"],
-            "user_turns": [["Question {one}", "Follow-up"], ["Skip", "Skip again"]],
+            "user_turns": [
+                ["Question {one}", "Follow-up", "Final question"],
+                ["Skip", "Skip again"],
+            ],
             "domain": ["keep", "skip"],
             "category": "math",
             "reference_turn_1": "reference one",
@@ -160,6 +184,8 @@ def test_mt_bench_uses_pairwise_lifecycle_and_preserves_judging(
                         ("assistant", f"{identity}:first {model}"),
                         ("user", "Follow-up"),
                         ("assistant", f"{identity}:second {model}"),
+                        ("user", "Final question"),
+                        ("assistant", f"{identity}:third {model}"),
                     )
                 ],
             }
@@ -182,7 +208,12 @@ def test_mt_bench_uses_pairwise_lifecycle_and_preserves_judging(
     task = get_packaged_task("mt-bench")
     spec = task.spec.model_dump()
     spec["dataset"] = {"adapter": "custom_conversations"}
-    spec["protocol"]["judge"]["turns"] = turns
+    spec["task"] = "custom-conversations"
+    spec["protocol"]["judge"] = {
+        "default_prompt_preset": preset,
+        "turns": turns,
+        "prompt_options": {"reference_categories": ["math"]},
+    }
     task = replace(
         task,
         spec=type(task.spec).model_validate(spec),
@@ -218,13 +249,19 @@ def test_mt_bench_uses_pairwise_lifecycle_and_preserves_judging(
     ] * len(turns)
     for row in annotations.itertuples():
         assert "3:first" not in row.judge_input and "3:second" not in row.judge_input
-        assert (
-            "Question {one}" in row.judge_input and "reference one" in row.judge_input
+        assert "Question {one}" in row.judge_input
+        assert ("reference one" in row.judge_input) is (
+            preset in {"fastchat-pairwise", "mt-score"}
         )
         if row.turn == 2:
             assert all(
                 text in row.judge_input
-                for text in ("Follow-up", "reference two", "9:second a", "9:second b")
+                for text in ("Follow-up", "9:second a", "9:second b")
+            )
+        if row.turn == 3:
+            assert all(
+                text in row.judge_input
+                for text in ("Final question", "9:third a", "9:third b")
             )
         if preset == "criteria":
             assert 'Check {"answer": 42}.' in row.judge_input
@@ -244,3 +281,11 @@ def test_mt_bench_uses_pairwise_lifecycle_and_preserves_judging(
     assert set(stored.instruction_id) == {f"9:turn-{turn}" for turn in turns}
     assert set(stored.orientation) == {"direct", "reversed"}
     assert len(stored) == len(turns) * 2
+
+    from judgearena.models import PreparedModel
+
+    def unavailable(_self):
+        pytest.fail("Repeated judging must replay the cache")
+
+    monkeypatch.setattr(PreparedModel, "materialize", unavailable)
+    assert run_benchmark(cfg).tolist() == pytest.approx(expected)

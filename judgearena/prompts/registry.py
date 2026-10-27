@@ -68,6 +68,8 @@ class JudgePromptPreset:
     with_explanation: bool = False
     output_format_file: str | None = None
     aggregation: Literal["individual", "agreement"] = "individual"
+    prepare_prompts: Callable | None = None
+    """Optional (cfg, prompt, instructions) -> (batch preparation, temperature)."""
     score_renderer: Callable | None = None
     """Optional scalar-score renderer: (samples, prompt_preset, truncate_input_chars,
     strip_thinking_before_judging) -> (rendering fields, ParsedScore requests, prompts).
@@ -91,6 +93,7 @@ class ResolvedJudgePrompt:
     variant_name: str | None = None
     output_format: str | None = None
     aggregation: Literal["individual", "agreement"] = "individual"
+    prepare_prompts: Callable | None = None
     score_renderer: Callable | None = None
 
     def metadata(self) -> dict[str, str | bool | None]:
@@ -138,6 +141,12 @@ def prompt_metadata(
     return variants
 
 
+def _prepare_mt_bench_prompts(cfg, prompt, instructions):
+    from judgearena.prompts.mt_bench import prepare_mt_bench_prompts
+
+    return prepare_mt_bench_prompts(cfg, prompt, instructions)
+
+
 def _render_mt_bench_101_scores(samples, **kwargs):
     from judgearena.prompts.mt_bench_101 import render_mt_bench_101_requests
 
@@ -178,6 +187,7 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+        prepare_prompts=_prepare_mt_bench_prompts,
         aggregation="agreement",
     ),
     MT_BENCH_101_PROMPT_PRESET: JudgePromptPreset(
@@ -359,6 +369,7 @@ def resolve_judge_prompt(
             source="delegated",
             delegated=True,
             aggregation=spec.aggregation,
+            prepare_prompts=spec.prepare_prompts,
             score_renderer=spec.score_renderer,
         )
 
@@ -417,6 +428,7 @@ def resolve_judge_prompt(
         user_sha256=_sha256(user_prompt_template),
         output_format=output_format,
         aggregation=spec.aggregation,
+        prepare_prompts=spec.prepare_prompts,
         score_renderer=spec.score_renderer,
     )
 

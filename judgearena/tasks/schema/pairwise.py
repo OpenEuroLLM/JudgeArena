@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -50,6 +50,8 @@ SwapMode = Literal["fixed", "both", "random"]
 
 class PairwiseJudgeSpec(StrictFrozenModel):
     format: Literal["standard", "independent_scores"] = "standard"
+    prompt_options: dict[str, Any] = Field(default_factory=dict)
+    use_default_engine_kwargs: bool = True
     minimum_score_by: tuple[str, ...] = ()
     """Group candidate scores by these metadata columns before comparing minima."""
     turns: Literal["all", "last"] | tuple[Annotated[int, Field(gt=0)], ...] = "all"
@@ -68,31 +70,6 @@ class PairwiseJudgeSpec(StrictFrozenModel):
             raise ValueError("minimum_score_by requires independent_scores judging.")
         return self
 
-    def prepare_prompts(self, cfg, prompt, instructions):
-        from judgearena.benchmarks.pairwise.judging import prepare_standard_prompts
-
-        return prepare_standard_prompts(cfg, prompt, instructions)
-
-
-class MTBenchJudgeSpec(PairwiseJudgeSpec):
-    format: Literal["mt_bench"] = "mt_bench"
-    fastchat_prompt_preset: str = Field(min_length=1)
-    fastchat_temperature: float = Field(ge=0)
-    reference_categories: tuple[str, ...] = ()
-
-    def prepare_prompts(self, cfg, prompt, instructions):
-        from judgearena.prompts.mt_bench import prepare_mt_bench_prompts
-
-        return prepare_mt_bench_prompts(cfg, prompt)
-
-    @model_validator(mode="after")
-    def _validate_reference_categories(self) -> MTBenchJudgeSpec:
-        if any(not category for category in self.reference_categories):
-            raise ValueError("reference categories must not be empty")
-        if len(set(self.reference_categories)) != len(self.reference_categories):
-            raise ValueError("reference categories must not contain duplicates")
-        return self
-
 
 class PairwiseProtocol(StrictFrozenModel):
     """Task-owned generation, baseline, judging, and scoring behavior."""
@@ -102,5 +79,5 @@ class PairwiseProtocol(StrictFrozenModel):
     """Count complete groups in this column when applying n_instructions."""
     generation: SingleTurnGeneration | MultiTurnGeneration
     baseline: BaselineSpec
-    judge: PairwiseJudgeSpec | MTBenchJudgeSpec
+    judge: PairwiseJudgeSpec
     scoring: ScoringSpec

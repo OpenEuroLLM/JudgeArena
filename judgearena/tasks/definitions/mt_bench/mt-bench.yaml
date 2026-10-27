@@ -47,14 +47,15 @@ protocol:
     strategy: task_default
     reference_id: gpt-3.5-turbo
   judge:
-    format: mt_bench
+    use_default_engine_kwargs: false
     default_prompt_preset: fastchat-pairwise
     default_swap_mode: both
     default_max_out_tokens: 2048
     turns: [1, 2]
-    fastchat_prompt_preset: default
-    fastchat_temperature: 0.0
-    reference_categories: [math, reasoning, coding, arena-hard-200]
+    prompt_options:
+      fastchat_prompt_preset: default
+      fastchat_temperature: 0.0
+      reference_categories: [math, reasoning, coding, arena-hard-200]
   scoring:
     metrics:
       - metric: pairwise_win_rate

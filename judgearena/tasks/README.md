@@ -176,9 +176,12 @@ comparisons require equally many answers from both candidates. `last` compares
 complete histories, including histories of unequal length. Generation proceeds
 one turn at a time using each candidate's own previous answers.
 
-For MT-Bench defaults, use the [packaged task](definitions/mt_bench/mt-bench.yaml).
-It requires matching user questions across candidates. FastChat combines swapped
-verdicts by agreement; ordinary presets keep per-pass preferences.
+Select `fastchat-pairwise` to use MT-Bench's renderer with any compatible dataset.
+Its one/two-turn prompts require matching user questions across candidates.
+Set reference routing in `judge.prompt_options.reference_categories`; see the
+[packaged task](definitions/mt_bench/mt-bench.yaml) for the benchmark defaults.
+FastChat combines swapped verdicts by agreement; ordinary presets keep per-pass
+preferences.
 
 MT-Bench templates accept `{question}`, `{answer_a}` and `{answer_b}` for one
 turn, numbered fields such as `{question_1}` and `{answer_a_2}` for two turns,

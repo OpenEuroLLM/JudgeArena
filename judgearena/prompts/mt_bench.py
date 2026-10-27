@@ -10,6 +10,7 @@ from importlib.resources import files
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from pydantic import Field, model_validator
 
 from judgearena.judging import JudgeRequest
 from judgearena.prompts.parsing import FastChatVerdictParser
@@ -20,6 +21,7 @@ from judgearena.prompts.registry import (
     build_pairwise_chat_prompt_template,
     resolve_run_judge_prompt,
 )
+from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.utils import strip_thinking_tags
 
 if TYPE_CHECKING:
@@ -31,6 +33,22 @@ _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
 _USER_MULTI_REF_BLOCK_FILE = "user-multi-reference-block.txt"
 _SYSTEM_BASE_FILE = "system-base.txt"
+
+
+class MTBenchPromptOptions(StrictFrozenModel):
+    """FastChat prompt variants and reference routing."""
+
+    fastchat_prompt_preset: str = Field(default="default", min_length=1)
+    fastchat_temperature: float = Field(default=0.0, ge=0)
+    reference_categories: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_reference_categories(self):
+        if any(not category for category in self.reference_categories):
+            raise ValueError("reference categories must not be empty")
+        if len(set(self.reference_categories)) != len(self.reference_categories):
+            raise ValueError("reference categories must not contain duplicates")
+        return self
 
 
 def load_mt_bench_prompt_text(filename: str) -> str:
@@ -326,10 +344,11 @@ def build_mt_bench_items(
 
 
 def prepare_mt_bench_prompts(
-    cfg: RunConfig, resolved_prompt: ResolvedJudgePrompt
+    cfg: RunConfig, resolved_prompt: ResolvedJudgePrompt, _instructions: pd.DataFrame
 ) -> tuple[Callable, float | None]:
     """Resolve prompt variants before generation and prepare comparison batches."""
-    settings = cfg.resolved_task.spec.protocol.judge
+    spec = cfg.resolved_task.spec.protocol.judge
+    settings = MTBenchPromptOptions.model_validate(spec.prompt_options)
     if cfg.judge.swap_mode not in ("fixed", "both"):
         raise ValueError(
             f"MT-Bench supports only swap_mode='fixed' or 'both'; got {cfg.judge.swap_mode!r}."
@@ -354,8 +373,8 @@ def prepare_mt_bench_prompts(
                     cfg.resolved_task, cfg.judge, multi_turn=multi
                 )
                 for multi, enabled in (
-                    (False, settings.turns in ("all", "last") or 1 in settings.turns),
-                    (True, settings.turns in ("all", "last") or 2 in settings.turns),
+                    (False, spec.turns in ("all", "last") or 1 in spec.turns),
+                    (True, spec.turns in ("all", "last") or 2 in spec.turns),
                 )
                 if enabled
             }

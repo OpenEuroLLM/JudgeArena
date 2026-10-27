@@ -312,11 +312,8 @@ def prepare_pairwise_judging(
             minimum_by=spec.minimum_score_by,
             use_tqdm=cfg.run.use_tqdm,
         ), None
-    prepare, default_temperature = (
-        cfg.resolved_task.spec.protocol.judge.prepare_prompts(
-            cfg, resolved_prompt, instructions
-        )
-    )
+    prepare_prompts = resolved_prompt.prepare_prompts or prepare_standard_prompts
+    prepare, default_temperature = prepare_prompts(cfg, resolved_prompt, instructions)
 
     def judge(model, comparisons):
         return judge_pairwise_batches(

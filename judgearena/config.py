@@ -26,7 +26,6 @@ from judgearena.tasks.schema import (
     EloProtocol,
     EloScoringSpec,
     MetaEvalProtocol,
-    MTBenchJudgeSpec,
     ResolvedTaskSpec,
     TaskDefaultBaseline,
 )
@@ -595,8 +594,9 @@ class RunConfig(BaseSettings):
     def judge_engine_kwargs(self) -> dict[str, object]:
         """Resolve engine inheritance and defaults for this task's judge."""
         assert self.resolved_task is not None
-        if isinstance(self.resolved_task.spec.protocol.judge, MTBenchJudgeSpec):
-            # Preserve MT-Bench's engine inheritance without automatic VLLM defaults.
+        if not getattr(
+            self.resolved_task.spec.protocol.judge, "use_default_engine_kwargs", True
+        ):
             return {**self.model.engine_kwargs, **self.judge.engine_kwargs}
         return build_default_judge_model_kwargs(
             self.judge.model,

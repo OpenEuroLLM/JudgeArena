@@ -150,7 +150,9 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.protocol.judge.default_prompt_preset == "fastchat-pairwise"
     assert mt_bench.spec.protocol.judge.default_swap_mode == "both"
     assert mt_bench.spec.protocol.judge.default_max_out_tokens == 2048
-    assert mt_bench.spec.protocol.judge.reference_categories == (
+    assert tuple(
+        mt_bench.spec.protocol.judge.prompt_options["reference_categories"]
+    ) == (
         "math",
         "reasoning",
         "coding",
@@ -607,9 +609,7 @@ def test_mt_bench_accepts_custom_metric_parameters_and_breakdowns(tmp_path):
     protocol = definition["protocol"]
     protocol["runner"] = "pairwise"
     protocol["generation"] = {"mode": "multi_turn_chat"}
-    protocol["judge"].update(
-        format="mt_bench", fastchat_prompt_preset="default", fastchat_temperature=0.0
-    )
+    protocol["judge"]["default_prompt_preset"] = "fastchat-pairwise"
     protocol["scoring"] = {
         "metrics": [
             {
