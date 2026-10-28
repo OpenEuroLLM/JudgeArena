@@ -182,12 +182,8 @@ def run_meta_eval(
         judged_battles, on="battle_id", how="left"
     ).sort_values("battle_id", kind="stable", ignore_index=True)
     metric_battles.to_parquet(result_dir / "battles.parquet", index=False)
-    runtime_by_metric = {
-        request.metric: {"rng": _metric_rng(cfg.run.seed, request.metric)}
-        for request, _metric in metrics
-    }
     metric_results = calculate_metrics(
-        metric_battles, metrics, runtime_by_metric=runtime_by_metric
+        metric_battles, metrics, runtime={"rng": cfg.run.seed}
     )
     report = MetaEvalReport(
         task=cfg.task,

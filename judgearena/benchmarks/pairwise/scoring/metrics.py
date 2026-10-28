@@ -11,6 +11,9 @@ import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 
+from judgearena.battles import focal_battles as _pairwise_view
+from judgearena.battles import preference_values
+from judgearena.prompts.parsing import score_preference
 from judgearena.utils.eval import compute_pref_summary
 
 BOOTSTRAP_ROUNDS = 1000
@@ -21,45 +24,7 @@ CONFIDENCE_LEVEL = 0.95
 def _preferences(battles: pd.DataFrame, column: str = "pref") -> pd.Series:
     if column not in battles:
         raise ValueError(f"Pairwise metrics require a {column!r} column.")
-    try:
-        preferences = pd.Series(battles[column], dtype="float64")
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Pairwise preferences must be numeric.") from exc
-    parsed = preferences.dropna()
-    invalid = ~np.isfinite(parsed) | ~parsed.between(0, 1)
-    if invalid.any():
-        raise ValueError(
-            "Pairwise preferences must be missing or finite values in [0, 1]."
-        )
-    return preferences
-
-
-def _pairwise_view(battles: pd.DataFrame) -> pd.DataFrame:
-    """Normalize rows carrying an evaluation model to the focal/opponent view."""
-    if "evaluation_model" not in battles:
-        return battles
-    frame = battles.loc[battles["evaluation_model"].notna()].copy()
-    required = {"model_a", "model_b", "pref"}
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"Evaluation battles are missing columns: {missing}.")
-    focal_is_a = frame["model_a"] == frame["evaluation_model"]
-    focal_is_b = frame["model_b"] == frame["evaluation_model"]
-    if not (focal_is_a ^ focal_is_b).all():
-        raise ValueError(
-            "Each evaluation battle must contain its evaluation model exactly once."
-        )
-    frame["model"] = frame["evaluation_model"]
-    frame["baseline"] = frame["model_b"].where(focal_is_a, frame["model_a"])
-    frame["pref"] = frame["pref"].where(focal_is_a, 1 - frame["pref"])
-    if {"completion_a", "completion_b"} <= set(frame.columns):
-        frame["completion_model"] = frame["completion_a"].where(
-            focal_is_a, frame["completion_b"]
-        )
-        frame["completion_baseline"] = frame["completion_b"].where(
-            focal_is_a, frame["completion_a"]
-        )
-    return frame
+    return preference_values(battles[column])
 
 
 def _format_winrate(value: object) -> str:
@@ -282,3 +247,54 @@ class LengthControlledWinrateMetric:
         if interval is not None:
             line += f" [{interval[0]:.2%}, {interval[1]:.2%}]"
         return line
+
+
+def score_outcomes(
+    scores: pd.DataFrame, *, minimum_by: tuple[str, ...] = (), temperature: float = 0.3
+) -> pd.DataFrame:
+    """Compare scalar candidate scores, optionally after taking each group's minima.
+
+    Grouped outcomes retain the grouping columns and model identities. Missing
+    scores follow pandas minimum semantics; wholly unscored groups stay missing.
+    """
+    frame = scores.copy()
+    if minimum_by:
+        keys = list(dict.fromkeys([*minimum_by, "model_a", "model_b"]))
+        frame = frame.groupby(keys, as_index=False)[["score_A", "score_B"]].min()
+        frame["instruction_index"] = frame.index
+    frame["pref"] = [
+        score_preference(a, b, temperature=temperature)
+        for a, b in zip(frame["score_A"], frame["score_B"], strict=True)
+    ]
+    return frame
+
+
+@dataclass(frozen=True, kw_only=True)
+class AbsoluteScoreMetric:
+    """Average candidate scores, optionally weighting each metadata group equally."""
+
+    macro_by: str | None = None
+
+    def calculate(self, battles: pd.DataFrame) -> dict[str, object]:
+        scores = battles[["score_A", "score_B"]]
+        if self.macro_by is not None:
+            scores = battles.groupby(self.macro_by)[["score_A", "score_B"]].mean()
+        means = scores.mean()
+        return {
+            "model_A_score": float(means["score_A"])
+            if pd.notna(means["score_A"])
+            else None,
+            "model_B_score": float(means["score_B"])
+            if pd.notna(means["score_B"])
+            else None,
+            "num_comparisons": len(battles),
+            "num_scored_A": int(battles["score_A"].notna().sum()),
+            "num_scored_B": int(battles["score_B"].notna().sum()),
+        }
+
+    @staticmethod
+    def render(result: dict[str, object]) -> str:
+        return (
+            "Absolute score: "
+            f"Model A={result['model_A_score']}, Model B={result['model_B_score']}"
+        )

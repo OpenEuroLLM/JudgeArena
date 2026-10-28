@@ -1,10 +1,14 @@
-"""Construction and execution of configured battle metrics."""
+"""Construction and execution of metrics for annotations and battles."""
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
+from inspect import Parameter, signature
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
@@ -22,9 +26,13 @@ from judgearena.benchmarks.pairwise.scoring.arena_hard import (
     ArenaHardV20Metric,
 )
 from judgearena.benchmarks.pairwise.scoring.metrics import (
+    AbsoluteScoreMetric,
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
 )
+from judgearena.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class _Metric(Protocol):
@@ -47,6 +55,7 @@ class MetricRequest(Protocol):
 
 
 _METRIC_TYPES: dict[str, type[_Metric]] = {
+    "mt_bench_101_absolute_score": MTBench101AbsoluteScoreMetric,
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,
@@ -56,10 +65,30 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "meta_eval_agreement": MetaEvalAgreementMetric,
     "meta_eval_elo_gap": MetaEvalEloGapMetric,
     "meta_eval_ranking": MetaEvalRankingMetric,
-    "mt_bench_101_absolute_score": MTBench101AbsoluteScoreMetric,
+    "absolute_score": AbsoluteScoreMetric,
 }
 
-ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric], ...]
+ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric | Exception], ...]
+
+
+def register_metric[T: type[_Metric]](name: str):
+    """Register a metric class for task/config use in this Python process.
+
+    ``calculate(rows)`` consumes canonical annotations/outcomes. Optional
+    ``required_columns`` lists its input fields; failures are saved as ``error``.
+    Pairwise rows have model_a/model_b/pref; independent rows have model/parsed.
+    Scalar score and candidate score_A/score_B depend on the selected parser.
+    Optional runtime keywords include rng and references: pairwise baselines,
+    Elo anchor models, or the selected meta-evaluation model pool, respectively.
+    """
+
+    def register(metric: T) -> T:
+        if not name or name in _METRIC_TYPES:
+            raise ValueError(f"Metric {name!r} is empty or already registered.")
+        _METRIC_TYPES[name] = metric
+        return metric
+
+    return register
 
 
 def available_metrics() -> tuple[str, ...]:
@@ -90,13 +119,17 @@ def build_metrics(
     *,
     parameter_overrides_by_metric: Mapping[str, Mapping[str, object]] | None = None,
 ) -> ConfiguredMetrics:
-    """Build requested metrics in order, applying temporary runtime overrides."""
+    """Build metrics in order, retaining construction failures for the report."""
     overrides = parameter_overrides_by_metric or {}
-    configured: list[tuple[MetricRequest, _Metric]] = []
+    configured: list[tuple[MetricRequest, _Metric | Exception]] = []
     for request in requests:
         parameters = dict(request.parameters)
         parameters.update(overrides.get(request.metric, {}))
-        configured.append((request, build_metric(request.metric, parameters)))
+        try:
+            configured.append((request, build_metric(request.metric, parameters)))
+        except Exception as exc:
+            logger.warning("Skipping metric %r: %s", request.metric, exc)
+            configured.append((request, exc))
     return tuple(configured)
 
 
@@ -110,29 +143,75 @@ def calculate_metrics(
     battles: pd.DataFrame,
     metrics: ConfiguredMetrics,
     *,
-    runtime_by_metric: Mapping[str, Mapping[str, object]] | None = None,
+    runtime: Mapping[str, object] | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Run configured metrics over one battle table."""
-    runtime_by_metric = runtime_by_metric or {}
+    """Supply accepted runtime keywords and record failures without losing annotations.
+
+    An integer rng gives each metric a stream derived from its name and seed.
+    A Generator is copied at its current state per metric; breakdowns continue
+    that metric's stream. Other values, such as references, pass through unchanged.
+    """
+    runtime = runtime or {}
     calculated: dict[str, dict[str, object]] = {}
     for request, metric in metrics:
-        runtime = dict(runtime_by_metric.get(request.metric, {}))
-        values = dict(metric.calculate(battles, **runtime))
+        try:
+            if isinstance(metric, Exception):
+                raise metric
+            parameters = signature(metric.calculate).parameters
+            accepts_kwargs = any(
+                p.kind == Parameter.VAR_KEYWORD for p in parameters.values()
+            )
+            kwargs = {
+                key: value
+                for key, value in runtime.items()
+                if accepts_kwargs
+                or (
+                    key in parameters
+                    and parameters[key].kind
+                    in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+                )
+            }
+            if "rng" in kwargs:
+                rng = kwargs["rng"]
+                if isinstance(rng, int):
+                    digest = hashlib.sha256(
+                        f"{rng}\0{request.metric}".encode()
+                    ).digest()
+                    rng = np.random.default_rng(int.from_bytes(digest[:8], "big"))
+                else:
+                    rng = deepcopy(rng)
+                kwargs["rng"] = rng
+            missing = set(getattr(metric, "required_columns", ())) - set(
+                battles.columns
+            )
+            if missing:
+                raise ValueError(f"Missing metric columns: {sorted(missing)}")
+            values = dict(metric.calculate(battles, **kwargs))
+        except Exception as exc:
+            logger.warning("Skipping metric %r: %s", request.metric, exc)
+            calculated[request.metric] = {"error": str(exc)}
+            continue
         if request.breakdown_by:
             groups: dict[str, list[dict[str, object]]] = {}
             for field in request.breakdown_by:
-                if field not in battles:
-                    raise ValueError(
-                        f"Metric {request.metric!r} cannot group by missing column "
-                        f"{field!r}."
+                try:
+                    groups[field] = [
+                        {
+                            "group": _group_value(key),
+                            "values": metric.calculate(group, **kwargs),
+                        }
+                        for key, group in battles.groupby(
+                            field, sort=False, dropna=False
+                        )
+                    ]
+                except Exception as exc:
+                    values.setdefault("breakdown_errors", {})[field] = str(exc)
+                    logger.warning(
+                        "Skipping metric %r breakdown %r: %s",
+                        request.metric,
+                        field,
+                        exc,
                     )
-                groups[field] = [
-                    {
-                        "group": _group_value(key),
-                        "values": metric.calculate(group, **runtime),
-                    }
-                    for key, group in battles.groupby(field, sort=False, dropna=False)
-                ]
             values["groups"] = groups
         calculated[request.metric] = values
     return calculated
@@ -146,17 +225,29 @@ def render_metrics(results: Mapping[str, dict[str, object]]) -> str:
     """Render metric results in their configured dictionary order."""
     sections: list[str] = []
     for name, result in results.items():
-        metric_type = _metric_type(name)
-        overall = {key: value for key, value in result.items() if key != "groups"}
-        sections.append(
-            metric_type.render(overall) if overall else f"{name}: unavailable"
-        )
-        for field, groups in result.get("groups", {}).items():
-            for group in groups:
-                rendered = (
-                    metric_type.render(group["values"])
-                    if group["values"]
-                    else f"{name}: unavailable"
-                )
-                sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
+        if "error" in result:
+            sections.append(f"{name}: failed — {result['error']}")
+            continue
+        try:
+            metric_type = _metric_type(name)
+            overall = {
+                key: value
+                for key, value in result.items()
+                if key not in ("groups", "breakdown_errors")
+            }
+            sections.append(
+                metric_type.render(overall) if overall else f"{name}: unavailable"
+            )
+            for field, error in result.get("breakdown_errors", {}).items():
+                sections.append(f"{field}: failed — {error}")
+            for field, groups in result.get("groups", {}).items():
+                for group in groups:
+                    rendered = (
+                        metric_type.render(group["values"])
+                        if group["values"]
+                        else f"{name}: unavailable"
+                    )
+                    sections.append(f"{field}={group['group']}:\n{_indent(rendered)}")
+        except Exception as exc:
+            logger.warning("Skipping rendering for metric %r: %s", name, exc)
     return "\n\n".join(sections)
