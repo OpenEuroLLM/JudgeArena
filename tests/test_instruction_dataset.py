@@ -467,12 +467,38 @@ def test_arena_adapter_filters_invalid_pairs_without_exposing_system_identity(
         else [],
     ]
     data = normalize_battles(frame, "test-arena")
+    from judgearena.benchmarks.pairwise.judging import comparison_text
 
     assert data.battles["instruction"].tolist() == ["one", "one"]
-    rendered = data.battles
+    rendered = comparison_text(data.battles, strip_thinking=False)
     assert rendered["completion_a"].tolist() == ["a1", "a1"]
     assert rendered["completion_b"].tolist() == ["b1", "a1"]
     assert data.battles["conversation_a"].iloc[0] == history
+
+
+def test_supplied_history_validation_and_system_override():
+    from judgearena.generate import generate_messages
+
+    history = [{"role": "system", "content": "Old"}, {"role": "user", "content": "Q"}]
+    data = pairwise_data.CompletionData(
+        pd.DataFrame({"instruction": ["Q"], "messages": [history]})
+    )
+    result = generate_messages(
+        data.instructions["messages"], "Dummy/answer", system_prompt="New"
+    )
+    assert result.iloc[0]["messages"] == [
+        {"role": "system", "content": "New"},
+        history[-1],
+        {"role": "assistant", "content": "answer"},
+    ]
+    with pytest.raises(ValueError, match="end.*user"):
+        pairwise_data.CompletionData(
+            pd.DataFrame(
+                {"instruction": ["Q"], "messages": [result.iloc[0]["messages"]]}
+            )
+        )
+    with pytest.raises(ValueError, match="expected"):
+        generate_messages(pd.Series([[history[-1], history[-1]]]), "Dummy/answer")
 
 
 def test_comparison_ids_survive_selection_with_shared_instructions(battle_rows):
@@ -499,3 +525,5 @@ def test_fixed_format_adapters_reject_unused_field_mappings(
     )
     with pytest.raises(ValueError, match="dataset.fields.*custom adapter"):
         adapter.load_data()
+
+

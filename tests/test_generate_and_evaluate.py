@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -695,6 +696,64 @@ def test_pairwise_preserves_selected_output_metadata_and_histories(
     assert annotations.iloc[0].checkpoint_b == "baseline checkpoint"
     assert "source checkpoint" not in annotations.to_string()
     assert "assistant: baseline answer" in prompt
+
+
+@pytest.mark.parametrize("system_prompt", [None, "Use concise answers."])
+def test_multiturn_generation_batches_active_turns_and_reuses_history_cache(
+    tmp_path, monkeypatch, system_prompt
+):
+    import judgearena.generate as generation
+    from judgearena.cache.inference import CompletionInferenceCache
+
+    calls, temperatures = [], []
+
+    def make_model(*args, **kwargs):
+        model = prepare_model(*args, **kwargs)
+
+        def batch(inputs, **_):
+            calls.append([value.to_messages() for value in inputs])
+            temperatures.append(kwargs["temperature"])
+            return ["<think>hidden</think>answer"] * len(inputs)
+
+        model.factory = lambda: SimpleNamespace(batch=batch)
+        return model
+
+    monkeypatch.setattr(generation, "prepare_model", make_model)
+    questions = pd.DataFrame(
+        {
+            "user_turns": [["q1", "q2", "q3"], ["short"]],
+            "category": ["coding", "other"],
+        },
+        index=[7, 9],
+    )
+    kwargs = dict(
+        questions=questions,
+        model="Dummy/answer",
+        use_tqdm=False,
+        truncate_input_chars=None,
+        strip_thinking_before_history=True,
+        inference_cache=CompletionInferenceCache(tmp_path, "conversations"),
+        system_prompt=system_prompt,
+        temperature_config={"coding": 0.0},
+        fallback_temperature=0.4,
+    )
+    answers = generation.generate_multiturn(**kwargs)
+    assert [len(batch) for batch in calls] == [1, 1, 1, 1]
+    assert temperatures == [0.0, 0.4, 0.0, 0.0]
+    assert [message.content for message in calls[3][0]] == (
+        [system_prompt] if system_prompt is not None else []
+    ) + [
+        "q1",
+        "answer",
+        "q2",
+        "answer",
+        "q3",
+    ]
+    assert answers.instruction_index.tolist() == [7, 9]
+    assert answers.messages.map(len).tolist() == [6, 2]
+    assert answers.iloc[0].messages[1]["content"] == "<think>hidden</think>answer"
+    pd.testing.assert_frame_equal(generation.generate_multiturn(**kwargs), answers)
+    assert len(calls) == 4
 
 
 def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():

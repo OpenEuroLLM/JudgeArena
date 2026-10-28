@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,7 +142,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "ro",
         "uk",
     )
-    assert mt_bench.spec.protocol.runner == "mt_bench"
+    assert mt_bench.spec.protocol.runner == "pairwise"
     assert mt_bench.spec.protocol.generation.mode == "multi_turn_chat"
     assert mt_bench.spec.protocol.baseline.reference_id == "gpt-3.5-turbo"
     assert mt_bench.spec.protocol.generation.default_max_out_tokens == 1024
@@ -148,7 +150,9 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench.spec.protocol.judge.default_prompt_preset == "fastchat-pairwise"
     assert mt_bench.spec.protocol.judge.default_swap_mode == "both"
     assert mt_bench.spec.protocol.judge.default_max_out_tokens == 2048
-    assert mt_bench.spec.protocol.judge.reference_categories == (
+    assert tuple(
+        mt_bench.spec.protocol.judge.prompt_options["reference_categories"]
+    ) == (
         "math",
         "reasoning",
         "coding",
@@ -395,6 +399,35 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "first_import",
+    [
+        "judgearena.datasets.registry",
+        "judgearena.datasets.mt_bench",
+        "judgearena.tasks.registry",
+    ],
+)
+def test_dataset_registration_preserves_builtins_on_fresh_import(first_import):
+    code = (
+        f"import {first_import}\n"
+        + """
+from judgearena.datasets.registry import register_dataset, dataset_names
+from judgearena.datasets.judgearena_tables import TableAdapter
+import pytest
+
+register_dataset("custom_tables")(TableAdapter)
+for name in ("mt_bench", "custom_tables"):
+    with pytest.raises(ValueError, match="already registered"):
+        register_dataset(name)(TableAdapter)
+assert {"custom_tables", "mt_bench", "arena_hard"} <= dataset_names()
+"""
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_registry_rejects_unknown_metric_id(tmp_path):
     definition = _task_definition()
     definition["protocol"]["scoring"]["metrics"] = [{"metric": "missing_metric"}]
@@ -578,14 +611,20 @@ def test_scoring_metrics_reject_duplicate_names():
         TaskSpec.model_validate(definition)
 
 
-def test_mt_bench_preserves_registered_metric_parameters(tmp_path):
+def test_mt_bench_accepts_custom_metric_parameters_and_breakdowns(tmp_path):
     definition = _task_definition("mt-test")
     protocol = definition["protocol"]
-    protocol["runner"] = "mt_bench"
+    protocol["runner"] = "pairwise"
     protocol["generation"] = {"mode": "multi_turn_chat"}
-    protocol["judge"].update(fastchat_prompt_preset="default", fastchat_temperature=0.0)
+    protocol["judge"]["default_prompt_preset"] = "fastchat-pairwise"
     protocol["scoring"] = {
-        "metrics": [{"metric": "bradley_terry", "parameters": {"n_bootstraps": 2}}]
+        "metrics": [
+            {
+                "metric": "bradley_terry",
+                "parameters": {"n_bootstraps": 2},
+                "breakdown_by": ["model", "custom_metadata"],
+            }
+        ]
     }
     _write_family(
         tmp_path,

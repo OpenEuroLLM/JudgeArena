@@ -82,7 +82,7 @@ class PairwiseProtocol(StrictFrozenModel):
     runner: Literal["pairwise"]
     limit_by: str | None = Field(default=None, min_length=1)
     """Count complete groups in this column when applying n_instructions."""
-    generation: SingleTurnGeneration
+    generation: SingleTurnGeneration | MultiTurnGeneration
     baseline: BaselineSpec
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec
