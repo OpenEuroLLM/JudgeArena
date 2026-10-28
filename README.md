@@ -273,7 +273,24 @@ This override applies to all vLLM models in the run. For remote providers (OpenA
 
 ## 📊 Supported Tasks
 
-Generate+judge tasks produce pairwise preferences between two models. Elo tasks estimate a single model's rating against human-annotated arena opponents. Meta-evaluation tasks score a judge against human arena votes.
+Generate+judge tasks produce pairwise preferences or independent annotations for each answer. Elo tasks estimate a single model's rating against human-annotated arena opponents. Meta-evaluation tasks score a judge against human arena votes.
+
+### Custom datasets and annotations
+
+Register a dataset adapter with `@register_dataset("my_dataset")` and return
+`CompletionData` or `PreferenceData`. See the [task and adapter guide](judgearena/tasks/README.md)
+for an example, required columns and judging options.
+
+Pairwise annotations include candidate identities, `pref`, `orientation`,
+`swapped`, judge input/output and parsed values. `pref` uses the original pair
+order: `0` favors A, `1` favors B, and `0.5` is a tie. Parsed scores use the
+judge's input order; `swapped` records whether the candidates were reversed.
+Independent-score annotations contain `model`, `completion` and `score`;
+derived preferences appear in the scoring rows. Nested or mixed-value columns
+are JSON-encoded in CSV and Parquet exports.
+
+Elo writes raw preferences to `annotations.parquet` and scoring preferences to
+`battles.parquet`, including any PairScore temperature adjustment.
 
 ### Generate + judge (pairwise)
 
@@ -292,6 +309,7 @@ Generate+judge tasks produce pairwise preferences between two models. Elo tasks 
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                                                                                                    |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                                                                                                  |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
+| `mt-bench-101`               | Multi-turn evaluation with supplied reference histories, independent answer scores, and dialogue-level aggregation |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
 For MT-Bench, the default pairwise baseline is `gpt-3.5-turbo`, matching
@@ -311,14 +329,6 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
 
-### ELO rating
-
-| Task                | Description                                                        |
-|---------------------|--------------------------------------------------------------------|
-| `elo-lmarena-100k`  | Battles sampled from `lmarena-ai/arena-human-preference-100k`      |
-| `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
-| `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
-| `elo-comparia`      | Battles sampled from the ComparIA arena                            |
 
 ## Meta-evaluating a judge
 

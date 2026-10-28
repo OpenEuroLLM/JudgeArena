@@ -428,3 +428,150 @@ def test_lazy_outputs_validate_prompt_before_generation(
         run_benchmark(cfg, data=data)
     assert loaded == (["Dummy/a"] if independent else ["Dummy/a", "Dummy/b"])
     assert data.model_output_loader is not None
+
+
+@pytest.mark.parametrize("mode", ["user", "system", "criteria", "custom"])
+def test_saved_run_replays_prompt_snapshot_after_original_changes(
+    tmp_path, mode, monkeypatch
+):
+    from dataclasses import replace
+
+    from judgearena.config import build_run_config, load_config
+    from judgearena.prompts.criteria import configure_criteria_prompt
+    from judgearena.prompts.registry import PRESETS
+
+    def configure(prompt, *, rubric):
+        return configure_criteria_prompt(prompt, criteria_file=rubric)
+
+    monkeypatch.setitem(
+        PRESETS,
+        "custom-rubric",
+        replace(
+            PRESETS["criteria-score"],
+            name="custom-rubric",
+            configure=configure,
+            option_files=("rubric",),
+        ),
+    )
+    criteria_preset = "custom-rubric" if mode == "custom" else "criteria-score"
+    option_key = "rubric" if mode == "custom" else "criteria_file"
+    user = tmp_path / "rubric.txt"
+    system = tmp_path / "system.txt"
+    user.write_text('Rate {completion}. Return {{"score": number}}')
+    system.write_text("Judge grammar only.")
+    criteria = tmp_path / "rubric.yaml"
+    criteria.write_text(
+        "criteria: [{name: grammar, description: Grammatical correctness}]\n"
+    )
+    cfg = RunConfig(
+        evaluation_name="snapshot",
+        protocol={
+            "runner": "single_answer",
+            "generation": {"mode": "single_turn_chat"},
+            "judge": {
+                "default_prompt_preset": "criteria-score"
+                if mode in ("criteria", "custom")
+                else "single-score"
+            },
+        },
+        model={"name": "Dummy/answer"},
+        judge={
+            "model": 'Dummy/{"score":8,"criteria":{"grammar":8}}',
+            **(
+                {
+                    "prompt": {
+                        "preset": criteria_preset,
+                        "options": {option_key: criteria},
+                    }
+                }
+                if mode in ("criteria", "custom")
+                else {
+                    "prompt": {
+                        "user_file": user,
+                        "system_file": system if mode == "system" else None,
+                        "parser": "json-score",
+                    }
+                }
+            ),
+        },
+        run={
+            "result_folder": str(tmp_path / "results"),
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+            "use_tqdm": False,
+        },
+    )
+    data = CompletionData(pd.DataFrame({"instruction": ["Q"]}))
+    first = run_benchmark(cfg, data=data)
+    saved = next((tmp_path / "results").rglob("config.yaml"))
+    user.unlink()
+    system.unlink()
+    criteria.unlink()
+    moved = tmp_path / "moved-run"
+    saved.parent.rename(moved)
+    saved = moved / "config.yaml"
+    restored = (
+        build_run_config(["--config_path", str(saved)])
+        if mode != "user"
+        else load_config(saved)
+    )
+    replay = run_benchmark(restored, data=data)
+    assert replay.judge_input.tolist() == first.judge_input.tolist()
+    assert replay.prompt_preset.tolist() == first.prompt_preset.tolist()
+    metadata = [
+        json.loads(p.read_text()) for p in tmp_path.rglob("run-metadata.v1.json")
+    ]
+    assert sorted(m["usage"]["total"]["requests"] for m in metadata) == [0, 2]
+    assert (
+        cfg.judge.prompt.options[option_key] == criteria
+        if mode in ("criteria", "custom")
+        else cfg.judge.prompt.user_file == user
+    )
+
+
+def test_public_api_runs_custom_file_parser(tmp_path, monkeypatch):
+    import judgearena.prompts.parsing as parsing
+    from judgearena import (
+        CompletionData,
+        ParsedScore,
+        RunConfig,
+        register_parser,
+        run_benchmark,
+    )
+
+    class GrammarParser:
+        name = "grammar"
+        result_type = ParsedScore
+        requires_top_logprobs = False
+
+        def parse_result(self, text, *, top_logprobs=None):
+            return ParsedScore(float(text))
+
+    monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
+    parser = register_parser("grammar", GrammarParser())
+    for name, value in [("", parser), ("grammar", parser), ("broken", object())]:
+        with pytest.raises(ValueError):
+            register_parser(name, value)
+    rubric = tmp_path / "grammar.txt"
+    rubric.write_text("Rate grammar from 1 to 10: {completion}. Return a number.")
+    cfg = RunConfig(
+        evaluation_name="grammar",
+        protocol={
+            "runner": "single_answer",
+            "generation": {"mode": "single_turn_chat"},
+            "judge": {"default_prompt_preset": "single-score"},
+        },
+        model={"name": "saved"},
+        judge={
+            "model": "Dummy/8",
+            "prompt": {"user_file": rubric, "parser": "grammar"},
+        },
+        run={"result_folder": str(tmp_path), "store_root": None, "no_log_file": True},
+    )
+    data = CompletionData(
+        pd.DataFrame({"instruction": ["Say hello"]}),
+        pd.DataFrame(
+            {"instruction_index": [0], "model": ["saved"], "completion": ["Hello."]}
+        ),
+    )
+    assert run_benchmark(cfg, data=data).score.tolist() == [8]
