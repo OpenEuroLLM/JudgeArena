@@ -1,5 +1,5 @@
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -15,7 +15,41 @@ from judgearena.config import (
     load_config,
 )
 from judgearena.prompts.registry import resolve_run_judge_prompt
+from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import EloScoringSpec, MetricSpec
+
+
+@pytest.mark.parametrize("override", [None, 0.8])
+def test_supplied_task_owns_defaults_and_prompt(override, monkeypatch):
+    task = get_packaged_task("alpaca-eval")
+    spec = task.spec.model_dump()
+    spec["task"] = "custom-task"
+    spec["protocol"]["judge"].update(
+        default_temperature=0.2, default_prompt_preset="default"
+    )
+    task = replace(task, spec=type(task.spec).model_validate(spec))
+    monkeypatch.setattr(
+        config_module,
+        "get_packaged_task",
+        lambda _: pytest.fail("task was looked up again"),
+    )
+    judge = {"model": "Dummy/j"}
+    if override is not None:
+        judge["temperature"] = override
+    cfg = RunConfig(
+        task="custom-task", resolved_task=task, model={"name": "Dummy/a"}, judge=judge
+    )
+    assert cfg.judge.temperature == (0.2 if override is None else override)
+    assert (
+        resolve_run_judge_prompt(cfg.resolved_task, cfg.judge).preset_name == "default"
+    )
+    assert cfg.model_dump()["resolved_task"]["spec"]["task"] == "custom-task"
+
+    spec["protocol"]["judge"]["default_temperature"] = 0.4
+    updated = replace(task, spec=type(task.spec).model_validate(spec))
+    rebound = cfg.for_task(updated)
+    assert rebound.judge.temperature == (0.4 if override is None else override)
+    assert cfg.judge.temperature == (0.2 if override is None else override)
 
 
 def _base_generate() -> dict:
@@ -127,46 +161,39 @@ def test_prompt_selection_rejects_conflicting_sources(prompt):
 
 
 def _registered_task(
+    task_id: str,
     *,
     default_swap_mode: str = "both",
     default_temperature: float | None = 0.25,
     default_max_out_tokens: int | None = 4096,
     default_top_logprobs: int | None = 5,
 ):
-    return SimpleNamespace(
-        spec=SimpleNamespace(
-            protocol=SimpleNamespace(
-                generation=SimpleNamespace(
-                    default_max_out_tokens=1024,
-                    default_seed=7,
-                ),
-                judge=SimpleNamespace(
-                    default_swap_mode=default_swap_mode,
-                    default_temperature=default_temperature,
-                    default_max_out_tokens=default_max_out_tokens,
-                    default_top_logprobs=default_top_logprobs,
-                ),
-            )
-        )
+    task = get_packaged_task("mt-bench")
+    spec = task.spec.model_dump()
+    spec["task"] = task_id
+    spec["protocol"].update(
+        baseline={"strategy": "runtime_required"},
+        generation={
+            "mode": "multi_turn_chat",
+            "default_max_out_tokens": 1024,
+            "default_seed": 7,
+        },
+        judge={
+            **spec["protocol"]["judge"],
+            "default_prompt_preset": "default",
+            "default_swap_mode": default_swap_mode,
+            "default_temperature": default_temperature,
+            "default_max_out_tokens": default_max_out_tokens,
+            "default_top_logprobs": default_top_logprobs,
+        },
     )
-
-
-def test_registered_task_applies_judge_defaults(monkeypatch):
-    monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
-    )
-    data = _base_generate()
-    data["task"] = "yaml-task"
-
-    cfg = RunConfig(**data)
-
-    assert cfg.judge.swap_mode == "both"
-    assert cfg.judge.temperature == 0.25
+    return replace(task, spec=type(task.spec).model_validate(spec))
 
 
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
+        ({}, ("both", 0.25, 4096, 5)),
         (
             {
                 "swap_mode": "random",
@@ -178,11 +205,11 @@ def test_registered_task_applies_judge_defaults(monkeypatch):
         ),
     ],
 )
-def test_registered_task_defaults_do_not_replace_explicit_judge_config(
+def test_registered_task_judge_defaults_preserve_explicit_overrides(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     data = _base_generate()
     data["task"] = "yaml-task"
@@ -225,7 +252,7 @@ def test_generation_settings_prefer_dedicated_then_engine_then_task(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     data = _base_generate()
     data["model"].update(overrides)
@@ -260,7 +287,7 @@ def test_judge_settings_include_inherited_engine_kwargs(
     monkeypatch, overrides, expected
 ):
     monkeypatch.setattr(
-        config_module, "get_packaged_task", lambda _task: _registered_task()
+        config_module, "get_packaged_task", lambda _task: _registered_task(_task)
     )
     monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
     data = _base_generate()
@@ -271,7 +298,7 @@ def test_judge_settings_include_inherited_engine_kwargs(
     }
     data["judge"].update(model="VLLM/j", **overrides)
 
-    kwargs = execution_module.build_judge(RunConfig(**data))
+    kwargs = execution_module.build_judge(RunConfig(**data), default_temperature=0.3)
 
     assert (
         kwargs["temperature"],
@@ -284,9 +311,11 @@ def test_judge_settings_include_inherited_engine_kwargs(
 @pytest.mark.parametrize(
     ("task", "judge_model", "expected"),
     [
-        ("alpaca-eval", "OpenRouter/j", 1),
-        ("alpaca-eval", "VLLM/j", 128),
-        ("mt-bench", "OpenRouter/j", 128),
+        ("alpaca-eval", "OpenRouter/j", (1, None, None, None)),
+        ("alpaca-eval", "VLLM/j", (128, 2, None, None)),
+        ("mt-bench", "OpenRouter/j", (128, 2, None, None)),
+        ("alpaca-eval", "VLLM/Qwen3-fp8", (128, 2, 512, "fp8")),
+        ("mt-bench", "VLLM/Qwen3-fp8", (128, 2, None, None)),
     ],
 )
 def test_judge_engine_inheritance_matches_the_runner(
@@ -294,17 +323,20 @@ def test_judge_engine_inheritance_matches_the_runner(
 ):
     data = _base_generate()
     data["task"] = task
-    data["model"]["engine_kwargs"] = {"max_tokens": 128}
+    data["model"]["engine_kwargs"] = {"max_tokens": 128, "tensor_parallel_size": 2}
     data["judge"]["model"] = judge_model
     monkeypatch.setattr(execution_module, "prepare_model", lambda **kwargs: kwargs)
 
     cfg = RunConfig(**data)
-    if task == "mt-bench":
-        kwargs = cfg.judge.model_kwargs(base_engine_kwargs=cfg.model.engine_kwargs)
-    else:
-        kwargs = execution_module.build_judge(cfg)
+    kwargs = execution_module.build_judge(cfg)
 
-    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected
+    assert cfg.judge.max_out_tokens == kwargs["max_tokens"] == expected[0]
+    assert (
+        kwargs["max_tokens"],
+        kwargs.get("tensor_parallel_size"),
+        kwargs.get("thinking_token_budget"),
+        kwargs.get("kv_cache_dtype"),
+    ) == expected
 
 
 @pytest.mark.parametrize("role", ["model", "judge"])
@@ -449,7 +481,7 @@ def test_load_config_from_yaml(tmp_path):
     assert cfg.model.name == "Dummy/a"
     assert cfg.model.max_out_tokens == 4096
     assert (
-        resolve_run_judge_prompt(cfg.task, cfg.judge).preset_name
+        resolve_run_judge_prompt(cfg.resolved_task, cfg.judge).preset_name
         == "default_with_explanation"
     )
     assert cfg.generation.n_instructions == 10
@@ -640,3 +672,78 @@ def test_meta_eval_block_is_rejected_for_non_meta_task():
 
     with pytest.raises(ValidationError, match="only valid for meta-evaluation"):
         RunConfig(**data)
+
+
+@pytest.mark.parametrize("name", ["custom-evaluation", "alpaca-eval"])
+def test_saved_configuration_keeps_supplied_task_definition(
+    tmp_path, monkeypatch, name, caplog
+):
+    task = get_packaged_task("alpaca-eval")
+    spec = task.spec.model_dump()
+    spec.update(
+        task=name, dataset={"adapter": "custom", "options": {"path": "answers.jsonl"}}
+    )
+    task = replace(task, spec=type(task.spec).model_validate(spec))
+    cfg = RunConfig(
+        task=name,
+        resolved_task=task,
+        model={"name": "Dummy/a"},
+        judge={"model": "Dummy/j"},
+    )
+    path = tmp_path / "config.yaml"
+    dump_config(cfg, path)
+    monkeypatch.setattr(
+        config_module,
+        "get_packaged_task",
+        lambda _: pytest.fail("Must reload saved task"),
+    )
+    assert cfg.resolved_task.provenance.source_sha256 == task.provenance.source_sha256
+    assert (
+        cfg.resolved_task.provenance.resolved_sha256 != task.provenance.resolved_sha256
+    )
+    caplog.clear()
+    assert load_config(path).resolved_task == cfg.resolved_task
+    assert "hash" not in caplog.text
+    import yaml
+
+    saved = yaml.safe_load(path.read_text())
+    saved["resolved_task"]["spec"]["description"] = "Edited saved task."
+    path.write_text(yaml.safe_dump(saved))
+    reloaded = load_config(path)
+    assert (
+        reloaded.resolved_task.provenance.resolved_sha256
+        != cfg.resolved_task.provenance.resolved_sha256
+    )
+    assert (
+        reloaded.resolved_task.provenance.source_sha256 == task.provenance.source_sha256
+    )
+    assert "hash" in caplog.text
+
+
+def test_cli_prompt_path_override_uses_cwd_not_config_directory(tmp_path, monkeypatch):
+    import yaml
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "rubric.txt").write_text("Saved {completion}")
+    (tmp_path / "override.txt").write_text("Override {completion}")
+    config = _base_generate()
+    config["judge"]["prompt"] = {"user_file": "rubric.txt", "parser": "score"}
+    path = config_dir / "run.yaml"
+    path.write_text(yaml.safe_dump(config))
+    monkeypatch.chdir(tmp_path)
+    assert load_config(path).judge.prompt.user_file == config_dir / "rubric.txt"
+    direct = RunConfig(
+        **(
+            config
+            | {"judge": {"model": "Dummy/j", "prompt": {"user_file": "override.txt"}}}
+        )
+    )
+    override = build_run_config(
+        ["--config_path", str(path), "--judge.prompt.user_file", "override.txt"]
+    )
+    assert (
+        override.judge.prompt.user_file
+        == direct.judge.prompt.user_file
+        == Path("override.txt")
+    )

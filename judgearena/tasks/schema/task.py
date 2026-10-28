@@ -8,7 +8,6 @@ from pydantic import Field, model_validator
 
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import (
-    CategoryDefaultsBaseline,
     OfficialOutputsBaseline,
 )
 from judgearena.tasks.schema.dataset import DatasetSpec
@@ -20,10 +19,10 @@ from judgearena.tasks.schema.pairwise import PairwiseProtocol
 
 ProtocolSpec = Annotated[
     PairwiseProtocol
-    | MTBenchProtocol
-    | MTBench101Protocol
     | EloProtocol
-    | MetaEvalProtocol,
+    | MetaEvalProtocol
+    | MTBenchProtocol
+    | MTBench101Protocol,
     Field(discriminator="runner"),
 ]
 
@@ -91,11 +90,5 @@ class TaskSpec(StrictFrozenModel):
             raise ValueError(
                 f"official baseline source {baseline.source!r} is not declared "
                 "in dataset.sources"
-            )
-        if isinstance(baseline, CategoryDefaultsBaseline) and (
-            self.dataset.fields.category != baseline.category_field
-        ):
-            raise ValueError(
-                "category-default baseline must use dataset.fields.category"
             )
         return self

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
@@ -12,22 +13,27 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     CliSettingsSource,
+    CliSuppress,
+    InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    YamlConfigSettingsSource,
 )
 
-from judgearena.benchmarks.pairwise.baselines import native_pairwise_baseline
+from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.prompts.registry import prompt_option_files
-from judgearena.tasks.registry import get_packaged_task
+from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
 from judgearena.tasks.schema import (
+    CategoryDefaultsBaseline,
     EloProtocol,
     EloScoringSpec,
     MetaEvalProtocol,
-    MTBenchProtocol,
+    ResolvedTaskSpec,
+    TaskDefaultBaseline,
 )
+
+logger = get_logger(__name__)
 
 # Set by build_run_config() for the duration of RunConfig() construction.
 _ACTIVE_CONFIG_PATH: str | None = None
@@ -455,8 +461,12 @@ class RunConfig(BaseSettings):
     )
 
     task: str
-    """Packaged benchmark task ID. Use ``judgearena tasks list`` to inspect
-    available definitions."""
+    """Packaged benchmark task ID or the name of a supplied resolved task."""
+
+    resolved_task: CliSuppress[ResolvedTaskSpec | None] = Field(
+        default=None, repr=False
+    )
+    """Effective task and source provenance, retained when saving a configuration."""
 
     model: ModelArgs = Field(default_factory=ModelArgs)
     """Model(s) under evaluation and their generation settings."""
@@ -495,13 +505,38 @@ class RunConfig(BaseSettings):
                 ):
                     raise ValueError(f"judge prompt file not found: {path}")
 
-        resolved_task = get_packaged_task(self.task)
-        if resolved_task is None:
-            raise ValueError(
-                f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
-                "inspect packaged tasks."
+        resolved_task = self.resolved_task
+        if resolved_task is not None and (
+            resolved_task.provenance.resolved_sha256
+            != _canonical_sha256(resolved_task.spec.model_dump(mode="json"))
+        ):
+            logger.warning(
+                "Resolved task %r has a stale definition hash; recomputing it from "
+                "the supplied definition. Source provenance is unchanged.",
+                resolved_task.task,
             )
-
+        if resolved_task is None and self.task is not None:
+            resolved_task = get_packaged_task(self.task)
+            if resolved_task is None:
+                raise ValueError(
+                    f"Unknown task {self.task!r}; use 'judgearena tasks list' to "
+                    "inspect packaged tasks."
+                )
+        if resolved_task is None:
+            raise ValueError("Provide a task or a resolved task definition.")
+        resolved_task = replace(
+            resolved_task,
+            provenance=replace(
+                resolved_task.provenance,
+                resolved_sha256=_canonical_sha256(
+                    resolved_task.spec.model_dump(mode="json")
+                ),
+            ),
+        )
+        if self.task is not None and resolved_task.task != self.task:
+            raise ValueError("Resolved task must match run.task.")
+        self.task = resolved_task.task
+        self.resolved_task = resolved_task
         protocol = resolved_task.spec.protocol
         task_generation = getattr(protocol, "generation", None)
         if (
@@ -509,6 +544,8 @@ class RunConfig(BaseSettings):
             and not getattr(task_generation, "default_truncate_input", True)
         ):
             self.generation.truncate_all_input_chars = None
+            self.generation.model_fields_set.discard("truncate_all_input_chars")
+        model_fields = self.model.model_fields_set.copy()
         model_values = self.model.model_dump(exclude_unset=True)
         for field, engine_key in (
             ("temperature", "temperature"),
@@ -534,22 +571,16 @@ class RunConfig(BaseSettings):
                     engine_key
                 ]
         self.model = ModelArgs.model_validate(model_values)
+        self.model.model_fields_set.intersection_update(model_fields)
 
         task_judge = protocol.judge
         judge_values = self.judge.model_dump(exclude_unset=True)
+        judge_fields = self.judge.model_fields_set.copy()
         if "swap_mode" not in judge_values:
-            judge_values["swap_mode"] = task_judge.default_swap_mode
-        if isinstance(protocol, MTBenchProtocol):
-            judge_engine_kwargs = {
-                **self.model.engine_kwargs,
-                **self.judge.engine_kwargs,
-            }
-        else:
-            judge_engine_kwargs = build_default_judge_model_kwargs(
-                self.judge.model,
-                self.model.engine_kwargs,
-                judge_engine_kwargs_override=self.judge.engine_kwargs,
+            judge_values["swap_mode"] = getattr(
+                task_judge, "default_swap_mode", "fixed"
             )
+        judge_engine_kwargs = self.judge_engine_kwargs()
         for field, engine_key in (
             ("temperature", "temperature"),
             ("max_out_tokens", "max_tokens"),
@@ -560,6 +591,7 @@ class RunConfig(BaseSettings):
                 continue
             judge_values[field] = judge_engine_kwargs.get(engine_key, default)
         self.judge = JudgeArgs.model_validate(judge_values)
+        self.judge.model_fields_set.intersection_update(judge_fields)
 
         is_elo = isinstance(protocol, EloProtocol)
         is_meta_eval = isinstance(protocol, MetaEvalProtocol)
@@ -592,12 +624,45 @@ class RunConfig(BaseSettings):
         else:
             if self.model.name is None:
                 raise ValueError("model.name is required.")
-            if (
-                self.model.baseline is None
-                and native_pairwise_baseline(self.task) is None
+            if self.model.baseline is None and not isinstance(
+                protocol.baseline, (TaskDefaultBaseline, CategoryDefaultsBaseline)
             ):
                 raise ValueError(f"model.baseline is required for task {self.task!r}.")
         return self
+
+    def judge_engine_kwargs(self) -> dict[str, object]:
+        """Resolve engine inheritance and defaults for this task's judge."""
+        assert self.resolved_task is not None
+        if not getattr(
+            self.resolved_task.spec.protocol.judge, "use_default_engine_kwargs", True
+        ):
+            return {**self.model.engine_kwargs, **self.judge.engine_kwargs}
+        return build_default_judge_model_kwargs(
+            self.judge.model,
+            self.model.engine_kwargs,
+            judge_engine_kwargs_override=self.judge.engine_kwargs,
+        )
+
+    def judge_model_kwargs(self) -> dict[str, object]:
+        """Effective judge settings for prompt validation and model construction."""
+        return self.judge.model_kwargs(
+            base_engine_kwargs=self.judge_engine_kwargs(),
+            fallback_chat_template=self.model.chat_template,
+        )
+
+    def for_task(self, task: ResolvedTaskSpec | None) -> RunConfig:
+        """Apply task defaults, retaining explicit settings (all saved settings on reload)."""
+        if task is None or task == self.resolved_task:
+            return self
+        values = self.model_dump(exclude={"resolved_task"})
+        for name in values:
+            value = getattr(self, name)
+            if isinstance(value, BaseModel):
+                values[name] = value.model_dump(exclude_unset=True)
+        values["model"]["engine_kwargs"] = self.model.engine_kwargs.copy()
+        values["judge"]["engine_kwargs"] = self.judge.engine_kwargs.copy()
+        values["task"] = task.task
+        return type(self)(**values, resolved_task=task)
 
     @classmethod
     def settings_customise_sources(
@@ -617,7 +682,7 @@ class RunConfig(BaseSettings):
             )
         if _ACTIVE_CONFIG_PATH is not None:
             sources.append(
-                YamlConfigSettingsSource(settings_cls, yaml_file=_ACTIVE_CONFIG_PATH)
+                InitSettingsSource(settings_cls, _read_config(_ACTIVE_CONFIG_PATH))
             )
         return tuple(sources) or (init_settings,)
 
@@ -646,13 +711,32 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def load_config(path: str | Path) -> RunConfig:
-    """Load and validate a RunConfig from a YAML file."""
+def _read_config(path: str | Path) -> dict:
+    """Read YAML, resolving judge asset paths relative to the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    return RunConfig(**data)
+    judge = data.get("judge")
+    if isinstance(judge, dict):
+        prompt = judge.get("prompt")
+        if isinstance(prompt, dict):
+            for owner, names in (
+                (prompt, ("system_file", "user_file")),
+                (prompt.get("options"), prompt_option_files(prompt.get("preset"))),
+            ):
+                if not isinstance(owner, dict):
+                    continue
+                for name in names:
+                    value = owner.get(name)
+                    if isinstance(value, str) and not Path(value).is_absolute():
+                        owner[name] = str(Path(path).resolve().parent / value)
+    return data
+
+
+def load_config(path: str | Path) -> RunConfig:
+    """Load YAML; relative judge prompt and rubric paths start beside the YAML file."""
+    return RunConfig(**_read_config(path))
 
 
 def dump_config(cfg: RunConfig, path: str | Path) -> None:
