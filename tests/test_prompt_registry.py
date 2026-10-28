@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pandas as pd
 import pytest
 
 from judgearena.config import JudgeArgs
@@ -237,6 +238,35 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
         ).preference == pytest.approx(0.006692850924284856)
         assert resolved.parser.parse_result("no scores") is None
         assert resolved.user_sha256 != resolve_judge_prompt(preset=name).user_sha256
+        from judgearena.config import RunConfig
+        from judgearena.prompts.registry import group_judge_prompts
+        from judgearena.tasks.registry import get_packaged_task
+
+        task = get_packaged_task("alpaca-eval")
+        spec = task.spec.model_dump()
+        spec["protocol"]["judge"].update(
+            default_prompt_preset=name, category_prompts={"creative": name}
+        )
+        task = replace(task, spec=type(task.spec).model_validate(spec))
+        cfg = RunConfig(
+            task=task.task,
+            model={"name": "Dummy/a"},
+            judge={
+                "model": "Dummy/j",
+                "prompt": {"preset": name, "options": {"maximum": 5}},
+            },
+        )
+        cfg.resolved_task = task
+        groups = group_judge_prompts(
+            cfg,
+            pd.DataFrame({"category": ["regular", "creative"]}),
+            resolve_run_judge_prompt(task, cfg.judge),
+        )
+        assert all(
+            prompt.parser.parse_result("Score_A: 8\nScore_B: 7").preference
+            == pytest.approx(0.006692850924284856)
+            for prompt, _ in groups
+        )
         with pytest.raises(TypeError, match="unexpected keyword"):
             resolve_judge_prompt(preset=name, options={"maximumm": 5})
         with pytest.raises(ValueError, match="already registered"):

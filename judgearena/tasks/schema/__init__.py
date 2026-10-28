@@ -6,6 +6,7 @@ keeps existing imports stable.
 """
 
 from judgearena.tasks.schema.baselines import (
+    AllReferencesBaseline,
     BaselineSpec,
     CategoryDefaultsBaseline,
     NoBaseline,
@@ -46,6 +47,7 @@ from judgearena.tasks.schema.task import (
 __all__ = [
     "MTBenchProtocol",
     "MTBench101Protocol",
+    "AllReferencesBaseline",
     "BaselineSpec",
     "CategoryDefaultsBaseline",
     "DatasetFields",

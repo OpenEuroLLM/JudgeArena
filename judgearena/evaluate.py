@@ -1,47 +1,39 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, replace
 
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompt_values import PromptValue
 
-from judgearena.judging import JudgeRequest, execute_judging
+from judgearena.cache.inference import JudgementCacheRowMetadata
+from judgearena.judging import (
+    JudgeRequest,
+    execute_judging,
+)
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
+    build_chat_prompt_template,
     resolve_judge_prompt,
 )
 from judgearena.prompts.registry import (
-    resolve_run_judge_prompt as _resolve_run_judge_prompt,
+    resolve_run_judge_prompt as resolve_run_judge_prompt,
 )
 from judgearena.utils import strip_thinking_tags, truncate
-
-if TYPE_CHECKING:
-    from judgearena.inference import JudgementCacheRowMetadata
 
 logger = get_logger(__name__)
 
 # Re-exported for existing callers; implementations live with the presets.
 from judgearena.prompts.parsing import (  # noqa: E402
     JudgeParser,
+    OutputParser,
     PairScore,  # noqa: F401
     ParsedPreference,
     resolve_judge_parser,
 )
-
-
-def load_judge_system_and_user_prompt(
-    multi_turn: bool = False,
-) -> tuple[str, str]:
-    resolved = resolve_judge_prompt(
-        preset=DEFAULT_JUDGE_PROMPT_PRESET,
-        multi_turn=multi_turn,
-    )
-    return resolved.system_prompt or "", resolved.user_prompt_template
 
 
 def resolve_judge_prompts(
@@ -84,15 +76,6 @@ def resolve_judge_prompts(
     return resolved
 
 
-def resolve_run_judge_prompt(
-    task: str | None,
-    cli_args,
-    *,
-    multi_turn: bool = False,
-) -> ResolvedJudgePrompt:
-    return _resolve_run_judge_prompt(task, cli_args, multi_turn=multi_turn)
-
-
 @dataclass
 class JudgeAnnotation:
     instruction: str  # instruction from the user
@@ -104,6 +87,85 @@ class JudgeAnnotation:
     # first-token top logprobs, only collected for logprob-weighted presets
     judge_top_logprobs: dict[str, float] | None = None
     parsed: ParsedPreference | None = None
+
+
+def _prompt_fields(**fields):
+    return {
+        **fields,
+        **{
+            f"{key}_json": json.dumps(value, ensure_ascii=False)
+            for key, value in fields.items()
+        },
+    }
+
+
+def validate_prompt_fields(prompt: ResolvedJudgePrompt, columns, supplied) -> None:
+    """Require template fields on the prepared rows used for judging."""
+    required = set(build_chat_prompt_template(prompt).input_variables)
+    if columns is None:
+        return  # Lazy output metadata is checked once its rows are loaded.
+    missing = (
+        required - set(columns) - _prompt_fields(**dict.fromkeys(supplied, "")).keys()
+    )
+    if missing:
+        raise ValueError(f"Judge prompt requires dataset columns: {sorted(missing)}.")
+
+
+def validate_battle_prompt_fields(prompt: ResolvedJudgePrompt, columns) -> None:
+    validate_prompt_fields(
+        prompt,
+        columns,
+        (
+            "user_prompt",
+            "completion_A",
+            "completion_B",
+            "completion_A_text",
+            "completion_B_text",
+        ),
+    )
+
+
+def render_battle_inputs(
+    instructions: list[str],
+    completions_A: list[str],
+    completions_B: list[str],
+    prompt: ResolvedJudgePrompt,
+    truncate_input_chars: int | None,
+    *,
+    metadata: list[dict[str, object]] | None = None,
+) -> list[PromptValue]:
+    """Render text comparisons, preserving JSON escaping and answer truncation."""
+    prompt_template = build_chat_prompt_template(prompt)
+
+    prompt_inputs = []
+    for user_prompt, completion_A, completion_B, row in zip(
+        instructions,
+        completions_A,
+        completions_B,
+        metadata if metadata is not None else [{}] * len(instructions),
+        strict=True,
+    ):
+        completion_A = truncate(completion_A, max_len=truncate_input_chars)
+        completion_B = truncate(completion_B, max_len=truncate_input_chars)
+        prompt_inputs.append(
+            {
+                **row,
+                **_prompt_fields(
+                    user_prompt=user_prompt,
+                    completion_A=completion_A,
+                    completion_B=completion_B,
+                    completion_A_text=truncate(
+                        row.get("completion_a_text", completion_A),
+                        max_len=truncate_input_chars,
+                    ),
+                    completion_B_text=truncate(
+                        row.get("completion_b_text", completion_B),
+                        max_len=truncate_input_chars,
+                    ),
+                ),
+            }
+        )
+    return prompt_template.batch(prompt_inputs)
 
 
 def annotate_battles(
@@ -119,19 +181,20 @@ def annotate_battles(
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
     cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
-    parse: JudgeParser | None = None,
+    *,
+    parse: OutputParser[ParsedPreference] | None = None,
+    prompt: ResolvedJudgePrompt | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
     Can also pass custom LLM judge prompts, if not passed uses defaults
-    `system_prompt, user_prompt_template = load_judge_system_and_user_prompt()`
     Example usage:
     ```python
     annotations = annotate_battles(
         # can be any langchain ChatModel, supports OpenAI, Together, vLLM, ...
         judge_chat_model=Together(model="meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         # the instructions we want to evaluate
-        user_prompts=["Write numbers between 1 and 5."],
+        instructions=["Write numbers between 1 and 5."],
         # the completions we want to evaluate for the first model
         completions_A=["1 2 3 4 5."],
         # the completions we want to evaluate for the second model
@@ -151,58 +214,40 @@ def annotate_battles(
     # alternatively pass list of tuples
     assert len(instructions) == len(completions_A) == len(completions_B)
 
-    resolved_prompt = resolve_judge_prompts(
-        prompt_preset=prompt_preset,
-        system_prompt=system_prompt,
-        user_prompt_template=user_prompt_template,
+    resolved_prompt = prompt
+    if resolved_prompt is None:
+        resolved_prompt = resolve_judge_prompts(
+            prompt_preset=prompt_preset,
+            system_prompt=system_prompt,
+            user_prompt_template=user_prompt_template,
+        )
+    else:
+        parse = parse if parse is not None else resolved_prompt.parser
+        if parse is not None:
+            collect_top_logprobs |= parse.requires_top_logprobs
+    if resolved_prompt.delegated:
+        raise ValueError(
+            f"Judge prompt preset '{resolved_prompt.preset_name}' is delegated and "
+            "cannot be used for generic pairwise judging."
+        )
+    effective_prompt = (
+        replace(resolved_prompt, parser=parse) if parse is not None else resolved_prompt
     )
+    effective_prompt.validate_for("pairwise")
 
-    message_templates: list[tuple[str, str]] = []
-    if resolved_prompt.system_prompt is not None:
-        message_templates.append(("system", resolved_prompt.system_prompt))
-    message_templates.append(("user", resolved_prompt.user_prompt_template))
-    prompt_template = ChatPromptTemplate.from_messages(message_templates)
     if strip_thinking_before_judging:
         completions_A = [strip_thinking_tags(c) for c in completions_A]
         completions_B = [strip_thinking_tags(c) for c in completions_B]
-
-    prompt_inputs = []
-    for user_prompt, completion_A, completion_B in zip(
-        instructions, completions_A, completions_B, strict=True
-    ):
-        completion_A = truncate(completion_A, max_len=truncate_input_chars)
-        completion_B = truncate(completion_B, max_len=truncate_input_chars)
-        prompt_inputs.append(
-            {
-                "user_prompt": user_prompt,
-                "completion_A": completion_A,
-                "completion_B": completion_B,
-                "user_prompt_json": json.dumps(user_prompt, ensure_ascii=False),
-                "completion_A_json": json.dumps(completion_A, ensure_ascii=False),
-                "completion_B_json": json.dumps(completion_B, ensure_ascii=False),
-            }
-        )
-    inputs = prompt_template.batch(prompt_inputs)
+    inputs = render_battle_inputs(
+        instructions,
+        completions_A,
+        completions_B,
+        resolved_prompt,
+        truncate_input_chars,
+    )
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
-    if parse is not None:
-        results = execute_judging(
-            judge_chat_model,
-            [
-                JudgeRequest(
-                    str(i),
-                    judge_input,
-                    parse,
-                    None if cache_row_metadata is None else cache_row_metadata[i],
-                )
-                for i, judge_input in enumerate(inputs)
-            ],
-            use_tqdm=use_tqdm,
-            result_type=ParsedPreference,
-        )
-        judge_results = [result.response for result in results]
-        parsed_results = [result.parsed for result in results]
-    else:
+    if parse is None:
         judge_results = do_inference(
             chat_model=judge_chat_model,
             inputs=inputs,
@@ -213,38 +258,77 @@ def annotate_battles(
         )
         if not collect_top_logprobs:
             judge_results = [InferenceResult(text=text) for text in judge_results]
-        parsed_results = [None] * len(judge_results)
-
-    annotations = []
-    for (
-        judge_input,
-        judge_result,
-        parsed,
-        instruction,
-        completion_A,
-        completion_B,
-    ) in zip(
-        inputs,
-        judge_results,
-        parsed_results,
-        instructions,
-        completions_A,
-        completions_B,
-        strict=True,
-    ):
-        annotations.append(
-            JudgeAnnotation(
-                judge_input=judge_input,
-                judge_completion=judge_result.text,
-                instruction=instruction,
-                completion_A=completion_A,
-                completion_B=completion_B,
-                prompt_preset=resolved_prompt.preset_name,
-                judge_top_logprobs=judge_result.first_token_top_logprobs,
-                parsed=parsed,
-            )
+        outcomes = ((response, None) for response in judge_results)
+    else:
+        metadata = (
+            cache_row_metadata
+            if cache_row_metadata is not None
+            else [None] * len(inputs)
         )
-    return annotations
+        requests = [
+            JudgeRequest(
+                id=str(index),
+                input=judge_input,
+                parser=parse,
+                cache_metadata=row,
+            )
+            for index, (judge_input, row) in enumerate(
+                zip(inputs, metadata, strict=True)
+            )
+        ]
+        results = execute_judging(
+            judge_chat_model, requests, use_tqdm=use_tqdm, result_type=ParsedPreference
+        )
+        outcomes = ((result.response, result.parsed) for result in results)
+
+    return [
+        JudgeAnnotation(
+            judge_input=judge_input,
+            judge_completion=response.text,
+            instruction=instruction,
+            completion_A=completion_A,
+            completion_B=completion_B,
+            prompt_preset=resolved_prompt.preset_name,
+            judge_top_logprobs=(
+                response.first_token_top_logprobs if collect_top_logprobs else None
+            ),
+            parsed=parsed,
+        )
+        for (
+            judge_input,
+            (response, parsed),
+            instruction,
+            completion_A,
+            completion_B,
+        ) in zip(
+            inputs,
+            outcomes,
+            instructions,
+            completions_A,
+            completions_B,
+            strict=True,
+        )
+    ]
+
+
+def render_comparison_requests(comparisons, prompt, truncate_input_chars):
+    """Render a text batch for the shared executor."""
+    if prompt.parser is None or prompt.delegated:
+        raise ValueError("Pairwise judging requires a resolved preference parser.")
+    inputs = render_battle_inputs(
+        comparisons.instruction.tolist(),
+        comparisons.completion_a.tolist(),
+        comparisons.completion_b.tolist(),
+        prompt,
+        truncate_input_chars,
+        metadata=comparisons.to_dict("records"),
+    )
+    return [
+        [
+            JudgeRequest(str(identity), value, prompt.parser)
+            for identity, value in zip(comparisons.index, inputs, strict=True)
+        ]
+    ]
 
 
 def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
@@ -371,3 +455,13 @@ def judge_and_parse_prefs(
         prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
 
     return annotations, annotations_reversed, prefs
+
+
+def load_judge_system_and_user_prompt(
+    multi_turn: bool = False,
+) -> tuple[str, str]:
+    resolved = resolve_judge_prompt(
+        preset=DEFAULT_JUDGE_PROMPT_PRESET,
+        multi_turn=multi_turn,
+    )
+    return resolved.system_prompt or "", resolved.user_prompt_template
