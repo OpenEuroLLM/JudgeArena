@@ -329,6 +329,14 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
 
+### ELO rating
+
+| Task                | Description                                                        |
+|---------------------|--------------------------------------------------------------------|
+| `elo-lmarena-100k`  | Battles sampled from `lmarena-ai/arena-human-preference-100k`      |
+| `elo-lmarena-140k`  | Battles sampled from `lmarena-ai/arena-human-preference-140k`      |
+| `elo-lmarena`       | Union of all `LMArena-*` variants                                  |
+| `elo-comparia`      | Battles sampled from the ComparIA arena                            |
 
 ## Meta-evaluating a judge
 
