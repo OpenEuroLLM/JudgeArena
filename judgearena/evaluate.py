@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from functools import partial
 
 import pandas as pd
 from langchain_core.prompt_values import PromptValue
@@ -9,7 +10,9 @@ from langchain_core.prompt_values import PromptValue
 from judgearena.cache.inference import JudgementCacheRowMetadata
 from judgearena.judging import (
     JudgeRequest,
+    answer_text,
     execute_judging,
+    judge_single_answers,
 )
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
@@ -17,6 +20,7 @@ from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     build_chat_prompt_template,
+    group_judge_prompts,
     resolve_judge_prompt,
 )
 from judgearena.prompts.registry import (
@@ -331,6 +335,110 @@ def render_comparison_requests(comparisons, prompt, truncate_input_chars):
     ]
 
 
+def render_single_requests(
+    samples, *, prompt, truncate_input_chars, strip_thinking_before_judging
+):
+    """Render one answer with its metadata; preserve parser-defined result types."""
+    validate_prompt_fields(
+        prompt, samples.columns, ("user_prompt", "completion", "completion_text")
+    )
+    inputs = []
+    for row in samples.to_dict("records"):
+        completion = answer_text(
+            row["completion"],
+            row.get("messages"),
+            strip_thinking=strip_thinking_before_judging,
+        )
+        inputs.append(
+            {
+                **row,
+                **_prompt_fields(
+                    user_prompt=row["instruction"],
+                    completion=truncate(completion, max_len=truncate_input_chars),
+                    completion_text=truncate(
+                        answer_text(
+                            row["completion"],
+                            strip_thinking=strip_thinking_before_judging,
+                        ),
+                        max_len=truncate_input_chars,
+                    ),
+                ),
+            }
+        )
+    rendered = build_chat_prompt_template(prompt).batch(inputs)
+    requests = [
+        JudgeRequest(str(identity), value, prompt.parser)
+        for identity, value in zip(samples.index, rendered, strict=True)
+    ]
+    return samples.iloc[:, :0], requests, [prompt] * len(samples)
+
+
+def prepare_single_answer_judging(
+    cfg,
+    resolved_prompt,
+    instructions,
+    *,
+    result_type: type | None = None,
+    use_tqdm: bool | None = None,
+    available_columns=None,
+):
+    """Validate prompts against known prepared fields before generating answers."""
+    use_tqdm = cfg.run.use_tqdm if use_tqdm is None else use_tqdm
+    groups = group_judge_prompts(cfg, instructions, resolved_prompt)
+    renderers = []
+    for prompt, ids in groups:
+        prompt.validate_for(
+            "single_answer", result_type, inference_kwargs=cfg.judge_model_kwargs()
+        )
+        kwargs = dict(
+            truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+            strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
+        )
+        if prompt.score_renderer is not None:
+            render = partial(
+                prompt.score_renderer, prompt_preset=prompt.preset_name, **kwargs
+            )
+        else:
+            if prompt.delegated:
+                raise ValueError(
+                    "Independent judging requires a parser and a renderable prompt."
+                )
+            validate_prompt_fields(
+                prompt,
+                None
+                if available_columns is None
+                else set(available_columns) | {"instruction", "model", "completion"},
+                ("user_prompt", "completion", "completion_text"),
+            )
+            render = partial(render_single_requests, prompt=prompt, **kwargs)
+        renderers.append((ids, render))
+
+    def judge(model, samples, *, source_ids=None):
+        frames, prompts = [], []
+        routing = samples.index if source_ids is None else source_ids.loc[samples.index]
+        for ids, render in renderers:
+            selected = samples.loc[routing.isin(ids)]
+            if not selected.empty:
+                frame, used = judge_single_answers(
+                    model,
+                    selected,
+                    render,
+                    use_tqdm=use_tqdm,
+                    result_type=result_type,
+                )
+                frames.append(frame)
+                prompts.extend(used)
+        annotations = (
+            pd.concat(frames, ignore_index=True)
+            .set_index("instruction_index", drop=False)
+            .loc[samples.index]
+            .reset_index(drop=True)
+        )
+        return annotations, prompts
+
+    return judge
+
+
 def combine_swapped_prefs(prefs_ab: pd.Series, prefs_ba: pd.Series) -> pd.Series:
     """Stack direct preferences before reversed preferences reoriented to A/B."""
     return pd.concat(
@@ -455,13 +563,3 @@ def judge_and_parse_prefs(
         prefs = combine_swapped_prefs(prefs.apply(_none_to_nan), prefs_reversed)
 
     return annotations, annotations_reversed, prefs
-
-
-def load_judge_system_and_user_prompt(
-    multi_turn: bool = False,
-) -> tuple[str, str]:
-    resolved = resolve_judge_prompt(
-        preset=DEFAULT_JUDGE_PROMPT_PRESET,
-        multi_turn=multi_turn,
-    )
-    return resolved.system_prompt or "", resolved.user_prompt_template

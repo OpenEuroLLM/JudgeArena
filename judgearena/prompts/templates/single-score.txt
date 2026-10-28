@@ -1,0 +1,6 @@
+Give an overall score from 1 to 10 for correctness, instruction following,
+and helpfulness. A score of 1 means the answer fails the request; 10 means
+it fully satisfies the request accurately and clearly.
+
+Return JSON with a numeric "score" and a brief "explanation":
+{{"score": 8, "explanation": "Your reason for the score."}}

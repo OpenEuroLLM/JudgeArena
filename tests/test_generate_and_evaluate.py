@@ -15,6 +15,7 @@ from judgearena.benchmarks.pairwise.baselines import (
     BaselinePlan,
     resolve_baseline_plan,
 )
+from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
@@ -756,6 +757,92 @@ def test_multiturn_generation_batches_active_turns_and_reuses_history_cache(
     assert len(calls) == 4
 
 
+def test_independent_score_presets_compare_expanded_candidates_in_order():
+    from judgearena.prompts.criteria import resolve_criteria
+    from judgearena.prompts.registry import resolve_run_judge_prompt
+
+    task = get_packaged_task("arena-hard-v2.0")
+    judge_spec = task.spec.protocol.judge.model_copy(
+        update={
+            "default_prompt_preset": "single-score",
+            "category_prompts": {"creative": "criteria-score"},
+        }
+    )
+    task = replace(
+        task,
+        spec=task.spec.model_copy(
+            update={
+                "protocol": task.spec.protocol.model_copy(update={"judge": judge_spec}),
+            }
+        ),
+    )
+    cfg = RunConfig(
+        task=task.task,
+        resolved_task=task,
+        model={"name": "a"},
+        judge={"model": "Dummy/j"},
+    )
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["Q1", "Q2"],
+            "category": ["creative", "other"],
+        },
+        index=["q1", "q2"],
+    )
+    comparisons = (
+        instructions.loc[["q2", "q1", "q2"]]
+        .assign(
+            source_instruction_index=["q1", "q2", "q1"],
+            model_a="a",
+            model_b=["b", "b", "c"],
+            completion_a=["A2", "A1", "A2"],
+            completion_b=["B2", "B1", "C2"],
+        )
+        .set_axis(["pair2", "pair1", "pair3"])
+    )
+    criteria_response = json.dumps(
+        {"criteria": {criterion.name: 6 for criterion in resolve_criteria()}}
+    )
+    model = FakeListLLM(
+        responses=[
+            criteria_response,
+            '{"score": 8}',
+            '{"score": 8}',
+            criteria_response,
+            '{"score": 4}',
+            "no score",
+        ]
+    )
+
+    judge, _ = prepare_pairwise_judging(
+        cfg,
+        resolve_run_judge_prompt(task, cfg.judge),
+        instructions,
+    )
+    annotations, outcomes, metadata = judge(
+        model,
+        comparisons,
+        source_ids=pd.Series({"pair1": "q1", "pair3": "q2", "pair2": "q2"}),
+    )
+
+    assert all(
+        f"Answer: {row.completion}" in row.judge_input
+        and f"Question: Q{row.completion[-1]}" in row.judge_input
+        for row in annotations.itertuples()
+    )
+    assert annotations.instruction_index.tolist() == ["pair2", "pair1", "pair3"] * 2
+    assert annotations.completion.tolist() == ["A2", "A1", "A2", "B2", "B1", "C2"]
+    assert outcomes.pref.tolist() == pytest.approx(
+        [0.2314752165, 0.5, np.nan], nan_ok=True
+    )
+    expected_prompts = ["single-score", "criteria-score", "single-score"]
+    assert outcomes.prompt_preset.tolist() == expected_prompts
+    assert {p["judge_prompt_preset"] for p in metadata["judge_prompts"]} == set(
+        expected_prompts
+    )
+    assert annotations.iloc[1]["parsed"]["details"]["criteria"]["clarity"] == 6
+
+
 def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     from judgearena.benchmarks.pairwise.comparisons import assemble_comparisons
 
@@ -790,6 +877,21 @@ def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     assert pairs["messages_b"].tolist() == b["messages"].tolist()
     assert pairs["category"].tolist() == ["coding", "coding"]
     assert "reference_pref" not in pairs
+
+
+def test_minimum_score_grouping_requires_scoring_prompt():
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    cfg = _cfg(
+        task="mt-bench-101",
+        model_A="Dummy/a",
+        model_B="Dummy/b",
+        judge_model="Dummy/judge",
+    )
+    with pytest.raises(ValueError, match="minimum_score_by requires a single-answer"):
+        prepare_pairwise_judging(
+            cfg, resolve_judge_prompt(preset="default"), pd.DataFrame()
+        )
 
 
 def test_category_baseline_uses_configured_field():

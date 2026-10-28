@@ -168,7 +168,7 @@ def _registered_task(
     default_max_out_tokens: int | None = 4096,
     default_top_logprobs: int | None = 5,
 ):
-    task = get_packaged_task("mt-bench")
+    task = get_packaged_task("alpaca-eval")
     spec = task.spec.model_dump()
     spec["task"] = task_id
     spec["protocol"].update(
@@ -179,7 +179,6 @@ def _registered_task(
             "default_seed": 7,
         },
         judge={
-            **spec["protocol"]["judge"],
             "default_prompt_preset": "default",
             "default_swap_mode": default_swap_mode,
             "default_temperature": default_temperature,
@@ -728,7 +727,7 @@ def test_cli_prompt_path_override_uses_cwd_not_config_directory(tmp_path, monkey
     (config_dir / "rubric.txt").write_text("Saved {completion}")
     (tmp_path / "override.txt").write_text("Override {completion}")
     config = _base_generate()
-    config["judge"]["prompt"] = {"user_file": "rubric.txt", "parser": "score"}
+    config["judge"]["prompt"] = {"user_file": "rubric.txt", "parser": "json-score"}
     path = config_dir / "run.yaml"
     path.write_text(yaml.safe_dump(config))
     monkeypatch.chdir(tmp_path)

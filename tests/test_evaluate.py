@@ -102,7 +102,7 @@ def test_executor_preserves_responses_missing_required_logprobs(caplog):
                 }
             },
         ),
-        "score_A: 8\nscore_B: 7",
+        '{"score": 8}',
     ]
     requests = [
         JudgeRequest(str(i), "Q", parse)
@@ -111,7 +111,7 @@ def test_executor_preserves_responses_missing_required_logprobs(caplog):
                 parser,
                 parser,
                 JUDGE_PARSERS["alpaca-eval-token"],
-                JUDGE_PARSERS["score"],
+                JUDGE_PARSERS["json-score"],
             ]
         )
     ]
@@ -120,14 +120,9 @@ def test_executor_preserves_responses_missing_required_logprobs(caplog):
         SimpleNamespace(batch=lambda inputs, **_: outputs), requests
     )
 
-    assert [r.response.text for r in results] == [
-        "M",
-        "m",
-        "M",
-        "score_A: 8\nscore_B: 7",
-    ]
+    assert [r.response.text for r in results] == ["M", "m", "M", '{"score": 8}']
     assert [r.parsed for r in results[:3]] == [None, None, None]
-    assert results[3].parsed.scores == {"A": 8.0, "B": 7.0}
+    assert results[3].parsed.score == 8
     warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
     assert "2" in warnings[0] and "logprobs" in warnings[0]
@@ -152,6 +147,19 @@ def test_executor_rejects_result_that_breaks_parser_contract():
     )
     with pytest.raises(TypeError, match="broken-score.*ParsedScore"):
         execute_judging(FakeListLLM(responses=["8"]), [JudgeRequest("q", "Q", parser)])
+
+
+def test_annotation_list_api_rejects_incompatible_parser_override():
+    with pytest.raises(ValueError, match="ParsedPreference"):
+        evaluate.annotate_battles(
+            object(),
+            ["Q"],
+            ["A"],
+            ["B"],
+            False,
+            prompt=evaluate.resolve_judge_prompts(prompt_preset="default"),
+            parse=JUDGE_PARSERS["single-score"],
+        )
 
 
 def test_executor_rejects_partial_cache_metadata_before_inference():
