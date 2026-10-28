@@ -435,7 +435,18 @@ We welcome contributions! Whether it's bug fixes, new features, or additional be
 
 ## Citation
 
-If you use this work in your research, please cite the following paper.
+If you use JudgeArena in your research, please cite:
+
+```bibtex
+@article{lushtaku2026judgearena,
+  title = {JudgeArena: A Unified Framework for Reproducible LLM-Judge Evaluation},
+  author = {Lushtaku, Erlis and Kargi, Bora and Elganzory, Ali and Ferreira, Fabio and Salamanca, Alejandro R. and Kreutzer, Julia and Salinas, David},
+  journal = {arXiv preprint arXiv:2608.02620},
+  year = {2026},
+}
+```
+
+The judge configurations were tuned in the following paper, and much of the code is reused from it. If you use the tuned judges, please also cite:
 
 ```bibtex
 @inproceedings{
@@ -447,7 +458,5 @@ If you use this work in your research, please cite the following paper.
   url={https://openreview.net/forum?id=cve4NOiyVp}
 }
 ```
-
-The judge configurations was tuned in this paper and a lot of code is reused in this package.
 
 ---
