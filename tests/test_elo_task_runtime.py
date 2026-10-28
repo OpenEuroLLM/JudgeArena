@@ -25,7 +25,7 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
         arena_battles, "load_arena_dataframe", fake_load_arena_dataframe
     )
 
-    battles = arena_battles.load_task_battles(task, tmp_path)
+    battles = arena_battles.ArenaBattlesAdapter(task, tmp_path).load_battles()
 
     source = captured["sources"]["ministere-culture/comparia-votes"]
     assert captured["arena"] == "ComparIA"
@@ -42,7 +42,7 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
         lambda **kwargs: captured.update(kwargs),
     )
 
-    arena_battles.download_task_sources(task, tmp_path)
+    arena_battles.ArenaBattlesAdapter(task, tmp_path).download()
 
     assert captured["repo_id"] == "lmarena-ai/arena-human-preference-100k"
     assert captured["revision"] == "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"

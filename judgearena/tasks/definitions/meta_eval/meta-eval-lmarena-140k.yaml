@@ -3,7 +3,7 @@ task: meta-eval-lmarena-140k
 description: Score a judge against human votes from LMSYS Chatbot Arena 140k.
 
 variants:
-  selector: language
+  selector: lang
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
 
 dataset:

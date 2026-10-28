@@ -25,7 +25,7 @@ protocol:
       - metric: pairwise_win_rate
 
 variants:
-  selector: language
+  selector: lang
   values:
     - ar
     - cs

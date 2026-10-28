@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from judgearena.datasets.registry import resolve_dataset_adapter
 from judgearena.log import get_logger
-from judgearena.tasks.schema import PairwiseProtocol, ResolvedTaskSpec
-from judgearena.utils import data_root
+from judgearena.tasks.schema import ResolvedTaskSpec
 
 logger = get_logger(__name__)
 
@@ -73,34 +71,29 @@ def load_pairwise_task_data(
     *,
     n_instructions: int | None = None,
     local_tables_path: Path | None = None,
-) -> PairwiseTaskData:
-    """Load one registered task through its declared dataset adapter."""
-    if not isinstance(task.spec.protocol, PairwiseProtocol):
-        raise ValueError(f"Task {task.task!r} does not use the pairwise protocol.")
+):
+    """Load canonical data through the task's dataset adapter."""
+    from dataclasses import replace
 
-    tables_path = local_tables_path or data_root / "tables"
-    adapter_id = task.spec.dataset.adapter
-    adapter = resolve_dataset_adapter(adapter_id)
-    instructions = adapter.load_instructions(task, tables_path)
-    if "instruction_index" in instructions.columns:
-        instructions = instructions.set_index("instruction_index")
-    if instructions.index.name != "instruction_index":
-        raise ValueError(
-            f"Dataset adapter {adapter_id!r} must provide 'instruction_index'."
-        )
-    if "instruction" not in instructions.columns:
-        raise ValueError(f"Dataset adapter {adapter_id!r} must provide 'instruction'.")
-    if instructions.index.has_duplicates:
-        raise ValueError(
-            f"Dataset adapter {adapter_id!r} returned duplicate instruction IDs."
-        )
+    from judgearena.datasets import load_task_data, resolve_dataset_filters
 
-    instructions = instructions.sort_index()
+    data = load_task_data(task, local_tables_path=local_tables_path)
+    data = data.select(resolve_dataset_filters(task))
     if n_instructions is not None:
-        instructions = instructions.head(n_instructions)
-    logger.info("Loaded %d instructions for %s.", len(instructions), task.task)
+        ids = data.instructions.head(n_instructions).index
+        from judgearena.datasets.data import PreferenceData
 
-    return PairwiseTaskData(
-        instructions=instructions,
-        model_outputs=adapter.load_model_outputs(task, tables_path),
-    )
+        selected_battles = (
+            {"battles": data.battles.loc[data.battles.instruction_index.isin(ids)]}
+            if isinstance(data, PreferenceData)
+            else {}
+        )
+        data = replace(
+            data,
+            **selected_battles,
+            instructions=data.instructions.loc[ids],
+            model_outputs=None
+            if data.model_outputs is None
+            else data.model_outputs.loc[data.model_outputs.instruction_index.isin(ids)],
+        )
+    return data

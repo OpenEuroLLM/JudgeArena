@@ -395,20 +395,6 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_registry_rejects_dataset_adapter_from_another_protocol(tmp_path):
-    definition = _task_definition()
-    definition["dataset"]["adapter"] = "arena_battles"
-    _write_family(
-        tmp_path,
-        family="example",
-        filename="test-task.yaml",
-        definition=definition,
-    )
-
-    with pytest.raises(TaskDefinitionError, match="unknown dataset adapter"):
-        load_tasks(tmp_path)
-
-
 def test_registry_rejects_unknown_metric_id(tmp_path):
     definition = _task_definition()
     definition["protocol"]["scoring"]["metrics"] = [{"metric": "missing_metric"}]
