@@ -13,10 +13,10 @@ from judgearena.tasks.schema.baselines import (
 from judgearena.tasks.schema.dataset import DatasetSpec
 from judgearena.tasks.schema.elo import EloProtocol
 from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
-from judgearena.tasks.schema.pairwise import PairwiseProtocol
+from judgearena.tasks.schema.pairwise import PairwiseProtocol, SingleAnswerProtocol
 
 ProtocolSpec = Annotated[
-    PairwiseProtocol | EloProtocol | MetaEvalProtocol,
+    PairwiseProtocol | SingleAnswerProtocol | EloProtocol | MetaEvalProtocol,
     Field(discriminator="runner"),
 ]
 

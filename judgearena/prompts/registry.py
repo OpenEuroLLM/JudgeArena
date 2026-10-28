@@ -525,13 +525,18 @@ def resolve_run_judge_prompt(
         from judgearena.tasks.registry import get_packaged_task
 
         task = get_packaged_task(task)
+    protocol = task.spec.protocol if task is not None else None
     if prompt is not None and prompt.user_file is not None:
         result_type = resolve_judge_parser(prompt.parser or "score").result_type
         mode = (
             "pairwise" if issubclass(result_type, ParsedPreference) else "single_answer"
         )
     else:
-        mode = "pairwise"
+        mode = (
+            "single_answer"
+            if protocol is not None and protocol.runner == "single_answer"
+            else "pairwise"
+        )
     return resolve_judge_prompt(
         judging_mode=mode,
         options=prompt.options if prompt is not None else None,

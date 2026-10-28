@@ -719,6 +719,52 @@ def test_saved_configuration_keeps_supplied_task_definition(
     assert "hash" in caplog.text
 
 
+def test_inline_evaluation_uses_supplied_answers_and_saved_protocol(tmp_path):
+    import pandas as pd
+
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.datasets.data import CompletionData
+
+    rubric = tmp_path / "rubric.txt"
+    rubric.write_text('Rate grammar: {completion}\nReturn {{"score": number}}')
+    cfg = RunConfig(
+        evaluation_name="grammar",
+        protocol={
+            "runner": "single_answer",
+            "generation": {"mode": "single_turn_chat"},
+            "judge": {"default_prompt_preset": "single-score"},
+        },
+        model={"name": "saved-model"},
+        judge={
+            "model": 'Dummy/{"score": 8}',
+            "prompt": {"user_file": rubric, "parser": "json-score"},
+        },
+        run={
+            "result_folder": str(tmp_path / "results"),
+            "store_root": None,
+            "no_log_file": True,
+        },
+    )
+    data = CompletionData(
+        pd.DataFrame({"instruction": ["Say hello"]}),
+        pd.DataFrame(
+            {
+                "instruction_index": [0],
+                "model": ["saved-model"],
+                "completion": ["Hello."],
+            }
+        ),
+    )
+    with pytest.raises(TypeError, match="Supplied data"):
+        run_benchmark(cfg, data=pd.DataFrame())
+    result = run_benchmark(cfg, data=data)
+    assert result["score"].tolist() == [8]
+    saved = load_config(next((tmp_path / "results").rglob("config.yaml")))
+    assert saved.task == "grammar"
+    assert saved.resolved_task.spec.protocol == cfg.protocol
+    assert run_benchmark(saved, data=data)["score"].tolist() == [8]
+
+
 def test_dataset_revision_override_survives_reload_and_rebinding(tmp_path, caplog):
     task = get_packaged_task("alpaca-eval")
     dataset = task.spec.dataset.model_dump()
