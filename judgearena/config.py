@@ -27,11 +27,15 @@ from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
 from judgearena.tasks.schema import (
     AllReferencesBaseline,
     CategoryDefaultsBaseline,
+    DatasetSpec,
     EloProtocol,
     EloScoringSpec,
     MetaEvalProtocol,
+    ProtocolSpec,
     ResolvedTaskSpec,
     TaskDefaultBaseline,
+    TaskProvenance,
+    TaskSpec,
 )
 
 logger = get_logger(__name__)
@@ -432,6 +436,9 @@ class RunArgs(BaseModel):
     seed: int = 0
     """Random seed for reproducibility."""
 
+    filters: dict[str, list[str | int | float | bool]] = Field(default_factory=dict)
+    """Select dataset rows by metadata values, e.g. {\"domain\": [\"math\"]}."""
+
     result_folder: str = "results"
     """Directory where annotations, results, and the resolved ``config.yaml``
     are written (under a per-run subfolder)."""
@@ -461,8 +468,20 @@ class RunConfig(BaseSettings):
         use_attribute_docstrings=True,
     )
 
-    task: str
-    """Packaged benchmark task ID or the name of a supplied resolved task."""
+    task: str | None = None
+    """Packaged benchmark task ID. Omit when supplying a protocol.
+    Use ``judgearena tasks list`` to inspect available definitions."""
+
+    evaluation_name: str = Field(
+        default="custom", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    )
+    """Stable cache and report name for evaluations without a packaged task."""
+
+    protocol: ProtocolSpec | None = None
+    """Replace the task's protocol, using the same schema as task definitions."""
+
+    dataset: DatasetSpec | None = None
+    """Replace the task's dataset declaration; omitted for supplied data."""
 
     resolved_task: CliSuppress[ResolvedTaskSpec | None] = Field(
         default=None, repr=False
@@ -524,7 +543,28 @@ class RunConfig(BaseSettings):
                     "inspect packaged tasks."
                 )
         if resolved_task is None:
-            raise ValueError("Provide a task or a resolved task definition.")
+            if self.protocol is None:
+                raise ValueError("Provide a task or an evaluation protocol.")
+            spec = TaskSpec(
+                schema_version=1,
+                task=self.evaluation_name,
+                task_version=1,
+                description="Inline evaluation.",
+                dataset=self.dataset or DatasetSpec(adapter="supplied"),
+                protocol=self.protocol,
+            )
+            digest = _canonical_sha256(spec.model_dump(mode="json"))
+            resolved_task = ResolvedTaskSpec(
+                spec, TaskProvenance("<inline>", digest, digest, ())
+            )
+        elif self.protocol is not None or self.dataset is not None:
+            definition = resolved_task.spec.model_dump()
+            if self.protocol is not None:
+                definition["protocol"] = self.protocol.model_dump()
+            if self.dataset is not None:
+                definition["dataset"] = self.dataset.model_dump()
+            spec = TaskSpec.model_validate(definition)
+            resolved_task = replace(resolved_task, spec=spec)
         resolved_task = replace(
             resolved_task,
             provenance=replace(

@@ -527,3 +527,29 @@ def test_fixed_format_adapters_reject_unused_field_mappings(
         adapter.load_data()
 
 
+def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
+    import judgearena.arenas_utils as source
+
+    pair = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
+    histories = [
+        pair,
+        [{"role": "system", "content": "S"}, *pair],
+        [*pair, {"role": "user", "content": "unfinished"}],
+        [{"role": "user", "content": 123}, pair[-1]],
+    ]
+    rows = pd.DataFrame({"conversation_a": histories, "conversation_b": histories})
+    rows = rows.assign(
+        id=range(4),
+        timestamp=0,
+        model_a_name="a",
+        model_b_name="b",
+        chosen_model_name="a",
+        both_equal=False,
+    )
+    monkeypatch.setattr(source, "_download_arena_dataset", lambda **kwargs: "/unused")
+    monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
+    monkeypatch.setattr(source, "detect_language", lambda text: "en")
+    loaded = source._load_arena_dataframe("ComparIA", dataset_sources={})
+    assert loaded.question_id.tolist() == [0, 1, 3]
+    normalized = normalize_battles(loaded, "ComparIA")
+    assert normalized.battles.question_id.tolist() == [0, 1]

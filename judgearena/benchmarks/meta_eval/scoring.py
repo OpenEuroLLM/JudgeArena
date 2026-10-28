@@ -78,6 +78,42 @@ def _validate_battles(battles: pd.DataFrame) -> None:
         )
 
 
+def aggregate_battle_preferences(
+    annotations: pd.DataFrame, *, swap_mode: str | None = None
+) -> pd.DataFrame:
+    """Combine canonical judge passes into one row per physical battle."""
+    rows = []
+    for battle_id, passes in annotations.groupby("battle_id", sort=False):
+        orientations = set(passes["orientation"])
+        mode = swap_mode or ("fixed" if orientations == {"single"} else "both")
+        expected_orientations = {"direct", "reversed"} if mode == "both" else {"single"}
+        if (
+            len(passes) != len(expected_orientations)
+            or orientations != expected_orientations
+        ):
+            raise ValueError(
+                f"Battle {battle_id!r} has {len(passes)} passes and orientations "
+                f"{sorted(orientations)}; expected {sorted(expected_orientations)}."
+            )
+        preference = (
+            float(passes["pref"].mean())
+            if passes["pref"].notna().all()
+            else float("nan")
+        )
+        rows.append({"battle_id": battle_id, "pref": preference})
+    return pd.DataFrame(rows, columns=["battle_id", "pref"])
+
+
+def _reference_battle_view(battles: pd.DataFrame) -> pd.DataFrame:
+    """Average judge passes per labeled comparison before agreement/rating metrics."""
+    if "orientation" not in battles:
+        return battles
+    labeled = battles.loc[battles["reference_pref"].notna()]
+    references = labeled[sorted(_REQUIRED_COLUMNS - {"pref"})].drop_duplicates()
+    prefs = aggregate_battle_preferences(labeled.loc[labeled["sampled"]])
+    return references.merge(prefs, on="battle_id", how="left", validate="one_to_one")
+
+
 def _hard_preferences(values: pd.Series, tie_tolerance: float) -> np.ndarray:
     numeric = values.to_numpy(dtype=float)
     return np.where(
@@ -129,6 +165,7 @@ class MetaEvalAgreementMetric:
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
         """Calculate attempted and complete agreement views."""
+        battles = _reference_battle_view(battles)
         _validate_battles(battles)
         if self.n_bootstraps and rng is None:
             raise ValueError("Bootstrapped meta-evaluation agreement requires an RNG.")
@@ -305,6 +342,7 @@ class MetaEvalRankingMetric:
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
         """Fit and bootstrap human, hard-judge, and soft-judge rankings."""
+        battles = _reference_battle_view(battles)
         _validate_battles(battles)
         if self.n_bootstraps and rng is None:
             raise ValueError("Bootstrapped meta-evaluation ranking requires an RNG.")
@@ -430,6 +468,7 @@ class MetaEvalEloGapMetric:
         rng: np.random.Generator | None = None,
     ) -> dict[str, object]:
         """Calculate hard and soft Elo gaps, retaining ties in both methods."""
+        battles = _reference_battle_view(battles)
         _validate_battles(battles)
         if rng is None:
             raise ValueError("Meta-evaluation Elo gap requires an RNG.")

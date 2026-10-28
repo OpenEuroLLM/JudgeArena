@@ -1,23 +1,33 @@
-"""PairScore temperature calibration against human arena preferences."""
+"""PairScore temperature calibration against reference preferences."""
 
 from __future__ import annotations
-
-from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 
-from judgearena.arenas_utils import extract_turn_text
-from judgearena.benchmarks.elo.rating import winner_to_pref
-from judgearena.cache.inference import JudgementInferenceCache
-from judgearena.evaluate import judge_and_parse_prefs
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.log import get_logger
-from judgearena.models import prepare_model
-from judgearena.prompts.parsing import PairScore
+from judgearena.prompts.parsing import PairScore, score_preference
 from judgearena.prompts.registry import ResolvedJudgePrompt
 
 logger = get_logger(__name__)
+
+
+def apply_pairscore_temperature(
+    annotations: pd.DataFrame, *, temperature: float
+) -> pd.DataFrame:
+    """Recompute canonical preferences without changing the raw judge annotations."""
+    preferences = []
+    for parsed in annotations["parsed"]:
+        scores = {} if parsed is None else parsed["scores"]
+        preferences.append(
+            score_preference(scores.get("A"), scores.get("B"), temperature=temperature)
+        )
+    preferences = pd.Series(preferences, index=annotations.index, dtype=float)
+    return annotations.assign(
+        pref=preferences.where(~annotations["swapped"], 1 - preferences)
+    )
 
 
 def fit_temperature(
@@ -50,30 +60,17 @@ def fit_temperature(
 
 
 def calibrate_pairscore_temperature(
-    arena_battles: pd.DataFrame,
-    source_battles: pd.DataFrame,
+    battles: pd.DataFrame,
     *,
-    enabled: bool,
-    soft_elo: bool,
     sample_size: int | None,
     rng: np.random.Generator,
-    judge_model: str,
-    judge_model_kwargs: Mapping[str, object],
+    judge_chat_model,
     swap_mode: str,
     prompt: ResolvedJudgePrompt,
     truncate_input_chars: int | None,
     default_temperature: float,
-    arena: str,
-    inference_cache: JudgementInferenceCache | None = None,
 ) -> float | None:
-    """Judge sampled human battles and return a fitted PairScore temperature."""
-    if not enabled:
-        return None
-    if not soft_elo:
-        logger.warning(
-            "--calibrate-temperature has no effect with --no-soft-elo; skipping."
-        )
-        return None
+    """Sample validated reference comparisons and fit their PairScore temperature."""
     if not isinstance(prompt.parser, PairScore):
         parser_name = getattr(prompt.parser, "name", type(prompt.parser).__name__)
         logger.warning(
@@ -83,72 +80,40 @@ def calibrate_pairscore_temperature(
         )
         return None
 
-    logger.info("Calibrating PairScore temperature against human annotations.")
+    logger.info("Calibrating PairScore temperature against reference annotations.")
     n_samples = (
-        min(sample_size, len(arena_battles))
-        if sample_size is not None
-        else len(arena_battles)
+        min(sample_size, len(battles)) if sample_size is not None else len(battles)
     )
-    calibration_battles = arena_battles.sample(
+    sample = battles.sample(
         n=n_samples,
         random_state=int(rng.integers(0, 2**31)),
     )
-    instructions = [
-        extract_turn_text(source_battles.loc[index, "conversation_a"][0])
-        for index in calibration_battles.index
-    ]
-    completions_a = [
-        extract_turn_text(source_battles.loc[index, "conversation_a"][1])
-        for index in calibration_battles.index
-    ]
-    completions_b = [
-        extract_turn_text(source_battles.loc[index, "conversation_b"][1])
-        for index in calibration_battles.index
-    ]
-
-    source_rows = source_battles.loc[calibration_battles.index]
-    calibration_judge = prepare_model(
-        model=judge_model,
-        cache=inference_cache,
-        **dict(judge_model_kwargs),
-    )
-    annotations, _, _ = judge_and_parse_prefs(
-        judge_chat_model=calibration_judge,
-        instructions=instructions,
-        completions_A=completions_a,
-        completions_B=completions_b,
-        swap_mode=swap_mode,
-        system_prompt=prompt.system_prompt,
-        user_prompt_template=prompt.user_prompt_template,
-        prompt_preset=prompt.preset_name,
-        parse=prompt.parser,
+    judgments = judge_comparisons(
+        judge_chat_model,
+        sample,
+        [(prompt, sample.index)],
+        swap_mode="both" if swap_mode == "both" else "fixed",
+        strip_thinking_before_judging=False,
         truncate_input_chars=truncate_input_chars,
-        cache_row_metadata=[
-            {
-                "instruction_id": f"{arena}:{row.question_id}",
-                "model_a": row.model_a,
-                "model_b": row.model_b,
-                "orientation": "direct",
-            }
-            for row in source_rows.itertuples()
-        ],
+        use_tqdm=False,
     )
+    # Calibration historically fits only the original arena answer order.
+    annotations = judgments.loc[judgments["orientation"] != "reversed"]
 
     score_differences: list[float] = []
     outcomes: list[float] = []
-    for annotation, human_winner in zip(
-        annotations, calibration_battles["winner"].tolist(), strict=True
+    for parsed, reference_preference in zip(
+        annotations["parsed"], sample["reference_pref"], strict=True
     ):
-        scores = {} if annotation.parsed is None else annotation.parsed.scores
+        scores = {} if parsed is None else parsed["scores"]
         score_a = scores.get("A")
         score_b = scores.get("B")
         if score_a is None or score_b is None:
             continue
-        human_preference = winner_to_pref(human_winner)
-        if human_preference is None or human_preference == 0.5:
+        if reference_preference not in (0.0, 1.0):
             continue
         score_differences.append(score_a - score_b)
-        outcomes.append(1.0 - human_preference)
+        outcomes.append(1.0 - reference_preference)
 
     if len(score_differences) < 10:
         logger.warning(
