@@ -100,8 +100,8 @@ def run_mt_bench_101_benchmark(
     )
     judge_chat_model = build_judge(cfg)
     judge_prompt_preset = (
-        cfg.judge.prompt_preset or protocol.judge.default_prompt_preset
-    )
+        cfg.judge.prompt.preset if cfg.judge.prompt else None
+    ) or protocol.judge.default_prompt_preset
     scored_a = judge_mt_bench_101_single(
         judge_chat_model=judge_chat_model,
         eval_items=eval_items,
