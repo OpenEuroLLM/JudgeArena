@@ -705,7 +705,9 @@ def test_run_elo_temperature_reuses_validated_scores(monkeypatch, tmp_path):
     assert annotations["judge"].eq(cfg.judge.model).all()
 
 
-@pytest.mark.parametrize("invalid", ["missing", "delegated", "mode", "logprobs"])
+@pytest.mark.parametrize(
+    "invalid", ["missing", "delegated", "scalar", "mode", "logprobs"]
+)
 def test_run_elo_rejects_unusable_prompt_before_generation(
     monkeypatch, tmp_path, invalid
 ):

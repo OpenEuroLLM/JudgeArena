@@ -219,7 +219,7 @@ complete conversations when available. Use `completion_text` (or
 when your template already includes the history. Both respect thinking removal
 and truncation settings.
 
-The MT-Bench-101 adapter handles a fixed source format and rejects
+MT-Bench-101 and WildBench adapters handle fixed source formats and reject
 `dataset.fields`. For another source layout, normalize it in your own adapter.
 
 Extra columns remain metadata. Use `--run.filters '{"category": ["coding"]}'`
@@ -275,6 +275,7 @@ The runner prepares each candidate answer once, then loads or generates the
 references. Comparison rows keep `source_instruction_index` and have unique IDs.
 The candidate must differ from the reference models. Change the list in the task
 definition; `model.baseline` cannot override it.
+`wildbench-reward-mix` uses this policy and averages per-reference WB-Rewards equally.
 
 ## Independent evaluation
 
@@ -289,10 +290,10 @@ protocol:
   generation:
     mode: provided_messages
   judge:
-    default_prompt_preset: single-score
+    default_prompt_preset: wildbench-score
   scoring:
     metrics:
-      - metric: mean_score
+      - metric: wildbench_score
         breakdown_by: [category]
 ```
 

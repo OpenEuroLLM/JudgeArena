@@ -30,6 +30,11 @@ from judgearena.benchmarks.pairwise.scoring.metrics import (
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
 )
+from judgearena.benchmarks.pairwise.scoring.wildbench import (
+    WildBenchRewardMetric,
+    WildBenchRewardMixMetric,
+    WildBenchScoreMetric,
+)
 from judgearena.log import get_logger
 
 logger = get_logger(__name__)
@@ -85,6 +90,9 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "meta_eval_elo_gap": MetaEvalEloGapMetric,
     "meta_eval_ranking": MetaEvalRankingMetric,
     "absolute_score": AbsoluteScoreMetric,
+    "wildbench_reward": WildBenchRewardMetric,
+    "wildbench_reward_mix": WildBenchRewardMixMetric,
+    "wildbench_score": WildBenchScoreMetric,
 }
 
 ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric | Exception], ...]

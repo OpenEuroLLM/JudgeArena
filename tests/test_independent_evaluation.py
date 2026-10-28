@@ -9,6 +9,7 @@ from judgearena.benchmarks.scoring import build_metric
 from judgearena.config import RunConfig
 from judgearena.datasets.arena_hard import ArenaHardAdapter
 from judgearena.datasets.data import CompletionData
+from judgearena.datasets.wildbench import WildBenchAdapter
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
@@ -230,6 +231,24 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
     )
     assert prefs.tolist() == [0.5, 0.5]
 
+    monkeypatch.setattr(WildBenchAdapter, "load_data", lambda self: data)
+    score_dir = tmp_path / "wildbench-score"
+    scored = run_benchmark(
+        RunConfig(
+            task="wildbench-score",
+            model={"name": "Dummy/generated"},
+            judge={"model": 'Dummy/{"score": 8}'},
+            run={
+                "result_folder": str(score_dir),
+                "store_root": str(tmp_path / "cache"),
+                "use_tqdm": False,
+            },
+        )
+    )
+    assert scored.score.tolist() == [8, 8]
+    report = json.loads(next(score_dir.rglob("results-*.json")).read_text())
+    assert report["metrics"]["wildbench_score"]["score"] == 6
+
 
 def test_independent_rejects_pairwise_settings():
     task = _independent_task()
@@ -329,6 +348,16 @@ def test_independent_pairs_validate_both_answers_before_judging():
             judge=lambda *args: pytest.fail("Judging started before validating B"),
             prompt=resolve_judge_prompt(preset="single-score"),
         )
+
+
+def test_wildbench_score_reports_missing_and_normalized_endpoints():
+    metric = build_metric("wildbench_score")
+    for score, expected in [(1, -8), (5, 0), (10, 10)]:
+        result = metric.calculate(pd.DataFrame({"score": [score, None]}))
+        assert result["raw_mean"] == score
+        assert result["score"] == expected
+        assert result["num_missing"] == 1
+    assert metric.calculate(pd.DataFrame({"score": [None]}))["score"] is None
 
 
 @pytest.mark.parametrize("fenced", [False, True])

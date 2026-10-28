@@ -1,0 +1,15 @@
+extends: _base.yaml
+task: wildbench-score
+description: WildBench v2 independent answer scoring with example-specific checklists.
+tags: [single-answer, instruction-following, multi-turn, wildbench]
+
+protocol:
+  runner: single_answer
+  judge:
+    default_prompt_preset: wildbench-score
+    default_temperature: 0.0
+    default_max_out_tokens: 4096
+  scoring:
+    metrics:
+      - metric: wildbench_score
+        breakdown_by: [category]

@@ -309,6 +309,9 @@ Elo writes raw preferences to `annotations.parquet` and scoring preferences to
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                                                                                                    |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                                                                                                  |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
+| `wildbench`                  | WildBench v2 checklist-guided WB-Reward against one reference model |
+| `wildbench-reward-mix`       | Mean WB-Reward against three saved reference models |
+| `wildbench-score`            | Independent WildBench v2 answer scores |
 | `mt-bench-101`               | Multi-turn evaluation with supplied reference histories, independent answer scores, and dialogue-level aggregation |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
@@ -328,6 +331,47 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
+
+### WildBench
+
+```bash
+judgearena --task wildbench \
+  --model.name OpenRouter/google/gemma-4-31b-it \
+  --model.baseline Llama-2-7b-chat-hf \
+  --judge.model OpenRouter/google/gemma-4-31b-it \
+  --generation.n_instructions 10
+```
+
+The adapter preserves supplied conversation history, loads available saved
+answers by model name, and supplies each example's checklist to the judge.
+Use `--run.filters '{"category":["Coding & Debugging"]}'` to select coding tasks.
+WB-Reward is reported on a -100 to 100 scale. In a custom task's metric
+parameters, set `length_penalty_threshold` to a character margin: slight wins
+become ties when the winning answer exceeds that margin; negative values disable
+this penalty. Missing judgments are excluded from the mean and counted separately.
+
+This integration uses JudgeArena's deterministic `random` swap mode by default;
+`both` judges both orders and averages their rewards. It uses the configured
+character limits rather than upstream's 1000-word truncation, and sends empty
+answers to the judge instead of assigning automatic verdicts. Judge models are
+user-selected.
+
+For Reward-Mix, use `--task wildbench-reward-mix` and omit `--model.baseline`.
+Each candidate answer is generated once and compared with saved answers from
+GPT-4 Turbo (2024-04-09), Claude 3 Haiku, and Llama 2 70B Chat. The result is the
+equal mean of their individual WB-Rewards. If a reference has no valid judgments,
+the combined reward is unavailable; per-reference results and annotations are
+still saved.
+
+For WB-Score, use `--task wildbench-score` and omit `--model.baseline`.
+The same adapter and generation components supply the answers. Each answer is
+judged on a 1–10 scale; results include the raw mean and `(mean - 5) * 2`, with
+missing judgments excluded and counted. This is the mean score, without the
+Space's weighted category aggregation.
+
+Independent evaluation also supports custom prompt/parser presets. Parsed
+scores, correctness labels, and criterion results are saved in annotations;
+configured metrics decide how to summarize them. See [independent evaluation](judgearena/tasks/README.md#independent-evaluation).
 
 ### ELO rating
 
