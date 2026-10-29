@@ -20,7 +20,9 @@ def _reset_root_logger():
     """Remove handlers added by configure_logging so tests don't leak state."""
     root = logging.getLogger(_ROOT_LOGGER_NAME)
     yield
-    root.handlers.clear()
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
     root.setLevel(logging.WARNING)
 
 
@@ -156,3 +158,86 @@ def test_make_run_log_path_format(tmp_path):
     assert path.suffix == ".log"
     # Timestamp portion: YYYYMMDD_HHMMSS (15 chars)
     assert len(path.stem) == len("run-") + 15
+
+
+def test_run_logging_isolates_runs_and_preserves_explicit_log(tmp_path):
+    from judgearena.artifacts import prepare_run_directory, run_logging
+    from judgearena.config import RunConfig
+
+    explicit_log = tmp_path / "explicit.log"
+    configure_logging(log_file=explicit_log)
+    previous_handlers = get_logger().handlers.copy()
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "Dummy/a", "baseline": "Dummy/b"},
+        judge={"model": "Dummy/j"},
+    )
+
+    @run_logging()
+    def run(name, *, fail=False):
+        prepare_run_directory(cfg, tmp_path / name)
+        get_logger().warning("message from %s", name)
+        if fail:
+            raise ValueError("run failed")
+
+    with pytest.raises(ValueError, match="run failed"):
+        run("first", fail=True)
+    assert get_logger().handlers == previous_handlers
+    run("second")
+    assert get_logger().handlers == previous_handlers
+
+    first_log = next((tmp_path / "first").glob("run-*.log")).read_text()
+    assert "message from first" in first_log
+    assert "message from second" not in first_log
+    assert (
+        "message from second"
+        in next((tmp_path / "second").glob("run-*.log")).read_text()
+    )
+    assert "message from first" in explicit_log.read_text()
+    assert "message from second" in explicit_log.read_text()
+
+
+def test_repeated_run_directory_keeps_previous_config_and_results(tmp_path):
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig
+
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "Dummy/a"},
+        judge={"model": "Dummy/j"},
+        run={"no_log_file": True},
+    )
+    first = prepare_run_directory(cfg, tmp_path / "evaluation")
+    original_config = (first / "config.yaml").read_text()
+    (first / "results.json").write_text('{"complete":true}')
+    cfg.run.seed += 1
+    import os
+    import stat
+
+    previous_umask = os.umask(0o002)
+    try:
+        second = prepare_run_directory(cfg, tmp_path / "evaluation")
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(second.stat().st_mode) & 0o777 == 0o775
+    assert first != second
+    assert (first / "config.yaml").read_text() == original_config
+    assert (first / "results.json").read_text() == '{"complete":true}'
+    assert not (second / "results.json").exists()
+
+
+def test_importing_logging_does_not_load_model_or_runner_stack():
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import judgearena.log; "
+            "assert 'judgearena.models' not in sys.modules; "
+            "assert 'judgearena.config' not in sys.modules; "
+            "assert 'judgearena.benchmarks.runner' not in sys.modules",
+        ],
+        check=True,
+    )

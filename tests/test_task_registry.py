@@ -651,3 +651,55 @@ def test_meta_eval_language_variant_preserves_the_dataset_and_protocol():
     )
     assert english.spec == task.spec
     assert english.selection.values == ("en",)
+
+
+def test_script_components_registered_after_catalog_import_work_in_task(
+    tmp_path, monkeypatch
+):
+    import pandas as pd
+
+    import judgearena.benchmarks.scoring as scoring
+    import judgearena.prompts.registry as prompts
+    from judgearena.prompts.parsing import ScoreParser
+
+    monkeypatch.setattr(scoring, "_METRIC_TYPES", dict(scoring._METRIC_TYPES))
+    monkeypatch.setattr(prompts, "PRESETS", dict(prompts.PRESETS))
+
+    @scoring.register_metric("custom_mean")
+    class CustomMean:
+        required_columns = ("score",)
+
+        def calculate(self, rows):
+            return {"mean": float(rows.score.mean())}
+
+        @staticmethod
+        def render(result):
+            return str(result["mean"])
+
+    prompts.register_prompt(
+        prompts.JudgePromptPreset(
+            name="custom_score",
+            parser=ScoreParser(),
+            judging_mode="single_answer",
+            inline_user='Grade {completion}. Return JSON: {{"score": number}}',
+        )
+    )
+    definition = _task_definition()
+    definition["protocol"]["judge"]["default_prompt_preset"] = "custom_score"
+    definition["protocol"]["scoring"]["metrics"] = [{"metric": "custom_mean"}]
+    _write_family(
+        tmp_path, family="custom", filename="task.yaml", definition=definition
+    )
+    task = load_tasks(tmp_path)["test-task"]
+    metrics = scoring.build_metrics(task.spec.protocol.scoring.metrics)
+    assert scoring.calculate_metrics(pd.DataFrame({"score": [4, 8]}), metrics) == {
+        "custom_mean": {"mean": 6}
+    }
+    assert (
+        "score"
+        in scoring.calculate_metrics(pd.DataFrame({"pref": [0.5]}), metrics)[
+            "custom_mean"
+        ]["error"]
+    )
+    with pytest.raises(ValueError, match="already registered"):
+        scoring.register_metric("custom_mean")(CustomMean)
