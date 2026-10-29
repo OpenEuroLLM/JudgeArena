@@ -20,7 +20,7 @@ from judgearena.benchmarks.pairwise.baselines import (
 from judgearena.benchmarks.pairwise.runner import run_pairwise
 from judgearena.benchmarks.registry import BenchmarkAdapter, resolve_benchmark_adapter
 from judgearena.config import RunConfig
-from judgearena.datasets.pairwise import PairwiseTaskData
+from judgearena.datasets.data import CompletionData
 from judgearena.models import InferenceResult, make_model
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import MetricSpec, ScoringSpec
@@ -73,7 +73,7 @@ def mock_external_data_and_cache(monkeypatch):
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda task, n_instructions=None: PairwiseTaskData(
+        lambda task, n_instructions=None: CompletionData(
             instructions=(
                 instructions.head(n_instructions)
                 if n_instructions is not None
@@ -313,7 +313,7 @@ def test_official_generation_receives_full_prompt_unless_explicitly_capped(
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda *_args, **_kwargs: PairwiseTaskData(instructions=instructions),
+        lambda *_args, **_kwargs: CompletionData(instructions=instructions),
     )
     seen_inputs = []
 
@@ -511,13 +511,13 @@ def test_run_pairwise_routes_arena_v2_baselines_and_prompts(monkeypatch, tmp_pat
                 "o3-mini-2025-01-31",
                 "gemini-2.0-flash-001",
             ],
-            "output": ["candidate hard", "candidate creative", "hard", "creative"],
+            "completion": ["candidate hard", "candidate creative", "hard", "creative"],
         }
     )
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda task, n_instructions=None: PairwiseTaskData(instructions, outputs),
+        lambda task, n_instructions=None: CompletionData(instructions, outputs),
     )
 
     run_pairwise(
@@ -560,7 +560,7 @@ def test_run_pairwise_weights_and_preserves_incomplete_alpaca_annotations(
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_pairwise_task_data",
-        lambda *_args, **_kwargs: PairwiseTaskData(instructions),
+        lambda *_args, **_kwargs: CompletionData(instructions),
     )
     missing = InferenceResult(text="M")
     judge_kwargs = _mock_alpaca_judge(monkeypatch, [valid, missing, valid, missing])
@@ -634,3 +634,24 @@ def test_all_missing_both_alpaca_judgments_keep_numeric_preferences(caplog):
         annotation.parsed is None for annotation in annotations + reversed_annotations
     )
     assert "1/1 judge outputs could not be parsed" in caplog.text
+
+
+def test_complete_missing_preserves_repeated_cache_ids():
+    rows = pd.Series(["q1", "q2", "q3"], index=["shared"] * 3)
+    existing = pd.DataFrame(
+        {"completion": ["", None, None], "checkpoint": ["saved", "stale", "stale"]},
+        index=rows.index,
+    )
+    result = benchmark_execution.complete_missing(
+        rows,
+        existing,
+        lambda pending: (
+            pending.str.upper().to_frame("completion").assign(tokens=[2, 3])
+        ),
+    )
+    assert result["completion"].tolist() == ["", "Q2", "Q3"]
+    assert result.index.tolist() == ["shared"] * 3
+    assert result.iloc[0]["checkpoint"] == "saved"
+    assert result.iloc[1:]["checkpoint"].isna().all()
+    assert result.iloc[1:]["tokens"].tolist() == [2, 3]
+    assert existing["checkpoint"].tolist() == ["saved", "stale", "stale"]

@@ -13,9 +13,8 @@ import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
 from judgearena.benchmarks.execution import (
-    build_completion_cache,
-    build_generation_kwargs,
     build_judge,
+    load_or_generate_completions,
 )
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
@@ -191,42 +190,29 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
         else generate_instructions
     )
 
-    def _run_generation(
-        model_spec: str, *, generation_kwargs: dict[str, object]
-    ) -> pd.DataFrame:
-        return generation_function(
-            instructions=instructions,
-            model=model_spec,
-            truncate_input_chars=cfg.generation.truncate_all_input_chars,
-            use_tqdm=cfg.run.use_tqdm,
-            inference_cache=build_completion_cache(cfg),
-            **generation_kwargs,
-        )
-
-    def _align_completion_series(df: pd.DataFrame) -> pd.Series:
-        return df.set_index("instruction_index").loc[instructions.index, "completion"]
-
     def _load_or_generate_completions(
         model_spec: str,
         *,
         role: str,
         instruction_ids: pd.Index | None = None,
     ) -> pd.Series:
-        preloaded = task_data.model_completion(
+        selected = (
+            instructions
+            if instruction_ids is None
+            else instructions.loc[instruction_ids]
+        )
+        existing = task_data.model_output_rows(
+            model_spec, instruction_ids=selected.index
+        )
+        return load_or_generate_completions(
+            cfg,
             model_spec,
-            instruction_ids=instruction_ids,
-        )
-        if preloaded is not None:
-            return preloaded
-        generation_kwargs = build_generation_kwargs(cfg, model_spec, role=role)
-        generated = _run_generation(
-            model_spec,
-            generation_kwargs=generation_kwargs,
-        )
-        completions = _align_completion_series(generated)
-        return (
-            completions if instruction_ids is None else completions.loc[instruction_ids]
-        )
+            selected,
+            existing,
+            role=role,
+            generate=generation_function,
+            use_tqdm=cfg.run.use_tqdm,
+        )["completion"]
 
     completions_A = _load_or_generate_completions(cfg.model.name, role="A")
 
