@@ -419,9 +419,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     metric_results = calculate_metrics(
         battles,
         metrics,
-        runtime_by_metric={
-            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
-        },
+        runtime={"rng": np.random.default_rng(cfg.run.seed)},
     )
 
     report = BattleReport(

@@ -252,9 +252,7 @@ def _finalize_mt_bench_run(
     metric_results = calculate_metrics(
         battles,
         metrics,
-        runtime_by_metric={
-            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
-        },
+        runtime={"rng": np.random.default_rng(cfg.run.seed)},
     )
     report = BattleReport(
         task=cfg.task,

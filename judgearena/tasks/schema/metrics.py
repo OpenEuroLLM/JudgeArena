@@ -1,4 +1,4 @@
-"""Declarative requests for battle-dataframe metrics."""
+"""Declarative requests for annotation or battle metrics."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from judgearena.tasks.schema.base import StrictFrozenModel
 
 
 class MetricSpec(StrictFrozenModel):
-    """One named calculation over a battle dataframe."""
+    """One named calculation over evaluation rows."""
 
     metric: str = Field(min_length=1)
     breakdown_by: tuple[str, ...] = ()
@@ -25,9 +25,9 @@ class MetricSpec(StrictFrozenModel):
 
 
 class ScoringSpec(StrictFrozenModel):
-    """Ordered metric calculations for one battle-producing protocol."""
+    """Ordered metric calculations; an empty list keeps annotations only."""
 
-    metrics: tuple[MetricSpec, ...] = Field(min_length=1)
+    metrics: tuple[MetricSpec, ...] = ()
 
     @model_validator(mode="after")
     def _validate_metrics(self) -> ScoringSpec:

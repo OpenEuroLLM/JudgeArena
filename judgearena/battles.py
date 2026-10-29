@@ -136,3 +136,45 @@ def preference_values(values: pd.Series) -> pd.Series:
 def hard_preferences(values: pd.Series) -> pd.Series:
     prefs = preference_values(values)
     return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
+
+
+def focal_battles(battles: pd.DataFrame) -> pd.DataFrame:
+    """Normalize rows carrying an evaluation model to the focal/opponent view."""
+    if "evaluation_model" not in battles:
+        return battles
+    frame = battles.loc[battles["evaluation_model"].notna()].copy()
+    required = {"model_a", "model_b", "pref"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"Evaluation battles are missing columns: {missing}.")
+    focal_is_a = frame["model_a"] == frame["evaluation_model"]
+    focal_is_b = frame["model_b"] == frame["evaluation_model"]
+    if not (focal_is_a ^ focal_is_b).all():
+        raise ValueError(
+            "Each evaluation battle must contain its evaluation model exactly once."
+        )
+    frame = frame.assign(**pairwise_aliases(frame, model_is_a=focal_is_a))
+    frame["pref"] = frame["pref"].where(focal_is_a, 1 - frame["pref"])
+    return frame
+
+
+def pairwise_aliases(
+    battles: pd.DataFrame,
+    *,
+    model_is_a: pd.Series,
+) -> dict[str, pd.Series]:
+    """Derive metric aliases from explicitly selected model slots."""
+    aliases = {
+        "model": battles["model_a"].where(model_is_a, battles["model_b"]),
+        "baseline": battles["model_b"].where(model_is_a, battles["model_a"]),
+    }
+    if {"completion_a", "completion_b"} <= set(battles.columns):
+        aliases.update(
+            completion_model=battles["completion_a"].where(
+                model_is_a, battles["completion_b"]
+            ),
+            completion_baseline=battles["completion_b"].where(
+                model_is_a, battles["completion_a"]
+            ),
+        )
+    return aliases
