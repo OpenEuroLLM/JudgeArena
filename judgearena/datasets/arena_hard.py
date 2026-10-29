@@ -4,95 +4,18 @@ from typing import Any
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import HuggingFaceDatasetSource, ResolvedTaskSpec
+from judgearena.datasets.data import CompletionData
+from judgearena.datasets.registry import (
+    DatasetAdapter,
+    register_dataset,
+    source_cache_dir,
+)
+from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 
-def is_arena_hard_dataset(dataset: str) -> bool:
-    task = get_packaged_task(dataset)
-    return task is not None and task.spec.dataset.adapter == "arena_hard"
-
-
-def normalize_official_arena_hard(
-    raw_df: pd.DataFrame, dataset: str
-) -> tuple[pd.DataFrame, pd.DataFrame | None]:
-    if not is_arena_hard_dataset(dataset):
-        raise ValueError(f"Unsupported Arena-Hard dataset: {dataset}")
-    df_instructions = _build_instructions(raw_df)
-    df_model_outputs = _build_model_outputs(raw_df)
-    return df_instructions, df_model_outputs
-
-
-def _source(task: ResolvedTaskSpec) -> HuggingFaceDatasetSource:
-    source = task.spec.dataset.sources.get("examples")
-    if not isinstance(source, HuggingFaceDatasetSource) or source.config is None:
-        raise ValueError(
-            f"Task {task.task!r} must define an 'examples' Hugging Face source "
-            "with its Arena-Hard data variant in 'config'."
-        )
-    return source
-
-
-def download_task_sources(task: ResolvedTaskSpec, local_tables_path: Path) -> None:
-    """Populate canonical instruction and output tables for one task.
-
-    Pulls the raw jsonl files directly via `snapshot_download` and reads them
-    with pandas: upstream's per-row `messages[].content` oscillates between
-    string and dict across answer files, so `datasets.load_dataset` can't
-    materialize them into a single Arrow schema.
-    """
-    if task.spec.dataset.adapter != "arena_hard":
-        raise ValueError(f"Task {task.task!r} does not use the Arena-Hard adapter.")
-    dataset = task.task
-    instructions_path = local_tables_path / "instructions" / f"{dataset}.csv"
-    model_outputs_path = local_tables_path / "model_outputs" / f"{dataset}.csv.zip"
-    if instructions_path.exists() and model_outputs_path.exists():
-        return
-
-    source = _source(task)
-    variant = source.config
-    snapshot_root = snapshot_download(
-        repo_id=source.repo_id,
-        repo_type="dataset",
-        allow_patterns=list(source.allow_patterns) or None,
-        force_download=False,
-        revision=source.revision,
-    )
-    raw_df = _read_arena_hard_jsonl_frames(
-        variant_dir=Path(snapshot_root) / "data" / variant
-    )
-    df_instructions, df_model_outputs = normalize_official_arena_hard(
-        raw_df=raw_df, dataset=dataset
-    )
-    instructions_path.parent.mkdir(parents=True, exist_ok=True)
-    model_outputs_path.parent.mkdir(parents=True, exist_ok=True)
-    df_instructions.to_csv(instructions_path, index=False)
-    if df_model_outputs is not None:
-        df_model_outputs.to_csv(model_outputs_path, index=False)
-
-
-def load_task_instructions(
-    task: ResolvedTaskSpec, local_tables_path: Path
-) -> pd.DataFrame:
-    """Load normalized instructions for a registered Arena-Hard task."""
-    download_task_sources(task, local_tables_path)
-    return pd.read_csv(local_tables_path / "instructions" / f"{task.task}.csv")
-
-
-def load_task_model_outputs(
-    task: ResolvedTaskSpec, local_tables_path: Path
-) -> pd.DataFrame | None:
-    """Load normalized reference outputs for a registered Arena-Hard task."""
-    download_task_sources(task, local_tables_path)
-    path = local_tables_path / "model_outputs" / f"{task.task}.csv.zip"
-    return pd.read_csv(path) if path.exists() else None
-
-
-def download_arena_hard(dataset: str, local_tables_path: Path) -> None:
-    """Compatibility wrapper around the registered Arena-Hard adapter."""
-    task = get_packaged_task(dataset)
-    if task is not None and task.spec.dataset.adapter == "arena_hard":
-        download_task_sources(task, local_tables_path)
+def _read_model_outputs(path: Path) -> pd.DataFrame | None:
+    outputs = pd.read_csv(path).rename(columns={"output": "completion"})
+    return None if outputs.empty else outputs
 
 
 def _read_arena_hard_jsonl_frames(variant_dir: Path) -> pd.DataFrame:
@@ -143,16 +66,16 @@ def _build_model_outputs(raw_df: pd.DataFrame) -> pd.DataFrame | None:
         {
             "instruction_index": instruction_index,
             "model": raw_df["model"],
-            "output": extracted_output,
+            "completion": extracted_output,
         }
     )
-    df = df[df["model"].notna() & df["output"].notna()]
+    df = df[df["model"].notna() & df["completion"].notna()]
     df = df.dropna(subset=["instruction_index"])
     if df.empty:
         return None
     df["instruction_index"] = df["instruction_index"].astype(str)
     df["model"] = df["model"].astype(str)
-    df["output"] = df["output"].astype(str)
+    df["completion"] = df["completion"].astype(str)
     return df.reset_index(drop=True)
 
 
@@ -209,3 +132,72 @@ def _turns_to_text(turns_value: Any) -> str:
             if key in turns_value:
                 return str(turns_value[key])
     return str(turns_value)
+
+
+@register_dataset("arena_hard")
+class ArenaHardAdapter(DatasetAdapter):
+    def _source(self) -> HuggingFaceDatasetSource:
+        source = self.task.spec.dataset.sources.get("examples")
+        if not isinstance(source, HuggingFaceDatasetSource) or source.config is None:
+            raise ValueError(
+                f"Task {self.task.task!r} must define an 'examples' Hugging Face source "
+                "with its Arena-Hard data variant in 'config'."
+            )
+        return source
+
+    def _table_paths(self) -> tuple[Path, Path]:
+        root = source_cache_dir(self.task, self.cache_dir)
+        return (
+            root / "instructions" / f"{self.task.task}.csv",
+            root / "model_outputs" / f"{self.task.task}.csv.zip",
+        )
+
+    def download(self) -> None:
+        """Populate canonical instruction and output tables for one task.
+
+        Pulls the raw jsonl files directly via `snapshot_download` and reads them
+        with pandas: upstream's per-row `messages[].content` oscillates between
+        string and dict across answer files, so `datasets.load_dataset` can't
+        materialize them into a single Arrow schema.
+        """
+        instructions_path, model_outputs_path = self._table_paths()
+        if instructions_path.exists() and model_outputs_path.exists():
+            return
+
+        source = self._source()
+        variant = source.config
+        snapshot_root = snapshot_download(
+            repo_id=source.repo_id,
+            repo_type="dataset",
+            allow_patterns=list(source.allow_patterns) or None,
+            force_download=False,
+            revision=source.revision,
+        )
+        raw_df = _read_arena_hard_jsonl_frames(
+            variant_dir=Path(snapshot_root) / "data" / variant
+        )
+        df_instructions = _build_instructions(raw_df)
+        df_model_outputs = _build_model_outputs(raw_df)
+        instructions_path.parent.mkdir(parents=True, exist_ok=True)
+        model_outputs_path.parent.mkdir(parents=True, exist_ok=True)
+        df_instructions.to_csv(instructions_path, index=False)
+        if df_model_outputs is None:
+            # An empty output table also records a completed source download.
+            df_model_outputs = pd.DataFrame(
+                columns=["instruction_index", "model", "completion"]
+            )
+        df_model_outputs.to_csv(model_outputs_path, index=False)
+
+    def load_data(self) -> CompletionData:
+        instructions = self.load_instructions()
+        _, outputs_path = self._table_paths()
+        return CompletionData.from_frames(
+            instructions,
+            _read_model_outputs(outputs_path),
+        )
+
+    def load_instructions(self) -> pd.DataFrame:
+        """Load normalized instructions for a registered Arena-Hard task."""
+        self.download()
+        instructions_path, _ = self._table_paths()
+        return pd.read_csv(instructions_path)

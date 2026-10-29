@@ -9,6 +9,16 @@ from urllib.request import urlretrieve
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from judgearena.datasets.data import (
+    CompletionData,
+    validate_instruction_ids,
+    validate_messages,
+)
+from judgearena.datasets.registry import (
+    DatasetAdapter,
+    register_dataset,
+    source_cache_dir,
+)
 from judgearena.paths import data_root
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
@@ -17,6 +27,313 @@ from judgearena.tasks.schema import (
     ResolvedTaskSpec,
     TaskDefaultBaseline,
 )
+
+
+def _normalize_question_id(question_id: object) -> object:
+    try:
+        return int(question_id)
+    except Exception:
+        return question_id
+
+
+def _git_raw_url(source: GitRawSource) -> str:
+    repository = source.repository.rstrip("/")
+    github_prefix = "https://github.com/"
+    if repository.startswith(github_prefix):
+        project = repository.removeprefix(github_prefix)
+        return (
+            f"https://raw.githubusercontent.com/{project}/{source.revision}/"
+            f"{source.path}"
+        )
+    return f"{repository}/raw/{source.revision}/{source.path}"
+
+
+def _extract_answer_turns(record: dict, source_name: str) -> tuple[object, list[str]]:
+    question_id = record.get("question_id", record.get("id"))
+    if question_id is None:
+        raise ValueError(
+            f"MT-Bench answer record from {source_name} is missing question_id/id."
+        )
+    choices = record.get("choices")
+    if not (isinstance(choices, list) and choices):
+        raise ValueError(
+            f"MT-Bench answer record for question {question_id} in {source_name} "
+            "is missing a non-empty choices list."
+        )
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise ValueError(
+            f"MT-Bench answer record for question {question_id} in {source_name} "
+            "has a malformed first choice entry."
+        )
+    turns = first_choice.get("turns")
+    if not isinstance(turns, list):
+        raise ValueError(
+            f"MT-Bench answer record for question {question_id} in {source_name} "
+            "is missing a turns list."
+        )
+    return _normalize_question_id(question_id), turns
+
+
+@register_dataset("mt_bench")
+class MTBenchAdapter(DatasetAdapter):
+    source_dir: Path
+
+    def __init__(self, task: ResolvedTaskSpec, cache_dir: Path) -> None:
+        super().__init__(task, cache_dir)
+        self.source_dir = source_cache_dir(task, cache_dir)
+
+    def _space_source(self) -> HuggingFaceSpaceSource:
+        source = self.task.spec.dataset.sources.get("benchmark")
+        if not isinstance(source, HuggingFaceSpaceSource):
+            raise ValueError(
+                f"Task {self.task.task!r} must define a Hugging Face Space source "
+                "named 'benchmark'."
+            )
+        return source
+
+    def _reference_source(self) -> GitRawSource:
+        source = self.task.spec.dataset.sources.get("references")
+        if not isinstance(source, GitRawSource):
+            raise ValueError(
+                f"Task {self.task.task!r} must define a Git raw source named 'references'."
+            )
+        return source
+
+    def _snapshot_files(
+        self, *, allow_patterns: list[str], expected_path: Path, description: str
+    ) -> None:
+        source = self._space_source()
+        try:
+            snapshot_download(
+                repo_id=source.repo_id,
+                repo_type="space",
+                allow_patterns=allow_patterns,
+                local_dir=self.source_dir,
+                force_download=False,
+                revision=source.revision,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to download {description} from Hugging Face Space "
+                f"{source.repo_id!r}. If you are offline, place the file at "
+                f"{expected_path}."
+            ) from exc
+        if not expected_path.exists():
+            raise FileNotFoundError(
+                f"Could not locate {description} after download. Expected {expected_path}."
+            )
+
+    def _download_references(self) -> Path | None:
+        reference_dir = self.source_dir / "reference_answer"
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        reference_path = reference_dir / "gpt-4.jsonl"
+        if reference_path.exists():
+            return reference_path
+        source = self._reference_source()
+        try:
+            urlretrieve(_git_raw_url(source), reference_path)
+        except Exception as exc:
+            warnings.warn(
+                "Could not download MT-Bench GPT-4 reference answers. Falling back "
+                f"to inline references from question.jsonl: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return None
+        return reference_path
+
+    def _download_questions(self) -> tuple[Path, Path | None]:
+        try:
+            self.source_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"Cannot create MT-Bench cache directory at {self.source_dir}. Set "
+                "JUDGEARENA_DATA to a writable location."
+            ) from exc
+
+        question_path = self.source_dir / "data" / "mt_bench" / "question.jsonl"
+        if not question_path.exists():
+            self._snapshot_files(
+                allow_patterns=[question_path.relative_to(self.source_dir).as_posix()],
+                expected_path=question_path,
+                description="MT-Bench questions",
+            )
+        return question_path, self._download_references()
+
+    def download_model_answer(self, model_id: str) -> Path:
+        """Download a cached MT-Bench model-answer file if missing."""
+
+        answer_path = (
+            self.source_dir / "data" / "mt_bench" / "model_answer" / f"{model_id}.jsonl"
+        )
+        if answer_path.exists():
+            return answer_path
+        answer_path.parent.mkdir(parents=True, exist_ok=True)
+        self._snapshot_files(
+            allow_patterns=[answer_path.relative_to(self.source_dir).as_posix()],
+            expected_path=answer_path,
+            description=f"MT-Bench model answers for {model_id!r}",
+        )
+        return answer_path
+
+    def download(self) -> None:
+        """Download every source required by the registered MT-Bench task."""
+        self._download_questions()
+        baseline = self.task.spec.protocol.baseline
+        if isinstance(baseline, TaskDefaultBaseline):
+            self.download_model_answer(baseline.reference_id)
+
+    def _load_answer_turns(self, model: str) -> pd.DataFrame | None:
+        """Read all answer turns, preserving their source order."""
+        local_path = Path(model)
+        if local_path.exists():
+            answer_path = local_path
+        elif "/" not in model:
+            answer_path = self.download_model_answer(model_id=model)
+        else:
+            return None
+
+        answer_records = pd.read_json(answer_path, lines=True).to_dict(orient="records")
+        rows = []
+        for record in answer_records:
+            question_id, turns = _extract_answer_turns(record, str(answer_path))
+            rows.append(
+                {
+                    "instruction_index": question_id,
+                    "answer_turns": turns,
+                }
+            )
+
+        df_answers = pd.DataFrame(rows)
+        if df_answers.empty:
+            raise ValueError(f"MT-Bench answer file {answer_path} contained no rows.")
+        df_answers.sort_values("instruction_index", inplace=True)
+        return df_answers
+
+    def load_instructions(self) -> pd.DataFrame:
+        fields = self.fields
+        question_path, reference_path = self._download_questions()
+        questions = pd.read_json(question_path, lines=True).to_dict(orient="records")
+
+        references_by_id: dict[int | str, list[str]] = {}
+        use_inline_references = reference_path is None
+        if reference_path is not None:
+            try:
+                records = pd.read_json(reference_path, lines=True).to_dict(
+                    orient="records"
+                )
+                for record in records:
+                    question_id = record.get("question_id", record.get("id"))
+                    choices = record.get("choices")
+                    if question_id is None or not (
+                        isinstance(choices, list) and choices
+                    ):
+                        continue
+                    first_choice = choices[0]
+                    turns = (
+                        first_choice.get("turns")
+                        if isinstance(first_choice, dict)
+                        else None
+                    )
+                    if not isinstance(turns, list):
+                        continue
+                    references_by_id[question_id] = turns
+                    references_by_id[_normalize_question_id(question_id)] = turns
+            except Exception as exc:
+                warnings.warn(
+                    "Failed to parse MT-Bench GPT-4 references. Falling back to "
+                    f"inline references from question.jsonl: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                use_inline_references = True
+
+        rows = []
+        for record in questions:
+            question_id_raw = record.get(fields.id, record.get("id"))
+            if question_id_raw is None:
+                raise ValueError(
+                    f"MT-Bench question is missing field {fields.id!r}: keys={list(record)}"
+                )
+            question_id = _normalize_question_id(question_id_raw)
+            turns = record.get(fields.instruction)
+            if isinstance(turns, list):
+                turn_1 = turns[0] if turns else None
+                turn_2 = turns[1] if len(turns) > 1 else None
+            else:
+                turn_1 = turns
+                turn_2 = record.get("turn_2")
+
+            reference_turns = references_by_id.get(
+                question_id_raw
+            ) or references_by_id.get(question_id)
+            if reference_turns is None and use_inline_references:
+                inline_reference = record.get("reference")
+                if isinstance(inline_reference, list):
+                    reference_turns = inline_reference
+
+            rows.append(
+                {
+                    "instruction_index": question_id,
+                    "category": (
+                        record.get(fields.category)
+                        if fields.category is not None
+                        else None
+                    ),
+                    "user_turns": turns
+                    if isinstance(turns, list)
+                    else [t for t in (turn_1, turn_2) if t is not None],
+                    "turn_1": turn_1,
+                    "turn_2": turn_2,
+                    "reference_turn_1": (
+                        reference_turns[0] if reference_turns else None
+                    ),
+                    "reference_turn_2": (
+                        reference_turns[1]
+                        if reference_turns is not None and len(reference_turns) > 1
+                        else None
+                    ),
+                    "instruction": turn_1,
+                }
+            )
+        return pd.DataFrame(rows)
+
+    def load_data(self) -> CompletionData:
+        return CompletionData.from_frames(
+            self.load_instructions(),
+            model_output_loader=self.load_model_outputs,
+        )
+
+    def load_model_outputs(self, model: str) -> pd.DataFrame | None:
+        answers = self._load_answer_turns(model)
+        if answers is None:
+            return None
+        questions = self.load_instructions().set_index("instruction_index")
+        validate_instruction_ids(
+            answers["instruction_index"],
+            questions.index,
+            f"Saved answers for {model!r}",
+        )
+        conversations = []
+        for row in answers.itertuples():
+            turns = questions.loc[row.instruction_index, "user_turns"]
+            if len(turns) != len(row.answer_turns):
+                raise ValueError(
+                    f"Saved answers for {row.instruction_index!r} do not cover the question's turns."
+                )
+            messages = [
+                {"role": role, "content": text}
+                for question, answer in zip(turns, row.answer_turns, strict=True)
+                for role, text in (("user", question), ("assistant", answer))
+            ]
+            validate_messages(messages)
+            conversations.append(messages)
+        return answers.drop(columns="answer_turns").assign(
+            model=model,
+            completion=[messages[-1]["content"] for messages in conversations],
+            messages=conversations,
+        )
 
 
 def _task(task_id: str = "mt-bench") -> ResolvedTaskSpec:
@@ -49,13 +366,6 @@ def _task_cache_dir(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
     return local_tables_path / "_sources" / task.definition_task
 
 
-def _normalize_question_id(question_id: object) -> object:
-    try:
-        return int(question_id)
-    except Exception:
-        return question_id
-
-
 def _snapshot_mt_bench_files(
     *,
     task: ResolvedTaskSpec,
@@ -84,18 +394,6 @@ def _snapshot_mt_bench_files(
         raise FileNotFoundError(
             f"Could not locate {description} after download. Expected {expected_path}."
         )
-
-
-def _git_raw_url(source: GitRawSource) -> str:
-    repository = source.repository.rstrip("/")
-    github_prefix = "https://github.com/"
-    if repository.startswith(github_prefix):
-        project = repository.removeprefix(github_prefix)
-        return (
-            f"https://raw.githubusercontent.com/{project}/{source.revision}/"
-            f"{source.path}"
-        )
-    return f"{repository}/raw/{source.revision}/{source.path}"
 
 
 def _download_references(task: ResolvedTaskSpec, local_dir: Path) -> Path | None:
@@ -182,33 +480,6 @@ def download_task_sources(task: ResolvedTaskSpec, local_tables_path: Path) -> No
             local_dir=local_dir,
             task=task,
         )
-
-
-def _extract_answer_turns(record: dict, source_name: str) -> tuple[object, list[str]]:
-    question_id = record.get("question_id", record.get("id"))
-    if question_id is None:
-        raise ValueError(
-            f"MT-Bench answer record from {source_name} is missing question_id/id."
-        )
-    choices = record.get("choices")
-    if not (isinstance(choices, list) and choices):
-        raise ValueError(
-            f"MT-Bench answer record for question {question_id} in {source_name} "
-            "is missing a non-empty choices list."
-        )
-    first_choice = choices[0]
-    if not isinstance(first_choice, dict):
-        raise ValueError(
-            f"MT-Bench answer record for question {question_id} in {source_name} "
-            "has a malformed first choice entry."
-        )
-    turns = first_choice.get("turns")
-    if not isinstance(turns, list):
-        raise ValueError(
-            f"MT-Bench answer record for question {question_id} in {source_name} "
-            "is missing a turns list."
-        )
-    return _normalize_question_id(question_id), turns
 
 
 def load_mt_bench_model_answers(

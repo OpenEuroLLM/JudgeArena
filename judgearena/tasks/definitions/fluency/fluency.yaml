@@ -5,7 +5,7 @@ description: Base-model sentence-completion fluency evaluation; select a languag
 tags: [pairwise, fluency, multilingual, base-model]
 
 variants:
-  selector: language
+  selector: lang
   values:
     - albanian
     - basque

@@ -2,114 +2,105 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+from judgearena.tasks.schema import DatasetFields, ResolvedTaskSpec
 
-from judgearena.tasks.schema import ResolvedTaskSpec
-
-TaskDataFunction = Callable[[ResolvedTaskSpec, Path], pd.DataFrame | None]
-TaskDownloadFunction = Callable[[ResolvedTaskSpec, Path], None]
-TaskBattleFunction = Callable[[ResolvedTaskSpec, Path], pd.DataFrame]
+if TYPE_CHECKING:
+    from judgearena.datasets.data import CompletionData
 
 
-@dataclass(frozen=True)
-class InstructionDatasetAdapter:
-    """Dataset operations required by instruction-based benchmark runners."""
-
-    download: TaskDownloadFunction
-    load_instructions: TaskDataFunction
-    load_model_outputs: TaskDataFunction
+def source_cache_dir(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
+    """Keep downloaded and normalized data specific to its declared inputs."""
+    dataset = json.dumps(task.spec.dataset.model_dump(mode="json"), sort_keys=True)
+    digest = hashlib.sha256(dataset.encode()).hexdigest()[:16]
+    return local_tables_path / "_sources" / task.definition_task / digest
 
 
-@dataclass(frozen=True)
-class BattleDatasetAdapter:
-    """Dataset operations required by arena-battle benchmark runners."""
+@dataclass
+class DatasetAdapter(ABC):
+    """Load a source into the dataset contracts consumed by pipelines.
 
-    download: TaskDownloadFunction
-    load_battles: TaskBattleFunction
+    ``task`` holds the resolved dataset declaration and optional selected variant.
+    ``cache_dir`` is the caller's local table/cache root; each adapter owns its
+    layout and may also use a source library's cache. It is not necessarily the
+    directory containing raw source files.
 
+    Implement ``load_data()`` and decorate the class with
+    ``@register_dataset("my_dataset")``. Interpret source formats and column
+    mappings here, returning ``CompletionData`` or ``PreferenceData`` with useful
+    metadata preserved. Override ``download()`` when sources need downloading.
+    The returned data determines pipeline compatibility.
+    """
 
-TaskDatasetAdapter = InstructionDatasetAdapter | BattleDatasetAdapter
+    task: ResolvedTaskSpec
+    cache_dir: Path
 
+    @property
+    def fields(self) -> DatasetFields:
+        """Require instruction-field mappings when an adapter uses them."""
+        fields = self.task.spec.dataset.fields
+        if fields is None:
+            raise ValueError(
+                f"Dataset adapter {self.task.spec.dataset.adapter!r} requires dataset.fields."
+            )
+        return fields
 
-def _instruction_datasets() -> dict[str, InstructionDatasetAdapter]:
-    from judgearena.datasets import (
-        arena_hard,
-        fluency,
-        judgearena_tables,
-        m_arenahard,
-        mt_bench,
-        mt_bench_101,
-    )
+    def download(self) -> None:
+        """Download missing sources when needed; the default does nothing."""
+        return None
 
-    return {
-        "judgearena_tables": InstructionDatasetAdapter(
-            judgearena_tables.download_task_sources,
-            judgearena_tables.load_task_instructions,
-            judgearena_tables.load_task_model_outputs,
-        ),
-        "arena_hard": InstructionDatasetAdapter(
-            arena_hard.download_task_sources,
-            arena_hard.load_task_instructions,
-            arena_hard.load_task_model_outputs,
-        ),
-        "fluency": InstructionDatasetAdapter(
-            fluency.download_task_sources,
-            fluency.load_task_instructions,
-            fluency.load_task_model_outputs,
-        ),
-        "m_arena_hard": InstructionDatasetAdapter(
-            m_arenahard.download_task_sources,
-            m_arenahard.load_task_instructions,
-            m_arenahard.load_task_model_outputs,
-        ),
-        "mt_bench": InstructionDatasetAdapter(
-            mt_bench.download_task_sources,
-            mt_bench.load_task_instructions,
-            mt_bench.load_task_model_outputs,
-        ),
-        "mt_bench_101": InstructionDatasetAdapter(
-            mt_bench_101.download_task_sources,
-            mt_bench_101.load_task_instructions,
-            mt_bench_101.load_task_model_outputs,
-        ),
-    }
+    @abstractmethod
+    def load_data(self) -> CompletionData:
+        """Return validated data, obtaining any missing sources needed to load it.
+
+        Callers need not call ``download()`` first. Optional saved model answers
+        may be supplied eagerly or through ``CompletionData.model_output_loader``.
+        """
 
 
-def _battle_datasets() -> dict[str, BattleDatasetAdapter]:
-    from judgearena.datasets import arena_battles
-
-    return {
-        "arena_battles": BattleDatasetAdapter(
-            arena_battles.download_task_sources,
-            arena_battles.load_task_battles,
-        ),
-    }
+_DATASETS: dict[str, type[DatasetAdapter]] = {}
 
 
-def instruction_dataset_names() -> frozenset[str]:
-    """Return instruction-adapter IDs owned by the dataset registry."""
-    return frozenset(_instruction_datasets())
+def register_dataset[T: type[DatasetAdapter]](name: str) -> Callable[[T], T]:
+    """Register an adapter class under the ID used by ``dataset.adapter``.
+
+    Use as ``@register_dataset("my_dataset")`` or call with an existing class.
+    Duplicate names raise ``ValueError``. Registration lasts for this Python
+    process; import custom adapters before loading tasks or creating an
+    ``AdapterCatalog``, which snapshots the available names.
+    """
+
+    def register(adapter: T) -> T:
+        if name in _DATASETS:
+            raise ValueError(f"Dataset adapter {name!r} is already registered.")
+        _DATASETS[name] = adapter
+        return adapter
+
+    return register
 
 
-def battle_dataset_names() -> frozenset[str]:
-    """Return battle-adapter IDs owned by the dataset registry."""
-    return frozenset(_battle_datasets())
+def dataset_names() -> frozenset[str]:
+    return frozenset(_DATASETS)
 
 
-def resolve_dataset_adapter(name: str) -> InstructionDatasetAdapter:
-    """Return the instruction-dataset implementation registered under ``name``."""
-    return _instruction_datasets()[name]
+def resolve_dataset_adapter(task: ResolvedTaskSpec, cache_dir: Path) -> DatasetAdapter:
+    return _DATASETS[task.spec.dataset.adapter](task, cache_dir)
 
 
-def resolve_battle_dataset_adapter(name: str) -> BattleDatasetAdapter:
-    """Return the battle-dataset implementation registered under ``name``."""
-    return _battle_datasets()[name]
-
-
-def resolve_download_adapter(name: str) -> TaskDatasetAdapter:
-    """Return any registered dataset adapter for source prefetching."""
-    return {**_instruction_datasets(), **_battle_datasets()}[name]
+# Load built-ins after defining the API so decorators can register their classes.
+from judgearena.datasets import (  # noqa: E402, F401
+    arena_battles,
+    arena_hard,
+    fluency,
+    judgearena_tables,
+    m_arenahard,
+    mt_bench,
+    mt_bench_101,
+)
