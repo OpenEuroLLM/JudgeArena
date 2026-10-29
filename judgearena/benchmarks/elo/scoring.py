@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pandas as pd
 
-from judgearena.battles import summarize_bootstrap
+from judgearena.battles import hard_preferences, summarize_bootstrap
 from judgearena.benchmarks.elo.rating import fit_bradley_terry
 
 
@@ -46,7 +46,7 @@ class BradleyTerryMetric:
         point_ratings = fit_bradley_terry(
             scoring_battles, pref_col="pref", baseline_model=self.baseline_model
         )
-        lifecycle_columns = {"pref_hard", "source", "evaluation_model"}
+        lifecycle_columns = {"pref_hard", "evaluation_model"}
         missing_lifecycle = sorted(lifecycle_columns - set(battles.columns))
         if missing_lifecycle:
             if self.n_bootstraps > 0:
@@ -65,10 +65,14 @@ class BradleyTerryMetric:
         if self.n_bootstraps > 0 and rng is None:
             raise ValueError("Bootstrapped Bradley-Terry requires an RNG.")
 
-        human_battles = scoring_battles.loc[scoring_battles["source"] == "human"].copy()
-        human_battles["pref"] = human_battles["pref_hard"]
-        human_ratings = fit_bradley_terry(
-            human_battles, pref_col="pref", baseline_model=self.baseline_model
+        reference_battles = scoring_battles.reindex(
+            columns=["model_a", "model_b", "reference_pref"]
+        ).dropna(subset=["reference_pref"])
+        reference_battles["pref"] = hard_preferences(
+            reference_battles["reference_pref"]
+        )
+        reference_ratings = fit_bradley_terry(
+            reference_battles, pref_col="pref", baseline_model=self.baseline_model
         )
 
         battle_counts: dict[str, int] = {}
@@ -100,13 +104,13 @@ class BradleyTerryMetric:
         overlap = [
             model
             for model in mean_ratings
-            if model in human_ratings and model != evaluation_model
+            if model in reference_ratings and model != evaluation_model
         ]
-        mae_vs_human = (
+        mae_vs_reference = (
             float(
                 np.mean(
                     [
-                        abs(mean_ratings[model] - human_ratings[model])
+                        abs(mean_ratings[model] - reference_ratings[model])
                         for model in overlap
                     ]
                 )
@@ -130,17 +134,17 @@ class BradleyTerryMetric:
             else float("nan"),
             "rating_n_bootstraps": len(model_rating_values),
             "mean_ratings": mean_ratings,
-            "human_ratings": human_ratings,
+            "reference_ratings": reference_ratings,
             "bootstrap_ratings": bootstrap_ratings,
             "rating_entries": [asdict(entry) for entry in rating_entries],
             "battle_counts": battle_counts,
-            "mae_vs_human": mae_vs_human,
+            "mae_vs_reference": mae_vs_reference,
             "mae_num_models": len(overlap),
             "n_bootstraps": self.n_bootstraps,
             "method": "Soft-ELO" if self.soft else "ELO",
             "evaluation_model": evaluation_model,
-            "llm_judged_battles": int((battles["source"] == "llm-judge").sum()),
-            "human_anchor_battles": len(human_battles),
+            "llm_judged_battles": int(battles["evaluation_model"].notna().sum()),
+            "reference_anchor_battles": len(reference_battles),
         }
 
     @staticmethod
@@ -163,7 +167,7 @@ class BradleyTerryMetric:
             f"bradley_terry: {values['method']} ratings "
             f"({values['n_bootstraps']} bootstraps)",
             f"{values['llm_judged_battles']} judged battles and "
-            f"{values['human_anchor_battles']} human anchor battles",
+            f"{values['reference_anchor_battles']} reference anchor battles",
         ]
         entries = values["rating_entries"]
         if not entries:
@@ -189,8 +193,8 @@ class BradleyTerryMetric:
             )
         if values["mae_num_models"]:
             lines.append(
-                f"MAE vs Human-ELO ({values['mae_num_models']} arena models): "
-                f"{values['mae_vs_human']:.1f}"
+                f"MAE vs reference ELO ({values['mae_num_models']} arena models): "
+                f"{values['mae_vs_reference']:.1f}"
             )
         else:
             lines.append("No overlapping arena models to compute MAE.")

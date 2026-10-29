@@ -904,3 +904,45 @@ def test_category_baseline_uses_configured_field():
         task_id=task.task, task=task, runtime_baseline=None, instructions=instructions
     )
     assert plan.baseline_by_index.tolist() == ["gemini-2.0-flash-001"]
+
+
+@pytest.mark.parametrize("mode", ["single_turn_chat", "multi_turn_chat"])
+def test_missing_answer_generation_reports_model_count_and_cause(mode, tmp_path):
+    from judgearena.benchmarks.pairwise.comparisons import prepare_answers
+
+    protocol = get_packaged_task("alpaca-eval").spec.protocol.model_dump()
+    protocol["generation"] = {"mode": mode}
+    model = "Unavailable/answer"
+    cfg = RunConfig(
+        task="alpaca-eval",
+        protocol=protocol,
+        model={"name": model},
+        judge={"model": "Dummy/j"},
+        run={"store_root": None, "result_folder": str(tmp_path)},
+    )
+    instructions = pd.DataFrame(
+        {"instruction": ["Q1", "Q2"], "user_turns": [["Q1"], ["Q2"]]}
+    )
+    data = CompletionData(
+        instructions,
+        pd.DataFrame(
+            {
+                "instruction_index": [0],
+                "model": [model],
+                "completion": ["saved"],
+                "messages": [
+                    [
+                        {"role": "user", "content": "Q1"},
+                        {"role": "assistant", "content": "saved"},
+                    ]
+                ],
+            }
+        ),
+    )
+    with pytest.raises(
+        RuntimeError, match="1 missing answer.*Unavailable/answer"
+    ) as error:
+        prepare_answers(cfg, data, instructions, model, role="A")
+    assert isinstance(error.value.__cause__, ValueError)
+    assert "provider" in str(error.value)
+    assert "Unavailable" in str(error.value.__cause__)

@@ -52,7 +52,7 @@ def run_evaluation(
     )
     metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = (data if data is not None else load_task_data(resolved_task)).select(
-        resolve_dataset_filters(resolved_task, {})
+        resolve_dataset_filters(resolved_task, cfg.run.filters)
     )
     instructions_df = task_data.instructions
     n_instructions = cfg.generation.n_instructions

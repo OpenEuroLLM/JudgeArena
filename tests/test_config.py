@@ -719,6 +719,27 @@ def test_saved_configuration_keeps_supplied_task_definition(
     assert "hash" in caplog.text
 
 
+def test_dataset_revision_override_survives_reload_and_rebinding(tmp_path, caplog):
+    task = get_packaged_task("alpaca-eval")
+    dataset = task.spec.dataset.model_dump()
+    source = next(iter(dataset["sources"]))
+    dataset["sources"][source]["revision"] = "1" * 40
+    cfg = RunConfig(**_base_generate(), dataset=dataset)
+    path = tmp_path / "config.yaml"
+    dump_config(cfg, path)
+    rebound = load_config(path).for_task(task)
+    assert rebound.resolved_task.spec.dataset.sources[source].revision == "1" * 40
+    assert (
+        rebound.resolved_task.provenance.source_sha256 == task.provenance.source_sha256
+    )
+    assert (
+        rebound.resolved_task.provenance.resolved_sha256
+        != task.provenance.resolved_sha256
+    )
+
+    assert "hash" not in caplog.text
+
+
 def test_cli_prompt_path_override_uses_cwd_not_config_directory(tmp_path, monkeypatch):
     import yaml
 

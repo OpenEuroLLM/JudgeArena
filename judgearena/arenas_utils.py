@@ -2,6 +2,7 @@ import warnings
 from collections.abc import Mapping
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from fast_langdetect import detect_language
 from huggingface_hub import snapshot_download
@@ -169,8 +170,25 @@ def _load_arena_dataframe(
         df["benchmark"] = "ComparIA"
         df["question_id"] = df["id"]
 
-    df["lang"] = df["conversation_a"].apply(
-        lambda conv: detect_language(extract_turn_text(conv[0])).lower()
+    def user_text(conversation):
+        if not isinstance(conversation, (list, tuple, np.ndarray)):
+            return ""
+        try:
+            return next(
+                (
+                    extract_turn_text(turn)
+                    for turn in conversation
+                    if isinstance(turn, dict) and turn.get("role") == "user"
+                ),
+                "",
+            )
+        except (TypeError, ValueError):
+            return ""  # The adapter counts and drops malformed source rows.
+
+    df["lang"] = (
+        df["conversation_a"]
+        .map(user_text)
+        .map(lambda text: detect_language(text).lower() if text else "")
     )
 
     cols = [
@@ -187,9 +205,20 @@ def _load_arena_dataframe(
     df = df.loc[:, cols]
 
     # keep only one turn conversation for now as they are easier to evaluate
-    df["turns"] = df.apply(lambda row: len(row["conversation_a"]) - 1, axis=1)
+    df["turns"] = df["conversation_a"].map(
+        lambda conversation: (
+            len(conversation)
+            - int(
+                isinstance(conversation[0], dict)
+                and conversation[0].get("role") == "system"
+            )
+            - 1
+            if isinstance(conversation, (list, tuple, np.ndarray)) and len(conversation)
+            else 0
+        )
+    )
     n_before = len(df)
-    df = df.loc[df.turns == 1]
+    df = df.loc[df.turns <= 1]
     n_dropped = n_before - len(df)
     if n_dropped > 0:
         logger.info(
