@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pandas as pd
 
-from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
     AllReferencesBaseline,
     CategoryDefaultsBaseline,
@@ -113,17 +111,3 @@ def resolve_baseline_plan(
         f"model.baseline is required for task {task_id!r}; its "
         f"{baseline.strategy!r} baseline policy does not provide a model."
     )
-
-
-def native_pairwise_baseline(task: str) -> str | Mapping[str, str] | None:
-    """Return the baseline declared by a registered task."""
-    resolved = get_packaged_task(task)
-    if resolved is not None:
-        baseline = resolved.spec.protocol.baseline
-        if isinstance(baseline, TaskDefaultBaseline):
-            return baseline.reference_id
-        if isinstance(baseline, CategoryDefaultsBaseline):
-            return baseline.references
-        return None
-
-    return None

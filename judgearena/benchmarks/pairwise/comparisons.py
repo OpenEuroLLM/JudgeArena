@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 
 from judgearena.benchmarks.execution import (
+    build_completion_cache,
+    build_generation_kwargs,
+    complete_missing,
     load_or_generate_completions,
 )
 from judgearena.benchmarks.pairwise.baselines import BaselinePlan
@@ -17,10 +20,50 @@ from judgearena.generate import (
     generate_base,
     generate_instructions,
     generate_messages,
+    generate_multiturn,
 )
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+
+
+def load_conversations(
+    cfg: RunConfig,
+    data: CompletionData,
+    questions: pd.DataFrame,
+    model: str,
+    *,
+    role: Literal["A", "B"],
+) -> pd.DataFrame:
+    """Reuse complete saved conversations and generate missing rows by ID."""
+    existing = data.model_output_rows(model, instruction_ids=questions.index)
+    if existing is not None and existing["completion"].notna().any():
+        _require_columns(existing, {"messages"}, "Saved conversation outputs")
+        for messages in existing.loc[existing["completion"].notna(), "messages"]:
+            validate_messages(messages)
+
+    def generate(pending):
+        generation = cfg.resolved_task.spec.protocol.generation
+        kwargs = build_generation_kwargs(cfg, model, role=role)
+        temperatures = (
+            None if "temperature" in kwargs else dict(generation.category_temperatures)
+        )
+        return generate_multiturn(
+            questions=pending,
+            model=model,
+            truncate_input_chars=cfg.generation.truncate_all_input_chars,
+            use_tqdm=cfg.run.use_tqdm,
+            temperature_config=temperatures,
+            fallback_temperature=generation.fallback_temperature,
+            system_prompt=generation.system_prompt,
+            strip_thinking_before_history=cfg.judge.strip_thinking_before_judging,
+            inference_cache=build_completion_cache(cfg),
+            **kwargs,
+        ).set_index("instruction_index")
+
+    return complete_missing(questions, existing, generate, model=model).assign(
+        model=model
+    )
 
 
 def conversation_comparisons(
@@ -125,6 +168,8 @@ def prepare_answers(
 ) -> pd.DataFrame:
     """Load saved answers and generate missing ones using the task's input format."""
     generation = cfg.resolved_task.spec.protocol.generation
+    if generation.mode == "multi_turn_chat":
+        return load_conversations(cfg, data, selected, model, role=role)
     answers = data.model_output_rows(model, instruction_ids=selected.index)
     if answers is None or answers["completion"].isna().any():
         inputs = selected["instruction"]

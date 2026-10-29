@@ -10,28 +10,28 @@ from judgearena.tasks.schema import ResolvedTaskSpec
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
+    from judgearena.datasets.data import CompletionData
 
 
 class BenchmarkRunner(Protocol):
     """Callable implemented by a benchmark-specific evaluation module."""
 
-    def __call__(self, cfg: RunConfig, task: ResolvedTaskSpec | None, /) -> object: ...
+    def __call__(
+        self,
+        cfg: RunConfig,
+        task: ResolvedTaskSpec | None,
+        /,
+        *,
+        data: CompletionData | None = None,
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
 class BenchmarkAdapter:
-    """Route a set of task names to one benchmark runner.
-
-    ``tasks=None`` defines the fallback adapter and should therefore be last.
-    Adding a benchmark only requires its runner and one registry entry.
-    """
+    """Associate a task protocol runner ID with its implementation."""
 
     name: str
-    tasks: frozenset[str] | None
     runner: BenchmarkRunner
-
-    def supports(self, task: str) -> bool:
-        return self.tasks is None or task in self.tasks
 
 
 @dataclass(frozen=True)
@@ -39,23 +39,21 @@ class ResolvedBenchmark:
     """Runner selection and the task definition resolved during dispatch."""
 
     adapter: BenchmarkAdapter
-    task: ResolvedTaskSpec | None
+    task: ResolvedTaskSpec
 
 
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
-    """Return registered benchmark implementations, specific first."""
+    """Return registered benchmark implementations."""
     from judgearena.benchmarks.elo.runner import run_elo
-    from judgearena.benchmarks.evaluation import run_evaluation as run_pairwise
+    from judgearena.benchmarks.evaluation import run_evaluation
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
-    from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
     from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
 
     return (
-        BenchmarkAdapter("elo", frozenset(), run_elo),
-        BenchmarkAdapter("meta_eval", frozenset(), run_meta_eval),
-        BenchmarkAdapter("mt_bench", frozenset(), run_mt_bench_benchmark),
-        BenchmarkAdapter("mt_bench_101", frozenset(), run_mt_bench_101_benchmark),
-        BenchmarkAdapter("pairwise", None, run_pairwise),
+        BenchmarkAdapter("mt_bench_101", run_mt_bench_101_benchmark),
+        BenchmarkAdapter("elo", run_elo),
+        BenchmarkAdapter("meta_eval", run_meta_eval),
+        BenchmarkAdapter("pairwise", run_evaluation),
     )
 
 
@@ -65,22 +63,14 @@ def benchmark_runner_names() -> frozenset[str]:
 
 
 def resolve_benchmark(task: str | ResolvedTaskSpec) -> ResolvedBenchmark:
-    """Resolve a runner and task definition with one registry lookup."""
-    adapters = benchmark_adapters()
-    resolved = task if isinstance(task, ResolvedTaskSpec) else get_packaged_task(task)
-    if resolved is not None:
-        runner_id = resolved.spec.protocol.runner
-        for adapter in adapters:
-            if adapter.name == runner_id:
-                return ResolvedBenchmark(adapter=adapter, task=resolved)
-        raise ValueError(f"Task {task!r} selects unavailable runner {runner_id!r}.")
-
-    for adapter in adapters:
-        if adapter.supports(task):
-            return ResolvedBenchmark(adapter=adapter, task=None)
-    raise ValueError(f"No generate-and-evaluate adapter supports task {task!r}.")
-
-
-def resolve_benchmark_adapter(task: str) -> BenchmarkAdapter:
-    """Return only the selected adapter for compatibility and inspection."""
-    return resolve_benchmark(task).adapter
+    """Select the runner declared by a resolved task or packaged task name."""
+    resolved = get_packaged_task(task) if isinstance(task, str) else task
+    if resolved is None:
+        raise ValueError(f"Unknown task {task!r}.")
+    runner_id = resolved.spec.protocol.runner
+    for adapter in benchmark_adapters():
+        if adapter.name == runner_id:
+            return ResolvedBenchmark(adapter=adapter, task=resolved)
+    raise ValueError(
+        f"Task {resolved.task!r} selects unavailable runner {runner_id!r}."
+    )

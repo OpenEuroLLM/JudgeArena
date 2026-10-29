@@ -174,6 +174,12 @@ def prompt_metadata(
     return variants
 
 
+def _prepare_mt_bench_prompts(cfg, prompt, instructions):
+    from judgearena.prompts.mt_bench import prepare_mt_bench_prompts
+
+    return prepare_mt_bench_prompts(cfg, prompt, instructions)
+
+
 SCORE_PARSER = JUDGE_PARSERS["score"]
 
 PRESETS: dict[str, JudgePromptPreset] = {
@@ -210,6 +216,8 @@ PRESETS: dict[str, JudgePromptPreset] = {
     FASTCHAT_PAIRWISE_PROMPT_PRESET: JudgePromptPreset(
         name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
         delegated=True,
+        prepare_prompts=_prepare_mt_bench_prompts,
+        aggregation="agreement",
     ),
     MT_BENCH_101_PROMPT_PRESET: JudgePromptPreset(
         name=MT_BENCH_101_PROMPT_PRESET,
