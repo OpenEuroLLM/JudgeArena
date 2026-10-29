@@ -33,6 +33,7 @@ from judgearena.tasks.schema import (
     MetaEvalProtocol,
     ProtocolSpec,
     ResolvedTaskSpec,
+    SingleAnswerProtocol,
     TaskDefaultBaseline,
     TaskProvenance,
     TaskSpec,
@@ -665,7 +666,12 @@ class RunConfig(BaseSettings):
         else:
             if self.model.name is None:
                 raise ValueError("model.name is required.")
-            if isinstance(protocol.baseline, AllReferencesBaseline):
+            if isinstance(protocol, SingleAnswerProtocol):
+                if self.model.baseline is not None or self.judge.swap_mode != "fixed":
+                    raise ValueError(
+                        "Independent single-answer evaluation does not use a baseline or swapped judging."
+                    )
+            elif isinstance(protocol.baseline, AllReferencesBaseline):
                 if self.model.name in protocol.baseline.references:
                     raise ValueError(
                         "model.name must differ from the all_references models."

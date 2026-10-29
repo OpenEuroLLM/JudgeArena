@@ -879,6 +879,126 @@ def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     assert "reference_pref" not in pairs
 
 
+@pytest.mark.parametrize("runner", ["elo", "meta_eval", "single_answer"])
+def test_conversation_workflows_share_score_prompts_and_replay(
+    tmp_path, monkeypatch, runner
+):
+    import judgearena.models as models
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.datasets.arena_battles import ArenaBattlesAdapter
+    from judgearena.datasets.data import PreferenceData
+    from judgearena.prompts.criteria import resolve_criteria
+
+    history = [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Follow-up"},
+        {"role": "assistant", "content": "Final answer"},
+    ]
+    data = PreferenceData.from_battles(
+        pd.DataFrame(
+            {
+                "instruction_index": ["q1", "q2"],
+                "instruction": "First question",
+                "user_turns": [["First question", "Follow-up"]] * 2,
+                "category": ["regular", "creative"],
+                "model_a": "a",
+                "model_b": "b",
+                "completion_a": "Final answer",
+                "completion_b": "Final answer",
+                "messages_a": [history] * 2,
+                "messages_b": [history] * 2,
+                "reference_pref": 0.5,
+            }
+        )
+    )
+    monkeypatch.setattr(ArenaBattlesAdapter, "load_data", lambda self: data)
+    monkeypatch.setattr(generate_and_evaluate, "load_task_data", lambda task: data)
+    task = get_packaged_task("elo-comparia")
+    spec = task.spec.model_dump()
+    judge = {
+        "default_prompt_preset": "single-score",
+        "category_prompts": {"creative": "criteria-score"},
+    }
+    metrics = [
+        {
+            "metric": "mean_score"
+            if runner == "single_answer"
+            else "pairwise_win_rate",
+            "breakdown_by": ["category"],
+        }
+    ]
+    protocol = {
+        "runner": runner,
+        "baseline": {"strategy": "none"},
+        "judge": judge,
+        "scoring": {"metrics": metrics},
+    }
+    if runner != "meta_eval":
+        protocol["generation"] = {"mode": "multi_turn_chat"}
+    if runner != "single_answer":
+        protocol["arena"] = "custom"
+        judge["turns"] = [1, 2]
+    if runner == "meta_eval":
+        metrics.append(
+            {
+                "metric": "meta_eval_agreement",
+                "parameters": {"n_bootstraps": 0, "tie_tolerance": 0.01},
+            }
+        )
+    spec["protocol"] = protocol
+    task = replace(task, spec=type(task.spec).model_validate(spec))
+    response = json.dumps(
+        {"score": 8, "criteria": {c.name: 8 for c in resolve_criteria()}}
+    )
+    cfg = RunConfig(
+        task=task.task,
+        resolved_task=task,
+        model={"name": "Dummy/generated"} if runner != "meta_eval" else {},
+        judge={
+            "model": f"Dummy/{response}",
+            "swap_mode": "fixed" if runner == "single_answer" else "both",
+        },
+        run={
+            "result_folder": str(tmp_path / "first"),
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+            "use_tqdm": False,
+        },
+        **(
+            {"meta_eval": {"top_models": 2, "battles_per_model": 2}}
+            if runner == "meta_eval"
+            else {}
+        ),
+    )
+    run_benchmark(cfg)
+    path = next((tmp_path / "first").rglob("*annotations.*"))
+    annotations = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
+    assert set(annotations.prompt_preset) == {"single-score", "criteria-score"}
+    assert annotations.judge_input.str.contains("First question").all()
+    assert annotations.judge_input.str.contains("Follow-up").any()
+    assert len(annotations) == (2 if runner == "single_answer" else 8)
+    if runner == "meta_eval":
+        result = json.loads(
+            next((tmp_path / "first").rglob("results.json")).read_text()
+        )
+        assert result["metrics"]["meta_eval_agreement"]["all"]["n_attempted"] == 2
+        assert len(result["metrics"]["pairwise_win_rate"]["groups"]["category"]) == 2
+        outcomes = pd.read_parquet(next((tmp_path / "first").rglob("battles.parquet")))
+        assert outcomes.loc[outcomes.turn == 1, "reference_pref"].isna().all()
+        assert outcomes.score_A.eq(8).all()
+        assert (
+            outcomes.parsed_a.map(lambda parsed: json.loads(parsed)["score"])
+            .eq(8)
+            .all()
+        )
+    monkeypatch.setattr(
+        models, "make_model", lambda *a, **kw: pytest.fail("Replay must use cache")
+    )
+    cfg.run.result_folder = str(tmp_path / "replay")
+    run_benchmark(cfg)
+
+
 def test_minimum_score_grouping_requires_scoring_prompt():
     from judgearena.prompts.registry import resolve_judge_prompt
 
