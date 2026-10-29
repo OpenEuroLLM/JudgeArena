@@ -211,6 +211,17 @@ PRESETS: dict[str, JudgePromptPreset] = {
         configure=configure_criteria_prompt,
         option_files=("criteria_file",),
     ),
+    "wildbench-score": JudgePromptPreset(
+        name="wildbench-score",
+        judging_mode="single_answer",
+        parser=JUDGE_PARSERS["wildbench-score"],
+        user_file="wildbench-score.txt",
+    ),
+    "wildbench-reward": JudgePromptPreset(
+        name="wildbench-reward",
+        parser=JUDGE_PARSERS["wildbench-reward"],
+        user_file="wildbench-reward.txt",
+    ),
     "criteria": JudgePromptPreset(
         name="criteria",
         system_file="system-prompt.txt",

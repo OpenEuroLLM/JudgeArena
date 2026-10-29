@@ -103,4 +103,5 @@ from judgearena.datasets import (  # noqa: E402, F401
     m_arenahard,
     mt_bench,
     mt_bench_101,
+    wildbench,
 )

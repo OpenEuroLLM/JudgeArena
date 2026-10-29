@@ -1,0 +1,25 @@
+schema_version: 1
+task_version: 1
+
+dataset:
+  adapter: wildbench
+  sources:
+    examples:
+      type: huggingface_dataset
+      repo_id: allenai/WildBench
+      revision: "26c49eb39d7d5ce2099b0bbafed5a88dcce954ec"
+      config: v2
+    outputs:
+      type: huggingface_dataset
+      repo_id: allenai/WildBench-V2-Model-Outputs
+      revision: "d6755bc68220df853c0825a733430f73f5af2501"
+
+protocol:
+  generation:
+    mode: provided_messages
+    default_temperature: 0.0
+    default_max_out_tokens: 4096
+    default_truncate_input: false
+metadata:
+  reference_implementation: https://github.com/allenai/WildBench/tree/d6b8dcaf377d173d031980f97c16e1a82618c03d
+  paper: https://arxiv.org/abs/2406.04770
