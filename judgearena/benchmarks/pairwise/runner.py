@@ -257,7 +257,7 @@ def run_pairwise(cfg: "RunConfig", resolved_task: ResolvedTaskSpec | None = None
     judge_chat_model = build_judge(cfg)
 
     logger.info("Saving results to %s", res_folder)
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(resolved_task, cfg.judge)
 
     eval_index = instructions.head(n_instructions).index
     prompt_groups = _build_judge_batches(

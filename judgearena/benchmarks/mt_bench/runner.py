@@ -399,7 +399,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench supports only swap_mode='fixed' or 'both'; "
             f"got {cfg.judge.swap_mode!r}."
         )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+    resolved_prompt = resolve_run_judge_prompt(task, cfg.judge, multi_turn=True)
     if (
         resolved_prompt.parser is not None
         and resolved_prompt.parser.requires_top_logprobs

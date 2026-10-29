@@ -139,7 +139,7 @@ def run_meta_eval(
         battles_per_model=cfg.meta_eval.battles_per_model,
         seed=cfg.run.seed,
     )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(task, cfg.judge)
     if resolved_prompt.delegated:
         raise ValueError(
             "Meta-evaluation cannot use delegated prompt preset "

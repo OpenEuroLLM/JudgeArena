@@ -160,7 +160,7 @@ def run_elo(cfg: "RunConfig", task: ResolvedTaskSpec | None = None) -> dict:
     ]
 
     our_completions = completions.tolist()
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge)
+    resolved_prompt = resolve_run_judge_prompt(task, cfg.judge)
 
     completions_A = [
         our_completions[i] if our_model_is_position_a[i] else opponent_completions[i]

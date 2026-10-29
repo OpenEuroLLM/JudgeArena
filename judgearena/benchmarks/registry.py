@@ -64,10 +64,10 @@ def benchmark_runner_names() -> frozenset[str]:
     return frozenset(adapter.name for adapter in benchmark_adapters())
 
 
-def resolve_benchmark(task: str) -> ResolvedBenchmark:
+def resolve_benchmark(task: str | ResolvedTaskSpec) -> ResolvedBenchmark:
     """Resolve a runner and task definition with one registry lookup."""
     adapters = benchmark_adapters()
-    resolved = get_packaged_task(task)
+    resolved = task if isinstance(task, ResolvedTaskSpec) else get_packaged_task(task)
     if resolved is not None:
         runner_id = resolved.spec.protocol.runner
         for adapter in adapters:
