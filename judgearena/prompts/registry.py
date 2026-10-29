@@ -7,6 +7,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.prompts.criteria import configure_criteria_prompt
@@ -22,6 +23,9 @@ from judgearena.prompts.parsing import (
     resolve_judge_parser,
     validate_parser,
 )
+
+if TYPE_CHECKING:
+    from judgearena.config import RunConfig
 
 PromptSource = Literal["preset", "file", "override", "delegated"]
 JudgingMode = Literal["pairwise"]
@@ -68,6 +72,9 @@ class JudgePromptPreset:
     delegated: bool = False
     with_explanation: bool = False
     output_format_file: str | None = None
+    aggregation: Literal["individual", "agreement"] = "individual"
+    prepare_prompts: Callable | None = None
+    """Optional (cfg, prompt, instructions) -> (batch preparation, temperature)."""
     judging_mode: JudgingMode = "pairwise"
     """Number of candidates the prompt judges, independent of the task's runner."""
 
@@ -92,6 +99,8 @@ class ResolvedJudgePrompt:
 
     variant_name: str | None = None
     output_format: str | None = None
+    aggregation: Literal["individual", "agreement"] = "individual"
+    prepare_prompts: Callable | None = None
     judging_mode: JudgingMode = "pairwise"
 
     def validate_for(
@@ -131,6 +140,7 @@ class ResolvedJudgePrompt:
             ),
             "judge_prompt_source": self.source,
             "judge_prompt_delegated": self.delegated,
+            "judge_aggregation": self.aggregation,
             "judge_prompt_system_path": self.system_path,
             "judge_prompt_user_path": self.user_path,
             "judge_prompt_system_sha256": self.system_sha256,
@@ -440,6 +450,8 @@ def resolve_judge_prompt(
         system_path=spec.system_file,
         user_path=spec.user_file,
         output_format=output_format,
+        aggregation=spec.aggregation,
+        prepare_prompts=spec.prepare_prompts,
         judging_mode=spec.judging_mode,
     )
     if spec.configure is not None:
@@ -473,3 +485,48 @@ def resolve_run_judge_prompt(
         multi_turn=multi_turn,
         parser=prompt.parser if prompt is not None else None,
     )
+
+
+def group_judge_prompts(
+    cfg: RunConfig,
+    instructions_df: pd.DataFrame,
+    resolved_prompt: ResolvedJudgePrompt,
+) -> list[tuple[ResolvedJudgePrompt, pd.Index]]:
+    """Group evaluation rows that share the same resolved judge prompt.
+
+    Tasks may map categories to prompt presets (e.g. Arena-Hard v2.0 judges
+    creative writing with a different system prompt). Runtime prompt overrides
+    (a different preset, preset options, or prompt files) disable the per-category mapping.
+    """
+    category_prompts = getattr(
+        cfg.resolved_task.spec.protocol.judge, "category_prompts", {}
+    )
+    if (
+        not category_prompts
+        or (
+            cfg.judge.prompt is not None
+            and (
+                cfg.judge.prompt.options
+                or (
+                    cfg.judge.prompt.preset is not None
+                    and cfg.judge.prompt.preset
+                    != cfg.resolved_task.spec.protocol.judge.default_prompt_preset
+                )
+            )
+        )
+        or resolved_prompt.source != "preset"
+        or "category" not in instructions_df.columns
+    ):
+        return [(resolved_prompt, instructions_df.index)]
+
+    categories = instructions_df["category"]
+    groups: list[tuple[ResolvedJudgePrompt, pd.Index]] = []
+    for category, rows in categories.groupby(
+        categories, sort=False, dropna=False, observed=True
+    ):
+        preset = None if pd.isna(category) else category_prompts.get(category)
+        prompt = (
+            resolved_prompt if preset is None else resolve_judge_prompt(preset=preset)
+        )
+        groups.append((prompt, rows.index))
+    return groups

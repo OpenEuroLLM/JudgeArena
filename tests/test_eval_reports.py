@@ -65,7 +65,7 @@ def test_battlereport_to_dict_arena_shape():
         swap_mode="fixed",
         result_folder="/tmp/run",
         preferences=[0.0, 1.0, 0.5, None],
-        metadata={"baseline_assignment": "flat", "prompt_preset": "default"},
+        metadata={"baseline_models": ["gpt4"], "prompt_preset": "default"},
     )
     d = report.to_dict()
     assert d["schema_version"] == "2"
@@ -76,7 +76,7 @@ def test_battlereport_to_dict_arena_shape():
     assert d["judge_model"] == "judge"
     assert d["swap_mode"] == "fixed"
     assert d["result_folder"] == "/tmp/run"
-    assert d["metadata"]["baseline_assignment"] == "flat"
+    assert d["metadata"]["baseline_models"] == ["gpt4"]
     assert d["metadata"]["prompt_preset"] == "default"
     assert d["metrics"]["pairwise_win_rate"]["num_wins"] == 2
     assert d["preferences"] == [0.0, 1.0, 0.5, None]
@@ -250,7 +250,7 @@ def test_battle_report_save_round_trip(tmp_path):
         swap_mode="fixed",
         result_folder="/tmp/run",
         preferences=[0.0, 1.0, 0.5],
-        metadata={"baseline_assignment": "flat"},
+        metadata={"baseline_models": ["gpt4"]},
     )
 
     path = report.save(tmp_path / "r.json")
