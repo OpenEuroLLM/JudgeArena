@@ -7,9 +7,12 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import numpy as np
+import pandas as pd
 
+from judgearena.prompts.criteria import SCALE_MAX, SCALE_MIN
 from judgearena.utils import strip_thinking_tags
 
 
@@ -41,11 +44,38 @@ class ParsedScore:
     details: dict[str, object] = field(default_factory=dict)
 
 
+class OutputParser[T](Protocol):
+    """Parse a judge response without prescribing the result's meaning."""
+
+    name: str
+    result_type: type[T]
+    """Runtime type of a successful parse; unparseable responses return None."""
+    requires_top_logprobs: bool
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> T | None: ...
+
+
+def validate_parser(parser: OutputParser, expected: type | None = None) -> None:
+    """Check the declared output before inference, without calling the parser."""
+    result_type = getattr(parser, "result_type", None)
+    if not isinstance(result_type, type):
+        raise ValueError(f"Parser {parser_name(parser)!r} must declare a result_type.")
+    if expected is not None and not issubclass(result_type, expected):
+        raise ValueError(
+            f"Parser {parser_name(parser)!r} must return {expected.__name__}; "
+            f"declares {result_type.__name__}."
+        )
+
+
 class JudgeParser(abc.ABC):
     """Parses judge output into a canonical preference and supporting evidence."""
 
     name: str
     """Registry key and run-metadata identifier."""
+
+    result_type = ParsedPreference
 
     requires_top_logprobs: bool = False
     """Whether this parser requires first-token top logprobs."""
@@ -69,6 +99,23 @@ class JudgeParser(abc.ABC):
         *,
         top_logprobs: dict[str, float] | None = None,
     ) -> ParsedPreference | None: ...
+
+
+class FastChatVerdictParser(JudgeParser):
+    name = "fastchat-verdict"
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> ParsedPreference | None:
+        text = strip_thinking_tags(judge_completion).strip()
+        for token, preference, label in (
+            ("A", 0.0, "A"),
+            ("B", 1.0, "B"),
+            ("C", 0.5, "tie"),
+        ):
+            if f"[[{token}]]" in text:
+                return ParsedPreference(preference, label=label)
+        return None
 
 
 # Graded preferences for the official Arena-Hard verdict labels. The spacing
@@ -105,15 +152,6 @@ class ArenaHardVerdict(JudgeParser):
 
     name = "arena-hard-verdict"
 
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
-
     def parse_result(
         self,
         judge_completion: str,
@@ -135,6 +173,51 @@ class ArenaHardVerdict(JudgeParser):
         return ParsedPreference(preference=preference, label=label)
 
 
+def _json_judge_field(judge_completion: str, field: str) -> dict:
+    """Read the last verdict object, retaining nested evidence after analysis/code."""
+    text = strip_thinking_tags(judge_completion).strip()
+    decoder = json.JSONDecoder()
+    details = None
+    offset = 0
+    while (start := text.find("{", offset)) >= 0:
+        try:
+            value, offset = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            offset = start + 1
+            continue
+        if isinstance(value, dict) and field in value:
+            details = value
+    if details is not None:
+        return details
+    # Some benchmark prompts permit a quoted verdict field without outer braces.
+    matches = list(re.finditer(r'"' + re.escape(field) + r'"\s*:\s*', text))
+    for match in reversed(matches):
+        try:
+            value, end = decoder.raw_decode(text, match.end())
+            if end < len(text) and not text[end].isspace() and text[end] not in ",}]":
+                continue
+            return {field: value}
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+def _numeric_score(
+    value, score_range: tuple[float, float] | None = None
+) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(score) or (
+        score_range is not None and not score_range[0] <= score <= score_range[1]
+    ):
+        return None
+    return score
+
+
 class AlpacaEvalToken(JudgeParser):
     """Parse the official logprob-weighted AlpacaEval verdict.
 
@@ -144,15 +227,6 @@ class AlpacaEvalToken(JudgeParser):
     name = "alpaca-eval-token"
     requires_top_logprobs = True
     _TOKENS = ("m", "M")
-
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
 
     def parse_result(
         self,
@@ -202,6 +276,22 @@ def weighted_token_preference(
     return float(weights[1] / weights.sum())
 
 
+def score_preference(
+    score_a: float | None,
+    score_b: float | None,
+    *,
+    temperature: float = 0.3,
+) -> float | None:
+    """0 favors A; 1 favors B. Missing scores give no preference."""
+    if pd.isna(score_a) or pd.isna(score_b):
+        return None
+    logit = temperature * (score_b - score_a)
+    if logit >= 0:
+        return 1.0 / (1.0 + math.exp(-logit))
+    exp_logit = math.exp(logit)
+    return exp_logit / (1.0 + exp_logit)
+
+
 class PairScore(JudgeParser):
     """Score-format parser: temperature-softened preference from A/B scores."""
 
@@ -212,19 +302,17 @@ class PairScore(JudgeParser):
 
     def preference_from_scores(
         self,
-        score_a: float,
-        score_b: float,
+        score_a: float | None,
+        score_b: float | None,
         *,
         temperature: float | None = None,
-    ) -> float:
-        """Return a bounded preference using a per-call or default temperature."""
-        if temperature is None:
-            temperature = self.temperature
-        logit = temperature * (score_b - score_a)
-        if logit >= 0:
-            return 1.0 / (1.0 + math.exp(-logit))
-        exp_logit = math.exp(logit)
-        return exp_logit / (1.0 + exp_logit)
+    ) -> float | None:
+        """Convert scores using a per-call or default temperature."""
+        return score_preference(
+            score_a,
+            score_b,
+            temperature=self.temperature if temperature is None else temperature,
+        )
 
     def parse_result(
         self,
@@ -234,12 +322,13 @@ class PairScore(JudgeParser):
         temperature: float | None = None,
     ) -> ParsedPreference | None:
         score_a, score_b = self.parse_raw_scores(judge_completion)
-        if score_a is None or score_b is None:
+        preference = self.preference_from_scores(
+            score_a, score_b, temperature=temperature
+        )
+        if preference is None:
             return None
         return ParsedPreference(
-            preference=float(
-                self.preference_from_scores(score_a, score_b, temperature=temperature)
-            ),
+            preference=preference,
             scores={"A": score_a, "B": score_b},
         )
 
@@ -266,6 +355,79 @@ class PairScore(JudgeParser):
             return None
         else:
             return float(m.group(group_index).strip(" "))
+
+
+def _criterion_names(names: list[str]) -> tuple[str, ...]:
+    if (
+        not names
+        or len(set(names)) != len(names)
+        or any(
+            not name.strip() or name != name.strip() or "\n" in name or "\r" in name
+            for name in names
+        )
+    ):
+        raise ValueError("Expected nonempty, unique, single-line criterion names.")
+    return tuple(names)
+
+
+class CriteriaParser(PairScore):
+    """Compare equally weighted criterion means, retaining every judge-slot score."""
+
+    name = "criteria"
+
+    def __init__(self, names: list[str], *, temperature: float = 0.3):
+        super().__init__(temperature=temperature)
+        self.names = _criterion_names(names)
+
+    def parse_result(
+        self,
+        judge_completion: str,
+        *,
+        top_logprobs: dict[str, float] | None = None,
+        temperature: float | None = None,
+    ) -> ParsedPreference | None:
+        text = strip_thinking_tags(judge_completion).strip()
+        names = {name.casefold(): name for name in self.names}
+        criteria = {}
+        for line in text.splitlines():
+            line = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line)
+            match = re.match(
+                r"(.+?):\s*A\s*=\s*(\d+(?:\.\d+)?)\s*,"
+                r"\s*B\s*=\s*(\d+(?:\.\d+)?)(?=\s|$)",
+                line.replace("**", "").strip(),
+                re.IGNORECASE,
+            )
+            if match is None:
+                continue  # Ignore prose and code fences around the score lines.
+            raw_name, raw_a, raw_b = match.groups()
+            name = names.get(raw_name.strip().casefold())
+            if name is None or name in criteria:
+                return None
+            scores = {"A": float(raw_a), "B": float(raw_b)}
+            if any(not SCALE_MIN <= score <= SCALE_MAX for score in scores.values()):
+                return None
+            criteria[name] = scores
+        if set(criteria) != set(self.names):
+            return None
+        means = {
+            slot: sum(scores[slot] for scores in criteria.values()) / len(criteria)
+            for slot in ("A", "B")
+        }
+        return ParsedPreference(
+            preference=self.preference_from_scores(
+                means["A"], means["B"], temperature=temperature
+            ),
+            scores=means,
+            details={"criteria": criteria},
+        )
+
+    def parse_raw_scores(
+        self, judge_completion: str
+    ) -> tuple[float | None, float | None]:
+        parsed = self.parse_result(judge_completion)
+        return (
+            (None, None) if parsed is None else (parsed.scores["A"], parsed.scores["B"])
+        )
 
 
 class MetaEvalPairScore(PairScore):
@@ -303,15 +465,6 @@ class AlpacaEvalJSON(JudgeParser):
     """Parse the ordered-model JSON emitted by the meta-eval Alpaca prompt."""
 
     name = "alpaca-eval-json"
-
-    def __call__(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> float | None:
-        result = self.parse_result(judge_completion, top_logprobs=top_logprobs)
-        return None if result is None else result.preference
 
     def parse_result(
         self,
@@ -374,8 +527,9 @@ def parser_name(parse) -> str:
 
 # Parsers selectable by name for runtime prompt overrides (judge.parser);
 # presets reference these same instances.
-JUDGE_PARSERS: dict[str, JudgeParser] = {
+JUDGE_PARSERS: dict[str, OutputParser] = {
     "score": PairScore(),
+    "fastchat-verdict": FastChatVerdictParser(),
     "meta-eval-score": MetaEvalPairScore(),
     "arena-hard-verdict": ArenaHardVerdict(),
     "alpaca-eval-json": AlpacaEvalJSON(),
@@ -383,7 +537,16 @@ JUDGE_PARSERS: dict[str, JudgeParser] = {
 }
 
 
-def resolve_judge_parser(name: str) -> JudgeParser:
+def register_parser[T](name: str, parser: OutputParser[T]) -> OutputParser[T]:
+    """Register a parser instance for use by name in custom prompt configs."""
+    if not name.strip() or name in JUDGE_PARSERS:
+        raise ValueError(f"Parser {name!r} is empty or already registered.")
+    validate_parser(parser)
+    JUDGE_PARSERS[name] = parser
+    return parser
+
+
+def resolve_judge_parser(name: str) -> OutputParser:
     """Return the registered judge parser named in a run config."""
     try:
         return JUDGE_PARSERS[name]

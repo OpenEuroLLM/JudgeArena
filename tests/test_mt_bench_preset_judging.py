@@ -262,7 +262,7 @@ def test_mt_bench_hard_bootstraps_use_run_seed(monkeypatch, tmp_path):
     cfg = RunConfig(
         task="mt-bench",
         model={"name": "candidate", "baseline": "reference"},
-        judge={"model": "judge", "prompt_preset": "default", "swap_mode": "fixed"},
+        judge={"model": "judge", "prompt": {"preset": "default"}, "swap_mode": "fixed"},
         run={"seed": seed, "use_tqdm": False},
     )
     protocol = get_packaged_task(cfg.task).spec.protocol.model_copy(

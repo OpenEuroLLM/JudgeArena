@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.judging import JudgeRequest, execute_judging
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.registry import (
@@ -118,6 +119,7 @@ def annotate_battles(
     strip_thinking_before_judging: bool = False,
     collect_top_logprobs: bool = False,
     cache_row_metadata: list[JudgementCacheRowMetadata] | None = None,
+    parse: JudgeParser | None = None,
 ) -> list[JudgeAnnotation]:
     """
     Directly evaluate from list of instructions and completions
@@ -183,21 +185,48 @@ def annotate_battles(
     inputs = prompt_template.batch(prompt_inputs)
 
     logger.info("Start LLM judge annotation (%d annotations).", len(inputs))
-    judge_results = do_inference(
-        chat_model=judge_chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        return_top_logprobs=collect_top_logprobs,
-        stage="judging",
-        cache_row_metadata=cache_row_metadata,
-    )
-    if not collect_top_logprobs:
-        judge_results = [InferenceResult(text=text) for text in judge_results]
+    if parse is not None:
+        results = execute_judging(
+            judge_chat_model,
+            [
+                JudgeRequest(
+                    str(i),
+                    judge_input,
+                    parse,
+                    None if cache_row_metadata is None else cache_row_metadata[i],
+                )
+                for i, judge_input in enumerate(inputs)
+            ],
+            use_tqdm=use_tqdm,
+            result_type=ParsedPreference,
+        )
+        judge_results = [result.response for result in results]
+        parsed_results = [result.parsed for result in results]
+    else:
+        judge_results = do_inference(
+            chat_model=judge_chat_model,
+            inputs=inputs,
+            use_tqdm=use_tqdm,
+            return_top_logprobs=collect_top_logprobs,
+            stage="judging",
+            cache_row_metadata=cache_row_metadata,
+        )
+        if not collect_top_logprobs:
+            judge_results = [InferenceResult(text=text) for text in judge_results]
+        parsed_results = [None] * len(judge_results)
 
     annotations = []
-    for judge_input, judge_result, instruction, completion_A, completion_B in zip(
+    for (
+        judge_input,
+        judge_result,
+        parsed,
+        instruction,
+        completion_A,
+        completion_B,
+    ) in zip(
         inputs,
         judge_results,
+        parsed_results,
         instructions,
         completions_A,
         completions_B,
@@ -212,6 +241,7 @@ def annotate_battles(
                 completion_B=completion_B,
                 prompt_preset=resolved_prompt.preset_name,
                 judge_top_logprobs=judge_result.first_token_top_logprobs,
+                parsed=parsed,
             )
         )
     return annotations
@@ -275,6 +305,7 @@ def judge_and_parse_prefs(
         truncate_input_chars=truncate_input_chars,
         use_tqdm=use_tqdm,
         collect_top_logprobs=parse.requires_top_logprobs,
+        parse=parse,
         cache_row_metadata=cache_row_metadata,
     )
 
@@ -309,6 +340,7 @@ def judge_and_parse_prefs(
             truncate_input_chars=truncate_input_chars,
             use_tqdm=use_tqdm,
             collect_top_logprobs=parse.requires_top_logprobs,
+            parse=parse,
             cache_row_metadata=reversed_cache_row_metadata,
         )
 
@@ -316,15 +348,7 @@ def judge_and_parse_prefs(
         return float("nan") if x is None else x
 
     def _parse_and_warn(ann_list: list, label: str) -> pd.Series:
-        results = [
-            parse.parse_result(
-                annotation.judge_completion,
-                top_logprobs=annotation.judge_top_logprobs,
-            )
-            for annotation in ann_list
-        ]
-        for annotation, result in zip(ann_list, results, strict=True):
-            annotation.parsed = result
+        results = [annotation.parsed for annotation in ann_list]
         n_failed = sum(1 for result in results if result is None)
         if n_failed:
             logger.warning(

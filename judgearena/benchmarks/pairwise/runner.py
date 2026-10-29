@@ -51,9 +51,15 @@ def _build_judge_batches(
     if (
         not category_prompts
         or (
-            cfg.judge.prompt_preset is not None
-            and cfg.judge.prompt_preset
-            != resolved_task.spec.protocol.judge.default_prompt_preset
+            cfg.judge.prompt is not None
+            and (
+                cfg.judge.prompt.options
+                or (
+                    cfg.judge.prompt.preset is not None
+                    and cfg.judge.prompt.preset
+                    != resolved_task.spec.protocol.judge.default_prompt_preset
+                )
+            )
         )
         or resolved_prompt.source != "preset"
         or "category" not in instructions_df.columns

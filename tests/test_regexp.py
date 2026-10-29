@@ -1,11 +1,13 @@
 import math
 
+import pandas as pd
 import pytest
 
 from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
     PairScore,
     ParsedPreference,
+    score_preference,
 )
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
@@ -43,14 +45,29 @@ In this case, Model A provided a correct and relevant response, listing two coun
 
 
 @pytest.mark.parametrize(
-    ("score_a", "score_b", "expected"), [(10_000, -10_000, 0.0), (-10_000, 10_000, 1.0)]
+    ("score_a", "score_b", "temperature", "expected"),
+    [
+        (10_000, -10_000, 0.3, 0.0),
+        (-10_000, 10_000, 0.3, 1.0),
+        (4, 4, 0.3, 0.5),
+        (6, 8, 0.5, 0.7310585786300049),
+        (6, 8, 0.0, 0.5),
+    ],
 )
-def test_pair_score_does_not_overflow(score_a, score_b, expected):
-    assert PairScore().preference_from_scores(score_a, score_b) == expected
+def test_score_preference(score_a, score_b, temperature, expected):
+    assert score_preference(score_a, score_b, temperature=temperature) == pytest.approx(
+        expected
+    )
+
+
+@pytest.mark.parametrize("missing", [None, math.nan, pd.NA])
+def test_score_preference_preserves_missing_scores(missing):
+    assert score_preference(missing, 5) is None
+    assert score_preference(5, missing) is None
 
 
 def test_pair_score_returns_structured_preference():
-    raw_text = "Score of Assistant A: 6\nScore of Assistant B: 8"
+    raw_text = "Score of Assistant A: 6\nScore of Assistant B: 8\n```"
     parser = PairScore()
     parsed = parser.parse_result(raw_text)
 
@@ -63,17 +80,6 @@ def test_pair_score_returns_structured_preference():
 def test_parsed_preference_rejects_invalid_values(preference):
     with pytest.raises(ValueError, match="finite and between 0 and 1"):
         ParsedPreference(preference=preference)
-
-
-def test_regexp():
-    raw_text = "Score of Assistant A: 0\nScore of Assistant B: 1\n```"
-
-    scorer = PairScore()
-    pref = scorer.parse_model_raw(raw_text)
-    assert pref is not None
-    assert pref == pytest.approx(0.5744425168116589)
-
-    print(pref)
 
 
 def test_default_prompt_preset_renders_answer_labels():
@@ -171,5 +177,8 @@ def test_score_parser_temperature_override_is_local_to_the_call():
     text = "score_A: 6\nscore_B: 8"
 
     assert parser.parse_result(text, temperature=0.0).preference == 0.5
+    assert parser.parse_result(text, temperature=0.3).preference == pytest.approx(
+        0.6456563062257954
+    )
     assert parser.temperature == 0.5
     assert parser(text) == pytest.approx(0.7310585786300049)

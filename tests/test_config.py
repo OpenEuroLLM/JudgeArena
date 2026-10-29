@@ -14,6 +14,7 @@ from judgearena.config import (
     dump_config,
     load_config,
 )
+from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
@@ -107,6 +108,22 @@ def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RunConfig(**data)
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        {"preset": "default", "user_file": "rubric.txt"},
+        {"preset": "default", "parser": "json-score"},
+        {"user_file": "rubric.txt", "options": {"rubric": "rubric.yaml"}},
+        {"system_file": "system.txt"},
+    ],
+)
+def test_prompt_selection_rejects_conflicting_sources(prompt):
+    from judgearena.config import JudgePromptSpec
+
+    with pytest.raises(ValidationError):
+        JudgePromptSpec(**prompt)
 
 
 def _registered_task(
@@ -423,14 +440,18 @@ def test_load_config_from_yaml(tmp_path):
         "  max_out_tokens: 4096\n"
         "judge:\n"
         "  model: Dummy/j\n"
-        "  prompt_preset: default_with_explanation\n"
+        "  prompt:\n"
+        "    preset: default_with_explanation\n"
         "generation:\n"
         "  n_instructions: 10\n"
     )
     cfg = load_config(yaml_path)
     assert cfg.model.name == "Dummy/a"
     assert cfg.model.max_out_tokens == 4096
-    assert cfg.judge.prompt_preset == "default_with_explanation"
+    assert (
+        resolve_run_judge_prompt(cfg.task, cfg.judge).preset_name
+        == "default_with_explanation"
+    )
     assert cfg.generation.n_instructions == 10
 
 

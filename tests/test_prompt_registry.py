@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import pytest
 
+from judgearena.config import JudgeArgs
 from judgearena.evaluate import (
-    judge_and_parse_prefs,
     resolve_judge_prompts,
     resolve_run_judge_prompt,
 )
-from judgearena.models import DummyModel
 from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prompt
-from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -22,12 +20,6 @@ from judgearena.prompts.registry import (
     default_preset_for_task,
     resolve_judge_prompt,
 )
-
-
-@dataclass
-class FakeCliArgs:
-    prompt_preset: str | None = None
-    prompt: object | None = None
 
 
 def test_default_presets_are_owned_by_task_yaml():
@@ -94,6 +86,8 @@ def test_explanation_preset_renders_explanation_suffix():
 
     assert resolved.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
     assert "explanation of your judgement" in resolved.user_prompt_template
+    assert "explanation of your judgement" in resolved.output_format
+    assert resolved.user_prompt_template.endswith(resolved.output_format)
 
 
 def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
@@ -112,11 +106,11 @@ def test_unknown_preset_raises():
         resolve_judge_prompt(task="alpaca-eval", preset="does-not-exist")
 
 
-def test_file_overrides_must_come_in_pair(tmp_path):
+def test_system_file_requires_user_file(tmp_path):
     system_file = tmp_path / "system.txt"
     system_file.write_text("Custom system", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="must be provided together"):
+    with pytest.raises(ValueError, match="user.*required"):
         resolve_judge_prompt(task="alpaca-eval", system_file=system_file)
 
 
@@ -176,40 +170,16 @@ def test_unknown_named_parser_lists_available(tmp_path):
 
 
 def test_resolve_run_judge_prompt_reads_cli_fields():
-    resolved_default = resolve_run_judge_prompt("alpaca-eval", FakeCliArgs())
+    resolved_default = resolve_run_judge_prompt(
+        "alpaca-eval", JudgeArgs(model="Dummy/j")
+    )
     resolved_explain = resolve_run_judge_prompt(
         "alpaca-eval",
-        FakeCliArgs(prompt_preset=DEFAULT_WITH_EXPLANATION_PRESET),
+        JudgeArgs(model="Dummy/j", prompt={"preset": DEFAULT_WITH_EXPLANATION_PRESET}),
     )
 
     assert resolved_default.preset_name == "alpaca-eval"
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
-
-
-@pytest.mark.parametrize(
-    ("parse", "expected"),
-    [(None, 0.8807970779778823), (PairScore(temperature=0.5), 0.7310585786300049)],
-)
-def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expected):
-    monkeypatch.setitem(
-        PRESETS,
-        "test-score",
-        replace(PRESETS["default"], name="test-score", parser=PairScore(temperature=1)),
-    )
-
-    annotations, reversed_annotations, prefs = judge_and_parse_prefs(
-        judge_chat_model=DummyModel("Dummy/score_A: 6\nscore_B: 8"),
-        instructions=["Question"],
-        completions_A=["Answer A"],
-        completions_B=["Answer B"],
-        prompt_preset="test-score",
-        swap_mode="fixed",
-        parse=parse,
-    )
-
-    assert annotations[0].parsed.preference == pytest.approx(expected)
-    assert reversed_annotations is None
-    assert prefs.tolist() == pytest.approx([expected])
 
 
 def test_every_preset_resolves_or_delegates():
@@ -219,5 +189,55 @@ def test_every_preset_resolves_or_delegates():
         if spec.delegated:
             assert resolved.delegated is True
         else:
-            assert resolved.system_prompt
+            assert resolved.system_prompt is not None or spec.system_file is None
             assert resolved.user_prompt_template
+
+
+@pytest.mark.parametrize("count", [None, 0, -1, True, 1.5, "5"])
+def test_logprob_prompt_requires_a_positive_integer_count(count):
+    settings = {"top_logprobs": count}
+    resolve_judge_prompt(preset="default").validate_for(
+        "pairwise", inference_kwargs=settings
+    )
+    with pytest.raises(ValueError, match="top_logprobs"):
+        resolve_judge_prompt(preset="alpaca-eval").validate_for(
+            "pairwise", inference_kwargs=settings
+        )
+
+
+def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
+    from judgearena.prompts import (
+        JudgePromptPreset,
+        available_prompt_presets,
+        register_prompt,
+    )
+    from judgearena.prompts.parsing import PairScore
+
+    def configure(prompt, *, maximum=10):
+        return replace(
+            prompt,
+            user_prompt_template=f"Grade {{completion}} from 1 to {maximum}.",
+            parser=PairScore(temperature=maximum),
+        )
+
+    name = "test-inline-grammar"
+    preset = JudgePromptPreset(
+        name=name,
+        inline_user="Grade {completion}.",
+        configure=configure,
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr("judgearena.prompts.registry.PRESETS", PRESETS.copy())
+        register_prompt(preset)
+        resolved = resolve_judge_prompt(preset=name, options={"maximum": 5})
+        assert name in available_prompt_presets()
+        assert resolved.user_prompt_template == "Grade {completion} from 1 to 5."
+        assert resolved.parser.parse_result(
+            "Score_A: 8\nScore_B: 7"
+        ).preference == pytest.approx(0.006692850924284856)
+        assert resolved.parser.parse_result("no scores") is None
+        assert resolved.user_sha256 != resolve_judge_prompt(preset=name).user_sha256
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            resolve_judge_prompt(preset=name, options={"maximumm": 5})
+        with pytest.raises(ValueError, match="already registered"):
+            register_prompt(preset)

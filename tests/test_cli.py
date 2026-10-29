@@ -183,7 +183,7 @@ def test_elo_forwards_optional_flags(capture_mains):
             "0.5",
             "--elo.elo_random_battles",
             "100",
-            "--judge.prompt_preset",
+            "--judge.prompt.preset",
             "default_with_explanation",
         ]
     )
@@ -196,7 +196,7 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert cfg.elo.baseline_model == "gpt-4o"
     assert cfg.elo.soft_elo_temperature == 0.5
     assert cfg.elo.elo_random_battles == 100
-    assert cfg.judge.prompt_preset == "default_with_explanation"
+    assert cfg.judge.prompt.preset == "default_with_explanation"
 
 
 def test_engine_kwargs_parsed_as_json(capture_mains):
@@ -229,12 +229,12 @@ def test_judge_prompt_preset_is_forwarded(capture_mains):
             "Dummy/B",
             "--judge.model",
             "Dummy/J",
-            "--judge.prompt_preset",
+            "--judge.prompt.preset",
             "default_with_explanation",
         ]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.judge.prompt_preset == "default_with_explanation"
+    assert cfg.judge.prompt.preset == "default_with_explanation"
 
 
 def test_custom_judge_prompt_files_are_forwarded(capture_mains, tmp_path):
@@ -261,7 +261,7 @@ def test_custom_judge_prompt_files_are_forwarded(capture_mains, tmp_path):
     cfg = capture_mains["cfg"]
     assert cfg.judge.prompt.system_file == system_file
     assert cfg.judge.prompt.user_file == user_file
-    assert cfg.judge.prompt.parser == "score"
+    assert cfg.judge.prompt.parser is None
 
 
 def test_mt_bench_omits_prompt_preset_for_task_default(capture_mains):
@@ -269,7 +269,7 @@ def test_mt_bench_omits_prompt_preset_for_task_default(capture_mains):
         ["--task", "mt-bench", "--model.name", "Dummy/A", "--judge.model", "Dummy/J"]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.judge.prompt_preset is None
+    assert cfg.judge.prompt is None
 
 
 def test_judge_side_kwargs_parsed_separately(capture_mains):

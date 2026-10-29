@@ -367,10 +367,11 @@ def _run_mt_bench_preset(
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
-        prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
+        prompt_preset=resolved_prompt.preset_name,
         system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
         user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
         parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
+        options=cfg.judge.prompt.options if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(

@@ -17,7 +17,7 @@ from judgearena.benchmarks.elo.rating import (
 from judgearena.benchmarks.elo.runner import run_elo
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.cache.sqlite import JudgementCache
-from judgearena.config import RunConfig, load_config
+from judgearena.config import JudgePromptSpec, RunConfig, load_config
 from judgearena.evaluate import JudgeAnnotation, judge_and_parse_prefs
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.parsing import JudgeParser, ParsedPreference
@@ -760,7 +760,7 @@ def test_run_elo_temperature_preserves_selected_parser(monkeypatch, tmp_path):
     )
     cfg = _default_args(result_folder=str(tmp_path), n_instructions=2, swap_mode="both")
     cfg.elo.n_bootstraps = 0
-    cfg.judge.prompt_preset = "meta-eval-pair-score"
+    cfg.judge.prompt = JudgePromptSpec(preset="meta-eval-pair-score")
     cfg.elo.soft_elo_temperature = 0.8
 
     result = run_elo_with_task(cfg)
