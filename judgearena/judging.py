@@ -10,6 +10,7 @@ from langchain_core.prompt_values import PromptValue
 
 from judgearena.battles import swap_comparison_slots
 from judgearena.cache.inference import JudgementCacheRowMetadata
+from judgearena.datasets.data import _require_columns, validate_messages
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.parsing import (
@@ -235,6 +236,38 @@ def pairwise_annotation_frame(
     return frame
 
 
+def answer_samples(instructions: pd.DataFrame, answers: pd.DataFrame) -> pd.DataFrame:
+    """Join canonical output rows by ID, keeping instruction and answer metadata.
+
+    Output model/completion fields are authoritative. Instruction-side messages
+    remain input_messages; output messages describe the completed conversation.
+    Other overlapping metadata names must be disambiguated by the adapter.
+    """
+    _require_columns(instructions, {"instruction"}, "Answer samples")
+    _require_columns(answers, {"model", "completion"}, "Answer outputs")
+    if (
+        instructions.index.isna().any()
+        or not instructions.index.is_unique
+        or not instructions.index.map(str).is_unique
+        or not answers.index.is_unique
+    ):
+        raise ValueError("Samples and answers require unique, nonmissing request IDs.")
+    context = instructions.drop(columns=["model", "completion"], errors="ignore")
+    if "messages" in context:
+        if "input_messages" in context:
+            raise ValueError("Instruction messages overlap with input_messages.")
+        context = context.rename(columns={"messages": "input_messages"})
+    samples = context.join(answers)
+    if samples[["instruction", "model", "completion"]].isna().any().any():
+        raise ValueError(
+            "Answer samples contain missing instructions, models or answers."
+        )
+    if "messages" in samples:
+        for messages in samples["messages"].dropna():
+            validate_messages(messages)
+    return samples
+
+
 def answer_text(completion, messages=None, *, strip_thinking=False) -> str:
     """Render a complete conversation when present, otherwise its text answer."""
     from judgearena.utils import strip_thinking_tags
@@ -250,3 +283,60 @@ def answer_text(completion, messages=None, *, strip_thinking=False) -> str:
             for message in messages
         )
     return strip_thinking_tags(completion) if strip_thinking else completion
+
+
+def judge_single_answers(
+    model,
+    samples: pd.DataFrame,
+    render: Callable,
+    *,
+    use_tqdm: bool = False,
+    result_type: type | None = None,
+) -> tuple[pd.DataFrame, list[ResolvedJudgePrompt]]:
+    """Grade indexed samples containing model/completion and renderer metadata.
+
+    The renderer returns rendering-specific fields, parsed-result requests, and
+    resolved prompts, all in sample order. Dataclasses and JSON-compatible results
+    are preserved in ``parsed``; scalar result objects also populate ``score``.
+    Requests use stringified row IDs;
+    instruction_id overrides cache identity. Return annotations and their prompts.
+    result_type restricts parsed outputs when a caller needs scalar scores.
+    """
+    ids = samples.index.map(str).tolist()
+    if samples.index.isna().any() or len(set(ids)) != len(ids):
+        raise ValueError("Samples require unique, nonmissing request IDs.")
+    extras, requests, prompts = render(samples)
+    for prompt in prompts:
+        prompt.validate_for("single_answer", result_type)
+    if (
+        [request.id for request in requests] != ids
+        or len(extras) != len(ids)
+        or len(prompts) != len(ids)
+    ):
+        raise ValueError(
+            "Score renderers must return fields, request, and prompt for each sample in order."
+        )
+    requests = [
+        replace(
+            request,
+            cache_metadata={
+                "instruction_id": str(getattr(row, "instruction_id", row.Index)),
+                "model_a": row.model,
+                "model_b": None,
+            },
+        )
+        for request, row in zip(requests, samples.itertuples(), strict=True)
+    ]
+    results = execute_judging(
+        model, requests, use_tqdm=use_tqdm, result_type=result_type
+    )
+    rendered = samples.assign(
+        **{column: extras[column].to_numpy() for column in extras}
+    )
+    annotations = annotation_frame(rendered, results, prompts).assign(
+        evaluated_model=samples["model"].to_numpy(),
+    )
+    annotations["score"] = annotations["parsed"].map(
+        lambda parsed: parsed.get("score") if isinstance(parsed, dict) else None
+    )
+    return annotations, prompts

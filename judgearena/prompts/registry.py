@@ -13,6 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from judgearena.prompts.criteria import configure_criteria_prompt
 
 if TYPE_CHECKING:
+    from judgearena.config import RunConfig
     from judgearena.tasks.schema import ResolvedTaskSpec
 
 from judgearena.prompts.parsing import (
@@ -24,11 +25,8 @@ from judgearena.prompts.parsing import (
     validate_parser,
 )
 
-if TYPE_CHECKING:
-    from judgearena.config import RunConfig
-
 PromptSource = Literal["preset", "file", "override", "delegated"]
-JudgingMode = Literal["pairwise"]
+JudgingMode = Literal["pairwise", "single_answer"]
 
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
@@ -75,6 +73,11 @@ class JudgePromptPreset:
     aggregation: Literal["individual", "agreement"] = "individual"
     prepare_prompts: Callable | None = None
     """Optional (cfg, prompt, instructions) -> (batch preparation, temperature)."""
+    score_renderer: Callable | None = None
+    """Optional single-answer renderer: (samples, prompt_preset, truncate_input_chars,
+    strip_thinking_before_judging) -> (rendering fields, judge requests, prompts).
+    Rows and requests follow the sample index; see judge_single_answers.
+    """
     judging_mode: JudgingMode = "pairwise"
     """Number of candidates the prompt judges, independent of the task's runner."""
 
@@ -101,11 +104,13 @@ class ResolvedJudgePrompt:
     output_format: str | None = None
     aggregation: Literal["individual", "agreement"] = "individual"
     prepare_prompts: Callable | None = None
+    score_renderer: Callable | None = None
     judging_mode: JudgingMode = "pairwise"
 
     def validate_for(
         self,
         mode: JudgingMode,
+        result_type: type | None = None,
         *,
         inference_kwargs: dict[str, object] | None = None,
     ) -> None:
@@ -119,7 +124,9 @@ class ResolvedJudgePrompt:
             if self.delegated:
                 return
             raise ValueError(f"Prompt {self.preset_name!r} requires a parser.")
-        validate_parser(self.parser, ParsedPreference)
+        validate_parser(
+            self.parser, ParsedPreference if mode == "pairwise" else result_type
+        )
         if inference_kwargs is not None and self.parser.requires_top_logprobs:
             count = inference_kwargs.get("top_logprobs")
             if type(count) is not int or count <= 0:
@@ -180,9 +187,30 @@ def _prepare_mt_bench_prompts(cfg, prompt, instructions):
     return prepare_mt_bench_prompts(cfg, prompt, instructions)
 
 
+def _render_mt_bench_101_scores(samples, **kwargs):
+    from judgearena.prompts.mt_bench_101 import render_mt_bench_101_requests
+
+    return render_mt_bench_101_requests(samples, **kwargs)
+
+
 SCORE_PARSER = JUDGE_PARSERS["score"]
 
 PRESETS: dict[str, JudgePromptPreset] = {
+    "single-score": JudgePromptPreset(
+        name="single-score",
+        judging_mode="single_answer",
+        parser=JUDGE_PARSERS["single-score"],
+        user_file="single-answer.txt",
+        output_format_file="single-score.txt",
+    ),
+    "criteria-score": JudgePromptPreset(
+        name="criteria-score",
+        judging_mode="single_answer",
+        user_file="single-answer.txt",
+        output_format_file="single-criteria.txt",
+        configure=configure_criteria_prompt,
+        option_files=("criteria_file",),
+    ),
     "criteria": JudgePromptPreset(
         name="criteria",
         system_file="system-prompt.txt",
@@ -221,11 +249,15 @@ PRESETS: dict[str, JudgePromptPreset] = {
     ),
     MT_BENCH_101_PROMPT_PRESET: JudgePromptPreset(
         name=MT_BENCH_101_PROMPT_PRESET,
+        judging_mode="single_answer",
         delegated=True,
+        score_renderer=_render_mt_bench_101_scores,
     ),
     MT_BENCH_101_CLEAN_PROMPT_PRESET: JudgePromptPreset(
         name=MT_BENCH_101_CLEAN_PROMPT_PRESET,
+        judging_mode="single_answer",
         delegated=True,
+        score_renderer=_render_mt_bench_101_scores,
     ),
     # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),
     # verbatim except for placeholder names. The judge explains, then emits one
@@ -386,7 +418,11 @@ def resolve_judge_prompt(
     options: dict[str, object] | None = None,
     judging_mode: JudgingMode = "pairwise",
 ) -> ResolvedJudgePrompt:
-    """Load a pairwise preset or custom files with a named parser."""
+    """Load a preset, or custom files whose judging_mode is supplied by the caller.
+
+    Presets own their mode and parser; custom files use the requested mode and
+    named parser. Consumers validate compatibility before generating answers.
+    """
     if preset is None:
         preset = default_preset_for_task(task)
     if system_file is not None and user_file is None:
@@ -460,6 +496,7 @@ def resolve_judge_prompt(
         output_format=output_format,
         aggregation=spec.aggregation,
         prepare_prompts=spec.prepare_prompts,
+        score_renderer=spec.score_renderer,
         judging_mode=spec.judging_mode,
     )
     if spec.configure is not None:
@@ -484,7 +521,19 @@ def resolve_run_judge_prompt(
     multi_turn: bool = False,
 ) -> ResolvedJudgePrompt:
     prompt = getattr(judge_cfg, "prompt", None)
+    if isinstance(task, str):
+        from judgearena.tasks.registry import get_packaged_task
+
+        task = get_packaged_task(task)
+    if prompt is not None and prompt.user_file is not None:
+        result_type = resolve_judge_parser(prompt.parser or "score").result_type
+        mode = (
+            "pairwise" if issubclass(result_type, ParsedPreference) else "single_answer"
+        )
+    else:
+        mode = "pairwise"
     return resolve_judge_prompt(
+        judging_mode=mode,
         options=prompt.options if prompt is not None else None,
         task=task,
         preset=prompt.preset if prompt is not None else None,

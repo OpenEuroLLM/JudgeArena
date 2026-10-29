@@ -47,10 +47,8 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     from judgearena.benchmarks.elo.runner import run_elo
     from judgearena.benchmarks.evaluation import run_evaluation
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
-    from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
 
     return (
-        BenchmarkAdapter("mt_bench_101", run_mt_bench_101_benchmark),
         BenchmarkAdapter("elo", run_elo),
         BenchmarkAdapter("meta_eval", run_meta_eval),
         BenchmarkAdapter("pairwise", run_evaluation),

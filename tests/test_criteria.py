@@ -116,6 +116,25 @@ def test_criteria_parser_rejects_incomplete_or_invalid_scores(criteria_file, out
 
 
 @pytest.mark.parametrize(
+    "scores",
+    [
+        {"clarity": 8},
+        {"clarity": 8, "correctness": 6, "extra": 4},
+        {"clarity": True, "correctness": 6},
+        {"clarity": 0, "correctness": 6},
+        {"clarity": 8, "correctness": 11},
+    ],
+)
+def test_independent_criteria_requires_every_configured_score(criteria_file, scores):
+    import json
+
+    parser = resolve_judge_prompt(
+        preset="criteria-score", options={"criteria_file": criteria_file}
+    ).parser
+    assert parser.parse_result(json.dumps({"criteria": scores})) is None
+
+
+@pytest.mark.parametrize(
     "output",
     [
         "clarity: A=8, B=4\ncorrectness: A=6, B=8",

@@ -1,0 +1,7 @@
+{criteria_block}
+
+Return JSON with a numeric score for every criterion on the stated scale.
+Replace each placeholder below with its score. Do not add or omit criteria.
+You may include a brief "explanation" alongside "criteria".
+
+{criteria_output_lines}

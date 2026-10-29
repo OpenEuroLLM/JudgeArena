@@ -162,9 +162,9 @@ def test_packaged_registry_discovers_versioned_tasks():
         "a4b674ca573c24143824ac7f60d9173e7081e37d"
     )
     mt_bench_101 = tasks["mt-bench-101"]
-    assert mt_bench_101.spec.protocol.runner == "mt_bench_101"
+    assert mt_bench_101.spec.protocol.runner == "pairwise"
     assert mt_bench_101.spec.dataset.adapter == "mt_bench_101"
-    assert mt_bench_101.spec.protocol.generation.mode == "golden_context_chat"
+    assert mt_bench_101.spec.protocol.generation.mode == "provided_messages"
     assert mt_bench_101.spec.protocol.generation.default_temperature == 0.0
     assert mt_bench_101.spec.protocol.generation.default_max_out_tokens == 4096
     assert mt_bench_101.spec.protocol.baseline.strategy == "runtime_required"
