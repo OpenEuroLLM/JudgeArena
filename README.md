@@ -446,6 +446,17 @@ If you use JudgeArena in your research, please cite:
 }
 ```
 
+Soft-Elo estimation and judge temperature calibration come from the following paper. If you use JudgeArena's Elo estimation, please also cite:
+
+```bibtex
+@inproceedings{kargi2026softelo,
+  title = {From Uncertain Judgments to Calibrated Rankings: Conformal Elo Estimation for LLM Evaluation},
+  author = {Kargi, Bora and Salinas, David},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year = {2026},
+}
+```
+
 The judge configurations were tuned in the following paper, and much of the code is reused from it. If you use the tuned judges, please also cite:
 
 ```bibtex
