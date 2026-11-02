@@ -218,6 +218,25 @@ def _numeric_score(
     return score
 
 
+@dataclass(frozen=True)
+class ScoreParser:
+    """Read a finite JSON score and retain evidence; optional bounds are inclusive."""
+
+    name: str = "json-score"
+    score_range: tuple[float, float] | None = None
+    result_type = ParsedScore
+    requires_top_logprobs = False
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs=None
+    ) -> ParsedScore | None:
+        details = _json_judge_field(judge_completion, "score")
+        score = _numeric_score(details.get("score"), self.score_range)
+        if score is None:
+            return None
+        return ParsedScore(score=score, details=details)
+
+
 class AlpacaEvalToken(JudgeParser):
     """Parse the official logprob-weighted AlpacaEval verdict.
 
@@ -368,6 +387,35 @@ def _criterion_names(names: list[str]) -> tuple[str, ...]:
     ):
         raise ValueError("Expected nonempty, unique, single-line criterion names.")
     return tuple(names)
+
+
+class CriteriaScoreParser:
+    """Require all configured criteria; retain their scores and equal-weight mean."""
+
+    name = "criteria-score"
+    result_type = ParsedScore
+    requires_top_logprobs = False
+
+    def __init__(self, names: list[str]):
+        self.names = _criterion_names(names)
+
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs=None
+    ) -> ParsedScore | None:
+        details = _json_judge_field(judge_completion, "criteria")
+        raw = details.get("criteria")
+        if not isinstance(raw, dict) or set(raw) != set(self.names):
+            return None
+        scores = {}
+        for name in self.names:
+            score = _numeric_score(raw[name], (SCALE_MIN, SCALE_MAX))
+            if score is None:
+                return None
+            scores[name] = score
+        return ParsedScore(
+            score=sum(scores.values()) / len(scores),
+            details={**details, "criteria": scores},
+        )
 
 
 class CriteriaParser(PairScore):
@@ -528,6 +576,8 @@ def parser_name(parse) -> str:
 # Parsers selectable by name for runtime prompt overrides (judge.parser);
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, OutputParser] = {
+    "json-score": ScoreParser(),
+    "single-score": ScoreParser("single-score", (SCALE_MIN, SCALE_MAX)),
     "score": PairScore(),
     "fastchat-verdict": FastChatVerdictParser(),
     "meta-eval-score": MetaEvalPairScore(),

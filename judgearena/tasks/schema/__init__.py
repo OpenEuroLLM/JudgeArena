@@ -45,8 +45,6 @@ from judgearena.tasks.schema.task import (
 )
 
 __all__ = [
-    "MTBenchProtocol",
-    "MTBench101Protocol",
     "AllReferencesBaseline",
     "BaselineSpec",
     "CategoryDefaultsBaseline",
@@ -79,6 +77,3 @@ __all__ = [
     "TaskSelection",
     "TaskSpec",
 ]
-
-from judgearena.tasks.schema.mt_bench import MTBenchProtocol
-from judgearena.tasks.schema.mt_bench_101 import MTBench101Protocol

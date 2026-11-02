@@ -5,12 +5,15 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
+from judgearena.benchmarks.pairwise.judging import judge_comparisons
 from judgearena.config import JudgeArgs
 from judgearena.evaluate import (
     resolve_judge_prompts,
     resolve_run_judge_prompt,
 )
+from judgearena.models import DummyModel
 from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prompt
+from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
@@ -51,6 +54,8 @@ def test_mt_bench_default_is_delegated_fastchat():
     assert resolved.delegated is True
     assert resolved.system_prompt is None
     assert resolved.user_prompt_template == ""
+    assert resolved.aggregation == "agreement"
+    assert resolved.metadata()["judge_aggregation"] == "agreement"
 
 
 def test_mt_bench_101_prompt_presets_are_delegated():
@@ -89,6 +94,7 @@ def test_explanation_preset_renders_explanation_suffix():
     assert "explanation of your judgement" in resolved.user_prompt_template
     assert "explanation of your judgement" in resolved.output_format
     assert resolved.user_prompt_template.endswith(resolved.output_format)
+    assert resolved.aggregation == "individual"
 
 
 def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
@@ -183,6 +189,43 @@ def test_resolve_run_judge_prompt_reads_cli_fields():
     assert resolved_explain.preset_name == DEFAULT_WITH_EXPLANATION_PRESET
 
 
+@pytest.mark.parametrize(
+    ("parse", "expected"),
+    [(None, 0.8807970779778823), (PairScore(temperature=0.5), 0.7310585786300049)],
+)
+def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expected):
+    monkeypatch.setitem(
+        PRESETS,
+        "test-score",
+        replace(PRESETS["default"], name="test-score", parser=PairScore(temperature=1)),
+    )
+
+    prompt = resolve_judge_prompt(preset="test-score")
+    if parse is not None:
+        prompt = replace(prompt, parser=parse)
+    comparisons = pd.DataFrame(
+        {
+            "instruction": ["Question"],
+            "completion_a": ["Answer A"],
+            "completion_b": ["Answer B"],
+            "model_a": ["a"],
+            "model_b": ["b"],
+        }
+    )
+    annotations = judge_comparisons(
+        DummyModel("Dummy/score_A: 6\nscore_B: 8"),
+        comparisons,
+        [(prompt, comparisons.index)],
+        swap_mode="fixed",
+        strip_thinking_before_judging=False,
+        truncate_input_chars=None,
+        use_tqdm=False,
+    )
+
+    assert annotations.iloc[0]["parsed"]["preference"] == pytest.approx(expected)
+    assert annotations["pref"].tolist() == pytest.approx([expected])
+
+
 def test_every_preset_resolves_or_delegates():
     for preset_name, spec in PRESETS.items():
         resolved = resolve_judge_prompt(preset=preset_name)
@@ -192,6 +235,60 @@ def test_every_preset_resolves_or_delegates():
         else:
             assert resolved.system_prompt is not None or spec.system_file is None
             assert resolved.user_prompt_template
+
+
+def test_standard_prompt_uses_metadata_without_overriding_swapped_answers():
+    prompt = replace(
+        resolve_judge_prompt(preset="default"),
+        system_prompt="Use {rubric}",
+        user_prompt_template="{history}|{user_prompt}|{completion_A}|{completion_B_json}",
+    )
+    comparisons = pd.DataFrame(
+        {
+            "instruction": ["Question"],
+            "completion_a": ["First"],
+            "completion_b": ["Second"],
+            "model_a": ["a"],
+            "model_b": ["b"],
+            "history": ['JSON {"x": 1}'],
+            "rubric": ["Accuracy"],
+            "completion_A": ["stale"],
+            "completion_B_json": ["stale"],
+        },
+        index=["q"],
+    )
+    annotations = judge_comparisons(
+        DummyModel("Dummy/score_A: 8\nscore_B: 4"),
+        comparisons,
+        [(prompt, comparisons.index)],
+        swap_mode="both",
+        strip_thinking_before_judging=False,
+        truncate_input_chars=None,
+        use_tqdm=False,
+    )
+    assert 'JSON {"x": 1}|Question|First|"Second"' in annotations.iloc[0].judge_input
+    assert 'JSON {"x": 1}|Question|Second|"First"' in annotations.iloc[1].judge_input
+    assert all("Use Accuracy" in value for value in annotations.judge_input)
+    assert annotations.pref.tolist() == pytest.approx([0.2314752165, 0.7685247835])
+
+
+def test_missing_prompt_metadata_fails_before_judging():
+    from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
+    from judgearena.config import build_run_config
+
+    cfg = build_run_config(
+        ["--task", "alpaca-eval", "--model.name", "Dummy/a", "--judge.model", "Dummy/j"]
+    )
+    prompt = replace(
+        resolve_judge_prompt(preset="default"), system_prompt="Use {rubric}"
+    )
+    with pytest.raises(ValueError, match="rubric"):
+        prepare_pairwise_judging(
+            cfg,
+            prompt,
+            pd.DataFrame({"instruction": ["Q"]}),
+            available_columns={"instruction"},
+        )
 
 
 @pytest.mark.parametrize("count", [None, 0, -1, True, 1.5, "5"])
@@ -206,24 +303,56 @@ def test_logprob_prompt_requires_a_positive_integer_count(count):
         )
 
 
+@pytest.mark.parametrize(
+    "preset,mode", [("single-score", "pairwise"), ("default", "single_answer")]
+)
+def test_prompt_rejects_wrong_judging_mode(preset, mode):
+    with pytest.raises(ValueError, match="judging mode"):
+        resolve_judge_prompt(preset=preset).validate_for(mode)
+
+
+def test_category_prompt_validates_parser_during_preparation(monkeypatch):
+    from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
+    from judgearena.config import RunConfig
+
+    cfg = RunConfig(
+        task="arena-hard-v2.0", model={"name": "Dummy/a"}, judge={"model": "Dummy/j"}
+    )
+    monkeypatch.setitem(
+        PRESETS,
+        "arena-hard-creative",
+        replace(
+            PRESETS["arena-hard-creative"],
+            parser=resolve_judge_prompt(preset="single-score").parser,
+        ),
+    )
+    with pytest.raises(ValueError, match="ParsedPreference"):
+        prepare_pairwise_judging(
+            cfg,
+            resolve_judge_prompt(preset="arena-hard"),
+            pd.DataFrame({"instruction": ["Q"], "category": ["creative_writing"]}),
+        )
+
+
 def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
     from judgearena.prompts import (
         JudgePromptPreset,
         available_prompt_presets,
         register_prompt,
     )
-    from judgearena.prompts.parsing import PairScore
+    from judgearena.prompts.parsing import ScoreParser
 
     def configure(prompt, *, maximum=10):
         return replace(
             prompt,
             user_prompt_template=f"Grade {{completion}} from 1 to {maximum}.",
-            parser=PairScore(temperature=maximum),
+            parser=ScoreParser(score_range=(1, maximum)),
         )
 
     name = "test-inline-grammar"
     preset = JudgePromptPreset(
         name=name,
+        judging_mode="single_answer",
         inline_user="Grade {completion}.",
         configure=configure,
     )
@@ -233,10 +362,8 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
         resolved = resolve_judge_prompt(preset=name, options={"maximum": 5})
         assert name in available_prompt_presets()
         assert resolved.user_prompt_template == "Grade {completion} from 1 to 5."
-        assert resolved.parser.parse_result(
-            "Score_A: 8\nScore_B: 7"
-        ).preference == pytest.approx(0.006692850924284856)
-        assert resolved.parser.parse_result("no scores") is None
+        assert resolved.parser.parse_result('{"score": 4}').score == 4
+        assert resolved.parser.parse_result('{"score": 8}') is None
         assert resolved.user_sha256 != resolve_judge_prompt(preset=name).user_sha256
         from judgearena.config import RunConfig
         from judgearena.prompts.registry import group_judge_prompts
@@ -263,11 +390,55 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
             resolve_run_judge_prompt(task, cfg.judge),
         )
         assert all(
-            prompt.parser.parse_result("Score_A: 8\nScore_B: 7").preference
-            == pytest.approx(0.006692850924284856)
-            for prompt, _ in groups
+            prompt.parser.parse_result('{"score": 8}') is None for prompt, _ in groups
         )
         with pytest.raises(TypeError, match="unexpected keyword"):
             resolve_judge_prompt(preset=name, options={"maximumm": 5})
         with pytest.raises(ValueError, match="already registered"):
             register_prompt(preset)
+
+
+def test_standalone_user_prompt_needs_no_system_file(tmp_path):
+    from judgearena.prompts.registry import build_chat_prompt_template
+
+    path = tmp_path / "judge.txt"
+    path.write_text("Grade {completion}.")
+    prompt = resolve_judge_prompt(
+        user_file=path, parser="json-score", judging_mode="single_answer"
+    )
+    messages = build_chat_prompt_template(prompt).format_messages(completion="Answer")
+    assert [(message.type, message.content) for message in messages] == [
+        ("human", "Grade Answer.")
+    ]
+    assert prompt.system_path is None and prompt.system_sha256 is None
+
+
+@pytest.mark.parametrize("preset", ["single-score", "default"])
+def test_prepared_field_validation_accepts_model_fields(preset):
+    from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
+    from judgearena.config import RunConfig
+    from judgearena.evaluate import prepare_single_answer_judging
+
+    cfg = RunConfig(
+        task="alpaca-eval", model={"name": "Dummy/a"}, judge={"model": "Dummy/j"}
+    )
+    prompt = replace(
+        resolve_judge_prompt(preset=preset),
+        user_prompt_template="{model}: {completion}"
+        if preset == "single-score"
+        else "{model_a}: {completion_A} vs {model_b}: {completion_B}",
+    )
+    prepare = (
+        prepare_single_answer_judging
+        if preset == "single-score"
+        else prepare_pairwise_judging
+    )
+    instructions = pd.DataFrame({"instruction": ["Q"]})
+    prepare(cfg, prompt, instructions, available_columns={"instruction"})
+    with pytest.raises(ValueError, match="rubric"):
+        prepare(
+            cfg,
+            replace(prompt, system_prompt="{rubric}"),
+            instructions,
+            available_columns={"instruction"},
+        )

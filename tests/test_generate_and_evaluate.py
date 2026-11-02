@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ from judgearena.benchmarks.pairwise.baselines import (
     BaselinePlan,
     resolve_baseline_plan,
 )
+from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
@@ -697,6 +699,150 @@ def test_pairwise_preserves_selected_output_metadata_and_histories(
     assert "assistant: baseline answer" in prompt
 
 
+@pytest.mark.parametrize("system_prompt", [None, "Use concise answers."])
+def test_multiturn_generation_batches_active_turns_and_reuses_history_cache(
+    tmp_path, monkeypatch, system_prompt
+):
+    import judgearena.generate as generation
+    from judgearena.cache.inference import CompletionInferenceCache
+
+    calls, temperatures = [], []
+
+    def make_model(*args, **kwargs):
+        model = prepare_model(*args, **kwargs)
+
+        def batch(inputs, **_):
+            calls.append([value.to_messages() for value in inputs])
+            temperatures.append(kwargs["temperature"])
+            return ["<think>hidden</think>answer"] * len(inputs)
+
+        model.factory = lambda: SimpleNamespace(batch=batch)
+        return model
+
+    monkeypatch.setattr(generation, "prepare_model", make_model)
+    questions = pd.DataFrame(
+        {
+            "user_turns": [["q1", "q2", "q3"], ["short"]],
+            "category": ["coding", "other"],
+        },
+        index=[7, 9],
+    )
+    kwargs = dict(
+        questions=questions,
+        model="Dummy/answer",
+        use_tqdm=False,
+        truncate_input_chars=None,
+        strip_thinking_before_history=True,
+        inference_cache=CompletionInferenceCache(tmp_path, "conversations"),
+        system_prompt=system_prompt,
+        temperature_config={"coding": 0.0},
+        fallback_temperature=0.4,
+    )
+    answers = generation.generate_multiturn(**kwargs)
+    assert [len(batch) for batch in calls] == [1, 1, 1, 1]
+    assert temperatures == [0.0, 0.4, 0.0, 0.0]
+    assert [message.content for message in calls[3][0]] == (
+        [system_prompt] if system_prompt is not None else []
+    ) + [
+        "q1",
+        "answer",
+        "q2",
+        "answer",
+        "q3",
+    ]
+    assert answers.instruction_index.tolist() == [7, 9]
+    assert answers.messages.map(len).tolist() == [6, 2]
+    assert answers.iloc[0].messages[1]["content"] == "<think>hidden</think>answer"
+    pd.testing.assert_frame_equal(generation.generate_multiturn(**kwargs), answers)
+    assert len(calls) == 4
+
+
+def test_independent_score_presets_compare_expanded_candidates_in_order():
+    from judgearena.prompts.criteria import resolve_criteria
+    from judgearena.prompts.registry import resolve_run_judge_prompt
+
+    task = get_packaged_task("arena-hard-v2.0")
+    judge_spec = task.spec.protocol.judge.model_copy(
+        update={
+            "default_prompt_preset": "single-score",
+            "category_prompts": {"creative": "criteria-score"},
+        }
+    )
+    task = replace(
+        task,
+        spec=task.spec.model_copy(
+            update={
+                "protocol": task.spec.protocol.model_copy(update={"judge": judge_spec}),
+            }
+        ),
+    )
+    cfg = RunConfig(
+        task=task.task,
+        resolved_task=task,
+        model={"name": "a"},
+        judge={"model": "Dummy/j"},
+    )
+    instructions = pd.DataFrame(
+        {
+            "instruction": ["Q1", "Q2"],
+            "category": ["creative", "other"],
+        },
+        index=["q1", "q2"],
+    )
+    comparisons = (
+        instructions.loc[["q2", "q1", "q2"]]
+        .assign(
+            source_instruction_index=["q1", "q2", "q1"],
+            model_a="a",
+            model_b=["b", "b", "c"],
+            completion_a=["A2", "A1", "A2"],
+            completion_b=["B2", "B1", "C2"],
+        )
+        .set_axis(["pair2", "pair1", "pair3"])
+    )
+    criteria_response = json.dumps(
+        {"criteria": {criterion.name: 6 for criterion in resolve_criteria()}}
+    )
+    model = FakeListLLM(
+        responses=[
+            criteria_response,
+            '{"score": 8}',
+            '{"score": 8}',
+            criteria_response,
+            '{"score": 4}',
+            "no score",
+        ]
+    )
+
+    judge, _ = prepare_pairwise_judging(
+        cfg,
+        resolve_run_judge_prompt(task, cfg.judge),
+        instructions,
+    )
+    annotations, outcomes, metadata = judge(
+        model,
+        comparisons,
+        source_ids=pd.Series({"pair1": "q1", "pair3": "q2", "pair2": "q2"}),
+    )
+
+    assert all(
+        f"Answer: {row.completion}" in row.judge_input
+        and f"Question: Q{row.completion[-1]}" in row.judge_input
+        for row in annotations.itertuples()
+    )
+    assert annotations.instruction_index.tolist() == ["pair2", "pair1", "pair3"] * 2
+    assert annotations.completion.tolist() == ["A2", "A1", "A2", "B2", "B1", "C2"]
+    assert outcomes.pref.tolist() == pytest.approx(
+        [0.2314752165, 0.5, np.nan], nan_ok=True
+    )
+    expected_prompts = ["single-score", "criteria-score", "single-score"]
+    assert outcomes.prompt_preset.tolist() == expected_prompts
+    assert {p["judge_prompt_preset"] for p in metadata["judge_prompts"]} == set(
+        expected_prompts
+    )
+    assert annotations.iloc[1]["parsed"]["details"]["criteria"]["clarity"] == 6
+
+
 def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     from judgearena.benchmarks.pairwise.comparisons import assemble_comparisons
 
@@ -733,6 +879,21 @@ def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     assert "reference_pref" not in pairs
 
 
+def test_minimum_score_grouping_requires_scoring_prompt():
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    cfg = _cfg(
+        task="mt-bench-101",
+        model_A="Dummy/a",
+        model_B="Dummy/b",
+        judge_model="Dummy/judge",
+    )
+    with pytest.raises(ValueError, match="minimum_score_by requires a single-answer"):
+        prepare_pairwise_judging(
+            cfg, resolve_judge_prompt(preset="default"), pd.DataFrame()
+        )
+
+
 def test_category_baseline_uses_configured_field():
     task = get_packaged_task("arena-hard-v2.0")
     spec = task.spec.model_dump()
@@ -743,3 +904,45 @@ def test_category_baseline_uses_configured_field():
         task_id=task.task, task=task, runtime_baseline=None, instructions=instructions
     )
     assert plan.baseline_by_index.tolist() == ["gemini-2.0-flash-001"]
+
+
+@pytest.mark.parametrize("mode", ["single_turn_chat", "multi_turn_chat"])
+def test_missing_answer_generation_reports_model_count_and_cause(mode, tmp_path):
+    from judgearena.benchmarks.pairwise.comparisons import prepare_answers
+
+    protocol = get_packaged_task("alpaca-eval").spec.protocol.model_dump()
+    protocol["generation"] = {"mode": mode}
+    model = "Unavailable/answer"
+    cfg = RunConfig(
+        task="alpaca-eval",
+        protocol=protocol,
+        model={"name": model},
+        judge={"model": "Dummy/j"},
+        run={"store_root": None, "result_folder": str(tmp_path)},
+    )
+    instructions = pd.DataFrame(
+        {"instruction": ["Q1", "Q2"], "user_turns": [["Q1"], ["Q2"]]}
+    )
+    data = CompletionData(
+        instructions,
+        pd.DataFrame(
+            {
+                "instruction_index": [0],
+                "model": [model],
+                "completion": ["saved"],
+                "messages": [
+                    [
+                        {"role": "user", "content": "Q1"},
+                        {"role": "assistant", "content": "saved"},
+                    ]
+                ],
+            }
+        ),
+    )
+    with pytest.raises(
+        RuntimeError, match="1 missing answer.*Unavailable/answer"
+    ) as error:
+        prepare_answers(cfg, data, instructions, model, role="A")
+    assert isinstance(error.value.__cause__, ValueError)
+    assert "provider" in str(error.value)
+    assert "Unavailable" in str(error.value.__cause__)

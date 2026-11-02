@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field, replace
 from importlib.resources import files
@@ -113,15 +114,20 @@ def configure_criteria_prompt(
     prompt: ResolvedJudgePrompt, *, criteria_file: str | Path | None = None
 ) -> ResolvedJudgePrompt:
     """Build matching instructions and a parser from the selected rubric."""
-    from judgearena.prompts.parsing import CriteriaParser
+    from judgearena.prompts.parsing import CriteriaParser, CriteriaScoreParser
 
     criteria = resolve_criteria(criteria_file)
     names = [criterion.name for criterion in criteria]
-    parser = CriteriaParser(names)
+    pairwise = prompt.judging_mode == "pairwise"
+    parser = CriteriaParser(names) if pairwise else CriteriaScoreParser(names)
     fields = {
         "criteria_block": prompt_block(criteria),
         "criteria_output_lines": "\n".join(
             f"{name}: A=<score>, B=<score>" for name in names
+        )
+        if pairwise
+        else json.dumps(
+            {"criteria": dict.fromkeys(names, "<score>")}, ensure_ascii=False, indent=2
         ),
     }
 
