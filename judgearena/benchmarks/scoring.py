@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from inspect import Parameter, signature
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
@@ -50,7 +52,27 @@ class MetricRequest(Protocol):
     parameters: Mapping[str, object]
 
 
+@dataclass(frozen=True)
+class MeanScoreMetric:
+    """Average finite scalar annotations on their original scale."""
+
+    def calculate(self, annotations: pd.DataFrame) -> dict[str, object]:
+        scores = pd.to_numeric(annotations["score"], errors="raise")
+        if not np.isfinite(scores.dropna()).all():
+            raise ValueError("Scores must be finite or missing.")
+        return {
+            "score": float(scores.mean()) if scores.notna().any() else None,
+            "num_samples": len(scores),
+            "num_missing": int(scores.isna().sum()),
+        }
+
+    @staticmethod
+    def render(result: dict[str, object]) -> str:
+        return f"Mean score: {result['score']} ({result['num_missing']} missing)"
+
+
 _METRIC_TYPES: dict[str, type[_Metric]] = {
+    "mean_score": MeanScoreMetric,
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,

@@ -7,14 +7,17 @@ import re
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from itertools import count
 from logging import FileHandler
 from pathlib import Path
+from shutil import copyfile
 from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from judgearena.artifacts.metadata import to_jsonable, write_run_metadata
 from judgearena.log import attach_file_handler, get_logger, make_run_log_path
+from judgearena.prompts.registry import prompt_option_files
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -50,7 +53,14 @@ def prepare_run_directory(
 ) -> Path:
     """Create a result directory and persist its resolved configuration."""
     output_dir = Path(path)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    for attempt in count():
+        output_dir = Path(path) if attempt == 0 else Path(f"{path}-{attempt}")
+        try:
+            output_dir.mkdir()
+            break
+        except FileExistsError:
+            continue
     if attach_log and not cfg.run.no_log_file:
         previous_handlers = get_logger().handlers.copy()
         handler = attach_file_handler(make_run_log_path(output_dir))
@@ -60,7 +70,30 @@ def prepare_run_directory(
 
     from judgearena.config import dump_config
 
-    dump_config(cfg, output_dir / "config.yaml")
+    saved_cfg = cfg
+    prompt = cfg.judge.prompt
+    if prompt is not None:
+        values = prompt.model_dump()
+        for owner, names in (
+            (values, ("system_file", "user_file")),
+            (values["options"], prompt_option_files(prompt.preset)),
+        ):
+            for name in names:
+                source = owner.get(name)
+                if source is not None:
+                    source = Path(source)
+                    target = output_dir / "prompts" / name / source.name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    copyfile(source, target)
+                    owner[name] = target.relative_to(output_dir)
+        saved_cfg = cfg.model_copy(
+            update={
+                "judge": cfg.judge.model_copy(
+                    update={"prompt": prompt.model_copy(update=values)}
+                )
+            }
+        )
+    dump_config(saved_cfg, output_dir / "config.yaml")
     return output_dir
 
 
@@ -74,7 +107,11 @@ def write_run_metadata_safely(**kwargs):
 
 
 def write_annotations(annotations: pd.DataFrame, path: str | Path) -> None:
-    """Save canonical columns, encoding nested evidence and metadata as JSON."""
+    """Save rows, JSON-encoding nested values and heterogeneous scalar columns.
+
+    Mixed ID columns are encoded too: json.loads restores each ID's original
+    type. Uniform integer or string ID columns keep their native representation.
+    """
     path = Path(path)
     if path.suffix not in (".csv", ".parquet"):
         raise ValueError("Annotations require a .csv or .parquet path.")

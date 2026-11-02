@@ -52,6 +52,7 @@ def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
         BenchmarkAdapter("elo", run_elo),
         BenchmarkAdapter("meta_eval", run_meta_eval),
         BenchmarkAdapter("pairwise", run_evaluation),
+        BenchmarkAdapter("single_answer", run_evaluation),
     )
 
 

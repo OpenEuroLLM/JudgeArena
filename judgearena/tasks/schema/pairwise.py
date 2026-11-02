@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, model_validator
 
 from judgearena.tasks.schema.base import StrictFrozenModel
-from judgearena.tasks.schema.baselines import BaselineSpec
+from judgearena.tasks.schema.baselines import BaselineSpec, NoBaseline
 from judgearena.tasks.schema.metrics import ScoringSpec
 
 
@@ -86,3 +86,14 @@ class PairwiseProtocol(StrictFrozenModel):
     baseline: BaselineSpec
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec
+
+
+class SingleAnswerProtocol(StrictFrozenModel):
+    """Annotate each answer independently; metrics consume the parsed evidence."""
+
+    runner: Literal["single_answer"]
+    limit_by: str | None = Field(default=None, min_length=1)
+    generation: SingleTurnGeneration | MultiTurnGeneration
+    baseline: NoBaseline = NoBaseline(strategy="none")
+    judge: JudgeSpec
+    scoring: ScoringSpec = ScoringSpec()
