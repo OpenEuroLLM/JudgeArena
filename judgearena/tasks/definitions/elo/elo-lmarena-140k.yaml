@@ -3,7 +3,7 @@ task: elo-lmarena-140k
 description: Arena-anchored ELO evaluation using LMSYS Chatbot Arena 140k battles.
 
 variants:
-  selector: language
+  selector: lang
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
 
 dataset:

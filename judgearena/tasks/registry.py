@@ -20,9 +20,6 @@ from judgearena.benchmarks.scoring import available_metrics, build_metric
 from judgearena.log import get_logger
 from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
 from judgearena.tasks.schema import (
-    EloProtocol,
-    MetaEvalProtocol,
-    MTBenchProtocol,
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
@@ -39,16 +36,10 @@ def _runner_names() -> frozenset[str]:
     return benchmark_runner_names()
 
 
-def _instruction_dataset_names() -> frozenset[str]:
-    from judgearena.datasets.registry import instruction_dataset_names
+def _dataset_names() -> frozenset[str]:
+    from judgearena.datasets.registry import dataset_names
 
-    return instruction_dataset_names()
-
-
-def _battle_dataset_names() -> frozenset[str]:
-    from judgearena.datasets.registry import battle_dataset_names
-
-    return battle_dataset_names()
+    return dataset_names()
 
 
 class TaskDefinitionError(ValueError):
@@ -267,12 +258,13 @@ class AdapterCatalog:
     """Component IDs that task YAML files may reference."""
 
     runners: frozenset[str] = field(default_factory=_runner_names)
-    instruction_datasets: frozenset[str] = field(
-        default_factory=_instruction_dataset_names
+    datasets: frozenset[str] = field(default_factory=_dataset_names)
+    prompts: frozenset[str] = field(
+        default_factory=lambda: frozenset(JUDGE_PROMPT_PRESETS)
     )
-    battle_datasets: frozenset[str] = field(default_factory=_battle_dataset_names)
-    prompts: frozenset[str] = frozenset(JUDGE_PROMPT_PRESETS)
-    metrics: frozenset[str] = frozenset(available_metrics())
+    metrics: frozenset[str] = field(
+        default_factory=lambda: frozenset(available_metrics())
+    )
 
 
 def load_tasks(
@@ -317,13 +309,9 @@ def _discover_tasks(
 
 def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) -> None:
     spec = resolved.spec
-    is_battle_backed = isinstance(spec.protocol, (EloProtocol, MetaEvalProtocol))
-    dataset_names = (
-        adapters.battle_datasets if is_battle_backed else adapters.instruction_datasets
-    )
     references = {
         "runner": (spec.protocol.runner, adapters.runners),
-        "dataset adapter": (spec.dataset.adapter, dataset_names),
+        "dataset adapter": (spec.dataset.adapter, adapters.datasets),
     }
     metric_names = adapters.metrics
     for request in spec.protocol.scoring.metrics:
@@ -338,13 +326,6 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
                 f"{resolved.provenance.source_path}: invalid metric "
                 f"{request.metric!r}: {exc}"
             ) from exc
-        if isinstance(spec.protocol, MTBenchProtocol):
-            unsupported = sorted(set(request.breakdown_by) - {"category", "turn"})
-            if unsupported:
-                raise TaskDefinitionError(
-                    f"{resolved.provenance.source_path}: MT-Bench cannot group "
-                    f"metrics by {unsupported}"
-                )
     judge = spec.protocol.judge
     references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
     for kind, (adapter_id, available) in references.items():
