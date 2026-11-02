@@ -1137,9 +1137,12 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
         except ImportError as e:
             logger.debug("Optional provider not available: %s", e)
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
-        assert model_provider in model_cls_dict, (
-            f"{model_provider} not available, choose among {list(model_cls_dict.keys())}"
-        )
+        if model_provider not in model_cls_dict:
+            providers = ["Dummy", "VLLM", "OpenRouter", *model_cls_dict]
+            raise ValueError(
+                f"Unknown or unavailable model provider {model_provider!r}; "
+                f"choose among {providers}."
+            )
         model_cls = model_cls_dict[model_provider]
         if model_provider == "LlamaCpp":
             engine_kwargs["model_path"] = model_name

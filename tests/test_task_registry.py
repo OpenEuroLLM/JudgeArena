@@ -445,9 +445,12 @@ def test_official_outputs_must_reference_declared_source(tmp_path):
         load_tasks(tmp_path)
 
 
-def test_category_baseline_uses_declared_category_field(tmp_path):
+@pytest.mark.parametrize("with_fields", [False, True])
+def test_category_baseline_uses_declared_category_field(tmp_path, with_fields):
     definition = _task_definition()
     definition["dataset"]["fields"]["category"] = "category"
+    if not with_fields:
+        del definition["dataset"]["fields"]
     definition["protocol"]["baseline"] = {
         "strategy": "category_defaults",
         "category_field": "other_category",
@@ -460,8 +463,18 @@ def test_category_baseline_uses_declared_category_field(tmp_path):
         definition=definition,
     )
 
-    with pytest.raises(TaskDefinitionError, match="dataset.fields.category"):
-        load_tasks(tmp_path)
+    import pandas as pd
+
+    from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
+
+    task = load_tasks(tmp_path)["test-task"]
+    plan = resolve_baseline_plan(
+        task_id=task.task,
+        task=task,
+        runtime_baseline=None,
+        instructions=pd.DataFrame({"instruction": ["Q"], "other_category": ["test"]}),
+    )
+    assert plan.baseline_by_index.tolist() == ["reference"]
 
 
 def test_resolved_hash_ignores_yaml_formatting(tmp_path):

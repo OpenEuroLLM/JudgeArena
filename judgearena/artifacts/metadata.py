@@ -17,9 +17,12 @@ import tomllib
 from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from judgearena.usage import current_run_usage
+
+if TYPE_CHECKING:
+    from judgearena.tasks.schema import ResolvedTaskSpec
 
 METADATA_FILENAME = "run-metadata.v1.json"
 METADATA_SCHEMA_VERSION = "judgearena-run-metadata/v1"
@@ -223,15 +226,17 @@ def _compact_results(results: dict[str, Any] | None) -> dict[str, Any]:
     return payload
 
 
-def _task_definition_metadata(run: dict[str, Any]) -> dict[str, Any] | None:
-    """Return compact provenance when ``run.task`` is a packaged task."""
-    task_id = run.get("task")
-    if not isinstance(task_id, str):
-        return None
+def _task_definition_metadata(
+    run: dict[str, Any], resolved: ResolvedTaskSpec | None = None
+) -> dict[str, Any] | None:
+    """Return provenance for the definition used by this run."""
+    if resolved is None:
+        task_id = run.get("task")
+        if not isinstance(task_id, str):
+            return None
+        from judgearena.tasks.registry import get_packaged_task
 
-    from judgearena.tasks.registry import get_packaged_task
-
-    resolved = get_packaged_task(task_id)
+        resolved = get_packaged_task(task_id)
     if resolved is None:
         return None
     metadata = {
@@ -257,6 +262,7 @@ def write_run_metadata(
     output_dir: str | Path,
     entrypoint: str,
     run: dict[str, Any],
+    task: ResolvedTaskSpec | None = None,
     results: dict[str, Any] | None = None,
     input_payloads: dict[str, Any] | None = None,
     judge_system_prompt: str | None = None,
@@ -294,7 +300,7 @@ def write_run_metadata(
             start_path=Path(__file__).resolve().parent
         ),
     }
-    task_definition = _task_definition_metadata(run)
+    task_definition = _task_definition_metadata(run, task)
     if task_definition is not None:
         metadata["task_definition"] = task_definition
 

@@ -31,7 +31,7 @@ class BradleyTerryMetric:
         self,
         battles: pd.DataFrame,
         *,
-        rng: np.random.Generator | None = None,
+        seed: int = 0,
     ) -> dict[str, object]:
         """Calculate Bradley-Terry ratings from battle rows."""
         required = {"model_a", "model_b", "pref"}
@@ -62,8 +62,7 @@ class BradleyTerryMetric:
                 "Bradley-Terry requires exactly one model under evaluation."
             )
         evaluation_model = str(evaluation_models[0])
-        if self.n_bootstraps > 0 and rng is None:
-            raise ValueError("Bootstrapped Bradley-Terry requires an RNG.")
+        rng = np.random.default_rng(seed)
 
         human_battles = scoring_battles.loc[scoring_battles["source"] == "human"].copy()
         human_battles["pref"] = human_battles["pref_hard"]
@@ -79,7 +78,6 @@ class BradleyTerryMetric:
 
         bootstrap_ratings: list[dict[str, float]] = []
         for _ in range(self.n_bootstraps):
-            assert rng is not None
             sample = scoring_battles.sample(
                 n=len(scoring_battles),
                 replace=True,

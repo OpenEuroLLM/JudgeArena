@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from judgearena.benchmarks.scoring import available_metrics, build_metric
 from judgearena.log import get_logger
-from judgearena.prompts.registry import JUDGE_PROMPT_PRESETS
+from judgearena.prompts.registry import available_prompt_presets
 from judgearena.tasks.schema import (
     ResolvedTaskSpec,
     ResourceDigest,
@@ -260,7 +260,7 @@ class AdapterCatalog:
     runners: frozenset[str] = field(default_factory=_runner_names)
     datasets: frozenset[str] = field(default_factory=_dataset_names)
     prompts: frozenset[str] = field(
-        default_factory=lambda: frozenset(JUDGE_PROMPT_PRESETS)
+        default_factory=lambda: frozenset(available_prompt_presets())
     )
     metrics: frozenset[str] = field(
         default_factory=lambda: frozenset(available_metrics())

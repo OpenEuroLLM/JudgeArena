@@ -126,12 +126,11 @@ class MetaEvalAgreementMetric:
         self,
         battles: pd.DataFrame,
         *,
-        rng: np.random.Generator | None = None,
+        seed: int = 0,
     ) -> dict[str, object]:
         """Calculate attempted and complete agreement views."""
         _validate_battles(battles)
-        if self.n_bootstraps and rng is None:
-            raise ValueError("Bootstrapped meta-evaluation agreement requires an RNG.")
+        rng = np.random.default_rng(seed)
         attempted = battles.loc[battles["sampled"]].copy()
         reference_is_tie = attempted["reference_pref"].eq(0.5)
         return {
@@ -188,7 +187,6 @@ class MetaEvalAgreementMetric:
         kappa_samples: list[float] = []
         if len(rows):
             for _ in range(self.n_bootstraps):
-                assert rng is not None
                 indices = rng.integers(0, len(rows), size=len(rows))
                 sample = rows.iloc[indices]
                 values = self._agreement_point(sample)
@@ -302,12 +300,11 @@ class MetaEvalRankingMetric:
         self,
         battles: pd.DataFrame,
         *,
-        rng: np.random.Generator | None = None,
+        seed: int = 0,
     ) -> dict[str, object]:
         """Fit and bootstrap human, hard-judge, and soft-judge rankings."""
         _validate_battles(battles)
-        if self.n_bootstraps and rng is None:
-            raise ValueError("Bootstrapped meta-evaluation ranking requires an RNG.")
+        rng = np.random.default_rng(seed)
         models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
         complete = battles["sampled"] & battles["pref"].notna()
         rows = battles.loc[complete].copy()
@@ -329,7 +326,6 @@ class MetaEvalRankingMetric:
         strata = _pair_strata(rows) if self.n_bootstraps else []
         samples: list[dict[str, dict[str, float]]] = []
         for _ in range(self.n_bootstraps):
-            assert rng is not None
             sample = pd.concat(
                 [
                     stratum.iloc[rng.integers(0, len(stratum), size=len(stratum))]
@@ -427,12 +423,11 @@ class MetaEvalEloGapMetric:
         self,
         battles: pd.DataFrame,
         *,
-        rng: np.random.Generator | None = None,
+        seed: int = 0,
     ) -> dict[str, object]:
         """Calculate hard and soft Elo gaps, retaining ties in both methods."""
         _validate_battles(battles)
-        if rng is None:
-            raise ValueError("Meta-evaluation Elo gap requires an RNG.")
+        rng = np.random.default_rng(seed)
 
         models = sorted(set(battles["model_a"]) | set(battles["model_b"]))
         attempted = battles.loc[battles["sampled"]]

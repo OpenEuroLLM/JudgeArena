@@ -9,6 +9,7 @@ import pandas as pd
 
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import (
+    AllReferencesBaseline,
     CategoryDefaultsBaseline,
     ResolvedTaskSpec,
     TaskDefaultBaseline,
@@ -17,7 +18,7 @@ from judgearena.tasks.schema import (
 
 @dataclass(frozen=True)
 class BaselinePlan:
-    """Row-aligned baseline assignment for model B."""
+    """Reference assignments indexed by source instruction; IDs may repeat."""
 
     baseline_by_index: pd.Series
 
@@ -65,6 +66,19 @@ def resolve_baseline_plan(
     instructions: pd.DataFrame,
 ) -> BaselinePlan:
     """Resolve a runtime override or the baseline declared by a task."""
+    if task is not None and isinstance(
+        task.spec.protocol.baseline, AllReferencesBaseline
+    ):
+        if runtime_baseline is not None:
+            raise ValueError("model.baseline cannot override an all_references policy.")
+        return BaselinePlan.per_row(
+            pd.concat(
+                [
+                    pd.Series(model, index=instructions.index)
+                    for model in task.spec.protocol.baseline.references
+                ]
+            )
+        )
     if runtime_baseline is not None:
         return BaselinePlan.flat(runtime_baseline, index=instructions.index)
 
@@ -79,17 +93,16 @@ def resolve_baseline_plan(
         return BaselinePlan.flat(baseline.reference_id, index=instructions.index)
 
     if isinstance(baseline, CategoryDefaultsBaseline):
-        if "category" not in instructions.columns:
+        field = baseline.category_field
+        if field not in instructions.columns:
             raise ValueError(
-                f"{task_id} requires a 'category' column for per-category "
+                f"{task_id} requires a {field!r} column for per-category "
                 "baseline routing; re-run dataset download to regenerate the "
                 "instructions table."
             )
-        per_row = instructions["category"].map(baseline.references)
+        per_row = instructions[field].map(baseline.references)
         if per_row.isna().any():
-            unknown = sorted(
-                instructions.loc[per_row.isna(), "category"].unique().tolist()
-            )
+            unknown = sorted(instructions.loc[per_row.isna(), field].unique().tolist())
             raise ValueError(
                 f"Unknown baseline categories for {task_id}: {unknown}. "
                 f"Known: {sorted(baseline.references)}"

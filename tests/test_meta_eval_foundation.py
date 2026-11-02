@@ -55,13 +55,13 @@ def test_sampling_rejects_insufficient_quota():
         sample_battles_per_model(battles, ["a", "b"], battles_per_model=2, seed=0)
 
 
-def test_meta_eval_protocol_requires_no_baseline_and_compatible_metrics():
+def test_meta_eval_protocol_accepts_metrics_and_requires_no_baseline():
     definition = get_packaged_task("meta-eval-comparia").spec.model_dump()
     protocol = definition["protocol"]
     metric = protocol["scoring"]["metrics"][0]
     metric["metric"] = "pairwise_win_rate"
-    with pytest.raises(ValidationError, match="unsupported meta-evaluation metric"):
-        TaskSpec.model_validate(definition)
+    metric["breakdown_by"] = ["category"]
+    TaskSpec.model_validate(definition)
 
     metric["metric"] = "meta_eval_agreement"
     protocol["baseline"] = {"strategy": "runtime_required"}
