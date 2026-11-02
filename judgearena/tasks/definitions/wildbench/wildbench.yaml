@@ -1,0 +1,20 @@
+extends: _base.yaml
+task: wildbench
+description: WildBench v2 checklist-guided WB-Reward against one reference model.
+tags: [pairwise, instruction-following, multi-turn, wildbench]
+
+protocol:
+  runner: pairwise
+  baseline:
+    strategy: runtime_required
+  judge:
+    default_prompt_preset: wildbench-reward
+    default_swap_mode: random
+    default_temperature: 0.0
+    default_max_out_tokens: 4096
+  scoring:
+    metrics:
+      - metric: wildbench_reward
+        breakdown_by: [category]
+        parameters:
+          length_penalty_threshold: -1

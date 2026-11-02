@@ -309,6 +309,9 @@ Elo writes raw preferences to `annotations.parquet` and scoring preferences to
 | `m-arena-hard-v2.0-{lang}`   | Language-specific v2.0 slice                                                                                                                                                    |
 | `m-arena-hard-v2.0-EU`       | All EU v2.0 languages combined                                                                                                                                                  |
 | `mt-bench`                   | Multi-turn benchmark with FastChat-compatible pairwise judging                                                                                                                  |
+| `wildbench`                  | WildBench v2 checklist-guided WB-Reward against one reference model |
+| `wildbench-reward-mix`       | Mean WB-Reward against three saved reference models |
+| `wildbench-score`            | Independent WildBench v2 answer scores |
 | `mt-bench-101`               | Multi-turn evaluation with supplied reference histories, independent answer scores, and dialogue-level aggregation |
 | `fluency-{lang}`             | Fluency evaluation for pretrained models across 43 languages from `geoalgo/multilingual-fluency` (e.g. `fluency-french`, `fluency-mandarin-chinese`, `fluency-standard-arabic`) |
 
@@ -328,6 +331,16 @@ For m-Arena-Hard, baseline completions are tied to the benchmark release:
   from `CohereLabs/deja-vu-pairwise-evals` (repeat 0) via
   [`scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py`](scripts/multilingual_arena_hard/ingest_deja_vu_aya_references.py).
 - `m-arena-hard-v2.0`: Gemini 2.5 Flash (`google/gemini-2.5-flash`).
+
+### WildBench
+
+```bash
+judgearena --task wildbench \
+  --model.name OpenRouter/google/gemma-4-31b-it \
+  --model.baseline Llama-2-7b-chat-hf \
+  --judge.model OpenRouter/google/gemma-4-31b-it \
+  --generation.n_instructions 10
+```
 
 ### ELO rating
 
