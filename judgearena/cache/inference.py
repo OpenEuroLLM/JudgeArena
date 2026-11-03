@@ -35,6 +35,7 @@ VLLM_EXECUTION_ONLY_KWARGS = {
 InputMode = Literal["chat", "text"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "ChatOpenAI": "chat",
+    "Decisions": "text",
     "Dummy": "chat",
     "LlamaCpp": "text",
     "OpenAI": "text",

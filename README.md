@@ -187,6 +187,28 @@ judgearena \
   --generation.n_instructions 10
 ```
 
+### Decision endpoints
+
+Use `Decisions/<model>` for a Decisions-compatible HTTP endpoint:
+
+```yaml
+judge:
+  model: Decisions/typesafe/jev-1.14
+  engine_kwargs:
+    endpoint: https://openrouter.ai/api/alpha/decisions
+    api_key_env: OPENROUTER_API_KEY
+    questions:
+      safe:
+        type: noul
+        instructions: Is the supplied content safe?
+```
+
+Use a prompt/parser bundle that renders the state and reads the JSON `answers`
+mapping. The backend retains the full response, including probabilities, for
+parsing and cache replay. Text-generation sampling settings are unused; decision
+probabilities are not token logprobs. For a compatible local server, change the
+endpoint and model, and omit `api_key_env` if authentication is not needed.
+
 ### Running locally with LlamaCpp
 
 LlamaCpp allows you to run GGUF models locally with high efficiency across various hardware, including CPUs, Apple Silicon (Metal), and NVIDIA GPUs. This is ideal for testing your setup without relying on external API keys or high-end server GPUs.

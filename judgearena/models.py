@@ -11,8 +11,10 @@ import time
 import warnings
 from collections.abc import Mapping
 from dataclasses import replace
+from urllib import request
 
 from langchain_community.llms import LlamaCpp
+from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from pandas.errors import DatabaseError
 from tqdm.asyncio import tqdm
@@ -196,6 +198,59 @@ class DummyModel:
 
     async def ainvoke(self, input, **invoke_kwargs):
         return self.message
+
+
+class DecisionsModel:
+    """Send rendered text and named questions to a Decisions-compatible endpoint.
+
+    The complete JSON response is retained as text so existing parsers and caches
+    preserve probabilities and other decision details without a separate format.
+    """
+
+    def __init__(self, model, *, endpoint, questions, api_key_env=None, timeout=120):
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError("Decisions requires a nonempty questions mapping.")
+        self.model = model
+        self.endpoint = endpoint
+        self.questions = questions
+        self.api_key_env = api_key_env
+        self.timeout = timeout
+
+    def invoke(self, input, **_kwargs):
+        state = input if isinstance(input, str) else input.to_string()
+        headers = {"Content-Type": "application/json"}
+        if self.api_key_env:
+            key = os.getenv(self.api_key_env)
+            if not key:
+                raise ValueError(f"Set {self.api_key_env} for the decision endpoint.")
+            headers["Authorization"] = f"Bearer {key}"
+        payload = {"model": self.model, "state": state, "questions": self.questions}
+        req = request.Request(
+            self.endpoint, data=json.dumps(payload).encode(), headers=headers
+        )
+        with request.urlopen(req, timeout=self.timeout) as response:
+            result = json.load(response)
+        answers = result.get("answers") if isinstance(result, dict) else None
+        if not isinstance(answers, dict) or not self.questions.keys() <= answers.keys():
+            raise ValueError("Decision endpoint did not return the requested answers.")
+        usage = result.get("usage") or {}
+        return AIMessage(
+            content=json.dumps(result),
+            response_metadata={
+                "model": result.get("model", self.model),
+                "token_usage": {
+                    "prompt_tokens": usage.get("input_tokens"),
+                    "completion_tokens": usage.get("output_tokens"),
+                    "cost": usage.get("cost"),
+                },
+            },
+        )
+
+    def batch(self, inputs, **kwargs):
+        return [self.invoke(item, **kwargs) for item in inputs]
+
+    async def ainvoke(self, input, **kwargs):
+        return await asyncio.to_thread(self.invoke, input, **kwargs)
 
 
 class ChatVLLM:
@@ -983,7 +1038,7 @@ def _resolve_model_config(
 def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
     if provider == "OpenRouter":
         return _REMOTE_ENDPOINTS[provider]
-    for key in ("base_url", "openai_api_base", "together_api_base"):
+    for key in ("endpoint", "base_url", "openai_api_base", "together_api_base"):
         if resolved_kwargs.get(key):
             return str(resolved_kwargs[key])
     if provider in {"ChatOpenAI", "OpenAI"}:
@@ -1051,6 +1106,12 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     top_k = sampling["top_k"]
     seed = sampling["seed"]
     top_logprobs = sampling["top_logprobs"]
+
+    if model_provider == "Decisions":
+        if top_logprobs is not None:
+            raise ValueError("Decision probabilities are not token logprobs.")
+        engine_kwargs.pop("max_tokens", None)
+        return DecisionsModel(model_name, **engine_kwargs)
 
     if model_provider == "Dummy":
         if top_logprobs is not None:
@@ -1138,7 +1199,7 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
             logger.debug("Optional provider not available: %s", e)
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
         if model_provider not in model_cls_dict:
-            providers = ["Dummy", "VLLM", "OpenRouter", *model_cls_dict]
+            providers = ["Dummy", "VLLM", "OpenRouter", "Decisions", *model_cls_dict]
             raise ValueError(
                 f"Unknown or unavailable model provider {model_provider!r}; "
                 f"choose among {providers}."
