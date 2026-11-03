@@ -208,7 +208,15 @@ def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
             "criteria": {"A": "First", "B": "Second", "tie": "Equal"},
         }
     }
-    response = {"answers": {"winner": {"choice": "B", "confidence": 0.8}}}
+    response = {
+        "answers": {
+            "winner": {
+                "choice": "B",
+                "confidence": 0.8,
+                "probabilities": {"A": 0.1, "B": 0.7, "tie": 0.2},
+            }
+        }
+    }
     monkeypatch.setattr(
         "urllib.request.urlopen", lambda *a, **k: BytesIO(json.dumps(response).encode())
     )
@@ -218,13 +226,19 @@ def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
         cache=JudgementInferenceCache(tmp_path, "mapping"),
     )
 
-    def judge(values):
+    def judge(values, aggregation="selected"):
         prompt = resolve_judge_prompt(
             preset="decision",
             options={
                 "judging_mode": "pairwise",
                 "questions": questions,
-                "preference": {"question": "winner", "values": values},
+                "result": {
+                    "preference": {
+                        "question": "winner",
+                        "values": values,
+                        "aggregation": aggregation,
+                    }
+                },
             },
         )
         inputs = render_inputs(
@@ -263,6 +277,9 @@ def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
     result = judge({"A": 1, "B": 0, "tie": 0.5})
     assert result.parsed.preference == 0
     assert result.parsed.details == response["answers"]
+    assert judge(
+        {"A": 0, "B": 1, "tie": 0.5}, "expected"
+    ).parsed.preference == pytest.approx(0.8)
 
 
 def test_decision_options_validate_and_preserve_raw_answers():
@@ -287,7 +304,145 @@ def test_decision_options_validate_and_preserve_raw_answers():
         {"judging_mode": "pairwise"},
         {"judging_mode": "unknown"},
         {"state": {}},
-        {"preference": {"question": "safe", "values": {"yes": 1}}},
+        {"result": {"preference": {"question": "safe", "values": {"yes": 1}}}},
     ):
         with pytest.raises(ValueError):
             resolve_judge_prompt(preset="decision", options={**options, **override})
+
+
+@pytest.mark.parametrize(
+    "kind,output,invert,value,expected",
+    [
+        ("noul", "preference", True, 0.8, 0.2),
+        ("noul", "preference", False, 0.8, 0.8),
+        ("noul", "score", False, 0.8, 0.8),
+        ("score", "score", False, 1.7, 1.7),
+        ("noul", "score", False, 1.2, None),
+        ("score", "score", False, float("nan"), None),
+    ],
+)
+def test_decision_scalar_conversions(kind, output, invert, value, expected):
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    options = {
+        "questions": {"quality": {"type": kind}},
+        "judging_mode": "pairwise" if output == "preference" else "single_answer",
+        "result": {
+            output: {
+                "question": "quality",
+                **({"invert": invert} if output == "preference" else {}),
+            }
+        },
+    }
+    parser = resolve_judge_prompt(preset="decision", options=options).parser
+    answers = {"quality": {kind: value}, "extra": {"noul": 0.5}}
+    parsed = parser.parse_result(json.dumps({"answers": answers}))
+    if expected is None:
+        assert parsed is None
+    else:
+        assert getattr(parsed, output) == pytest.approx(expected)
+        assert parsed.details == answers
+    assert parser.parse_result('{"answers": {"other": {}}}') is None
+
+
+def test_decision_scores_use_shared_pairwise_conversion(monkeypatch):
+    import pandas as pd
+
+    from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
+    from judgearena.config import RunConfig
+    from judgearena.prompts.registry import resolve_run_judge_prompt
+
+    cfg = RunConfig(
+        task="alpaca-eval-ja",
+        model={"name": "Dummy/a"},
+        judge={
+            "model": "Decisions/local",
+            "prompt": {
+                "preset": "decision",
+                "options": {
+                    "questions": {
+                        "quality": {
+                            "type": "score",
+                            "criteria": ["Poor", "Good", "Excellent"],
+                        }
+                    },
+                    "result": {"score": {"question": "quality"}},
+                },
+            },
+        },
+    )
+    pairs = pd.DataFrame(
+        [
+            {
+                "instruction": "Q",
+                "model_a": "a",
+                "model_b": "b",
+                "completion_a": "A",
+                "completion_b": "B",
+            }
+        ]
+    )
+
+    def post(request, **kwargs):
+        state = json.loads(request.data)["state"]
+        score = 2 if state["completion"] == "A" else 0
+        return BytesIO(json.dumps({"answers": {"quality": {"score": score}}}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", post)
+    execute, _ = prepare_pairwise_judging(
+        cfg,
+        resolve_run_judge_prompt(cfg.resolved_task, cfg.judge),
+        pairs,
+        available_columns=pairs.columns,
+    )
+    annotations, outcomes, _ = execute(
+        models.prepare_model("Decisions/local", endpoint="http://localhost/decisions"),
+        pairs,
+    )
+    from judgearena.prompts.parsing import PairScore
+
+    expected = PairScore(
+        temperature=cfg.resolved_task.spec.protocol.judge.score_temperature
+    ).preference_from_scores(2, 0)
+    assert outcomes["pref"].tolist() == pytest.approx([expected])
+    assert annotations["score"].tolist() == [2, 0]
+
+
+@pytest.mark.parametrize(
+    "probabilities",
+    [
+        None,
+        {"A": 1},
+        {"A": 0.5, "B": 0.5, "extra": 0},
+        {"A": -0.1, "B": 1.1},
+        {"A": float("nan"), "B": 0},
+        {"A": 0.2, "B": 0.2},
+    ],
+)
+def test_expected_preference_rejects_invalid_distribution(probabilities):
+    from judgearena.prompts.registry import resolve_judge_prompt
+
+    parser = resolve_judge_prompt(
+        preset="decision",
+        options={
+            "judging_mode": "pairwise",
+            "questions": {
+                "winner": {"type": "choice", "criteria": {"A": "First", "B": "Second"}}
+            },
+            "result": {
+                "preference": {
+                    "question": "winner",
+                    "values": {"A": 0, "B": 1},
+                    "aggregation": "expected",
+                }
+            },
+        },
+    ).parser
+    assert (
+        parser.parse_result(
+            json.dumps(
+                {"answers": {"winner": {"choice": "A", "probabilities": probabilities}}}
+            )
+        )
+        is None
+    )

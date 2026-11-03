@@ -213,15 +213,27 @@ judge:
             A: completion_a is better.
             B: completion_b is better.
             tie: Both answers are equally good or equally poor.
-      preference:
-        question: winner
-        values: {A: 0.0, B: 1.0, tie: 0.5}
+      result:
+        preference:
+          question: winner
+          values: {A: 0.0, B: 1.0, tie: 0.5}
+          aggregation: expected
 ```
 
 The default state contains `instruction`, `completion_a` and `completion_b`. For independent
-judging, use `judging_mode: single_answer` and omit `preference`; the state contains
+judging, use `judging_mode: single_answer`; the state contains
 `instruction` and `completion`. Questions can mix Noul, Choice and Score. All returned
-answers and probabilities are retained; metrics choose which values to use.
+answers and probabilities are retained in the parsed outcome's details.
+
+`result.preference` supports Choice with `aggregation: selected` (the default)
+or `expected` (probability-weighted values). For Noul, use
+`{question: a_better, invert: true}` to convert the probability that A is better
+into the preference convention where 0 favors A and 1 favors B.
+
+For independent scalar scoring, set `result: {score: {question: quality}}`, where
+`quality` is a Score or Noul question. A pairwise runner can use this single-answer
+bundle to score each candidate and apply its existing score-to-preference rule.
+Omit `result` in single-answer mode to retain the named answers without conversion.
 An optional `state` mapping selects prepared fields, for example
 `{instruction: instruction, completion: completion, language: lang}`.
 
