@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -178,7 +178,7 @@ _CURRENT_TRACKER: ContextVar[UsageTracker | None] = ContextVar(
 
 
 @contextmanager
-def track_usage() -> Iterator[UsageTracker]:
+def track_usage() -> Generator[UsageTracker, None, None]:
     """Collect usage; nested scopes intentionally share the outer run tracker."""
     current = _CURRENT_TRACKER.get()
     if current is not None:

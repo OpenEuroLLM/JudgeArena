@@ -3,7 +3,7 @@ task: elo-comparia
 description: Arena-anchored ELO evaluation using ComparIA human preference battles.
 
 variants:
-  selector: language
+  selector: lang
   # Detected-language census of the pinned snapshot: 94% fr, 4% en; every
   # other language has <500 battles.
   values: [fr, en]

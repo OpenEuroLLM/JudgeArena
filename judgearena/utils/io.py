@@ -29,11 +29,9 @@ def download_hf(name: str, local_path: Path):
     resolved_task = get_packaged_task(name)
     if resolved_task is None:
         raise ValueError(f"Unknown task {name!r}.")
-    from judgearena.datasets.registry import resolve_download_adapter
+    from judgearena.datasets.registry import resolve_dataset_adapter
 
-    resolve_download_adapter(resolved_task.spec.dataset.adapter).download(
-        resolved_task, local_path
-    )
+    resolve_dataset_adapter(resolved_task, local_path).download()
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
