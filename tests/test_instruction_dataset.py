@@ -508,7 +508,7 @@ def test_comparison_ids_survive_selection_with_shared_instructions(battle_rows):
     assert data.select({"reference_pref": [0.5]}).battles.battle_id.tolist() == ["1"]
 
 
-@pytest.mark.parametrize("task_name", ["mt-bench-101"])
+@pytest.mark.parametrize("task_name", ["mt-bench-101", "wildbench"])
 def test_fixed_format_adapters_reject_unused_field_mappings(
     tmp_path, monkeypatch, task_name
 ):
