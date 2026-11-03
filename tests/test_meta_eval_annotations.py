@@ -7,12 +7,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import judgearena.evaluate as evaluate
+import judgearena.judging as judging
 from judgearena.benchmarks.meta_eval.annotate import (
     _battle_texts,
     aggregate_battle_preferences,
     annotate_sample,
 )
+from judgearena.models import InferenceResult
 from judgearena.prompts.registry import resolve_judge_prompt
 
 
@@ -57,7 +58,11 @@ def test_annotation_swaps_and_aggregates_battles(monkeypatch):
             ["score_A: 1\nscore_B: 7", "unparseable", "unparseable"],
         ]
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: next(responses))
+    monkeypatch.setattr(
+        judging,
+        "do_inference",
+        lambda **kwargs: [InferenceResult(text=x) for x in next(responses)],
+    )
     rows = annotate_sample(
         sample,
         _config("both"),
@@ -88,7 +93,9 @@ def test_annotation_preserves_parser_label_and_details(monkeypatch):
     output = (
         '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
     )
-    monkeypatch.setattr(evaluate, "do_inference", lambda **kwargs: [output])
+    monkeypatch.setattr(
+        judging, "do_inference", lambda **kwargs: [InferenceResult(text=output)]
+    )
     rows = annotate_sample(
         _sample(),
         _config("fixed"),

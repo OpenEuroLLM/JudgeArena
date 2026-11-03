@@ -60,7 +60,7 @@ def test_agreement_reports_missing_judgments_and_excludes_only_human_ties():
     )
     battles.loc[5, "sampled"] = False
     result = MetaEvalAgreementMetric(n_bootstraps=8, tie_tolerance=0.01).calculate(
-        battles, rng=np.random.default_rng(7)
+        battles, seed=7
     )
 
     all_rows = result["all"]
@@ -121,13 +121,13 @@ def test_elo_gap_configuration_requires_increasing_budgets():
 def test_elo_gap_distinguishes_soft_confidence_from_hard_labels():
     battles = _balanced_battles()
     metric = _elo_gap_metric((4,), 3)
-    result = metric.calculate(battles, rng=np.random.default_rng(11))
+    result = metric.calculate(battles, seed=11)
     assert result["soft"] == result["hard"]
     assert result["hard"][0]["mean_gap"] == pytest.approx(0.0, abs=1e-6)
     assert result["hard"][0]["n_seeds_valid"] == 3
 
     battles.loc[battles["pref"].eq(0.0), "pref"] = 0.2
-    softened = metric.calculate(battles, rng=np.random.default_rng(11))
+    softened = metric.calculate(battles, seed=11)
     assert softened["hard"] == result["hard"]
     assert softened["soft"][0]["mean_gap"] != pytest.approx(
         result["hard"][0]["mean_gap"]
@@ -137,7 +137,7 @@ def test_elo_gap_distinguishes_soft_confidence_from_hard_labels():
 def test_elo_gap_counts_attempts_before_parse_filtering():
     battles = _balanced_battles()
     battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
-    result = _elo_gap_metric((1, 4), 4).calculate(battles, rng=np.random.default_rng(7))
+    result = _elo_gap_metric((1, 4), 4).calculate(battles, seed=7)
 
     rows = result["soft"]
     assert rows[0]["mean_complete_per_model"] <= rows[1]["mean_complete_per_model"]
@@ -150,7 +150,7 @@ def test_elo_gap_keeps_fixed_model_set_and_fails_whole_replicates():
     battles = _balanced_battles()
     focal_a = battles["model_a"].eq("a") | battles["model_b"].eq("a")
     battles.loc[focal_a, "pref"] = np.nan
-    result = _elo_gap_metric((4,), 2).calculate(battles, rng=np.random.default_rng(3))
+    result = _elo_gap_metric((4,), 2).calculate(battles, seed=3)
 
     assert result["n_models"] == 3
     assert result["soft"][0]["n_seeds_valid"] == 0
@@ -162,7 +162,7 @@ def test_elo_gap_warns_and_returns_empty_for_attempted_battle_shortfalls(caplog)
     battles.loc[battles["battle_id"].eq("ab-0"), "sampled"] = False
     battles.loc[battles["battle_id"].eq("ab-0"), "pref"] = np.nan
 
-    result = _elo_gap_metric((4,), 1).calculate(battles, rng=np.random.default_rng(1))
+    result = _elo_gap_metric((4,), 1).calculate(battles, seed=1)
 
     assert result == {}
     assert "Skipping meta_eval_elo_gap" in caplog.text

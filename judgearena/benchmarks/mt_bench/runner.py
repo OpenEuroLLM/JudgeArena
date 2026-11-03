@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
 import pandas as pd
 
 from judgearena.artifacts import prepare_run_directory, write_run_metadata_safely
@@ -252,9 +251,7 @@ def _finalize_mt_bench_run(
     metric_results = calculate_metrics(
         battles,
         metrics,
-        runtime_by_metric={
-            "bradley_terry": {"rng": np.random.default_rng(cfg.run.seed)},
-        },
+        runtime={"seed": cfg.run.seed},
     )
     report = BattleReport(
         task=cfg.task,
@@ -367,10 +364,11 @@ def _run_mt_bench_preset(
         truncate_input_chars=cfg.generation.truncate_judge_input_chars,
         use_tqdm=cfg.run.use_tqdm,
         reference_categories=protocol.judge.reference_categories,
-        prompt_preset=cfg.judge.prompt_preset or resolved_prompt.preset_name,
+        prompt_preset=resolved_prompt.preset_name,
         system_file=cfg.judge.prompt.system_file if cfg.judge.prompt else None,
         user_file=cfg.judge.prompt.user_file if cfg.judge.prompt else None,
         parser=cfg.judge.prompt.parser if cfg.judge.prompt else None,
+        options=cfg.judge.prompt.options if cfg.judge.prompt else None,
         strip_thinking_before_judging=cfg.judge.strip_thinking_before_judging,
     )
     return _finalize_mt_bench_run(
@@ -400,7 +398,7 @@ def run_mt_bench_benchmark(cfg: RunConfig, task: ResolvedTaskSpec | None = None)
             "MT-Bench supports only swap_mode='fixed' or 'both'; "
             f"got {cfg.judge.swap_mode!r}."
         )
-    resolved_prompt = resolve_run_judge_prompt(cfg.task, cfg.judge, multi_turn=True)
+    resolved_prompt = resolve_run_judge_prompt(task, cfg.judge, multi_turn=True)
     if (
         resolved_prompt.parser is not None
         and resolved_prompt.parser.requires_top_logprobs

@@ -8,7 +8,7 @@ from __future__ import annotations
 from importlib.metadata import version
 from importlib.resources import files
 
-from judgearena.criteria.defaults import CRITERIA_BY_NAME
+from judgearena.prompts.criteria import resolve_criteria
 
 
 def _assert_non_empty_text_resource(package: str, relative_path: str) -> None:
@@ -21,15 +21,15 @@ def main() -> None:
     print(f"Starting smoke test for JudgeArena {version('judgearena')}...")
 
     # Validates that package import and built-in criteria loading both work.
-    if "default" not in CRITERIA_BY_NAME:
-        raise AssertionError("Missing default criteria entry.")
-    if not CRITERIA_BY_NAME["default"]:
+    if not resolve_criteria():
         raise AssertionError("Default criteria list is empty.")
 
     # Validates packaged text resources expected at runtime.
     _assert_non_empty_text_resource("judgearena.prompts", "templates/prompt.txt")
     _assert_non_empty_text_resource("judgearena.prompts", "templates/system-prompt.txt")
-    _assert_non_empty_text_resource("judgearena.criteria", "data/default.yaml")
+    _assert_non_empty_text_resource(
+        "judgearena.prompts", "templates/criteria-default.yaml"
+    )
 
     print("✅ All integrity checks passed: Imports, Criteria, and Resources are valid.")
 

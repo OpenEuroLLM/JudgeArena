@@ -1,7 +1,10 @@
 import pandas as pd
+from langchain_core.messages import convert_to_messages
+from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.cache.inference import CompletionInferenceCache
+from judgearena.datasets.data import validate_messages
 from judgearena.models import PreparedModel, do_inference, prepare_model
 from judgearena.utils import strip_thinking_tags, truncate
 
@@ -302,3 +305,79 @@ def generate_base(
     )
 
     return df_outputs
+
+
+def _with_system_prompt(messages, system_prompt):
+    if system_prompt is None:
+        return list(messages)
+    history = messages[1:] if messages and messages[0]["role"] == "system" else messages
+    return [{"role": "system", "content": system_prompt}, *history]
+
+
+def _chat_input(
+    messages,
+    *,
+    system_prompt=None,
+    truncate_input_chars=None,
+    strip_thinking=False,
+):
+    validate_messages(messages, ending="user")
+    rendered = []
+    for message in _with_system_prompt(messages, system_prompt):
+        content = message["content"]
+        if strip_thinking and message["role"] == "assistant":
+            content = strip_thinking_tags(content)
+        rendered.append(
+            (message["role"], truncate(content, max_len=truncate_input_chars))
+        )
+    return ChatPromptValue(messages=convert_to_messages(rendered))
+
+
+def generate_messages(
+    instructions: pd.Series,
+    model: str,
+    truncate_input_chars: int | None = 8192,
+    max_tokens: int | None = 8192,
+    use_tqdm: bool = True,
+    system_prompt: str | None = None,
+    inference_cache: CompletionInferenceCache | None = None,
+    **model_kwargs,
+) -> pd.DataFrame:
+    """Generate one answer per supplied conversation, without extending other rows.
+
+    Each Series value is a list of role/content messages ending with the user's
+    request. Its index supplies the completion and cache IDs. No system message
+    is added unless supplied; an explicit system_prompt replaces an existing
+    leading system message. Message text is literal, including braces.
+    """
+    chat_model = prepare_model(
+        model, max_tokens=max_tokens, cache=inference_cache, **model_kwargs
+    )
+    inputs = [
+        _chat_input(
+            messages,
+            system_prompt=system_prompt,
+            truncate_input_chars=truncate_input_chars,
+        )
+        for messages in instructions
+    ]
+    completions = do_inference(
+        chat_model=chat_model,
+        inputs=inputs,
+        use_tqdm=use_tqdm,
+        stage="generation",
+        cache_row_metadata=[
+            {"instruction_id": str(index)} for index in instructions.index
+        ],
+    )
+    return pd.DataFrame(
+        {
+            "instruction_index": instructions.index,
+            "completion": completions,
+            "messages": [
+                _with_system_prompt(history, system_prompt)
+                + [{"role": "assistant", "content": completion}]
+                for history, completion in zip(instructions, completions, strict=True)
+            ],
+        }
+    )

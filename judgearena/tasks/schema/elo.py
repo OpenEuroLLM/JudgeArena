@@ -9,7 +9,11 @@ from pydantic import Field
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import NoBaseline
 from judgearena.tasks.schema.metrics import ScoringSpec
-from judgearena.tasks.schema.pairwise import PairwiseJudgeSpec, SingleTurnGeneration
+from judgearena.tasks.schema.pairwise import (
+    MultiTurnGeneration,
+    PairwiseJudgeSpec,
+    SingleTurnGeneration,
+)
 
 
 class EloScoringSpec(ScoringSpec):
@@ -24,7 +28,7 @@ class EloProtocol(StrictFrozenModel):
 
     runner: Literal["elo"]
     arena: str = Field(min_length=1)
-    generation: SingleTurnGeneration
+    generation: SingleTurnGeneration | MultiTurnGeneration
     baseline: NoBaseline
     judge: PairwiseJudgeSpec
     scoring: EloScoringSpec

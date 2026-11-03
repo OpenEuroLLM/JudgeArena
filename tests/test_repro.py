@@ -1,6 +1,11 @@
 import json
+from dataclasses import replace
+
+import pandas as pd
+import pytest
 
 import judgearena.artifacts.metadata as repro
+from judgearena.tasks.registry import get_packaged_task
 
 
 def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
@@ -14,10 +19,15 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
     (tmp_path / "results.json").write_text("{}")
 
+    task = get_packaged_task("alpaca-eval")
+    task = replace(
+        task, provenance=replace(task.provenance, resolved_sha256="custom-hash")
+    )
     metadata_path = repro.write_run_metadata(
         output_dir=tmp_path,
         entrypoint="judgearena.test.entrypoint",
-        run={"dataset": "alpaca-eval"},
+        run={"task": "alpaca-eval"},
+        task=task,
         results={
             "num_battles": 3,
             "preferences": [0.0, 0.5, 1.0],
@@ -41,6 +51,7 @@ def test_write_run_metadata_writes_expected_fields(tmp_path, monkeypatch):
     )
 
     metadata = json.loads(metadata_path.read_text())
+    assert metadata["task_definition"]["resolved_sha256"] == "custom-hash"
     assert metadata["schema_version"] == repro.METADATA_SCHEMA_VERSION
     assert metadata["entrypoint"] == "judgearena.test.entrypoint"
     assert metadata["results"]["num_battles"] == 3
@@ -129,3 +140,31 @@ def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypat
         "alpaca_eval/_base.yaml",
         "alpaca_eval/alpaca-eval.yaml",
     ]
+
+
+@pytest.mark.parametrize("suffix", ["csv", "parquet"])
+def test_annotation_artifacts_preserve_nested_evidence(tmp_path, suffix):
+    from judgearena.artifacts import write_annotations
+
+    frame = pd.DataFrame(
+        {
+            "pref": [0.25, float("nan")],
+            "parsed": [{"label": "é", "details": {"missing": float("nan")}}, None],
+            "tags": [["coding", "日本語"], []],
+            "metadata": [{"rating": 1}, 0],
+            "mixed_label": ["coding", 1],
+        }
+    )
+    path = tmp_path / f"annotations.{suffix}"
+    write_annotations(frame, path)
+    loaded = pd.read_csv(path) if suffix == "csv" else pd.read_parquet(path)
+    assert loaded.pref.iloc[0] == 0.25 and pd.isna(loaded.pref.iloc[1])
+    assert json.loads(loaded.parsed.iloc[0]) == {
+        "label": "é",
+        "details": {"missing": None},
+    }
+    assert pd.isna(loaded.parsed.iloc[1])
+    assert json.loads(loaded.tags.iloc[0]) == ["coding", "日本語"]
+    assert json.loads(loaded.tags.iloc[1]) == []
+    assert [json.loads(value) for value in loaded.metadata] == [{"rating": 1}, 0]
+    assert [json.loads(value) for value in loaded.mixed_label] == ["coding", 1]

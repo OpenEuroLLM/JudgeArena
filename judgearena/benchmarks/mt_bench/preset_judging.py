@@ -56,7 +56,11 @@ def _build_mt_bench_preset_user_prompt_template(
         multi_turn=multi_turn,
         ref_based=ref_based,
     )
-    output_section = _extract_output_section(resolved_prompt.user_prompt_template)
+    output_section = (
+        resolved_prompt.output_format
+        if resolved_prompt.output_format is not None
+        else _extract_output_section(resolved_prompt.user_prompt_template)
+    )
     return f"{base_template}\n\n{output_section}"
 
 
@@ -69,6 +73,7 @@ def _select_preset_prompt(
     system_file: str | None = None,
     user_file: str | None = None,
     parser: str | None = None,
+    options: dict[str, object] | None = None,
 ) -> MTBenchPresetPrompt:
     ref_based = is_reference_based_category(category, reference_categories)
     resolved_prompt = resolve_judge_prompt(
@@ -77,6 +82,7 @@ def _select_preset_prompt(
         user_file=user_file,
         multi_turn=multi_turn,
         parser=parser,
+        options=options,
     )
     if resolved_prompt.delegated:
         raise ValueError(
@@ -114,6 +120,7 @@ def _build_mt_bench_preset_items(
     system_file: str | None = None,
     user_file: str | None = None,
     parser: str | None = None,
+    options: dict[str, object] | None = None,
     strip_thinking_before_judging: bool = False,
 ) -> list[MTBenchJudgeItem]:
     return build_mt_bench_pairwise_judge_items(
@@ -131,6 +138,7 @@ def _build_mt_bench_preset_items(
             system_file=system_file,
             user_file=user_file,
             parser=parser,
+            options=options,
         ),
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
@@ -154,6 +162,7 @@ def judge_mt_bench_with_preset(
     system_file: str | None = None,
     user_file: str | None = None,
     parser: str | None = None,
+    options: dict[str, object] | None = None,
     strip_thinking_before_judging: bool = False,
 ) -> tuple[pd.Series, list[dict[str, Any]], list[dict[str, object]]]:
     assert swap_mode in ("fixed", "both")
@@ -171,6 +180,7 @@ def judge_mt_bench_with_preset(
         system_file=system_file,
         user_file=user_file,
         parser=parser,
+        options=options,
         strip_thinking_before_judging=strip_thinking_before_judging,
     )
     judgments, prompt_kwargs_used = infer_pairwise_judgments_by_prompt_groups(

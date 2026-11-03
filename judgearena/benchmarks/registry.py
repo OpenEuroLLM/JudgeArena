@@ -45,10 +45,10 @@ class ResolvedBenchmark:
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations, specific first."""
     from judgearena.benchmarks.elo.runner import run_elo
+    from judgearena.benchmarks.evaluation import run_evaluation as run_pairwise
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
     from judgearena.benchmarks.mt_bench.runner import run_mt_bench_benchmark
     from judgearena.benchmarks.mt_bench_101.runner import run_mt_bench_101_benchmark
-    from judgearena.benchmarks.pairwise.runner import run_pairwise
 
     return (
         BenchmarkAdapter("elo", frozenset(), run_elo),
@@ -64,10 +64,10 @@ def benchmark_runner_names() -> frozenset[str]:
     return frozenset(adapter.name for adapter in benchmark_adapters())
 
 
-def resolve_benchmark(task: str) -> ResolvedBenchmark:
+def resolve_benchmark(task: str | ResolvedTaskSpec) -> ResolvedBenchmark:
     """Resolve a runner and task definition with one registry lookup."""
     adapters = benchmark_adapters()
-    resolved = get_packaged_task(task)
+    resolved = task if isinstance(task, ResolvedTaskSpec) else get_packaged_task(task)
     if resolved is not None:
         runner_id = resolved.spec.protocol.runner
         for adapter in adapters:

@@ -476,7 +476,7 @@ def test_run_mt_bench_concrete_prompt_preset_uses_preset_judging(monkeypatch, tm
     cfg = RunConfig(
         task="mt-bench",
         model={"name": "VLLM/example/model-a"},
-        judge={"model": "VLLM/Judge", "prompt_preset": "default_with_explanation"},
+        judge={"model": "VLLM/Judge", "prompt": {"preset": "default_with_explanation"}},
         generation={"n_instructions": 1},
         run={"result_folder": str(tmp_path)},
     )
@@ -609,7 +609,7 @@ def test_run_mt_bench_rejects_random_before_preparation(monkeypatch, prompt_pres
         model={"name": "Dummy/model"},
         judge={
             "model": "Dummy/judge",
-            "prompt_preset": prompt_preset,
+            "prompt": {"preset": prompt_preset},
             "swap_mode": "random",
         },
     )
@@ -693,7 +693,7 @@ def test_run_mt_bench_rejects_logprob_parser_before_preparation(monkeypatch):
         model={"name": "Dummy/model"},
         judge={
             "model": "Dummy/judge",
-            "prompt_preset": "alpaca-eval",
+            "prompt": {"preset": "alpaca-eval"},
             "top_logprobs": 5,
         },
     )

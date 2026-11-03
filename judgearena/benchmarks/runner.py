@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 def run_benchmark(cfg: RunConfig) -> object:
     """Run a task through its registered benchmark adapter."""
-    resolved = resolve_benchmark(cfg.task)
+    resolved = resolve_benchmark(cfg.resolved_task)
     logger.info("Using %s benchmark adapter for %s.", resolved.adapter.name, cfg.task)
     with track_usage() as usage_tracker:
         try:
