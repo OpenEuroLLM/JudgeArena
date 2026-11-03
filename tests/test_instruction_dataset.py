@@ -467,12 +467,38 @@ def test_arena_adapter_filters_invalid_pairs_without_exposing_system_identity(
         else [],
     ]
     data = normalize_battles(frame, "test-arena")
+    from judgearena.benchmarks.pairwise.judging import comparison_text
 
     assert data.battles["instruction"].tolist() == ["one", "one"]
-    rendered = data.battles
+    rendered = comparison_text(data.battles, strip_thinking=False)
     assert rendered["completion_a"].tolist() == ["a1", "a1"]
     assert rendered["completion_b"].tolist() == ["b1", "a1"]
     assert data.battles["conversation_a"].iloc[0] == history
+
+
+def test_supplied_history_validation_and_system_override():
+    from judgearena.generate import generate_messages
+
+    history = [{"role": "system", "content": "Old"}, {"role": "user", "content": "Q"}]
+    data = pairwise_data.CompletionData(
+        pd.DataFrame({"instruction": ["Q"], "messages": [history]})
+    )
+    result = generate_messages(
+        data.instructions["messages"], "Dummy/answer", system_prompt="New"
+    )
+    assert result.iloc[0]["messages"] == [
+        {"role": "system", "content": "New"},
+        history[-1],
+        {"role": "assistant", "content": "answer"},
+    ]
+    with pytest.raises(ValueError, match="end.*user"):
+        pairwise_data.CompletionData(
+            pd.DataFrame(
+                {"instruction": ["Q"], "messages": [result.iloc[0]["messages"]]}
+            )
+        )
+    with pytest.raises(ValueError, match="expected"):
+        generate_messages(pd.Series([[history[-1], history[-1]]]), "Dummy/answer")
 
 
 def test_comparison_ids_survive_selection_with_shared_instructions(battle_rows):
@@ -499,3 +525,31 @@ def test_fixed_format_adapters_reject_unused_field_mappings(
     )
     with pytest.raises(ValueError, match="dataset.fields.*custom adapter"):
         adapter.load_data()
+
+
+def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
+    import judgearena.arenas_utils as source
+
+    pair = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
+    histories = [
+        pair,
+        [{"role": "system", "content": "S"}, *pair],
+        [*pair, {"role": "user", "content": "unfinished"}],
+        [{"role": "user", "content": 123}, pair[-1]],
+    ]
+    rows = pd.DataFrame({"conversation_a": histories, "conversation_b": histories})
+    rows = rows.assign(
+        id=range(4),
+        timestamp=0,
+        model_a_name="a",
+        model_b_name="b",
+        chosen_model_name="a",
+        both_equal=False,
+    )
+    monkeypatch.setattr(source, "_download_arena_dataset", lambda **kwargs: "/unused")
+    monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
+    monkeypatch.setattr(source, "detect_language", lambda text: "en")
+    loaded = source._load_arena_dataframe("ComparIA", dataset_sources={})
+    assert loaded.question_id.tolist() == [0, 1, 3]
+    normalized = normalize_battles(loaded, "ComparIA")
+    assert normalized.battles.question_id.tolist() == [0, 1]

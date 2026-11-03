@@ -10,16 +10,20 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 
 from judgearena.battles import agreement_outcomes, swap_comparison_slots
+from judgearena.benchmarks.pairwise.scoring.metrics import score_outcomes
 from judgearena.datasets.data import _require_columns, validate_messages
 from judgearena.evaluate import (
+    prepare_single_answer_judging,
     render_comparison_requests,
     validate_battle_prompt_fields,
 )
 from judgearena.judging import (
+    answer_samples,
     answer_text,
     execute_pairwise,
     pairwise_annotation_frame,
 )
+from judgearena.prompts.parsing import ParsedScore
 from judgearena.prompts.registry import (
     ResolvedJudgePrompt,
     group_judge_prompts,
@@ -290,6 +294,31 @@ def prepare_pairwise_judging(
     swap_mode = cfg.judge.swap_mode if swap_mode is None else swap_mode
     use_tqdm = cfg.run.use_tqdm if use_tqdm is None else use_tqdm
     spec = cfg.resolved_task.spec.protocol.judge
+    if resolved_prompt.judging_mode == "single_answer":
+        sample_columns = None
+        if available_columns is not None:
+            sample_columns = {
+                column[:-2] if column.endswith(("_a", "_b")) else column
+                for column in available_columns
+            }
+            if "messages" in available_columns:
+                sample_columns.add("input_messages")
+        judge = prepare_single_answer_judging(
+            cfg,
+            resolved_prompt,
+            instructions,
+            result_type=ParsedScore,
+            use_tqdm=use_tqdm,
+            available_columns=sample_columns,
+        )
+        _require_columns(instructions, set(spec.minimum_score_by), "Score grouping")
+        return partial(
+            judge_independent_comparisons,
+            judge=judge,
+            prompt=resolved_prompt,
+            minimum_by=spec.minimum_score_by,
+            temperature=spec.score_temperature,
+        ), None
     if spec.minimum_score_by:
         raise ValueError("minimum_score_by requires a single-answer scoring prompt.")
     if resolved_prompt.prepare_prompts is None:
@@ -312,3 +341,64 @@ def prepare_pairwise_judging(
         )
 
     return judge, default_temperature
+
+
+def judge_independent_comparisons(
+    model,
+    comparisons: pd.DataFrame,
+    *,
+    judge: Callable,
+    prompt: ResolvedJudgePrompt,
+    minimum_by: tuple[str, ...] = (),
+    temperature: float = 0.3,
+    source_ids: pd.Series | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    """Grade all A answers, then all B answers, and compare their scalar scores."""
+    validate_comparisons(comparisons)
+    context = comparisons.drop(
+        columns=[c for c in comparisons if c.endswith(("_a", "_b"))]
+    )
+    samples = [
+        answer_samples(
+            context,
+            comparisons[[c for c in comparisons if c.endswith(f"_{slot}")]].rename(
+                columns=lambda c: c[:-2]
+            ),
+        )
+        for slot in ("a", "b")
+    ]
+    scored = [judge(model, rows, source_ids=source_ids) for rows in samples]
+    frames = [frame for frame, _ in scored]
+    turns = score_outcomes(
+        comparisons.reset_index(drop=True).assign(
+            instruction_index=comparisons.index,
+            score_A=frames[0]["score"],
+            score_B=frames[1]["score"],
+            parsed_a=frames[0]["parsed"],
+            parsed_b=frames[1]["parsed"],
+        ),
+        temperature=temperature,
+    )
+    annotations = pd.concat(frames, ignore_index=True).merge(
+        turns[["instruction_index", "score_A", "score_B", "pref"]].rename(
+            columns={"pref": "turn_preference"}
+        ),
+        on="instruction_index",
+        how="left",
+        validate="many_to_one",
+    )
+    outcomes = score_outcomes(
+        turns, minimum_by=minimum_by, temperature=temperature
+    ).assign(
+        orientation="single",
+        prompt_preset=prompt.preset_name if minimum_by else frames[0]["prompt_preset"],
+    )
+    return (
+        annotations,
+        outcomes,
+        {
+            "judge_prompts": prompt_metadata(
+                prompt for _, prompts in scored for prompt in prompts
+            ),
+        },
+    )

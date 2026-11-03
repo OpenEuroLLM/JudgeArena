@@ -81,10 +81,20 @@ def test_config_path_dispatches_and_cli_overrides(tmp_path, capture_mains):
         "model: {name: Dummy/A, baseline: Dummy/B}\n"
         "judge: {model: yaml-judge, swap_mode: both}\n"
     )
-    cli_module.cli(["--config_path", str(yaml_path), "--judge.model", "cli-judge"])
+    cli_module.cli(
+        [
+            "--config_path",
+            str(yaml_path),
+            "--judge.model",
+            "cli-judge",
+            "--run.filters",
+            '{"domain": ["math"], "difficulty": [2]}',
+        ]
+    )
     cfg = capture_mains["cfg"]
     assert cfg.judge.model == "cli-judge"  # CLI overrides YAML
     assert cfg.judge.swap_mode == "both"  # preserved from YAML
+    assert cfg.run.filters == {"domain": ["math"], "difficulty": [2]}
 
 
 def test_missing_task_errors(capture_mains):

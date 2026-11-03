@@ -9,20 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-
-def winner_to_pref(winner: str) -> float | None:
-    """Convert a hard winner label to a continuous preference value."""
-    if winner == "model_a":
-        return 0.0
-    if winner == "model_b":
-        return 1.0
-    if winner in ("tie", "tie (bothbad)"):
-        return 0.5
-    return None
-
-
-def _is_nan_pref(pref) -> bool:
-    return pref is None or (isinstance(pref, float) and np.isnan(pref))
+from judgearena.battles import hard_preferences
 
 
 def fit_bradley_terry(
@@ -76,7 +63,7 @@ def _sample_fingerprint(sampled: pd.DataFrame) -> str:
     rows = [
         {
             "index": int(index) if isinstance(index, int | np.integer) else str(index),
-            "question_id": str(row["question_id"]),
+            "question_id": str(row.get("question_id", row.get("instruction_index"))),
             "model_a": str(row["model_a"]),
             "model_b": str(row["model_b"]),
         }
@@ -105,87 +92,25 @@ def select_seeded_random_arena_battles(
             for index in sampled.index
         ],
         "sampled_question_ids": [
-            str(value) for value in sampled["question_id"].tolist()
+            str(value)
+            for value in sampled[
+                "question_id" if "question_id" in sampled else "instruction_index"
+            ].tolist()
         ],
         "sample_fingerprint": _sample_fingerprint(sampled),
     }
     return sampled.reset_index(drop=True), metadata
 
 
-def sampling_cache_token(
-    sampling_metadata: dict[str, object],
-    *,
-    n_instructions: int | None,
-    n_instructions_per_language: int | None,
-) -> str:
-    if sampling_metadata.get("sampling_mode") == "seeded_random":
-        return (
-            "seeded-random_"
-            f"{sampling_metadata['requested_rows']}_"
-            f"seed-{sampling_metadata['random_seed']}_"
-            f"{str(sampling_metadata['sample_fingerprint'])[:12]}"
-        )
-    return f"head_{n_instructions}_{n_instructions_per_language}"
-
-
-def prefs_to_battle_results(
-    prefs,
-    our_model_is_position_a,
-    opponent_models,
-    model_name: str,
-    *,
-    judge_model: str | None = None,
-    question_ids=None,
-) -> pd.DataFrame:
-    """Map position-oriented preferences into model-name-level battle rows."""
-    records = []
-    for pref, is_pos_a, opponent in zip(
-        prefs, our_model_is_position_a, opponent_models, strict=True
-    ):
-        if _is_nan_pref(pref):
-            winner = None
-        elif pref == 0.5:
-            winner = "tie"
-        elif pref < 0.5:
-            winner = "model_a"
-        else:
-            winner = "model_b"
-
-        if is_pos_a:
-            record = {
-                "model_a": model_name,
-                "model_b": opponent,
-                "winner": winner,
-                "pref": pref,
-            }
-        else:
-            record = {
-                "model_a": opponent,
-                "model_b": model_name,
-                "winner": winner,
-                "pref": None if _is_nan_pref(pref) else pref,
-            }
-        record["pref_hard"] = winner_to_pref(winner)
-        records.append(record)
-
-    frame = pd.DataFrame(records)
-    frame["source"] = "llm-judge"
-    frame["judge_model"] = judge_model
-    if question_ids is not None:
-        frame["question_id"] = question_ids
-    return frame
-
-
 def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
-    """Build deterministic human-anchor battles from a loaded arena frame."""
-    frame = df_arena_all.loc[:, ["model_a", "model_b", "winner"]].copy()
+    """Build scoring anchors from selected reference comparisons."""
+    frame = df_arena_all.loc[:, ["model_a", "model_b", "reference_pref"]].copy()
+    frame["pref"] = frame["reference_pref"]
     counts = pd.concat([frame["model_a"], frame["model_b"]]).value_counts()
     well_represented = set(counts[counts >= 500].index)
     frame = frame[
         frame["model_a"].isin(well_represented)
         & frame["model_b"].isin(well_represented)
     ]
-    frame["pref"] = frame["winner"].map(winner_to_pref)
-    frame["pref_hard"] = frame["pref"]
-    frame["source"] = "human"
+    frame["pref_hard"] = hard_preferences(frame["pref"])
     return frame

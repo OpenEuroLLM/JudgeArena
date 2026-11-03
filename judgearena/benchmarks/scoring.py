@@ -14,7 +14,6 @@ from judgearena.benchmarks.meta_eval.scoring import (
     MetaEvalEloGapMetric,
     MetaEvalRankingMetric,
 )
-from judgearena.benchmarks.mt_bench_101.scoring import MTBench101AbsoluteScoreMetric
 from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
     AlpacaEvalLengthControlledMetric,
 )
@@ -52,7 +51,6 @@ class MetricRequest(Protocol):
 
 
 _METRIC_TYPES: dict[str, type[_Metric]] = {
-    "mt_bench_101_absolute_score": MTBench101AbsoluteScoreMetric,
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,

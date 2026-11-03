@@ -1,24 +1,26 @@
-"""Per-turn 1-10 judging and min-per-dialogue aggregation for MT-Bench-101."""
+"""MT-Bench-101 task prompts, rendering, and scalar-score parsing."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from functools import lru_cache
 from importlib.resources import files
 
 import pandas as pd
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompt_values import ChatPromptValue
 
 from judgearena.datasets.mt_bench_101 import (
     MT_BENCH_101_REFERENCE_TASKS,
-    MT_BENCH_101_TASK_TO_ABILITY,
 )
-from judgearena.models import do_inference
-from judgearena.prompts.parsing import PairScore, ParsedScore
+from judgearena.judging import JudgeRequest
+from judgearena.prompts.parsing import ParsedScore
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
+    ResolvedJudgePrompt,
 )
 from judgearena.utils import safe_text, strip_thinking_tags
 
@@ -72,6 +74,8 @@ class MTBench101ScoreParser:
     """Parse the score format associated with an MT-Bench-101 prompt preset."""
 
     name = "mt-bench-101-score"
+    result_type = ParsedScore
+    requires_top_logprobs = False
 
     def __init__(self, prompt_preset: str = MT_BENCH_101_PROMPT_PRESET) -> None:
         self.prompt_preset = prompt_preset
@@ -80,7 +84,9 @@ class MTBench101ScoreParser:
         result = self.parse_result(judge_completion)
         return None if result is None else result.score
 
-    def parse_result(self, judge_completion: str) -> ParsedScore | None:
+    def parse_result(
+        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
+    ) -> ParsedScore | None:
         if self.prompt_preset == MT_BENCH_101_PROMPT_PRESET:
             match = UPSTREAM_SCORE_PATTERN.search(judge_completion)
             if match is None:
@@ -95,13 +101,6 @@ class MTBench101ScoreParser:
             if 1 <= score <= 10:
                 return ParsedScore(score=float(score), label=match.group(0))
         return None
-
-
-def parse_mt_bench_101_rating(
-    judge_completion: str,
-    prompt_preset: str = MT_BENCH_101_PROMPT_PRESET,
-) -> float | None:
-    return MTBench101ScoreParser(prompt_preset)(judge_completion)
 
 
 def format_mt_bench_101_dialogue(
@@ -127,14 +126,15 @@ def build_mt_bench_101_judge_prompt(
     assistant_message: str,
     reference_answer: str,
     prompt_preset: str,
-) -> tuple[str, str]:
+) -> tuple[ResolvedJudgePrompt, str]:
+    """Return the selected template and its rendered user message."""
     prompts = load_mt_bench_101_prompts(prompt_preset)
     if prompt_preset == MT_BENCH_101_PROMPT_PRESET:
-        history = "".join(
-            f"\n\n Human: {turn.get('user', '')}\n\nAssistant: {turn.get('bot', '')}"
-            for turn in golden_context
+        history = format_mt_bench_101_dialogue(
+            golden_context=golden_context,
+            user_message=user_message,
+            assistant_message="",
         )
-        history += f"\n\n Human: {user_message}\n\nAssistant: "
         template_name = (
             "reference" if task in MT_BENCH_101_REFERENCE_TASKS else "default"
         )
@@ -154,58 +154,67 @@ def build_mt_bench_101_judge_prompt(
                     {"role": "assistant", "content": reference_answer},
                 )
             )
-        user_prompt = prompts["user_prompt_templates"][template_name].format(
+        system_prompt = prompts["system_prompts"][task]
+        user_template = prompts["user_prompt_templates"][template_name]
+        user_prompt = user_template.format(
             history=history,
             prediction=assistant_message,
             reference_answer=upstream_reference,
         )
-        return prompts["system_prompts"][task], user_prompt
-
-    task_prompts = prompts["task_prompts"]
-    dialogue = format_mt_bench_101_dialogue(
-        golden_context=golden_context,
-        user_message=user_message,
-        assistant_message=assistant_message,
-    )
-    user_prompt = f"The dialogue need to be judged is: \n *** \n {dialogue} \n ***"
-    if task in MT_BENCH_101_REFERENCE_TASKS:
-        user_prompt += (
-            f"\n\nThe reference solution is: \n ### \n {reference_answer} \n ###\n\n"
+    else:
+        user_template = "The dialogue need to be judged is: \n *** \n {dialogue} \n ***"
+        if task in MT_BENCH_101_REFERENCE_TASKS:
+            user_template += (
+                "\n\nThe reference solution is: \n ### \n {reference_answer} \n ###\n\n"
+            )
+        system_prompt = (
+            f"{prompts['global_system']}\n\n"
+            f"{prompts['task_prompts'][task]}\n\n"
+            f"{prompts['scoring_format']}"
+        ).strip()
+        user_prompt = user_template.format(
+            dialogue=format_mt_bench_101_dialogue(
+                golden_context=golden_context,
+                user_message=user_message,
+                assistant_message=assistant_message,
+            ),
+            reference_answer=reference_answer,
         )
-    system_prompt = (
-        f"{prompts['global_system']}\n\n"
-        f"{task_prompts[task]}\n\n"
-        f"{prompts['scoring_format']}"
-    ).strip()
-    return system_prompt, user_prompt
+    return ResolvedJudgePrompt(
+        preset_name=prompt_preset,
+        judging_mode="single_answer",
+        variant_name=task,
+        parser=MTBench101ScoreParser(prompt_preset),
+        system_prompt=system_prompt,
+        user_prompt_template=user_template,
+        source="preset",
+        system_sha256=hashlib.sha256(system_prompt.encode()).hexdigest(),
+        user_sha256=hashlib.sha256(user_template.encode()).hexdigest(),
+    ), user_prompt
 
 
-def judge_mt_bench_101_single(
+def render_mt_bench_101_requests(
+    samples: pd.DataFrame,
     *,
-    judge_chat_model,
-    eval_items: pd.DataFrame,
-    completions: pd.DataFrame,
-    evaluated_model: str,
     prompt_preset: str = MT_BENCH_101_PROMPT_PRESET,
     truncate_input_chars: int | None = 8192,
-    use_tqdm: bool = False,
     strip_thinking_before_judging: bool = False,
-) -> pd.DataFrame:
-    completion_by_idx = (
-        completions
-        if "instruction_index" not in completions.columns
-        else completions.set_index("instruction_index")
-    )
+) -> tuple[pd.DataFrame, list[JudgeRequest[ParsedScore]], list[ResolvedJudgePrompt]]:
+    """Prepare rendering fields, requests, and prompts from adapter turn rows.
+
+    Samples contain completion text and the adapter's turn metadata. Returned
+    annotation rows and request IDs follow the sample index.
+    """
     rows: list[dict[str, object]] = []
-    for idx in eval_items.index:
-        eval_row = eval_items.loc[idx]
-        completion_row = completion_by_idx.loc[idx]
+    requests = []
+    resolved_prompts = []
+    for idx, eval_row in samples.iterrows():
         task = str(eval_row["task"])
-        model_response = safe_text(completion_row.get("completion", ""), None)
+        model_response = safe_text(eval_row["completion"], None)
         if strip_thinking_before_judging:
             model_response = strip_thinking_tags(model_response)
         model_response = safe_text(model_response, truncate_input_chars)
-        system_prompt, user_prompt = build_mt_bench_101_judge_prompt(
+        prompt, user_prompt = build_mt_bench_101_judge_prompt(
             task=task,
             golden_context=list(eval_row.get("golden_context") or []),
             user_message=safe_text(
@@ -219,93 +228,22 @@ def judge_mt_bench_101_single(
         )
         rows.append(
             {
-                "instruction_index": idx,
-                "dialogue_id": eval_row["dialogue_id"],
-                "dialogue_uid": eval_row["dialogue_uid"],
-                "task": task,
-                "ability": eval_row.get("ability", MT_BENCH_101_TASK_TO_ABILITY[task]),
-                "domain": eval_row["domain"],
-                "turn_index": eval_row["turn_index"],
                 "model_completion": model_response,
-                "judge_prompt_preset": prompt_preset,
-                "system_prompt": system_prompt,
+                "system_prompt": prompt.system_prompt,
                 "user_prompt": user_prompt,
             }
         )
-    prompt_template = ChatPromptTemplate.from_messages(
-        [("system", "{system_prompt}"), ("user", "{user_prompt}")]
-    )
-    inputs = prompt_template.batch(
-        [
-            {"system_prompt": row["system_prompt"], "user_prompt": row["user_prompt"]}
-            for row in rows
-        ]
-    )
-    judge_completions = do_inference(
-        chat_model=judge_chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        stage="judging",
-        cache_row_metadata=[
-            {
-                "instruction_id": f"{row['dialogue_uid']}:turn-{row['turn_index']}",
-                "model_a": evaluated_model,
-                "model_b": None,
-            }
-            for row in rows
-        ],
-    )
-    for row, judge_completion in zip(rows, judge_completions, strict=True):
-        row["judge_completion"] = judge_completion
-        row["score"] = parse_mt_bench_101_rating(judge_completion, prompt_preset)
-    return pd.DataFrame(rows)
-
-
-def derive_mt_bench_101_pairwise_preferences(
-    scored_a: pd.DataFrame,
-    scored_b: pd.DataFrame,
-) -> pd.DataFrame:
-    cols = [
-        "instruction_index",
-        "dialogue_uid",
-        "dialogue_id",
-        "task",
-        "ability",
-        "domain",
-        "turn_index",
-    ]
-    merged = (
-        scored_a.loc[:, cols + ["score"]]
-        .rename(columns={"score": "score_A"})
-        .merge(
-            scored_b.loc[:, cols + ["score"]].rename(columns={"score": "score_B"}),
-            on=cols,
-            how="inner",
+        requests.append(
+            JudgeRequest(
+                id=str(idx),
+                input=ChatPromptValue(
+                    messages=[
+                        SystemMessage(content=prompt.system_prompt),
+                        HumanMessage(content=user_prompt),
+                    ]
+                ),
+                parser=prompt.parser,
+            )
         )
-    )
-    scorer = PairScore()
-    merged["preference"] = [
-        None
-        if pd.isna(score_a) or pd.isna(score_b)
-        else float(scorer.preference_from_scores(score_a, score_b))
-        for score_a, score_b in zip(merged["score_A"], merged["score_B"], strict=True)
-    ]
-    return merged
-
-
-def aggregate_mt_bench_101_dialogues(pairwise_turns: pd.DataFrame) -> pd.DataFrame:
-    """Apply the benchmark's minimum-turn rule before deriving preferences."""
-    group_columns = ["dialogue_uid", "dialogue_id", "task", "ability", "domain"]
-    dialogues = pairwise_turns.groupby(group_columns, as_index=False)[
-        ["score_A", "score_B"]
-    ].min()
-    scorer = PairScore()
-    dialogues["preference"] = [
-        None
-        if pd.isna(score_a) or pd.isna(score_b)
-        else float(scorer.preference_from_scores(score_a, score_b))
-        for score_a, score_b in zip(
-            dialogues["score_A"], dialogues["score_B"], strict=True
-        )
-    ]
-    return dialogues
+        resolved_prompts.append(prompt)
+    return pd.DataFrame(rows), requests, resolved_prompts
