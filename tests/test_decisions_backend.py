@@ -197,3 +197,97 @@ def test_decision_bundle_preparation_and_annotations(tmp_path, monkeypatch, pair
     saved = pd.read_csv(path).iloc[0]
     assert json.loads(saved.judge_input) == requests[0].input
     assert json.loads(saved.judge_completion) == response
+
+
+def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
+    from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
+
+    questions = {
+        "winner": {
+            "type": "choice",
+            "criteria": {"A": "First", "B": "Second", "tie": "Equal"},
+        }
+    }
+    response = {"answers": {"winner": {"choice": "B", "confidence": 0.8}}}
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *a, **k: BytesIO(json.dumps(response).encode())
+    )
+    model = models.prepare_model(
+        "Decisions/local",
+        endpoint="http://localhost/decisions",
+        cache=JudgementInferenceCache(tmp_path, "mapping"),
+    )
+
+    def judge(values):
+        prompt = resolve_judge_prompt(
+            preset="decision",
+            options={
+                "judging_mode": "pairwise",
+                "questions": questions,
+                "preference": {"question": "winner", "values": values},
+            },
+        )
+        inputs = render_inputs(
+            prompt,
+            [
+                {
+                    "user_prompt": "Question",
+                    "completion_A": "Left",
+                    "completion_B": "Right",
+                }
+            ],
+        )
+        assert inputs[0]["state"] == {
+            "instruction": "Question",
+            "answer_a": "Left",
+            "answer_b": "Right",
+        }
+        return execute_judging(
+            model,
+            [
+                JudgeRequest(
+                    "1",
+                    inputs[0],
+                    prompt.parser,
+                    {"instruction_id": "1", "model_a": "a", "model_b": "b"},
+                )
+            ],
+        )[0]
+
+    assert judge({"A": 0, "B": 1, "tie": 0.5}).parsed.preference == 1
+
+    def no_http(*args, **kwargs):
+        pytest.fail("Mapping-only changes must reuse cache")
+
+    monkeypatch.setattr("urllib.request.urlopen", no_http)
+    result = judge({"A": 1, "B": 0, "tie": 0.5})
+    assert result.parsed.preference == 0
+    assert result.parsed.details == response["answers"]
+
+
+def test_decision_options_validate_and_preserve_raw_answers():
+    from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
+
+    options = {
+        "questions": {"safe": {"type": "noul", "instructions": "Is answer safe?"}}
+    }
+    prompt = resolve_judge_prompt(preset="decision", options=options)
+    assert render_inputs(prompt, [{"user_prompt": "Hi", "completion": "Hello"}])[0][
+        "state"
+    ] == {"instruction": "Hi", "answer": "Hello"}
+    answers = {"safe": {"noul": 0.9}}
+    assert prompt.parser.parse_result(json.dumps({"answers": answers})) == answers
+    custom = resolve_judge_prompt(
+        preset="decision", options={**options, "state": {"context": "lang"}}
+    )
+    assert render_inputs(custom, [{"lang": "de"}])[0]["state"] == {"context": "de"}
+    with pytest.raises(ValueError, match="fields"):
+        render_inputs(custom, [{}])
+    for override in (
+        {"judging_mode": "pairwise"},
+        {"judging_mode": "unknown"},
+        {"state": {}},
+        {"preference": {"question": "safe", "values": {"yes": 1}}},
+    ):
+        with pytest.raises(ValueError):
+            resolve_judge_prompt(preset="decision", options={**options, **override})

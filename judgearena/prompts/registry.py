@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.inference import JudgeInput
 from judgearena.prompts.criteria import configure_criteria_prompt
+from judgearena.prompts.decision import configure_decision_prompt, render_decision
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -218,6 +219,11 @@ def _render_mt_bench_101_scores(samples, **kwargs):
 SCORE_PARSER = JUDGE_PARSERS["score"]
 
 PRESETS: dict[str, JudgePromptPreset] = {
+    "decision": JudgePromptPreset(
+        name="decision",
+        render_input=render_decision,
+        configure=configure_decision_prompt,
+    ),
     "single-score": JudgePromptPreset(
         name="single-score",
         judging_mode="single_answer",

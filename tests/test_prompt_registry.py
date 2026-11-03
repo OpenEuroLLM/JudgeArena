@@ -228,13 +228,18 @@ def test_judging_uses_preset_parser_unless_overridden(monkeypatch, parse, expect
 
 def test_every_preset_resolves_or_delegates():
     for preset_name, spec in PRESETS.items():
-        resolved = resolve_judge_prompt(preset=preset_name)
+        options = (
+            {"questions": {"safe": {"type": "noul"}}}
+            if preset_name == "decision"
+            else None
+        )
+        resolved = resolve_judge_prompt(preset=preset_name, options=options)
         assert resolved.preset_name == preset_name
         if spec.delegated:
             assert resolved.delegated is True
         else:
             assert resolved.system_prompt is not None or spec.system_file is None
-            assert resolved.user_prompt_template
+            assert resolved.user_prompt_template or resolved.render_input
 
 
 def test_standard_prompt_uses_metadata_without_overriding_swapped_answers():

@@ -189,47 +189,45 @@ judgearena \
 
 ### Decision endpoints
 
-Use `Decisions/<model>` for a Decisions-compatible HTTP endpoint:
+Use `Decisions/<model>` with the `decision` prompt preset. For example, compare
+answers on AlpacaEval data using a Choice question:
 
 ```yaml
+task: alpaca-eval-ja
+model:
+  name: OpenRouter/google/gemma-4-31b-it
 judge:
   model: Decisions/typesafe/jev-1.14
   engine_kwargs:
     endpoint: https://openrouter.ai/api/alpha/decisions
     api_key_env: OPENROUTER_API_KEY
+  prompt:
+    preset: decision
+    options:
+      judging_mode: pairwise
+      questions:
+        winner:
+          type: choice
+          instructions: Which answer better satisfies instruction?
+          criteria:
+            A: answer_a is better.
+            B: answer_b is better.
+            tie: Both answers are equally good or equally poor.
+      preference:
+        question: winner
+        values: {A: 0.0, B: 1.0, tie: 0.5}
 ```
 
-Register a bundle in your evaluation script and select `judge.prompt.preset: safety`:
+The default state contains `instruction`, `answer_a` and `answer_b`. For independent
+judging, use `judging_mode: single_answer` and omit `preference`; the state contains
+`instruction` and `answer`. Questions can mix Noul, Choice and Score. All returned
+answers and probabilities are retained; metrics choose which values to use.
+An optional `state` mapping selects prepared fields, for example
+`{instruction: user_prompt, answer: completion, language: lang}`.
 
-```python
-from judgearena import DecisionInput, JudgePromptPreset, register_prompt
-from judgearena.prompts.parsing import resolve_judge_parser
-
-
-def safety_request(row) -> DecisionInput:
-    return {
-        "state": {"question": row["user_prompt"], "answer": row["completion"]},
-        "questions": {"safe": {"type": "noul", "instructions": "Is the answer safe?"}},
-    }
-
-
-register_prompt(JudgePromptPreset(
-    name="safety",
-    judging_mode="single_answer",
-    parser=resolve_judge_parser("decision-answers"),
-    render_input=safety_request,
-    required_fields=("user_prompt", "completion"),
-))
-```
-
-Each request can mix named Noul, Choice and Score questions. The parser retains
-all answers, including distributions and confidence when supplied. Metrics choose
-which values to use; a pairwise bundle can instead map answers to a preference.
-Requests and full responses are saved for inspection and cache replay.
-
-Text-generation sampling settings are unused; decision probabilities are not
-token logprobs. For a compatible local server, change the endpoint and model,
-and omit `api_key_env` if authentication is not needed.
+The endpoint must support the Decisions API. For a compatible local server,
+change the endpoint and model, and omit `api_key_env` when authentication is not
+needed. Text-generation sampling settings are unused.
 
 ### Running locally with LlamaCpp
 
