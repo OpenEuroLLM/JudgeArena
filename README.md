@@ -197,17 +197,39 @@ judge:
   engine_kwargs:
     endpoint: https://openrouter.ai/api/alpha/decisions
     api_key_env: OPENROUTER_API_KEY
-    questions:
-      safe:
-        type: noul
-        instructions: Is the supplied content safe?
 ```
 
-Use a prompt/parser bundle that renders the state and reads the JSON `answers`
-mapping. The backend retains the full response, including probabilities, for
-parsing and cache replay. Text-generation sampling settings are unused; decision
-probabilities are not token logprobs. For a compatible local server, change the
-endpoint and model, and omit `api_key_env` if authentication is not needed.
+Register a bundle in your evaluation script and select `judge.prompt.preset: safety`:
+
+```python
+from judgearena import DecisionInput, JudgePromptPreset, register_prompt
+from judgearena.prompts.parsing import resolve_judge_parser
+
+
+def safety_request(row) -> DecisionInput:
+    return {
+        "state": {"question": row["user_prompt"], "answer": row["completion"]},
+        "questions": {"safe": {"type": "noul", "instructions": "Is the answer safe?"}},
+    }
+
+
+register_prompt(JudgePromptPreset(
+    name="safety",
+    judging_mode="single_answer",
+    parser=resolve_judge_parser("decision-answers"),
+    render_input=safety_request,
+    required_fields=("user_prompt", "completion"),
+))
+```
+
+Each request can mix named Noul, Choice and Score questions. The parser retains
+all answers, including distributions and confidence when supplied. Metrics choose
+which values to use; a pairwise bundle can instead map answers to a preference.
+Requests and full responses are saved for inspection and cache replay.
+
+Text-generation sampling settings are unused; decision probabilities are not
+token logprobs. For a compatible local server, change the endpoint and model,
+and omit `api_key_env` if authentication is not needed.
 
 ### Running locally with LlamaCpp
 

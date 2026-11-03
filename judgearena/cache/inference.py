@@ -23,7 +23,7 @@ from judgearena.cache.sqlite import (
     write_descriptor,
 )
 from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
-from judgearena.inference import InferenceResult
+from judgearena.inference import InferenceResult, validate_decision_input
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 VLLM_EXECUTION_ONLY_KWARGS = {
@@ -32,10 +32,10 @@ VLLM_EXECUTION_ONLY_KWARGS = {
     "tensor_parallel_size",
 }
 
-InputMode = Literal["chat", "text"]
+InputMode = Literal["chat", "text", "decision"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "ChatOpenAI": "chat",
-    "Decisions": "text",
+    "Decisions": "decision",
     "Dummy": "chat",
     "LlamaCpp": "text",
     "OpenAI": "text",
@@ -65,6 +65,14 @@ def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
 
 def canonicalize_model_input(input_item: Any, input_mode: InputMode) -> str:
     """Serialize the chat messages or flattened text sent to a provider."""
+    if input_mode == "decision":
+        validate_decision_input(input_item)
+        return json.dumps(
+            {"type": "decision", **input_item},
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
     if input_mode == "text":
         if isinstance(input_item, str):
             text = input_item
