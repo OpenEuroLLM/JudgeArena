@@ -113,3 +113,24 @@ class MetaEvalReport(Report):
             f"Swap mode: {self.swap_mode}"
         )
         print(render_metrics(self.metrics))
+
+
+class AnnotationReport(Report):
+    """Metric results for independently annotated answers."""
+
+    task: str
+    model: str
+    judge_model: str
+    metrics: dict[str, dict[str, object]]
+    num_samples: int
+    metadata: dict
+    result_folder: str
+
+    def render(self) -> None:
+        from judgearena.benchmarks.scoring import render_metrics
+
+        print(
+            f"\n{self.model} on {self.task}: {self.num_samples} answers judged by {self.judge_model}"
+        )
+        print(render_metrics(self.metrics))
+        print(f"Results: {self.result_folder}")

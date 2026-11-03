@@ -367,27 +367,27 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
         assert resolved.user_sha256 != resolve_judge_prompt(preset=name).user_sha256
         from judgearena.config import RunConfig
         from judgearena.prompts.registry import group_judge_prompts
-        from judgearena.tasks.registry import get_packaged_task
 
-        task = get_packaged_task("alpaca-eval")
-        spec = task.spec.model_dump()
-        spec["protocol"]["judge"].update(
-            default_prompt_preset=name, category_prompts={"creative": name}
-        )
-        task = replace(task, spec=type(task.spec).model_validate(spec))
         cfg = RunConfig(
-            task=task.task,
+            evaluation_name="configured-prompt",
+            protocol={
+                "runner": "single_answer",
+                "generation": {"mode": "single_turn_chat"},
+                "judge": {
+                    "default_prompt_preset": name,
+                    "category_prompts": {"creative": name},
+                },
+            },
             model={"name": "Dummy/a"},
             judge={
                 "model": "Dummy/j",
                 "prompt": {"preset": name, "options": {"maximum": 5}},
             },
         )
-        cfg.resolved_task = task
         groups = group_judge_prompts(
             cfg,
             pd.DataFrame({"category": ["regular", "creative"]}),
-            resolve_run_judge_prompt(task, cfg.judge),
+            resolve_run_judge_prompt(cfg.resolved_task, cfg.judge),
         )
         assert all(
             prompt.parser.parse_result('{"score": 8}') is None for prompt, _ in groups
