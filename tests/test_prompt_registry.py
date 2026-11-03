@@ -242,11 +242,16 @@ def test_every_preset_resolves_or_delegates():
             assert resolved.user_prompt_template or resolved.render_input
 
 
-def test_standard_prompt_uses_metadata_without_overriding_swapped_answers():
+@pytest.mark.parametrize("canonical", [False, True])
+def test_standard_prompt_uses_metadata_without_overriding_swapped_answers(canonical):
     prompt = replace(
         resolve_judge_prompt(preset="default"),
         system_prompt="Use {rubric}",
-        user_prompt_template="{history}|{user_prompt}|{completion_A}|{completion_B_json}",
+        user_prompt_template=(
+            "{history}|{instruction}|{completion_a}|{completion_b_json}"
+            if canonical
+            else "{history}|{user_prompt}|{completion_A}|{completion_B_json}"
+        ),
     )
     comparisons = pd.DataFrame(
         {

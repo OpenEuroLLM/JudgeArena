@@ -40,11 +40,11 @@ def configure_decision_prompt(
     validate_decision_input({"state": {}, "questions": questions})
     if state is None:
         state = {
-            "instruction": "user_prompt",
+            "instruction": "instruction",
             **(
-                {"answer_a": "completion_A", "answer_b": "completion_B"}
+                {"completion_a": "completion_a", "completion_b": "completion_b"}
                 if judging_mode == "pairwise"
-                else {"answer": "completion"}
+                else {"completion": "completion"}
             ),
         }
     if (

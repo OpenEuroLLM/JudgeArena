@@ -210,20 +210,20 @@ judge:
           type: choice
           instructions: Which answer better satisfies instruction?
           criteria:
-            A: answer_a is better.
-            B: answer_b is better.
+            A: completion_a is better.
+            B: completion_b is better.
             tie: Both answers are equally good or equally poor.
       preference:
         question: winner
         values: {A: 0.0, B: 1.0, tie: 0.5}
 ```
 
-The default state contains `instruction`, `answer_a` and `answer_b`. For independent
+The default state contains `instruction`, `completion_a` and `completion_b`. For independent
 judging, use `judging_mode: single_answer` and omit `preference`; the state contains
-`instruction` and `answer`. Questions can mix Noul, Choice and Score. All returned
+`instruction` and `completion`. Questions can mix Noul, Choice and Score. All returned
 answers and probabilities are retained; metrics choose which values to use.
 An optional `state` mapping selects prepared fields, for example
-`{instruction: user_prompt, answer: completion, language: lang}`.
+`{instruction: instruction, completion: completion, language: lang}`.
 
 The endpoint must support the Decisions API. For a compatible local server,
 change the endpoint and model, and omit `api_key_env` when authentication is not

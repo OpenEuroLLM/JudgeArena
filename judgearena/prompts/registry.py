@@ -175,6 +175,19 @@ def build_chat_prompt_template(
     return ChatPromptTemplate.from_messages(message_templates)
 
 
+def canonical_prompt_field(name: str) -> str:
+    """Translate historical template placeholders at the chat-template boundary."""
+    base = name.removesuffix("_json")
+    canonical = {
+        "user_prompt": "instruction",
+        "completion_A": "completion_a",
+        "completion_B": "completion_b",
+        "completion_A_text": "completion_a_text",
+        "completion_B_text": "completion_b_text",
+    }.get(base, base)
+    return canonical + ("_json" if name.endswith("_json") else "")
+
+
 def render_inputs(prompt: ResolvedJudgePrompt, fields: list[dict]) -> list[JudgeInput]:
     """Render the same prepared fields as custom inputs or chat messages."""
     if prompt.render_input is not None:
@@ -185,7 +198,13 @@ def render_inputs(prompt: ResolvedJudgePrompt, fields: list[dict]) -> list[Judge
                     f"Judge prompt requires prepared fields: {sorted(missing)}."
                 )
         return [prompt.render_input(row) for row in fields]
-    return build_chat_prompt_template(prompt).batch(fields)
+    template = build_chat_prompt_template(prompt)
+    return template.batch(
+        [
+            {key: row[canonical_prompt_field(key)] for key in template.input_variables}
+            for row in fields
+        ]
+    )
 
 
 def prompt_metadata(

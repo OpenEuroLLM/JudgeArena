@@ -135,9 +135,9 @@ def test_decision_bundle_preparation_and_annotations(tmp_path, monkeypatch, pair
             return ParsedPreference(0.0, details=answers)
 
     fields = (
-        ("user_prompt", "completion_A", "completion_B")
+        ("instruction", "completion_a", "completion_b")
         if pairwise
-        else ("user_prompt", "completion")
+        else ("instruction", "completion")
     )
     questions = {
         "criterion": {"type": "noul", "instructions": "Is the answer helpful?"}
@@ -231,16 +231,16 @@ def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
             prompt,
             [
                 {
-                    "user_prompt": "Question",
-                    "completion_A": "Left",
-                    "completion_B": "Right",
+                    "instruction": "Question",
+                    "completion_a": "Left",
+                    "completion_b": "Right",
                 }
             ],
         )
         assert inputs[0]["state"] == {
             "instruction": "Question",
-            "answer_a": "Left",
-            "answer_b": "Right",
+            "completion_a": "Left",
+            "completion_b": "Right",
         }
         return execute_judging(
             model,
@@ -272,9 +272,9 @@ def test_decision_options_validate_and_preserve_raw_answers():
         "questions": {"safe": {"type": "noul", "instructions": "Is answer safe?"}}
     }
     prompt = resolve_judge_prompt(preset="decision", options=options)
-    assert render_inputs(prompt, [{"user_prompt": "Hi", "completion": "Hello"}])[0][
+    assert render_inputs(prompt, [{"instruction": "Hi", "completion": "Hello"}])[0][
         "state"
-    ] == {"instruction": "Hi", "answer": "Hello"}
+    ] == {"instruction": "Hi", "completion": "Hello"}
     answers = {"safe": {"noul": 0.9}}
     assert prompt.parser.parse_result(json.dumps({"answers": answers})) == answers
     custom = resolve_judge_prompt(
