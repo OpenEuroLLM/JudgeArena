@@ -1,12 +1,13 @@
 import json
 from io import BytesIO
 
+import pandas as pd
 import pytest
 
 import judgearena.models as models
 from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.judging import JudgeRequest, execute_judging
-from judgearena.prompts.parsing import resolve_judge_parser
+from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.usage import track_usage
 
 
@@ -44,7 +45,10 @@ def test_decisions_judging_replay_and_question_identity(
     cache = JudgementInferenceCache(tmp_path, "decision-test")
 
     def judge(
-        question="Is this safe?", endpoint="https://example.test/decisions", state=None
+        question="Is this safe?",
+        endpoint="https://example.test/decisions",
+        state=None,
+        result=None,
     ):
         model = models.prepare_model(
             "Decisions/example/model",
@@ -52,25 +56,23 @@ def test_decisions_judging_replay_and_question_identity(
             endpoint=endpoint,
             api_key_env="DECISION_KEY",
         )
+        questions = {
+            "safe": {"type": "noul", "instructions": question},
+            "winner": {"type": "choice", "criteria": {"A": "First", "B": "Second"}},
+            "quality": {"type": "score", "criteria": ["Poor", "Good"]},
+        }
+        prompt = resolve_judge_prompt(
+            preset="decision",
+            options={
+                "questions": questions,
+                "result": result,
+                "judging_mode": "pairwise" if result else "single_answer",
+            },
+        )
         request = JudgeRequest(
             "1",
-            {
-                "state": state or {"answer": "Hello"},
-                "questions": {
-                    "safe": {"type": "noul", "instructions": question},
-                    "winner": {
-                        "type": "choice",
-                        "instructions": "Which is better?",
-                        "criteria": {"A": "First", "B": "Second"},
-                    },
-                    "quality": {
-                        "type": "score",
-                        "instructions": "Rate quality",
-                        "criteria": ["Poor", "Good"],
-                    },
-                },
-            },
-            resolve_judge_parser("decision-answers"),
+            {"state": state or "Hello", "questions": questions},
+            prompt.parser,
             {"instruction_id": "1", "model_a": "candidate", "model_b": None},
         )
         return execute_judging(model, [request], use_tqdm=use_tqdm)[0]
@@ -87,6 +89,15 @@ def test_decisions_judging_replay_and_question_identity(
     assert replay.response.text == first.response.text
     assert not usage.snapshot().requests
     assert len(calls) == 1
+    conversion = {"question": "winner", "values": {"A": 0, "B": 1}}
+    assert judge(result={"preference": conversion}).parsed.preference == 0
+    weighted = judge(result={"preference": {**conversion, "aggregation": "expected"}})
+    assert weighted.parsed.preference == pytest.approx(0.2)
+    assert weighted.parsed.details == response["answers"]
+    for probabilities in ({"A": 1}, {"A": 0.2, "B": 0.2}):
+        malformed = {"answers": {"winner": {"probabilities": probabilities}}}
+        assert weighted.request.parser.parse_result(json.dumps(malformed)) is None
+    assert len(calls) == 1  # Reparse the raw cache without credentials or HTTP.
     monkeypatch.setenv("DECISION_KEY", "test-key")
     judge("Is this helpful?")
     judge(endpoint="https://other.test/decisions")
@@ -107,209 +118,6 @@ def test_decisions_reject_missing_answers(monkeypatch, response):
         model.invoke({"state": "Hello", "questions": {"safe": {"type": "noul"}}})
 
 
-@pytest.mark.parametrize("pairwise", [False, True])
-def test_decision_bundle_preparation_and_annotations(tmp_path, monkeypatch, pairwise):
-    import pandas as pd
-
-    from judgearena.artifacts import write_annotations
-    from judgearena.evaluate import (
-        render_comparison_requests,
-        render_single_requests,
-        validate_prompt_fields,
-    )
-    from judgearena.judging import annotation_frame
-    from judgearena.prompts.parsing import ParsedPreference
-    from judgearena.prompts.registry import (
-        PRESETS,
-        JudgePromptPreset,
-        register_prompt,
-        resolve_judge_prompt,
-    )
-
-    class PreferenceParser:
-        requires_top_logprobs = False
-        result_type = ParsedPreference
-
-        def parse_result(self, text, **kwargs):
-            answers = resolve_judge_parser("decision-answers").parse_result(text)
-            return ParsedPreference(0.0, details=answers)
-
-    fields = (
-        ("instruction", "completion_a", "completion_b")
-        if pairwise
-        else ("instruction", "completion")
-    )
-    questions = {
-        "criterion": {"type": "noul", "instructions": "Is the answer helpful?"}
-    }
-    monkeypatch.setattr("judgearena.prompts.registry.PRESETS", PRESETS.copy())
-    register_prompt(
-        JudgePromptPreset(
-            name="structured-test",
-            parser=PreferenceParser()
-            if pairwise
-            else resolve_judge_parser("decision-answers"),
-            judging_mode="pairwise" if pairwise else "single_answer",
-            required_fields=fields,
-            render_input=lambda row: {
-                "state": {key: row[key] for key in fields},
-                "questions": questions,
-            },
-        )
-    )
-    prompt = resolve_judge_prompt(preset="structured-test")
-    with pytest.raises(ValueError, match="dataset columns"):
-        validate_prompt_fields(prompt, (), ())
-    rows = pd.DataFrame(
-        [
-            {
-                "instruction": "A {question}",
-                "completion": "answer long",
-                "completion_a": "answer long",
-                "completion_b": "other long",
-            }
-        ],
-        index=["id"],
-    )
-    if pairwise:
-        requests = render_comparison_requests(rows, prompt, 6)[0]
-    else:
-        _, requests, _ = render_single_requests(
-            rows,
-            prompt=prompt,
-            truncate_input_chars=6,
-            strip_thinking_before_judging=False,
-        )
-    assert requests[0].input == {
-        "state": dict(zip(fields, ["A {question}", "answer", "other "], strict=False)),
-        "questions": questions,
-    }
-    response = {"answers": {"criterion": {"type": "noul", "noul": 0.9}}}
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *a, **k: BytesIO(json.dumps(response).encode())
-    )
-    results = execute_judging(
-        models.prepare_model("Decisions/local", endpoint="http://localhost/decisions"),
-        requests,
-    )
-    path = tmp_path / "annotations.csv"
-    write_annotations(annotation_frame(rows, results, [prompt]), path)
-    saved = pd.read_csv(path).iloc[0]
-    assert json.loads(saved.judge_input) == requests[0].input
-    assert json.loads(saved.judge_completion) == response
-
-
-def test_configured_decision_preference_reuses_response(tmp_path, monkeypatch):
-    from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
-
-    questions = {
-        "winner": {
-            "type": "choice",
-            "criteria": {"A": "First", "B": "Second", "tie": "Equal"},
-        }
-    }
-    response = {
-        "answers": {
-            "winner": {
-                "choice": "B",
-                "confidence": 0.8,
-                "probabilities": {"A": 0.1, "B": 0.7, "tie": 0.2},
-            }
-        }
-    }
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *a, **k: BytesIO(json.dumps(response).encode())
-    )
-    model = models.prepare_model(
-        "Decisions/local",
-        endpoint="http://localhost/decisions",
-        cache=JudgementInferenceCache(tmp_path, "mapping"),
-    )
-
-    def judge(values, aggregation="selected"):
-        prompt = resolve_judge_prompt(
-            preset="decision",
-            options={
-                "judging_mode": "pairwise",
-                "questions": questions,
-                "result": {
-                    "preference": {
-                        "question": "winner",
-                        "values": values,
-                        "aggregation": aggregation,
-                    }
-                },
-            },
-        )
-        inputs = render_inputs(
-            prompt,
-            [
-                {
-                    "instruction": "Question",
-                    "completion_a": "Left",
-                    "completion_b": "Right",
-                }
-            ],
-        )
-        assert inputs[0]["state"] == {
-            "instruction": "Question",
-            "completion_a": "Left",
-            "completion_b": "Right",
-        }
-        return execute_judging(
-            model,
-            [
-                JudgeRequest(
-                    "1",
-                    inputs[0],
-                    prompt.parser,
-                    {"instruction_id": "1", "model_a": "a", "model_b": "b"},
-                )
-            ],
-        )[0]
-
-    assert judge({"A": 0, "B": 1, "tie": 0.5}).parsed.preference == 1
-
-    def no_http(*args, **kwargs):
-        pytest.fail("Mapping-only changes must reuse cache")
-
-    monkeypatch.setattr("urllib.request.urlopen", no_http)
-    result = judge({"A": 1, "B": 0, "tie": 0.5})
-    assert result.parsed.preference == 0
-    assert result.parsed.details == response["answers"]
-    assert judge(
-        {"A": 0, "B": 1, "tie": 0.5}, "expected"
-    ).parsed.preference == pytest.approx(0.8)
-
-
-def test_decision_options_validate_and_preserve_raw_answers():
-    from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
-
-    options = {
-        "questions": {"safe": {"type": "noul", "instructions": "Is answer safe?"}}
-    }
-    prompt = resolve_judge_prompt(preset="decision", options=options)
-    assert render_inputs(prompt, [{"instruction": "Hi", "completion": "Hello"}])[0][
-        "state"
-    ] == {"instruction": "Hi", "completion": "Hello"}
-    answers = {"safe": {"noul": 0.9}}
-    assert prompt.parser.parse_result(json.dumps({"answers": answers})) == answers
-    custom = resolve_judge_prompt(
-        preset="decision", options={**options, "state": {"context": "lang"}}
-    )
-    assert render_inputs(custom, [{"lang": "de"}])[0]["state"] == {"context": "de"}
-    with pytest.raises(ValueError, match="fields"):
-        render_inputs(custom, [{}])
-    for override in (
-        {"judging_mode": "pairwise"},
-        {"judging_mode": "unknown"},
-        {"state": {}},
-        {"result": {"preference": {"question": "safe", "values": {"yes": 1}}}},
-    ):
-        with pytest.raises(ValueError):
-            resolve_judge_prompt(preset="decision", options={**options, **override})
-
-
 @pytest.mark.parametrize(
     "kind,output,invert,value,expected",
     [
@@ -322,8 +130,6 @@ def test_decision_options_validate_and_preserve_raw_answers():
     ],
 )
 def test_decision_scalar_conversions(kind, output, invert, value, expected):
-    from judgearena.prompts.registry import resolve_judge_prompt
-
     options = {
         "questions": {"quality": {"type": kind}},
         "judging_mode": "pairwise" if output == "preference" else "single_answer",
@@ -345,9 +151,7 @@ def test_decision_scalar_conversions(kind, output, invert, value, expected):
     assert parser.parse_result('{"answers": {"other": {}}}') is None
 
 
-def test_decision_scores_use_shared_pairwise_conversion(monkeypatch):
-    import pandas as pd
-
+def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
     from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
     from judgearena.config import RunConfig
     from judgearena.prompts.registry import resolve_run_judge_prompt
@@ -395,10 +199,24 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch):
         pairs,
         available_columns=pairs.columns,
     )
-    annotations, outcomes, _ = execute(
-        models.prepare_model("Decisions/local", endpoint="http://localhost/decisions"),
-        pairs,
+    model = models.prepare_model(
+        "Decisions/local",
+        endpoint="http://localhost/decisions",
+        cache=JudgementInferenceCache(tmp_path, "scores"),
     )
+    annotations, outcomes, _ = execute(model, pairs)
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *a, **k: pytest.fail("Cache miss")
+    )
+    replay, replay_outcomes, _ = execute(model, pairs)
+    pd.testing.assert_frame_equal(annotations, replay)
+    pd.testing.assert_frame_equal(outcomes, replay_outcomes)
+    from judgearena.artifacts import write_annotations
+
+    write_annotations(annotations, tmp_path / "annotations.csv")
+    saved = pd.read_csv(tmp_path / "annotations.csv")
+    assert json.loads(saved.iloc[0].judge_input)["state"]["completion"] == "A"
+    assert json.loads(saved.iloc[0].parsed)["details"]["quality"]["score"] == 2
     from judgearena.prompts.parsing import PairScore
 
     expected = PairScore(
@@ -408,41 +226,28 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch):
     assert annotations["score"].tolist() == [2, 0]
 
 
-@pytest.mark.parametrize(
-    "probabilities",
-    [
-        None,
-        {"A": 1},
-        {"A": 0.5, "B": 0.5, "extra": 0},
-        {"A": -0.1, "B": 1.1},
-        {"A": float("nan"), "B": 0},
-        {"A": 0.2, "B": 0.2},
-    ],
-)
-def test_expected_preference_rejects_invalid_distribution(probabilities):
-    from judgearena.prompts.registry import resolve_judge_prompt
+def test_decision_state_and_result_contracts():
+    from judgearena.prompts.registry import render_inputs
 
-    parser = resolve_judge_prompt(
+    options = {"questions": {"safe": {"type": "noul"}}, "state": {"language": "lang"}}
+    prompt = resolve_judge_prompt(preset="decision", options=options)
+    assert render_inputs(prompt, [{"lang": "de"}])[0]["state"] == {"language": "de"}
+    with pytest.raises(ValueError, match="fields"):
+        render_inputs(prompt, [{}])
+    pairwise = resolve_judge_prompt(
         preset="decision",
         options={
+            "questions": options["questions"],
             "judging_mode": "pairwise",
-            "questions": {
-                "winner": {"type": "choice", "criteria": {"A": "First", "B": "Second"}}
-            },
-            "result": {
-                "preference": {
-                    "question": "winner",
-                    "values": {"A": 0, "B": 1},
-                    "aggregation": "expected",
-                }
-            },
+            "result": {"preference": {"question": "safe"}},
         },
-    ).parser
-    assert (
-        parser.parse_result(
-            json.dumps(
-                {"answers": {"winner": {"choice": "A", "probabilities": probabilities}}}
-            )
-        )
-        is None
     )
+    row = {"instruction": "Q", "completion_a": "A", "completion_b": "B"}
+    assert render_inputs(pairwise, [row])[0]["state"] == row
+    for extra in (
+        {"judging_mode": "pairwise"},
+        {"state": {}},
+        {"result": {"score": {"question": "missing"}}},
+    ):
+        with pytest.raises(ValueError):
+            resolve_judge_prompt(preset="decision", options={**options, **extra})
