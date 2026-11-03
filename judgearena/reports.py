@@ -113,5 +113,3 @@ class MetaEvalReport(Report):
             f"Swap mode: {self.swap_mode}"
         )
         print(render_metrics(self.metrics))
-
-
