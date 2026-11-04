@@ -1244,7 +1244,7 @@ def make_model(
             logger.debug("Optional provider not available: %s", e)
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
         if model_provider not in model_cls_dict:
-            providers = ["Dummy", "VLLM", "OpenRouter", "Decisions", *model_cls_dict]
+            providers = ["Dummy", "VLLM", "OpenRouter", *model_cls_dict]
             raise ValueError(
                 f"Unknown or unavailable model provider {model_provider!r}; "
                 f"choose among {providers}."
