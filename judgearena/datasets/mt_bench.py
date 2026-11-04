@@ -15,11 +15,9 @@ from judgearena.datasets.data import (
     validate_messages,
 )
 from judgearena.datasets.registry import DatasetAdapter, register_dataset
-from judgearena.datasets.registry import source_cache_dir as _task_cache_dir
 from judgearena.tasks.schema import (
     GitRawSource,
     HuggingFaceSpaceSource,
-    ResolvedTaskSpec,
     TaskDefaultBaseline,
 )
 
@@ -72,12 +70,6 @@ def _extract_answer_turns(record: dict, source_name: str) -> tuple[object, list[
 
 @register_dataset("mt_bench")
 class MTBenchAdapter(DatasetAdapter):
-    source_dir: Path
-
-    def __init__(self, task: ResolvedTaskSpec, cache_dir: Path) -> None:
-        super().__init__(task, cache_dir)
-        self.source_dir = _task_cache_dir(task, cache_dir)
-
     def _space_source(self) -> HuggingFaceSpaceSource:
         source = self.task.spec.dataset.sources.get("benchmark")
         if not isinstance(source, HuggingFaceSpaceSource):

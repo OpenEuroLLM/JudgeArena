@@ -29,9 +29,47 @@ def download_hf(name: str, local_path: Path):
     resolved_task = get_packaged_task(name)
     if resolved_task is None:
         raise ValueError(f"Unknown task {name!r}.")
-    from judgearena.datasets.registry import resolve_dataset_adapter
+    download_task(resolved_task, local_path=local_path)
 
-    resolve_dataset_adapter(resolved_task, local_path).download()
+
+def download_task(task, *, local_path=None, model=None, baseline=None, filters=None):
+    """Prepare task inputs, selected saved answers and metric assets; no inference."""
+    from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
+    from judgearena.benchmarks.pairwise.comparisons import preload_model_outputs
+    from judgearena.benchmarks.scoring import prefetch_metrics
+    from judgearena.datasets import load_task_data, resolve_dataset_filters
+    from judgearena.tasks.schema import (
+        AllReferencesBaseline,
+        CategoryDefaultsBaseline,
+        PairwiseProtocol,
+        TaskDefaultBaseline,
+    )
+
+    data = load_task_data(task, local_tables_path=local_path).select(
+        resolve_dataset_filters(task, filters or {})
+    )
+    models = [model] if model else []
+    protocol = task.spec.protocol
+    if isinstance(protocol, PairwiseProtocol) and (
+        baseline is not None
+        or isinstance(
+            protocol.baseline,
+            (
+                TaskDefaultBaseline,
+                CategoryDefaultsBaseline,
+                AllReferencesBaseline,
+            ),
+        )
+    ):
+        plan = resolve_baseline_plan(
+            task_id=task.task,
+            task=task,
+            runtime_baseline=baseline,
+            instructions=data.instructions,
+        )
+        models.extend(plan.unique_models)
+    preload_model_outputs(data, models)
+    prefetch_metrics(protocol.scoring.metrics)
 
 
 def read_df(filename: Path, **pandas_kwargs) -> pd.DataFrame:
