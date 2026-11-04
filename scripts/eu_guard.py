@@ -1,6 +1,6 @@
 """Classify EU-Guard prompts directly; no candidate answers are generated.
 
-Jev: python scripts/eu_guard.py --model Decisions/typesafe/jev-1.14
+Jev: python scripts/eu_guard.py --model OpenRouter/typesafe/jev-1.14
 Local guard: python scripts/eu_guard.py --llama-guard --model meta-llama/Llama-Guard-3-8B
 Jev uses an example rubric, not the official EU-Guard evaluator.
 The local example uses Llama Guard's own policy, which differs from EU-Guard's.
@@ -73,12 +73,7 @@ def judge_jev(rows, model_name, cache):
             rows.index, render_inputs(prompt, rows.to_dict("records")), strict=True
         )
     ]
-    model = prepare_model(
-        model_name,
-        cache=cache,
-        endpoint="https://openrouter.ai/api/alpha/decisions",
-        api_key_env="OPENROUTER_API_KEY",
-    )
+    model = prepare_model(model_name, cache=cache)
     results = execute_judging(model, requests, use_tqdm=True)
     return annotation_frame(rows, results, [prompt] * len(rows))
 

@@ -74,7 +74,7 @@ def test_adapter_decisions_and_replay(tmp_path, monkeypatch, preset):
         ),
     )
     model = prepare_model(
-        "Decisions/local",
+        "ChatOpenAI/local",
         endpoint="http://localhost/systemone",
         cache=JudgementInferenceCache(tmp_path / "cache", "eu-guard"),
     )
