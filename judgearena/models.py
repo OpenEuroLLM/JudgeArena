@@ -23,6 +23,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from judgearena.cache.inference import (
     CacheRowMetadata,
     InferenceCache,
+    InputMode,
     PreparedModel,
     build_model_descriptor,
     canonicalize_model_input,
@@ -859,6 +860,12 @@ def do_inference(
             stage=stage,
         )
 
+    if any(isinstance(item, dict) for item in inputs):
+        for item in inputs:
+            validate_decision_input(item)
+        if chat_model.prepare_input is not None:
+            chat_model = chat_model.prepare_input("decision")
+
     cache = chat_model.cache
     if cache is None or chat_model.descriptor is None:
         return _run_backend_inference(
@@ -1057,18 +1064,26 @@ def prepare_model(
     max_tokens: int | None = 8192,
     *,
     cache: InferenceCache | None = None,
+    input_mode: InputMode | None = None,
     **engine_kwargs,
 ) -> PreparedModel:
     """Prepare cache identity without constructing the provider backend."""
     provider, model_name, resolved_kwargs, sampling = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )
+    if input_mode == "decision":
+        resolved_kwargs = _decision_options(provider, resolved_kwargs, sampling)
     descriptor = (
         build_model_descriptor(
             provider,
             model_name,
             {**resolved_kwargs, **sampling},
-            endpoint=_resolve_model_endpoint(provider, resolved_kwargs),
+            endpoint=(
+                resolved_kwargs["endpoint"]
+                if input_mode == "decision"
+                else _resolve_model_endpoint(provider, resolved_kwargs)
+            ),
+            input_mode=input_mode,
         )
         if cache is not None
         else None
@@ -1082,13 +1097,42 @@ def prepare_model(
         factory=lambda: make_model(
             model,
             max_tokens=max_tokens,
+            input_mode=input_mode,
             **factory_kwargs,
         ),
         cache=cache,
+        prepare_input=lambda mode: prepare_model(
+            model, max_tokens=max_tokens, cache=cache, input_mode=mode, **factory_kwargs
+        ),
     )
 
 
-def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
+def _decision_options(provider: str, options: dict, sampling: dict) -> dict:
+    if provider == "VLLM":
+        raise ValueError(
+            "VLLM in-process decision inference is not supported; use a compatible HTTP server."
+        )
+    if sampling["top_logprobs"] is not None:
+        raise ValueError("Decision probabilities are not token logprobs.")
+    options = options.copy()
+    options.pop("max_tokens", None)
+    if provider == "OpenRouter":
+        options.setdefault("endpoint", "https://openrouter.ai/api/alpha/decisions")
+        options.setdefault("api_key_env", "OPENROUTER_API_KEY")
+    if not options.get("endpoint"):
+        raise ValueError(
+            f"{provider} decision requests require a compatible HTTP endpoint."
+        )
+    return options
+
+
+def make_model(
+    model: str,
+    max_tokens: int | None = 8192,
+    *,
+    input_mode: InputMode | None = None,
+    **engine_kwargs,
+):
     """Instantiate a model wrapper from a provider/model-name string.
 
     Args:
@@ -1109,11 +1153,10 @@ def make_model(model: str, max_tokens: int | None = 8192, **engine_kwargs):
     seed = sampling["seed"]
     top_logprobs = sampling["top_logprobs"]
 
-    if model_provider == "Decisions":
-        if top_logprobs is not None:
-            raise ValueError("Decision probabilities are not token logprobs.")
-        engine_kwargs.pop("max_tokens", None)
-        return DecisionsModel(model_name, **engine_kwargs)
+    if input_mode == "decision":
+        return DecisionsModel(
+            model_name, **_decision_options(model_provider, engine_kwargs, sampling)
+        )
 
     if model_provider == "Dummy":
         if top_logprobs is not None:

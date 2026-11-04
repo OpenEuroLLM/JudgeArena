@@ -3,10 +3,7 @@ task: alpaca-eval-ja
 model:
   name: OpenRouter/google/gemma-4-31b-it
 judge:
-  model: Decisions/typesafe/jev-1.14
-  engine_kwargs:
-    endpoint: https://openrouter.ai/api/alpha/decisions
-    api_key_env: OPENROUTER_API_KEY
+  model: OpenRouter/typesafe/jev-1.14
   prompt:
     preset: decision
     options:

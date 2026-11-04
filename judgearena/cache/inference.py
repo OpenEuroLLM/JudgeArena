@@ -35,7 +35,6 @@ VLLM_EXECUTION_ONLY_KWARGS = {
 InputMode = Literal["chat", "text", "decision"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "ChatOpenAI": "chat",
-    "Decisions": "decision",
     "Dummy": "chat",
     "LlamaCpp": "text",
     "OpenAI": "text",
@@ -91,6 +90,8 @@ def build_model_descriptor(
     model_name: str,
     resolved_kwargs: dict[str, Any],
     endpoint: str | None = None,
+    *,
+    input_mode: InputMode | None = None,
 ) -> dict[str, Any] | None:
     """Describe output-affecting settings without constructing the backend.
 
@@ -98,7 +99,7 @@ def build_model_descriptor(
     part of the key. VLLM tokenizer-template changes require a distinct model
     revision or an explicit ``chat_template``.
     """
-    input_mode = provider_input_mode(provider)
+    input_mode = input_mode or provider_input_mode(provider)
     if input_mode is None:
         return None
 
@@ -159,6 +160,7 @@ class PreparedModel:
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
     cache: InferenceCache[Any] | None = None
+    prepare_input: Callable[[InputMode], PreparedModel] | None = None
     _model: Any = field(default=None, init=False, repr=False)
 
     def materialize(self) -> Any:

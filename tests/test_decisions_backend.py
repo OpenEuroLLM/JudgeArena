@@ -51,7 +51,7 @@ def test_decisions_judging_replay_and_question_identity(
         result=None,
     ):
         model = models.prepare_model(
-            "Decisions/example/model",
+            "OpenRouter/example/model",
             cache=cache,
             endpoint=endpoint,
             api_key_env="DECISION_KEY",
@@ -111,7 +111,8 @@ def test_decisions_reject_missing_answers(monkeypatch, response):
         "urllib.request.urlopen", lambda *a, **k: BytesIO(json.dumps(response).encode())
     )
     model = models.make_model(
-        "Decisions/local",
+        "ChatOpenAI/local",
+        input_mode="decision",
         endpoint="http://localhost/decisions",
     )
     with pytest.raises(ValueError, match="requested answers"):
@@ -160,7 +161,7 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
         task="alpaca-eval-ja",
         model={"name": "Dummy/a"},
         judge={
-            "model": "Decisions/local",
+            "model": "ChatOpenAI/local",
             "prompt": {
                 "preset": "decision",
                 "options": {
@@ -200,7 +201,7 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
         available_columns=pairs.columns,
     )
     model = models.prepare_model(
-        "Decisions/local",
+        "ChatOpenAI/local",
         endpoint="http://localhost/decisions",
         cache=JudgementInferenceCache(tmp_path, "scores"),
     )
@@ -251,3 +252,11 @@ def test_decision_state_and_result_contracts():
     ):
         with pytest.raises(ValueError):
             resolve_judge_prompt(preset="decision", options={**options, **extra})
+
+
+def test_decision_provider_routing():
+    model = models.make_model("OpenRouter/typesafe/jev", input_mode="decision")
+    assert model.endpoint == "https://openrouter.ai/api/alpha/decisions"
+    assert model.api_key_env == "OPENROUTER_API_KEY"
+    with pytest.raises(ValueError, match="in-process"):
+        models.make_model("VLLM/openjev/openjev", input_mode="decision")

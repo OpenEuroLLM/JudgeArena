@@ -1,6 +1,6 @@
 # Decision judging
 
-Use `Decisions/<model>` with the `decision` prompt preset. Export
+Use `OpenRouter/typesafe/jev-1.14` with the `decision` prompt preset. Export
 `OPENROUTER_API_KEY`, then run either example from the repository root:
 
 ```bash
@@ -50,11 +50,26 @@ configured metrics consume the converted values or these details.
 
 ## Endpoints
 
-The endpoint must implement the Decisions request/response contract; an ordinary
-chat-completions endpoint is insufficient. For a compatible local server, change
-`judge.engine_kwargs.endpoint` and `judge.model`; omit `api_key_env` if no
-authentication is needed. Text-generation sampling settings do not control
-decision requests.
+The prompt renders decision requests; the model prefix selects the provider.
+`prepare_model()` routes these inputs automatically. Direct `make_model()`
+callers must pass `input_mode="decision"`.
+OpenRouter supplies its decision endpoint and reads `OPENROUTER_API_KEY`.
+For another compatible HTTP server, set the endpoint explicitly:
+
+```yaml
+judge:
+  model: ChatOpenAI/openjev/openjev
+  engine_kwargs:
+    endpoint: http://localhost:8000/v1/systemone
+  prompt:
+    preset: decision
+    options: # questions and result conversion as above
+```
+
+The server must implement the Decisions request/response contract. Set
+`api_key_env` if it needs authentication. Text-generation sampling settings do
+not control decision requests. `VLLM/...` selects in-process execution, which
+does not yet support decisions.
 
 OpenRouter execution and cache replay have been verified. Local vLLM deployment
 and in-process decision inference are not verified by this integration.
