@@ -35,16 +35,16 @@ class TableAdapter(DatasetAdapter):
         return next(iter(paths), Path(directory) / f"{self.task.task}{suffix}")
 
     def _instruction_path(self) -> Path:
-        return self.cache_dir / self._table_path("instructions", ".csv")
+        return self.source_dir / self._table_path("instructions", ".csv")
 
     def _model_output_path(self) -> Path:
-        return self.cache_dir / self._table_path("model_outputs", ".csv.zip")
+        return self.source_dir / self._table_path("model_outputs", ".csv.zip")
 
     def download(self) -> None:
         """Download every Hugging Face source declared by a table-backed task."""
         if not self.task.spec.dataset.sources:
             raise ValueError("Table adapter requires dataset.sources.")
-        self.cache_dir.mkdir(exist_ok=True, parents=True)
+        self.source_dir.mkdir(exist_ok=True, parents=True)
         for name, source in self.task.spec.dataset.sources.items():
             if not isinstance(source, HuggingFaceDatasetSource):
                 raise ValueError(
@@ -56,7 +56,7 @@ class TableAdapter(DatasetAdapter):
                 repo_type="dataset",
                 revision=source.revision,
                 allow_patterns=list(source.allow_patterns) or None,
-                local_dir=self.cache_dir,
+                local_dir=self.source_dir,
                 force_download=False,
             )
 
@@ -87,7 +87,7 @@ class TableAdapter(DatasetAdapter):
             return PreferenceData.from_battles(
                 normalize_preferences(
                     pd.read_csv(
-                        self.cache_dir / self._table_path("battles", ".csv")
+                        self.source_dir / self._table_path("battles", ".csv")
                     ).rename(columns=self.task.spec.dataset.battle_columns),
                     outcome_preferences=self.task.spec.dataset.outcome_preferences,
                 )

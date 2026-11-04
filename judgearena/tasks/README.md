@@ -28,6 +28,29 @@ Executable behavior lives outside the definitions:
 - `judgearena/benchmarks/` runs the selected evaluation workflow.
 - `judgearena/prompts/` owns reusable judge prompt presets.
 
+## Prepare an offline run
+
+```bash
+judgearena tasks download mt-bench
+judgearena tasks download --config_path run.yaml
+```
+
+The config form uses the resolved dataset revision, filters, selected models,
+baselines and metrics. It loads available saved answers and prepares external
+scoring assets. It does not generate answers or download model weights.
+
+Use the same `JUDGEARENA_DATA` and `HF_HOME` on the download host and compute
+node, and bind them into containers. Set `HF_HUB_OFFLINE=1` and
+`HF_DATASETS_OFFLINE=1` on offline nodes. Task inputs live under
+`$JUDGEARENA_DATA/tables`; revision-specific directories keep downloads separate.
+Arena-Hard's scoring tokenizer uses `$JUDGEARENA_DATA/tiktoken-cache` unless
+`TIKTOKEN_CACHE_DIR` is set. Response caches use `run.store_root` separately.
+Run preparation with this version before moving the job offline.
+
+Custom metrics can implement `prefetch()` to prepare their external assets.
+Preparation reports download or metric-construction failures rather than
+claiming those assets are ready.
+
 ## Add a task using existing components
 
 Create a public YAML file under `definitions/<family>/`. Files beginning with

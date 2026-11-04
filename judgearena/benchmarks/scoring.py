@@ -158,6 +158,16 @@ def build_metrics(
     return tuple(configured)
 
 
+def prefetch_metrics(requests: Sequence[MetricRequest]) -> None:
+    """Prepare external scoring assets, failing if a metric cannot be prepared."""
+    for _, metric in build_metrics(requests):
+        if isinstance(metric, Exception):
+            raise metric
+        prefetch = getattr(metric, "prefetch", None)
+        if prefetch is not None:
+            prefetch()
+
+
 def _group_value(value: object) -> object:
     if pd.isna(value):
         return None

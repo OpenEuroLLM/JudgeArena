@@ -43,6 +43,11 @@ class DatasetAdapter(ABC):
     cache_dir: Path
 
     @property
+    def source_dir(self) -> Path:
+        """Local files isolated by the task's declared dataset sources and options."""
+        return source_cache_dir(self.task, self.cache_dir)
+
+    @property
     def fields(self) -> DatasetFields:
         """Require instruction-field mappings when an adapter uses them."""
         fields = self.task.spec.dataset.fields

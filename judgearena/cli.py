@@ -27,7 +27,7 @@ def _format_config_error(exc: ValidationError) -> str:
 
 def cli(argv: list[str] | None = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
-    # `judgearena tasks {list,show,validate}` inspects packaged task definitions
+    # `judgearena tasks {list,show,validate,download}` manages packaged tasks
     # instead of running an evaluation, so it has its own argparse grammar (see
     # tasks/cli.py) and must be routed before build_run_config, which only parses
     # run/eval flags and would reject the subcommand form.

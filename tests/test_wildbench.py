@@ -57,12 +57,14 @@ def test_reward_penalty_preserves_strong_wins_and_strict_length_boundary():
 def test_wildbench_composes_saved_or_generated_answers_with_metrics(
     monkeypatch, tmp_path, metric
 ):
+    from judgearena import utils
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.datasets import wildbench
     from judgearena.models import DummyModel
     from judgearena.tasks.registry import get_packaged_task
     from judgearena.tasks.schema import TaskSpec
 
+    monkeypatch.setattr(utils, "data_root", tmp_path)
     records = [
         {
             "session_id": "session-1",
@@ -137,7 +139,9 @@ def test_wildbench_composes_saved_or_generated_answers_with_metrics(
             "use_tqdm": False,
         },
     )
-    data = wildbench.WildBenchAdapter(cfg.resolved_task, tmp_path).load_data()
+    data = wildbench.WildBenchAdapter(
+        cfg.resolved_task, tmp_path / "tables"
+    ).load_data()
     assert (
         data.instructions.loc["session-1", "messages"]
         == records[0]["conversation_input"]
@@ -148,6 +152,11 @@ def test_wildbench_composes_saved_or_generated_answers_with_metrics(
     )
     assert data.model_completion("candidate").tolist() == ["42"]
     assert data.model_completion("new-model") is None
+    monkeypatch.setattr(
+        wildbench,
+        "get_dataset_config_names",
+        lambda *a, **kw: pytest.fail("Model discovery must work offline"),
+    )
     prefs = run_benchmark(cfg)
     assert prefs.tolist() == ([0.25] if generate else [0.25, 0.75])
     annotations = pd.read_csv(next((tmp_path / "results").rglob("*-annotations.csv")))
