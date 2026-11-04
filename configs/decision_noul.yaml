@@ -1,0 +1,35 @@
+# judgearena --config_path configs/decision_noul.yaml
+task: alpaca-eval-ja
+model:
+  name: OpenRouter/google/gemma-4-31b-it
+judge:
+  model: OpenRouter/typesafe/jev-1.14
+  prompt:
+    preset: decision
+    options:
+      judging_mode: pairwise
+      questions:
+        a_better:
+          type: noul
+          instructions: Does completion_a satisfy instruction better than completion_b?
+      result:
+        preference:
+          question: a_better
+          invert: true
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  baseline:
+    strategy: task_default
+    reference_id: gpt4_1106_preview
+  judge:
+    default_prompt_preset: decision
+    default_swap_mode: fixed
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+generation:
+  n_instructions: 4
+run:
+  store_root: ./cache/decisions

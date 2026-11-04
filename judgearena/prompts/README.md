@@ -1,20 +1,23 @@
 # Decision judging
 
 Use `OpenRouter/typesafe/jev-1.14` with the `decision` prompt preset. Export
-`OPENROUTER_API_KEY`, then run either example from the repository root:
+`OPENROUTER_API_KEY`, then run an example from the repository root:
 
 ```bash
 judgearena --config_path configs/decision_pairwise.yaml
+judgearena --config_path configs/decision_noul.yaml
 judgearena --config_path configs/decision_independent.yaml
 ```
 
 [Pairwise](../../configs/decision_pairwise.yaml) generates four Gemma answers
 and compares them with saved AlpacaEval reference answers using Choice.
+[Noul](../../configs/decision_noul.yaml) asks whether A is better than B and
+converts the yes probability to a preference with `invert: true`.
 [Independent](../../configs/decision_independent.yaml) scores four Gemma answers
 using Score and reports their mean, without a baseline. These are custom
 evaluations on AlpacaEval data, not its official judging protocol.
 
-Both configs inherit the dataset from the task and supply a complete replacement
+The configs inherit the dataset from the task and supply a complete replacement
 protocol. Change the candidate, judge, questions or metrics in the config.
 
 ## Inputs and results
@@ -24,8 +27,9 @@ protocol. Change the candidate, judge, questions or metrics in the config.
 | `pairwise` | `instruction`, `completion_a`, `completion_b` | `result.preference` |
 | `single_answer` | `instruction`, `completion` | `result.score`, or raw answers when omitted |
 
-Questions can mix Noul, Choice and Score. `state` optionally maps your question's
-state names to prepared fields, including adapter metadata:
+Questions can mix Noul, Choice and Score. Omit `state` to use the defaults above.
+To rename fields or include metadata, map the names Jev receives (left) to
+prepared data fields (right):
 
 ```yaml
 state:
@@ -48,30 +52,6 @@ returned probabilities and confidence. Without a conversion, `parsed` contains
 the named answers directly. Raw responses are retained for cache replay;
 configured metrics consume the converted values or these details.
 
-## Noul example
-
-To ask whether A is better than B, replace `judge.prompt` in the pairwise
-example with:
-
-```yaml
-prompt:
-  preset: decision
-  options:
-    judging_mode: pairwise
-    questions:
-      a_better:
-        type: noul
-        instructions: Does completion_a satisfy instruction better than completion_b?
-    result:
-      preference:
-        question: a_better
-        invert: true
-```
-
-Noul returns the probability of yes. With `invert: true`, a probability of
-`0.8` becomes preference `0.2`, favoring A. No Choice mapping or aggregation
-setting is needed.
-
 ## Endpoints
 
 The prompt renders decision requests; the model prefix selects the provider.
@@ -89,6 +69,3 @@ judge:
     preset: decision
     options: # questions and result conversion as above
 ```
-
-The server must implement the Decisions request/response contract. Set
-`api_key_env` if it needs authentication.
