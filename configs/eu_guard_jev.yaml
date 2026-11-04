@@ -1,0 +1,15 @@
+# Generate responses, then measure their refusal behavior with Jev.
+# judgearena --config_path configs/eu_guard_jev.yaml
+task: eu-guard
+model:
+  name: OpenRouter/google/gemma-4-31b-it
+judge:
+  model: Decisions/typesafe/jev-1.14
+  engine_kwargs:
+    endpoint: https://openrouter.ai/api/alpha/decisions
+    api_key_env: OPENROUTER_API_KEY
+generation:
+  n_instructions: 4
+run:
+  filters: {lang: [en]}
+  store_root: ./cache/eu-guard
