@@ -55,6 +55,27 @@ def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
+def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
+    """Merge fields, replacing collections and sections whose implementation changes."""
+    identity = {
+        ("protocol",): "runner",
+        ("dataset",): "adapter",
+        ("protocol", "generation"): "mode",
+        ("protocol", "baseline"): "strategy",
+    }.get(path)
+    if len(path) == 3 and path[:2] == ("dataset", "sources"):
+        identity = "type"
+    if identity in overrides and overrides[identity] != defaults.get(identity):
+        return overrides.copy()
+    merged = defaults.copy()
+    for key, value in overrides.items():
+        if isinstance(value, dict) and value and isinstance(merged.get(key), dict):
+            merged[key] = _merge_overrides(merged[key], value, (*path, key))
+        else:
+            merged[key] = value
+    return merged
+
+
 class ModelArgs(BaseModel):
     """The model(s) under evaluation and their generation/engine settings."""
 
@@ -479,10 +500,10 @@ class RunConfig(BaseSettings):
     """Stable cache and report name for evaluations without a packaged task."""
 
     protocol: ProtocolSpec | None = None
-    """Replace the task's protocol, using the same schema as task definitions."""
+    """Override task protocol fields; changing runner requires a complete protocol."""
 
     dataset: DatasetSpec | None = None
-    """Replace the task's dataset declaration; omitted for supplied data."""
+    """Override dataset fields; changing adapter replaces the declaration."""
 
     resolved_task: CliSuppress[ResolvedTaskSpec | None] = Field(
         default=None, repr=False
@@ -506,6 +527,34 @@ class RunConfig(BaseSettings):
 
     run: RunArgs = Field(default_factory=RunArgs)
     """Run-level settings (seed, output, caching, logging)."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_task_overrides(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = values.copy()
+        task = values.get("resolved_task")
+        if task is None and isinstance(values.get("task"), str):
+            task = get_packaged_task(values["task"])
+        if task is None:
+            return values
+        definition = (
+            task.get("spec") if isinstance(task, dict) else getattr(task, "spec", None)
+        )
+        if isinstance(definition, BaseModel):
+            definition = definition.model_dump()
+        if not isinstance(definition, dict):
+            return values
+        for section in ("protocol", "dataset"):
+            overrides = values.get(section)
+            if isinstance(overrides, dict) and isinstance(
+                definition.get(section), dict
+            ):
+                values[section] = _merge_overrides(
+                    definition[section], overrides, (section,)
+                )
+        return values
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
@@ -731,16 +780,16 @@ class RunConfig(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         # Precedence: CLI flags first (highest), then --config_path YAML, then defaults.
         # When neither global is set (direct construction / load_config), use init kwargs.
-        sources: list[PydanticBaseSettingsSource] = []
+        if _ACTIVE_CLI_ARGS is None and _ACTIVE_CONFIG_PATH is None:
+            return (init_settings,)
+        values = _read_config(_ACTIVE_CONFIG_PATH) if _ACTIVE_CONFIG_PATH else {}
         if _ACTIVE_CLI_ARGS is not None:
-            sources.append(
-                CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
-            )
-        if _ACTIVE_CONFIG_PATH is not None:
-            sources.append(
-                InitSettingsSource(settings_cls, _read_config(_ACTIVE_CONFIG_PATH))
-            )
-        return tuple(sources) or (init_settings,)
+            cli = CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
+            overrides = cli()
+            if "task" in overrides:
+                values = {**values, "task": overrides["task"]}
+            values = _merge_overrides(cls._merge_task_overrides(values), overrides)
+        return (InitSettingsSource(settings_cls, values),)
 
 
 def build_run_config(argv: list[str] | None = None) -> RunConfig:

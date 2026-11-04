@@ -813,3 +813,72 @@ def test_cli_prompt_path_override_uses_cwd_not_config_directory(tmp_path, monkey
         == direct.judge.prompt.user_file
         == Path("override.txt")
     )
+
+
+def test_partial_task_sections_merge_and_replay(tmp_path):
+    task = get_packaged_task("alpaca-eval")
+    source = next(iter(task.spec.dataset.sources))
+    cfg = RunConfig(
+        **_base_generate(),
+        protocol={"scoring": {"metrics": [{"metric": "pairwise_win_rate"}]}},
+        dataset={"sources": {source: {"revision": "1" * 40}}},
+    )
+    assert cfg.protocol.judge == task.spec.protocol.judge
+    assert cfg.protocol.baseline == task.spec.protocol.baseline
+    assert [m.metric for m in cfg.protocol.scoring.metrics] == ["pairwise_win_rate"]
+    assert (
+        cfg.dataset.sources[source].repo_id == task.spec.dataset.sources[source].repo_id
+    )
+    assert cfg.dataset.sources[source].revision == "1" * 40
+    path = tmp_path / "config.yaml"
+    dump_config(cfg, path)
+    assert load_config(path).for_task(task).resolved_task.spec == cfg.resolved_task.spec
+
+
+def test_changed_task_identity_does_not_inherit_old_settings():
+    with pytest.raises(ValidationError):
+        RunConfig(**_base_generate(), protocol={"runner": "single_answer"})
+    cfg = RunConfig(**_base_generate(), dataset={"adapter": "custom"})
+    assert cfg.dataset.sources == {}
+    assert cfg.dataset.fields is None
+
+
+def test_empty_dataset_overrides_stay_cleared_after_rebinding(tmp_path):
+    task = get_packaged_task("alpaca-eval")
+    task = replace(
+        task,
+        spec=task.spec.model_copy(
+            update={
+                "dataset": task.spec.dataset.model_copy(
+                    update={"options": {"path": "old"}}
+                )
+            }
+        ),
+    )
+    cfg = RunConfig(
+        **_base_generate(), resolved_task=task, dataset={"options": {}, "fields": None}
+    )
+    path = tmp_path / "config.yaml"
+    dump_config(cfg, path)
+    rebound = load_config(path).for_task(task)
+    assert rebound.dataset.options == {}
+    assert rebound.dataset.fields is None
+
+
+@pytest.mark.parametrize(
+    "override, expected",
+    [
+        ("{}", {}),
+        ('{"adapter":"custom"}', {}),
+        ('{"adapter":"judgearena_tables"}', {"path": "old"}),
+    ],
+)
+def test_cli_dataset_override_respects_inherited_adapter(tmp_path, override, expected):
+    path = tmp_path / "run.yaml"
+    path.write_text(
+        "task: alpaca-eval\nmodel: {name: Dummy/a}\n"
+        "judge: {model: Dummy/j}\ndataset: {options: {path: old}}\n"
+    )
+    flag = "--dataset.options" if override == "{}" else "--dataset"
+    cfg = build_run_config(["--config_path", str(path), flag, override])
+    assert cfg.dataset.options == expected

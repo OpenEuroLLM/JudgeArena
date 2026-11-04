@@ -8,8 +8,9 @@ Task YAML describes **what benchmark is being run**. A run config describes
 - Keep experiment choices in `RunConfig`: candidate and judge models, sampling
   parameters, instruction limits, caching, and supported overrides.
 - Publish a new task version when changing benchmark defaults. Experiments can
-  replace `protocol` or `dataset` in `RunConfig` without editing the task; these
-  use the same schemas and replace the whole section before defaults resolve.
+  override `protocol` or `dataset` fields in `RunConfig` without editing the task.
+  Both use the task schemas. Matching runners/adapters inherit omitted fields;
+  changing either replaces that section before defaults resolve.
 
 ## Layout
 
@@ -441,6 +442,25 @@ not needed. Effective settings follow this precedence:
 CLI > run config YAML > task YAML > code default
 ```
 
-For a small change to a packaged dataset, copy its declaration with
-`cfg.resolved_task.spec.dataset.model_dump()`, edit the source revision, and
-pass it as `dataset` in the new config. The packaged task stays unchanged.
+For example, change only a dataset revision and the metric list:
+
+```yaml
+task: arena-hard-v0.1
+dataset:
+  sources:
+    examples:
+      revision: "<new-commit-sha>"
+protocol:
+  scoring:
+    metrics: [{metric: pairwise_win_rate}]
+```
+
+Nested mappings merge; lists replace. An explicit `{}` clears a nested mapping,
+and `null` clears a nullable field. Changing generation mode, baseline strategy
+or source type also replaces that nested section. Saved configs retain resolved
+settings, including explicit clears, for replay.
+
+Previously, omitted fields in a supplied section used schema defaults. They now
+inherit task settings when the runner/adapter stays the same. Set those fields
+explicitly if you need the previous schema defaults. Prompt/parser/metric
+compatibility remains the user's responsibility.
