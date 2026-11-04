@@ -1,15 +1,17 @@
 import json
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 
 from judgearena.benchmarks.eu_guard import EUGuardMetric
 from judgearena.cache.inference import JudgementInferenceCache
+from judgearena.config import JudgeArgs
 from judgearena.datasets import load_task_data
-from judgearena.judging import JudgeRequest, annotation_frame, execute_judging
-from judgearena.models import prepare_model
-from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
+from judgearena.prompts.registry import render_inputs, resolve_run_judge_prompt
+from scripts.eu_guard import judge_jev
 
 
 def test_refusal_metrics_labels_probabilities_and_missing():
@@ -38,8 +40,8 @@ def test_refusal_metrics_labels_probabilities_and_missing():
     assert EUGuardMetric().calculate(labels.assign(completion=""))["num_valid"] == 0
 
 
-@pytest.mark.parametrize("preset", ["eu-guard-behavior", "eu-guard-prompt"])
-def test_adapter_decisions_and_replay(tmp_path, monkeypatch, preset):
+@pytest.mark.parametrize("config", ["eu_guard_jev", "eu_guard_prompt_jev"])
+def test_adapter_decisions_and_replay(tmp_path, monkeypatch, config):
     source = tmp_path / "test.jsonl"
     pd.DataFrame(
         {
@@ -57,15 +59,17 @@ def test_adapter_decisions_and_replay(tmp_path, monkeypatch, preset):
     data = load_task_data("eu-guard").select({"lang": ["de"]})
     samples = (
         data.instructions.assign(completion="I cannot help.")
-        if preset.endswith("behavior")
+        if config == "eu_guard_jev"
         else data.instructions
     )
-    prompt = resolve_judge_prompt(preset=preset)
+    cfg = JudgeArgs.model_validate(
+        yaml.safe_load(Path(f"configs/{config}.yaml").read_text())["judge"]
+    )
+    assert cfg.prompt.preset == "decision"
+    prompt = resolve_run_judge_prompt(None, cfg)
     inputs = render_inputs(prompt, samples.to_dict("records"))
     assert set(inputs[0]["state"]) == (
-        {"instruction", "completion"}
-        if preset.endswith("behavior")
-        else {"instruction"}
+        {"instruction", "completion"} if config == "eu_guard_jev" else {"instruction"}
     )
     monkeypatch.setattr(
         "urllib.request.urlopen",
@@ -73,29 +77,14 @@ def test_adapter_decisions_and_replay(tmp_path, monkeypatch, preset):
             json.dumps({"answers": {"refusal": {"noul": 0.9}}}).encode()
         ),
     )
-    model = prepare_model(
-        "ChatOpenAI/local",
-        endpoint="http://localhost/systemone",
-        cache=JudgementInferenceCache(tmp_path / "cache", "eu-guard"),
-    )
-    requests = [
-        JudgeRequest(
-            str(i),
-            value,
-            prompt.parser,
-            {"instruction_id": str(i), "model_a": "guard", "model_b": None},
-        )
-        for i, value in zip(samples.index, inputs, strict=True)
-    ]
-    results = execute_judging(model, requests)
+    cfg.model = "ChatOpenAI/local"
+    cfg.engine_kwargs = {"endpoint": "http://localhost/systemone"}
+    cache = JudgementInferenceCache(tmp_path / "cache", "eu-guard")
+    annotations = judge_jev(samples, cfg, cache)
     monkeypatch.setattr(
         "urllib.request.urlopen", lambda *a, **kw: pytest.fail("Cache miss")
     )
-    replay = execute_judging(model, requests)
-    annotations = annotation_frame(samples, results, [prompt])
-    pd.testing.assert_frame_equal(
-        annotations, annotation_frame(samples, replay, [prompt])
-    )
+    pd.testing.assert_frame_equal(annotations, judge_jev(samples, cfg, cache))
     assert annotations.iloc[0]["concept_id"] == "x"
     assert EUGuardMetric().calculate(annotations)["fcr"] == 0
 

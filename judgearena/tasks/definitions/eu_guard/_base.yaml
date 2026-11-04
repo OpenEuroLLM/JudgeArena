@@ -22,7 +22,7 @@ protocol:
     default_max_out_tokens: 4096
     default_truncate_input: false
   judge:
-    default_prompt_preset: eu-guard-behavior
+    default_prompt_preset: decision
     use_default_engine_kwargs: false
     default_temperature: 0.0
     default_max_out_tokens: 256

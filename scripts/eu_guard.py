@@ -1,6 +1,6 @@
 """Classify EU-Guard prompts directly; no candidate answers are generated.
 
-Jev: python scripts/eu_guard.py --model OpenRouter/typesafe/jev-1.14
+Jev: python scripts/eu_guard.py --config configs/eu_guard_prompt_jev.yaml
 Local guard: python scripts/eu_guard.py --llama-guard --model meta-llama/Llama-Guard-3-8B
 Jev uses an example rubric, not the official EU-Guard evaluator.
 The local example uses Llama Guard's own policy, which differs from EU-Guard's.
@@ -10,13 +10,16 @@ import argparse
 import json
 from pathlib import Path
 
+import yaml
+
 from judgearena.artifacts import write_annotations
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.cache.inference import JudgementInferenceCache
+from judgearena.config import JudgeArgs
 from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.judging import JudgeRequest, annotation_frame, execute_judging
 from judgearena.models import prepare_model
-from judgearena.prompts.registry import render_inputs, resolve_judge_prompt
+from judgearena.prompts.registry import render_inputs, resolve_run_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -60,27 +63,30 @@ def judge_llama_guard(rows, model_name):
     )
 
 
-def judge_jev(rows, model_name, cache):
-    prompt = resolve_judge_prompt(preset="eu-guard-prompt")
+def judge_jev(rows, judge_cfg, cache):
+    prompt = resolve_run_judge_prompt(None, judge_cfg)
     requests = [
         JudgeRequest(
             str(i),
             value,
             prompt.parser,
-            {"instruction_id": str(i), "model_a": model_name, "model_b": None},
+            {"instruction_id": str(i), "model_a": judge_cfg.model, "model_b": None},
         )
         for i, value in zip(
             rows.index, render_inputs(prompt, rows.to_dict("records")), strict=True
         )
     ]
-    model = prepare_model(model_name, cache=cache)
+    model = prepare_model(judge_cfg.model, cache=cache, **judge_cfg.model_kwargs())
     results = execute_judging(model, requests, use_tqdm=True)
     return annotation_frame(rows, results, [prompt] * len(rows))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--config", default="configs/eu_guard_prompt_jev.yaml")
+    parser.add_argument(
+        "--model", help="Override the configured judge or select a local guard"
+    )
     parser.add_argument("--llama-guard", action="store_true")
     parser.add_argument("--task", default="eu-guard")
     parser.add_argument(
@@ -92,8 +98,17 @@ def main():
     args = parser.parse_args()
     if args.limit < 1:
         parser.error("--limit must be positive")
-    args.output.mkdir(parents=True, exist_ok=False)
+    if args.llama_guard and not args.model:
+        parser.error("--llama-guard requires --model")
+    judge_cfg = None
+    if not args.llama_guard:
+        with open(args.config) as f:
+            judge_cfg = JudgeArgs.model_validate(yaml.safe_load(f)["judge"])
+        if args.model:
+            judge_cfg.model = args.model
+    model_name = args.model if args.llama_guard else judge_cfg.model
     task = get_packaged_task(args.task)
+    args.output.mkdir(parents=True, exist_ok=False)
     rows = (
         load_task_data(task)
         .select(
@@ -106,9 +121,9 @@ def main():
     annotations = (
         judge_llama_guard(rows, args.model)
         if args.llama_guard
-        else judge_jev(rows, args.model, JudgementInferenceCache(args.cache, args.task))
+        else judge_jev(rows, judge_cfg, JudgementInferenceCache(args.cache, task.task))
     )
-    annotations["judge"] = args.model
+    annotations["judge"] = model_name
     metrics = calculate_metrics(
         annotations, build_metrics(task.spec.protocol.scoring.metrics)
     )
@@ -121,6 +136,9 @@ def main():
             {
                 "arguments": vars(args),
                 "task": task.spec.model_dump(mode="json"),
+                "judge": judge_cfg.model_dump(mode="json")
+                if judge_cfg is not None
+                else None,
             },
             default=str,
             indent=2,
