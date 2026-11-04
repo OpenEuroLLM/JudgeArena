@@ -48,6 +48,30 @@ returned probabilities and confidence. Without a conversion, `parsed` contains
 the named answers directly. Raw responses are retained for cache replay;
 configured metrics consume the converted values or these details.
 
+## Noul example
+
+To ask whether A is better than B, replace `judge.prompt` in the pairwise
+example with:
+
+```yaml
+prompt:
+  preset: decision
+  options:
+    judging_mode: pairwise
+    questions:
+      a_better:
+        type: noul
+        instructions: Does completion_a satisfy instruction better than completion_b?
+    result:
+      preference:
+        question: a_better
+        invert: true
+```
+
+Noul returns the probability of yes. With `invert: true`, a probability of
+`0.8` becomes preference `0.2`, favoring A. No Choice mapping or aggregation
+setting is needed.
+
 ## Endpoints
 
 The prompt renders decision requests; the model prefix selects the provider.
@@ -67,9 +91,4 @@ judge:
 ```
 
 The server must implement the Decisions request/response contract. Set
-`api_key_env` if it needs authentication. Text-generation sampling settings do
-not control decision requests. `VLLM/...` selects in-process execution, which
-does not yet support decisions.
-
-OpenRouter execution and cache replay have been verified. Local vLLM deployment
-and in-process decision inference are not verified by this integration.
+`api_key_env` if it needs authentication.
