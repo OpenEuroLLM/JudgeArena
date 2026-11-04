@@ -50,11 +50,9 @@ class DatasetSpec(StrictFrozenModel):
     format: str | None = None
     sources: dict[str, SourceSpec] = Field(default_factory=dict)
     fields: DatasetFields | None = None
-    options: dict[str, Any] = Field(
-        default_factory=dict, exclude_if=lambda value: not value
-    )
+    options: dict[str, Any] = Field(default_factory=dict)
     output_columns: dict[str, str] = Field(default_factory=dict)
     battle_columns: dict[str, str] = Field(default_factory=dict)
     outcome_preferences: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(
-        default_factory=dict, exclude_if=lambda value: not value
+        default_factory=dict
     )
