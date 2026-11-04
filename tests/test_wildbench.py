@@ -343,3 +343,49 @@ def test_all_references_rejects_empty_or_duplicate_models(references):
 def test_all_references_rejects_reference_override_and_self_comparison(model):
     with pytest.raises(ValueError, match="all_references"):
         RunConfig(task="wildbench-reward-mix", model=model, judge={"model": "Dummy/A"})
+
+
+def test_independent_saved_answer_preserves_both_primary_tags(monkeypatch, tmp_path):
+    from judgearena import utils
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.datasets import wildbench
+
+    monkeypatch.setattr(utils, "data_root", tmp_path)
+    monkeypatch.setattr(
+        wildbench, "get_dataset_config_names", lambda *a, **kw: ["saved"]
+    )
+    monkeypatch.setattr(
+        wildbench,
+        "load_dataset",
+        lambda repo, *a, **kw: Dataset.from_list(
+            [
+                {
+                    "session_id": "q",
+                    "conversation_input": [{"role": "user", "content": "Hi"}],
+                    "checklist": ["Be polite"],
+                    "primary_tag": "Greeting",
+                }
+                if repo == "allenai/WildBench"
+                else {
+                    "session_id": "q",
+                    "output": ["Hello!"],
+                    "primary_tag": "Answer tag",
+                }
+            ]
+        ),
+    )
+    cfg = RunConfig(
+        task="wildbench-score",
+        model={"name": "saved"},
+        judge={"model": 'Dummy/{"score": 8}'},
+        run={
+            "store_root": None,
+            "result_folder": str(tmp_path / "results"),
+            "no_log_file": True,
+            "use_tqdm": False,
+        },
+    )
+    annotations = run_benchmark(cfg)
+    assert annotations[["primary_tag", "output_primary_tag", "score"]].to_dict(
+        "records"
+    ) == [{"primary_tag": "Greeting", "output_primary_tag": "Answer tag", "score": 8.0}]
