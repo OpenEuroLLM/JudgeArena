@@ -199,8 +199,10 @@ class InferenceCache[CacheRowMetadataT: CacheRowMetadata](ABC):
                 metadata=metadata[index],
             )
             for index, output in zip(indices, outputs, strict=True)
+            if output.error is None
         ]
-        store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
+        if rows:
+            store.save(pd.DataFrame(rows), pushed_by=self.pushed_by)
 
     @abstractmethod
     def make_row(

@@ -419,14 +419,43 @@ class ChatVLLM:
             prompts = [self._to_raw_text(inp) for inp in inputs]
             outputs = self.llm.generate(prompts, self.sampling_params)
         else:
+            from vllm.exceptions import VLLMValidationError
+
             messages_batch = [self._to_messages(inp) for inp in inputs]
-            outputs = self.llm.chat(
-                messages_batch,
-                self.sampling_params,
-                add_generation_prompt=True,
-                chat_template=self.chat_template,
-                chat_template_kwargs=self._chat_template_kwargs,
-            )
+            valid_indices = []
+            for index, messages in enumerate(messages_batch):
+                try:
+                    # Private vLLM API (0.19-0.25): renders and length-checks one
+                    # chat request exactly as LLM.chat() does.
+                    self.llm._preprocess_chat_one(
+                        messages,
+                        add_generation_prompt=True,
+                        chat_template=self.chat_template,
+                        chat_template_kwargs=self._chat_template_kwargs,
+                        tokenization_kwargs={"max_output_tokens": 1},
+                    )
+                except VLLMValidationError as error:
+                    if error.parameter != "input_tokens":
+                        raise
+                else:
+                    valid_indices.append(index)
+            outputs = [None] * len(inputs)
+            if valid_indices:
+                generated = self.llm.chat(
+                    [messages_batch[index] for index in valid_indices],
+                    self.sampling_params,
+                    add_generation_prompt=True,
+                    chat_template=self.chat_template,
+                    chat_template_kwargs=self._chat_template_kwargs,
+                )
+                for index, output in zip(valid_indices, generated, strict=True):
+                    outputs[index] = output
+            if len(valid_indices) < len(inputs):
+                logger.warning(
+                    "Skipped %d requests exceeding the model context; "
+                    "recording failed annotations.",
+                    len(inputs) - len(valid_indices),
+                )
         return outputs
 
     def batch(self, inputs: list, **invoke_kwargs) -> list:
@@ -437,10 +466,17 @@ class ChatVLLM:
         """
         usage_stage = invoke_kwargs.pop("usage_stage", None)
         outputs = self._run_raw_batch(inputs)
-        if self._top_logprobs is None and usage_stage is None:
+        if (
+            self._top_logprobs is None
+            and usage_stage is None
+            and all(out is not None for out in outputs)
+        ):
             return [out.outputs[0].text for out in outputs]
         results = []
         for out in outputs:
+            if out is None:
+                results.append(InferenceResult(text="", error="context_length"))
+                continue
             generation = out.outputs[0]
             top = None
             if getattr(generation, "logprobs", None):
@@ -611,7 +647,7 @@ def _to_inference_result(
     default_model: str | None,
 ) -> InferenceResult:
     if isinstance(response, InferenceResult):
-        if response.usage is not None:
+        if response.usage is not None or response.error is not None:
             return response
         return replace(
             response,
@@ -649,7 +685,7 @@ def _collect_inference_results(
         )
         for response in responses
     ]
-    request_usage = [result.usage for result in results]
+    request_usage = [result.usage for result in results if result.usage is not None]
     record_usage(request_usage)
 
     batch_usage = RunUsage(tuple(request_usage))
