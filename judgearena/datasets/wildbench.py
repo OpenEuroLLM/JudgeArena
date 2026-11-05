@@ -104,7 +104,11 @@ class WildBenchAdapter(DatasetAdapter):
                     cache_dir=str(self.source_dir / "datasets"),
                 )
                 frame = pd.DataFrame(answers).rename(
-                    columns={"session_id": "instruction_index", "output": "completion"}
+                    columns={
+                        "session_id": "instruction_index",
+                        "output": "completion",
+                        "primary_tag": "output_primary_tag",
+                    }
                 )
                 frame["completion"] = frame["completion"].map(
                     lambda value: value[0] if isinstance(value, list) else value
