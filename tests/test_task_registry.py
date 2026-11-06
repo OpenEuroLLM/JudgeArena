@@ -703,3 +703,109 @@ def test_script_components_registered_after_catalog_import_work_in_task(
     )
     with pytest.raises(ValueError, match="already registered"):
         scoring.register_metric("custom_mean")(CustomMean)
+
+
+def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
+    import shutil
+
+    import pandas as pd
+
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+    from judgearena.prompts.registry import (
+        group_judge_prompts,
+        resolve_run_judge_prompt,
+    )
+
+    definition = _task_definition()
+    judge = definition["protocol"]["judge"]
+    judge.pop("default_prompt_preset")
+    judge["prompt"] = {"file": "prompts/judge.yaml"}
+    judge["category_prompts"] = {"coding": {"file": "prompts/code.yaml"}}
+    definition["dataset"]["adapter"] = "./components.py:Adapter"
+    definition["protocol"]["scoring"]["metrics"] = [
+        {"metric": "./components.py:Metric"},
+        {"metric": "pairwise_win_rate"},
+    ]
+    definition.pop("task")
+    root = tmp_path / "definitions"
+    _write_family(root, family="base", filename="_base.yaml", definition=definition)
+    (root / "base/components.py").write_text(
+        "from judgearena.datasets.judgearena_tables import TableAdapter as Adapter\n"
+        "from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric\n"
+        "Metric = PairwiseWinRateMetric\n"
+    )
+    prompts = root / "base/prompts"
+    prompts.mkdir()
+    (prompts.parent / "parsers.py").write_text(
+        "from judgearena.prompts.parsing import PairScore\n"
+        "PARSER = PairScore(temperature=0.7)\n"
+    )
+    for name in ("judge", "code"):
+        (prompts / f"{name}.yaml").write_text(
+            f"parser: ../parsers.py:PARSER\nuser_file: {name}.txt\n"
+        )
+        (prompts / f"{name}.txt").write_text(name + " {completion_a} {completion_b}")
+    _write_family(
+        root,
+        family="child",
+        filename="test.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "test-task",
+            "protocol": {"judge": {"prompt": {"system": "Judge carefully."}}},
+        },
+    )
+    task = load_tasks(root)["test-task"]
+    assert task.spec.protocol.judge.prompt.system == "Judge carefully."
+    cfg = RunConfig(
+        resolved_task=task, model={"name": "candidate"}, judge={"model": "Dummy/test"}
+    )
+    rows = pd.DataFrame({"category": ["general", "coding"]})
+
+    def templates(config):
+        prompt = resolve_run_judge_prompt(config.resolved_task, config.judge)
+        return [
+            p.user_prompt_template for p, _ in group_judge_prompts(config, rows, prompt)
+        ]
+
+    assert templates(cfg) == [
+        "judge {completion_a} {completion_b}",
+        "code {completion_a} {completion_b}",
+    ]
+    from judgearena.benchmarks.scoring import (
+        build_metrics,
+        calculate_metrics,
+        render_metrics,
+    )
+    from judgearena.datasets.registry import source_cache_dir
+
+    source_cache = source_cache_dir(cfg.resolved_task, tmp_path)
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    shutil.rmtree(root)
+    shutil.move(run, tmp_path / "moved")
+    replay = load_config(tmp_path / "moved/config.yaml")
+    assert source_cache_dir(replay.resolved_task, tmp_path) == source_cache
+    requests = replay.resolved_task.spec.protocol.scoring.metrics
+    values = calculate_metrics(
+        pd.DataFrame({"model_a": ["candidate"], "model_b": ["other"], "pref": [0.0]}),
+        build_metrics(requests),
+    )
+    assert len(values) == 2 and all("error" not in value for value in values.values())
+    assert render_metrics(values)
+    parsed = resolve_run_judge_prompt(replay.resolved_task, replay.judge).parser
+    from judgearena.prompts.parsing import PairScore
+
+    assert parsed.parse_result("score_A: 8\nscore_B: 4") == PairScore(
+        temperature=0.7
+    ).parse_result("score_A: 8\nscore_B: 4")
+    assert templates(replay) == [
+        "judge {completion_a} {completion_b}",
+        "code {completion_a} {completion_b}",
+    ]
+    from judgearena.config import JudgePromptSpec
+
+    replay.judge.prompt = JudgePromptSpec(
+        user="override {completion}", parser="json-score"
+    )
+    assert templates(replay) == ["override {completion}"]

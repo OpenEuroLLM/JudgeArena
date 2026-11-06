@@ -442,3 +442,81 @@ def test_prepared_field_validation_accepts_model_fields(preset):
             instructions,
             available_columns={"instruction"},
         )
+
+
+@pytest.mark.parametrize("preset", [False, True])
+def test_yaml_bundle_survives_source_removal_and_run_move(
+    tmp_path, preset, monkeypatch
+):
+    import shutil
+
+    import yaml
+
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    bundle = (
+        {"preset": "single-score"}
+        if preset
+        else {"user": "Classify {completion}", "parser": "json-score"}
+    )
+    source = tmp_path / "prompt.yaml"
+    source.write_text(yaml.safe_dump(bundle))
+    cfg = RunConfig(
+        task="alpaca-eval",
+        model={"name": "candidate"},
+        judge={"model": "Dummy/test", "prompt": {"file": source}},
+    )
+    before = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
+    from judgearena.prompts.registry import (
+        JudgePromptPreset,
+        build_chat_prompt_template,
+        register_prompt,
+    )
+
+    monkeypatch.setattr("judgearena.prompts.registry.PRESETS", PRESETS.copy())
+    register_prompt(JudgePromptPreset.from_file("test-bundle", source))
+    named = resolve_judge_prompt(preset="test-bundle")
+    fields = {"completion": "Example", "user_prompt": "Say hello"}
+    expected = build_chat_prompt_template(before).format_prompt(**fields)
+    assert build_chat_prompt_template(named).format_prompt(**fields) == expected
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    source.unlink()
+    moved = tmp_path / "moved"
+    shutil.move(run, moved)
+    replay = load_config(moved / "config.yaml")
+    after = resolve_run_judge_prompt(replay.resolved_task, replay.judge)
+    assert after.metadata() == before.metadata()
+    assert build_chat_prompt_template(after).format_prompt(**fields) == expected
+    assert replay.judge.prompt.model_dump() == cfg.judge.prompt.model_dump()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"system_file": "missing.txt"},
+        {"parser": "json-score"},
+        {"options": {"unknown": 1}},
+    ],
+)
+def test_task_bundle_keeps_explicit_argument_validation(kwargs):
+    with pytest.raises(ValueError):
+        resolve_judge_prompt(task="arena-hard-v0.1", **kwargs)
+
+
+def test_parser_files_are_isolated_and_edits_reloaded(tmp_path):
+    from judgearena.prompts.parsing import resolve_judge_parser
+
+    for directory in ("first", "second"):
+        (tmp_path / directory).mkdir()
+    source = "from judgearena.prompts.parsing import PairScore\nPARSER = PairScore(temperature={})\n"
+    paths = [tmp_path / name / "parsers.py" for name in ("first", "second")]
+    for path, value in zip(paths, (0.2, 0.8), strict=True):
+        path.write_text(source.format(value))
+    references = [f"{path}:PARSER" for path in paths]
+    assert [resolve_judge_parser(ref).temperature for ref in references] == [0.2, 0.8]
+    paths[0].write_text(source.format(0.9))
+    assert resolve_judge_parser(references[0]).temperature == 0.9
+    for symbol in ("Missing", "PairScore"):
+        with pytest.raises(ValueError, match="OutputParser instance"):
+            resolve_judge_parser(f"{paths[0]}:{symbol}")

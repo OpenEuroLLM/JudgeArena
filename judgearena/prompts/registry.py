@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
+from functools import partial
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -85,6 +86,38 @@ class JudgePromptPreset:
     """Optional (resolved_prompt, **options) -> resolved_prompt; owns option validation."""
     option_files: tuple[str, ...] = ()
     """File-valued option names to resolve beside config YAML and snapshot for replay."""
+
+    @classmethod
+    def from_file(cls, name: str, path: str | Path) -> JudgePromptPreset:
+        """Build a named preset using the same YAML schema as tasks and configs."""
+        from judgearena.prompts.spec import JudgePromptSpec
+
+        bundle = JudgePromptSpec(file=path)
+        if bundle.preset is not None:
+            base = PRESETS[bundle.preset]
+            if bundle.options and base.configure is None:
+                raise ValueError(
+                    f"Prompt preset {bundle.preset!r} does not accept options."
+                )
+            return replace(
+                base,
+                name=name,
+                configure=partial(base.configure, **bundle.options)
+                if bundle.options
+                else base.configure,
+            )
+        parser = resolve_judge_parser(bundle.parser or "score")
+        return cls(
+            name=name,
+            parser=parser,
+            system_file=str(bundle.system_file) if bundle.system_file else None,
+            user_file=str(bundle.user_file) if bundle.user_file else None,
+            inline_system=bundle.system,
+            inline_user=bundle.user,
+            judging_mode="pairwise"
+            if issubclass(parser.result_type, ParsedPreference)
+            else "single_answer",
+        )
 
 
 @dataclass(frozen=True)
@@ -211,16 +244,13 @@ PRESETS: dict[str, JudgePromptPreset] = {
         configure=configure_criteria_prompt,
         option_files=("criteria_file",),
     ),
-    "wildbench-score": JudgePromptPreset(
-        name="wildbench-score",
-        judging_mode="single_answer",
-        parser=JUDGE_PARSERS["wildbench-score"],
-        user_file="wildbench-score.txt",
+    "wildbench-score": JudgePromptPreset.from_file(
+        "wildbench-score",
+        files("judgearena").joinpath("tasks/definitions/wildbench/prompts/score.yaml"),
     ),
-    "wildbench-reward": JudgePromptPreset(
-        name="wildbench-reward",
-        parser=JUDGE_PARSERS["wildbench-reward"],
-        user_file="wildbench-reward.txt",
+    "wildbench-reward": JudgePromptPreset.from_file(
+        "wildbench-reward",
+        files("judgearena").joinpath("tasks/definitions/wildbench/prompts/reward.yaml"),
     ),
     "criteria": JudgePromptPreset(
         name="criteria",
@@ -273,29 +303,29 @@ PRESETS: dict[str, JudgePromptPreset] = {
     # Official Arena-Hard-Auto judge prompt (arena-hard-v0.1 judge_config.yaml),
     # verbatim except for placeholder names. The judge explains, then emits one
     # graded verdict label ([[A>>B]] ... [[B>>A]]).
-    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ARENA_HARD_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["arena-hard-verdict"],
-        system_file="arena-hard-system-prompt.txt",
-        user_file="arena-hard-prompt.txt",
+    ARENA_HARD_JUDGE_PROMPT_PRESET: JudgePromptPreset.from_file(
+        ARENA_HARD_JUDGE_PROMPT_PRESET,
+        files("judgearena").joinpath(
+            "tasks/definitions/arena_hard/prompts/pairwise.yaml"
+        ),
     ),
     # Official Arena-Hard v2.0 creative-writing variant: identical except the
     # judge is not asked to answer the prompt itself first.
-    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["arena-hard-verdict"],
-        system_file="arena-hard-creative-system-prompt.txt",
-        user_file="arena-hard-prompt.txt",
+    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET: JudgePromptPreset.from_file(
+        ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
+        files("judgearena").joinpath(
+            "tasks/definitions/arena_hard/prompts/creative.yaml"
+        ),
     ),
     # Official AlpacaEval 2.0 annotator prompt (alpaca_eval_clf.txt), verbatim
     # except for placeholder names and brace escaping for f-string templating.
     # The judge answers with a single model identifier: "m" (completion_A) or
     # "M" (completion_B).
-    ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset(
-        name=ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["alpaca-eval-token"],
-        system_file="alpaca-eval-system-prompt.txt",
-        user_file="alpaca-eval-prompt.txt",
+    ALPACA_EVAL_JUDGE_PROMPT_PRESET: JudgePromptPreset.from_file(
+        ALPACA_EVAL_JUDGE_PROMPT_PRESET,
+        files("judgearena").joinpath(
+            "tasks/definitions/alpaca_eval/prompts/pairwise.yaml"
+        ),
     ),
     META_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
         name=META_EVAL_PAIR_SCORE_PROMPT_PRESET,
@@ -304,17 +334,17 @@ PRESETS: dict[str, JudgePromptPreset] = {
         user_file="prompt.txt",
         output_format_file="integer-score-output.txt",
     ),
-    META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET: JudgePromptPreset(
-        name=META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["alpaca-eval-json"],
-        system_file="meta-eval-alpaca-eval-system-prompt.txt",
-        user_file="meta-eval-alpaca-eval-json-prompt.txt",
+    META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET: JudgePromptPreset.from_file(
+        META_EVAL_ALPACA_EVAL_JSON_PROMPT_PRESET,
+        files("judgearena").joinpath(
+            "tasks/definitions/meta_eval/prompts/alpaca-json.yaml"
+        ),
     ),
-    META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset(
-        name=META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET,
-        parser=JUDGE_PARSERS["meta-eval-score"],
-        system_file="meta-eval-alpaca-eval-system-prompt.txt",
-        user_file="meta-eval-alpaca-eval-pair-score-prompt.txt",
+    META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET: JudgePromptPreset.from_file(
+        META_EVAL_ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET,
+        files("judgearena").joinpath(
+            "tasks/definitions/meta_eval/prompts/alpaca-score.yaml"
+        ),
     ),
 }
 
@@ -348,13 +378,17 @@ def default_preset_for_task(task: str | ResolvedTaskSpec | None) -> str:
     if task is None:
         return DEFAULT_JUDGE_PROMPT_PRESET
     if not isinstance(task, str):
-        return task.spec.protocol.judge.default_prompt_preset
+        return (
+            task.spec.protocol.judge.prompt.preset
+            if task.spec.protocol.judge.prompt is not None
+            else task.spec.protocol.judge.default_prompt_preset
+        ) or DEFAULT_JUDGE_PROMPT_PRESET
     # Import lazily: task validation uses the prompt catalog in this module.
     from judgearena.tasks.registry import get_packaged_task
 
     resolved = get_packaged_task(task)
     if resolved is not None:
-        return resolved.spec.protocol.judge.default_prompt_preset
+        return default_preset_for_task(resolved)
     return DEFAULT_JUDGE_PROMPT_PRESET
 
 
@@ -384,35 +418,41 @@ def _materialize_user_template(
     return text
 
 
-def _resolve_file_prompt(
+def _resolve_custom_prompt(
     *,
     system_file: str | Path | None,
-    user_file: str | Path,
+    user_file: str | Path | None,
+    user: str | None,
+    system: str | None,
     multi_turn: bool,
     parser: OutputParser,
     judging_mode: JudgingMode,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file) if system_file is not None else None
-    user_path = Path(user_file)
+    user_path = Path(user_file) if user_file is not None else None
     system_prompt = (
-        system_path.read_text(encoding="utf-8") if system_path is not None else None
+        system_path.read_text(encoding="utf-8") if system_path is not None else system
     )
     user_prompt_template = _materialize_user_template(
-        user_path.read_text(encoding="utf-8"),
+        user_path.read_text(encoding="utf-8") if user_path is not None else user,
         multi_turn=multi_turn,
         with_explanation=False,
     )
     return ResolvedJudgePrompt(
-        preset_name=f"file:{system_path.name}+{user_path.name}"
-        if system_path
-        else f"file:{user_path.name}",
+        preset_name=(
+            f"file:{system_path.name}+{user_path.name}"
+            if system_path
+            else f"file:{user_path.name}"
+        )
+        if user_path
+        else "inline",
         parser=parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
-        source="file",
+        source="file" if user_path else "override",
         judging_mode=judging_mode,
         system_path=str(system_path) if system_path is not None else None,
-        user_path=str(user_path),
+        user_path=str(user_path) if user_path else None,
         system_sha256=_sha256(system_prompt) if system_prompt is not None else None,
         user_sha256=_sha256(user_prompt_template),
     )
@@ -424,26 +464,54 @@ def resolve_judge_prompt(
     preset: str | None = None,
     system_file: str | Path | None = None,
     user_file: str | Path | None = None,
+    user: str | None = None,
+    system: str | None = None,
     multi_turn: bool = False,
     parser: str | None = None,
     options: dict[str, object] | None = None,
     judging_mode: JudgingMode = "pairwise",
 ) -> ResolvedJudgePrompt:
-    """Load a preset, or custom files whose judging_mode is supplied by the caller.
+    """Load a preset or custom templates with a caller-supplied judging mode.
 
-    Presets own their mode and parser; custom files use the requested mode and
+    Presets own their mode and parser; custom templates use the requested mode and
     named parser. Consumers validate compatibility before generating answers.
     """
+    if (
+        preset is None
+        and task is not None
+        and all(
+            value is None for value in (user_file, user, system_file, system, parser)
+        )
+    ):
+        if isinstance(task, str):
+            from judgearena.tasks.registry import get_packaged_task
+
+            task = get_packaged_task(task)
+        if task is not None and task.spec.protocol.judge.prompt is not None:
+            selection = task.spec.protocol.judge.prompt
+            if options is not None:
+                selection = selection.model_copy(update={"options": options})
+            return resolve_prompt_spec(selection, multi_turn=multi_turn)
     if preset is None:
         preset = default_preset_for_task(task)
-    if system_file is not None and user_file is None:
-        raise ValueError("A judge user prompt file is required with a system file.")
-    if user_file is not None:
+    if user_file is not None and user is not None:
+        raise ValueError("Select either a user template or a user file.")
+    if system_file is not None and system is not None:
+        raise ValueError("Select either a system template or a system file.")
+    if (
+        (system_file is not None or system is not None)
+        and user_file is None
+        and user is None
+    ):
+        raise ValueError("A judge user template is required with a system template.")
+    if user_file is not None or user is not None:
         if options:
             raise ValueError("Prompt options require a preset.")
-        return _resolve_file_prompt(
+        return _resolve_custom_prompt(
             system_file=system_file,
             user_file=user_file,
+            user=user,
+            system=system,
             multi_turn=multi_turn,
             parser=resolve_judge_parser(parser or "score"),
             judging_mode=judging_mode,
@@ -531,32 +599,36 @@ def resolve_run_judge_prompt(
     *,
     multi_turn: bool = False,
 ) -> ResolvedJudgePrompt:
-    prompt = getattr(judge_cfg, "prompt", None)
     if isinstance(task, str):
         from judgearena.tasks.registry import get_packaged_task
 
         task = get_packaged_task(task)
-    protocol = task.spec.protocol if task is not None else None
-    if prompt is not None and prompt.user_file is not None:
+    prompt = getattr(judge_cfg, "prompt", None)
+    if prompt is None and task is not None:
+        prompt = task.spec.protocol.judge.prompt
+    if prompt is not None:
+        return resolve_prompt_spec(prompt, multi_turn=multi_turn)
+    return resolve_judge_prompt(task=task, multi_turn=multi_turn)
+
+
+def resolve_prompt_spec(prompt, *, multi_turn: bool = False) -> ResolvedJudgePrompt:
+    """Resolve the shared task/config selection through the existing registry."""
+    mode = "pairwise"
+    if prompt.user_file is not None or prompt.user is not None:
         result_type = resolve_judge_parser(prompt.parser or "score").result_type
         mode = (
             "pairwise" if issubclass(result_type, ParsedPreference) else "single_answer"
         )
-    else:
-        mode = (
-            "single_answer"
-            if protocol is not None and protocol.runner == "single_answer"
-            else "pairwise"
-        )
     return resolve_judge_prompt(
         judging_mode=mode,
-        options=prompt.options if prompt is not None else None,
-        task=task,
-        preset=prompt.preset if prompt is not None else None,
-        system_file=prompt.system_file if prompt is not None else None,
-        user_file=prompt.user_file if prompt is not None else None,
+        options=prompt.options,
+        preset=prompt.preset,
+        system_file=prompt.system_file,
+        user_file=prompt.user_file,
+        user=prompt.user,
+        system=prompt.system,
         multi_turn=multi_turn,
-        parser=prompt.parser if prompt is not None else None,
+        parser=prompt.parser,
     )
 
 
@@ -571,24 +643,23 @@ def group_judge_prompts(
     creative writing with a different system prompt). Runtime prompt overrides
     (a different preset, preset options, or prompt files) disable the per-category mapping.
     """
-    category_prompts = getattr(
-        cfg.resolved_task.spec.protocol.judge, "category_prompts", {}
+    judge = cfg.resolved_task.spec.protocol.judge
+    category_prompts = judge.category_prompts
+    default_preset = (
+        judge.prompt.preset if judge.prompt is not None else judge.default_prompt_preset
     )
+    override = cfg.judge.prompt
     if (
         not category_prompts
+        or "category" not in instructions_df.columns
         or (
-            cfg.judge.prompt is not None
+            override is not None
             and (
-                cfg.judge.prompt.options
-                or (
-                    cfg.judge.prompt.preset is not None
-                    and cfg.judge.prompt.preset
-                    != cfg.resolved_task.spec.protocol.judge.default_prompt_preset
-                )
+                override.options
+                or override.preset != default_preset
+                or override.preset is None
             )
         )
-        or resolved_prompt.source != "preset"
-        or "category" not in instructions_df.columns
     ):
         return [(resolved_prompt, instructions_df.index)]
 
@@ -599,7 +670,11 @@ def group_judge_prompts(
     ):
         preset = None if pd.isna(category) else category_prompts.get(category)
         prompt = (
-            resolved_prompt if preset is None else resolve_judge_prompt(preset=preset)
+            resolved_prompt
+            if preset is None
+            else resolve_judge_prompt(preset=preset)
+            if isinstance(preset, str)
+            else resolve_prompt_spec(preset)
         )
         groups.append((prompt, rows.index))
     return groups

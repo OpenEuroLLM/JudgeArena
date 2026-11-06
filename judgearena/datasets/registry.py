@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from judgearena.tasks.schema import DatasetFields, ResolvedTaskSpec
+from judgearena.utils.extensions import load_python_object, python_reference
 
 if TYPE_CHECKING:
     from judgearena.datasets.data import CompletionData
@@ -18,7 +19,14 @@ if TYPE_CHECKING:
 
 def source_cache_dir(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
     """Keep downloaded and normalized data specific to its declared inputs."""
-    dataset = json.dumps(task.spec.dataset.model_dump(mode="json"), sort_keys=True)
+    declaration = task.spec.dataset.model_dump(mode="json")
+    reference = python_reference(declaration["adapter"])
+    if reference is not None:
+        path, symbol = reference
+        declaration["adapter"] = (
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}:{symbol}"
+        )
+    dataset = json.dumps(declaration, sort_keys=True)
     digest = hashlib.sha256(dataset.encode()).hexdigest()[:16]
     return local_tables_path / "_sources" / task.definition_task / digest
 
@@ -33,7 +41,8 @@ class DatasetAdapter(ABC):
     directory containing raw source files.
 
     Implement ``load_data()`` and decorate the class with
-    ``@register_dataset("my_dataset")``. Interpret source formats and column
+    ``@register_dataset("my_dataset")`` or reference it as ``./dataset.py:Adapter``
+    from task YAML. Interpret source formats and column
     mappings here, returning ``CompletionData`` or ``PreferenceData`` with useful
     metadata preserved. Override ``download()`` when sources need downloading.
     The returned data determines pipeline compatibility.
@@ -96,7 +105,20 @@ def dataset_names() -> frozenset[str]:
 
 
 def resolve_dataset_adapter(task: ResolvedTaskSpec, cache_dir: Path) -> DatasetAdapter:
-    return _DATASETS[task.spec.dataset.adapter](task, cache_dir)
+    return dataset_adapter_type(task.spec.dataset.adapter)(task, cache_dir)
+
+
+def dataset_adapter_type(name: str) -> type[DatasetAdapter]:
+    reference = python_reference(name)
+    if reference is not None:
+        adapter = load_python_object(*reference)
+        if not isinstance(adapter, type) or not issubclass(adapter, DatasetAdapter):
+            raise ValueError(f"{name!r} must reference a DatasetAdapter class.")
+        return adapter
+    try:
+        return _DATASETS[name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown dataset adapter {name!r}.") from exc
 
 
 # Load built-ins after defining the API so decorators can register their classes.
