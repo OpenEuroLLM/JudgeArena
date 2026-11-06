@@ -558,49 +558,114 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     )
 
 
-def test_public_api_runs_custom_file_parser(tmp_path, monkeypatch):
+@pytest.mark.parametrize("from_task", [False, True])
+def test_public_api_runs_file_components_and_replays(tmp_path, monkeypatch, from_task):
+    import yaml
+
     import judgearena.prompts.parsing as parsing
     from judgearena import (
-        CompletionData,
-        ParsedScore,
         RunConfig,
         register_parser,
         run_benchmark,
     )
+    from judgearena.config import load_config
+    from judgearena.tasks import load_tasks
 
-    class GrammarParser:
-        name = "grammar"
-        result_type = ParsedScore
-        requires_top_logprobs = False
-
-        def parse_result(self, text, *, top_logprobs=None):
-            return ParsedScore(float(text))
-
+    source = tmp_path / "parser.py"
+    source.write_text(
+        "from judgearena.prompts.parsing import ParsedScore\n"
+        "class GrammarParser:\n"
+        "    name = 'grammar'\n"
+        "    result_type = ParsedScore\n"
+        "    requires_top_logprobs = False\n"
+        "    def parse_result(self, text, *, top_logprobs=None):\n"
+        "        return ParsedScore(float(text))\n"
+        "PARSER = GrammarParser()\n"
+    )
+    reference = f"{source}:PARSER"
     monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
-    parser = register_parser("grammar", GrammarParser())
+    parser = register_parser("grammar", parsing.resolve_judge_parser(reference))
     for name, value in [("", parser), ("grammar", parser), ("broken", object())]:
         with pytest.raises(ValueError):
             register_parser(name, value)
     rubric = tmp_path / "grammar.txt"
     rubric.write_text("Rate grammar from 1 to 10: {completion}. Return a number.")
-    cfg = RunConfig(
+    components = tmp_path / "components.py"
+    components.write_text(
+        "import pandas as pd\n"
+        "from judgearena.datasets.registry import DatasetAdapter\n"
+        "from judgearena.datasets.data import CompletionData\n"
+        "from judgearena.benchmarks.scoring import MeanScoreMetric\n"
+        "class Adapter(DatasetAdapter):\n"
+        "    def load_data(self):\n"
+        "        return CompletionData(\n"
+        "            pd.DataFrame({'instruction': ['Say hello']}),\n"
+        "            pd.DataFrame({'instruction_index': [0], 'model': ['saved'],\n"
+        "                          'completion': ['Hello.']}))\n"
+    )
+    declaration = dict(
+        dataset={"adapter": "./components.py:Adapter"},
         evaluation_name="grammar",
         protocol={
             "runner": "single_answer",
             "generation": {"mode": "single_turn_chat"},
             "judge": {"default_prompt_preset": "single-score"},
+            "scoring": {"metrics": [{"metric": "./components.py:MeanScoreMetric"}]},
         },
         model={"name": "saved"},
         judge={
             "model": "Dummy/8",
-            "prompt": {"user_file": rubric, "parser": "grammar"},
+            "prompt": {"user_file": "grammar.txt", "parser": "./parser.py:PARSER"},
         },
-        run={"result_folder": str(tmp_path), "store_root": None, "no_log_file": True},
+        run={
+            "result_folder": str(tmp_path),
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+        },
     )
-    data = CompletionData(
-        pd.DataFrame({"instruction": ["Say hello"]}),
-        pd.DataFrame(
-            {"instruction_index": [0], "model": ["saved"], "completion": ["Hello."]}
-        ),
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(yaml.safe_dump(declaration))
+    if from_task:
+        task = {
+            "schema_version": 1,
+            "task": "grammar",
+            "task_version": 1,
+            "description": "Score saved answers.",
+            "dataset": declaration.pop("dataset"),
+            "protocol": declaration.pop("protocol"),
+        }
+        task["protocol"]["judge"]["prompt"] = declaration["judge"].pop("prompt")
+        # A task family contains its YAML and referenced implementation files.
+        family = tmp_path / "definitions" / "grammar"
+        family.mkdir(parents=True)
+        for file in (components, source, rubric):
+            (family / file.name).write_bytes(file.read_bytes())
+        (family / "task.yaml").write_text(yaml.safe_dump(task))
+        experiment.unlink()
+        resolved = load_tasks(family.parent)["grammar"]
+        cfg = RunConfig(resolved_task=resolved, **declaration)
+    else:
+        cfg = load_config(experiment)
+        experiment.unlink()
+    assert run_benchmark(cfg).score.tolist() == [8]
+    import json
+
+    report = json.loads(next(tmp_path.rglob("results-*.json")).read_text())
+    assert next(iter(report["metrics"].values()))["score"] == 8
+
+    from judgearena.config import load_config
+
+    saved = next(tmp_path.rglob("config.yaml"))
+    components.unlink()
+    source.unlink()
+    rubric.unlink()
+    if from_task:
+        import shutil
+
+        shutil.rmtree(family.parent)
+    replay = load_config(saved)
+    monkeypatch.setattr(
+        "judgearena.models.make_model",
+        lambda *a, **kw: pytest.fail("Replay must not construct a backend"),
     )
-    assert run_benchmark(cfg, data=data).score.tolist() == [8]
+    assert run_benchmark(replay).score.tolist() == [8]

@@ -6,7 +6,8 @@ tags: [pairwise, instruction-following, multi-turn, wildbench]
 protocol:
   runner: pairwise
   judge:
-    default_prompt_preset: wildbench-reward
+    prompt:
+      preset: wildbench-reward
     default_swap_mode: random
     default_temperature: 0.0
     default_max_out_tokens: 4096

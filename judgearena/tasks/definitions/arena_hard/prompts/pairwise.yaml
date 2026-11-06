@@ -1,0 +1,3 @@
+parser: ../parsers.py:ARENA_HARD_VERDICT
+system_file: arena-hard-system-prompt.txt
+user_file: arena-hard-prompt.txt

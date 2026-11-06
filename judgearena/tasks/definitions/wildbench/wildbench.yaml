@@ -8,7 +8,8 @@ protocol:
   baseline:
     strategy: runtime_required
   judge:
-    default_prompt_preset: wildbench-reward
+    prompt:
+      preset: wildbench-reward
     default_swap_mode: random
     default_temperature: 0.0
     default_max_out_tokens: 4096

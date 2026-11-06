@@ -14,10 +14,12 @@ from shutil import copyfile
 from typing import TYPE_CHECKING
 
 import pandas as pd
+import yaml
 
 from judgearena.artifacts.metadata import to_jsonable, write_run_metadata
 from judgearena.log import attach_file_handler, get_logger, make_run_log_path
-from judgearena.prompts.registry import prompt_option_files
+from judgearena.prompts.spec import config_prompts, prompt_file_fields
+from judgearena.utils.extensions import component_references, python_reference
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -68,32 +70,27 @@ def prepare_run_directory(
         if run_handlers is not None and handler not in previous_handlers:
             run_handlers.append(handler)
 
-    from judgearena.config import dump_config
-
-    saved_cfg = cfg
-    prompt = cfg.judge.prompt
-    if prompt is not None:
-        values = prompt.model_dump()
-        for owner, names in (
-            (values, ("system_file", "user_file")),
-            (values["options"], prompt_option_files(prompt.preset)),
-        ):
-            for name in names:
-                source = owner.get(name)
-                if source is not None:
-                    source = Path(source)
-                    target = output_dir / "prompts" / name / source.name
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    copyfile(source, target)
-                    owner[name] = target.relative_to(output_dir)
-        saved_cfg = cfg.model_copy(
-            update={
-                "judge": cfg.judge.model_copy(
-                    update={"prompt": prompt.model_copy(update=values)}
-                )
-            }
-        )
-    dump_config(saved_cfg, output_dir / "config.yaml")
+    saved = cfg.model_dump(mode="json")
+    references = list(component_references(saved))
+    references.extend((prompt, "parser") for prompt in config_prompts(saved))
+    for index, (owner, key) in enumerate(references):
+        reference = python_reference(owner.get(key))
+        if reference is not None:
+            source, symbol = reference
+            target = output_dir / "components" / str(index) / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copyfile(source, target)
+            owner[key] = f"{target.relative_to(output_dir)}:{symbol}"
+    for index, prompt in enumerate(config_prompts(saved)):
+        for owner, name in prompt_file_fields(prompt):
+            source = Path(owner[name])
+            target = output_dir / "prompts" / str(index) / name / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            copyfile(source, target)
+            owner[name] = str(target.relative_to(output_dir))
+    (output_dir / "config.yaml").write_text(
+        yaml.safe_dump(saved, sort_keys=False), encoding="utf-8"
+    )
     return output_dir
 
 

@@ -34,6 +34,7 @@ from judgearena.benchmarks.pairwise.scoring.wildbench import (
     WildBenchScoreMetric,
 )
 from judgearena.log import get_logger
+from judgearena.utils.extensions import load_python_object, python_reference
 
 logger = get_logger(__name__)
 
@@ -122,6 +123,17 @@ def available_metrics() -> tuple[str, ...]:
 
 
 def _metric_type(name: str) -> type[_Metric]:
+    reference = python_reference(name)
+    if reference is not None:
+        metric = load_python_object(*reference)
+        if not isinstance(metric, type) or not all(
+            callable(getattr(metric, method, None))
+            for method in ("calculate", "render")
+        ):
+            raise ValueError(
+                f"{name!r} must reference a metric class with calculate and render."
+            )
+        return metric
     try:
         return _METRIC_TYPES[name]
     except KeyError as exc:

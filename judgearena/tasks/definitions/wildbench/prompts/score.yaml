@@ -1,0 +1,2 @@
+parser: ../parsers.py:SCORE
+user_file: wildbench-score.txt

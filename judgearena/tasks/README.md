@@ -26,7 +26,8 @@ Executable behavior lives outside the definitions:
 
 - `judgearena/datasets/` downloads and normalizes upstream data.
 - `judgearena/benchmarks/` runs the selected evaluation workflow.
-- `judgearena/prompts/` owns reusable judge prompt presets.
+- `judgearena/prompts/` owns reusable judge prompt presets. Benchmark templates
+  live beside their tasks in `prompts/`; see [prompt bundles](../prompts/README.md).
 
 ## Prepare an offline run
 
@@ -437,6 +438,29 @@ from `judgearena`, including `register_dataset`, `register_prompt`,
 error. Import registrations before loading tasks or replaying saved configs. See
 [prompt registration](../prompts/registry.py), [parsers](../prompts/parsing.py)
 and [metrics](../benchmarks/scoring.py).
+
+Task-local components can be referenced directly, without registration:
+
+```yaml
+dataset:
+  adapter: ./dataset.py:MyDatasetAdapter
+protocol:
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: ./metrics.py:MyMetric
+        parameters: {threshold: 0.5}
+```
+
+Paths start beside the YAML that declares them, including inherited task files.
+Adapters subclass `DatasetAdapter`; metrics implement the same `calculate` and
+`render` methods as registered metrics. Metric parameters are constructor arguments.
+Registered names remain available for shared components. Result dictionaries use
+the configured metric selector as their key, including file references.
+
+Saved runs copy referenced Python files alongside their config for replay. Imported
+packages and other files used by those implementations must still be available.
+Only load task definitions and Python files you trust.
 
 Metrics can request runtime inputs by declaring keyword parameters, for example
 `calculate(self, rows, *, seed, references)`. Shared execution supplies accepted

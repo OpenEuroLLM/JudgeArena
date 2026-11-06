@@ -6,7 +6,7 @@ import pytest
 from judgearena.prompts.mt_bench import (
     _select_prompt,
 )
-from judgearena.prompts.parsing import FastChatVerdictParser
+from judgearena.tasks.definitions.mt_bench.parsers import FastChatVerdictParser
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
 

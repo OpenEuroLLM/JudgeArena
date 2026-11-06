@@ -1,0 +1,3 @@
+parser: ../parsers.py:PAIR_SCORE
+system_file: meta-eval-alpaca-eval-system-prompt.txt
+user_file: meta-eval-alpaca-eval-pair-score-prompt.txt

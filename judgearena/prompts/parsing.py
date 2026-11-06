@@ -7,6 +7,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -14,6 +15,8 @@ import pandas as pd
 
 from judgearena.prompts.criteria import SCALE_MAX, SCALE_MIN
 from judgearena.utils import strip_thinking_tags
+from judgearena.utils.extensions import load_python_object
+from judgearena.utils.extensions import python_reference as parser_file_reference
 
 
 @dataclass(slots=True)
@@ -101,78 +104,6 @@ class JudgeParser(abc.ABC):
     ) -> ParsedPreference | None: ...
 
 
-class FastChatVerdictParser(JudgeParser):
-    name = "fastchat-verdict"
-
-    def parse_result(
-        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
-    ) -> ParsedPreference | None:
-        text = strip_thinking_tags(judge_completion).strip()
-        for token, preference, label in (
-            ("A", 0.0, "A"),
-            ("B", 1.0, "B"),
-            ("C", 0.5, "tie"),
-        ):
-            if f"[[{token}]]" in text:
-                return ParsedPreference(preference, label=label)
-        return None
-
-
-# Graded preferences for the official Arena-Hard verdict labels. The spacing
-# keeps decisiveness recoverable downstream (< 0.5 is an A win either way,
-# but 0.0 marks a significant [[A>>B]] win vs 0.25 for [[A>B]]), and the
-# encoding is symmetric so swapped-order judgments invert via 1 - preference.
-ARENA_HARD_VERDICT_PREFERENCES: dict[str, float] = {
-    "A>>B": 0.0,
-    "A>B": 0.25,
-    "B<<A": 0.0,
-    "B<A": 0.25,
-    "A=B": 0.5,
-    "B=A": 0.5,
-    "A<B": 0.75,
-    "B>A": 0.75,
-    "A<<B": 1.0,
-    "B>>A": 1.0,
-}
-
-# Official Arena-Hard verdict extraction (judge_config.yaml regex_pattern),
-# with v2.0's single-bracket fallback for judges that drop one bracket pair.
-_ARENA_HARD_VERDICT_PATTERN = re.compile(r"\[\[([AB<>=]+)\]\]")
-_ARENA_HARD_VERDICT_FALLBACK_PATTERN = re.compile(r"\[([AB<>=]+)\]")
-
-
-class ArenaHardVerdict(JudgeParser):
-    """Extract one graded verdict label, following the official rules.
-
-    Like the current Arena-Hard-Auto ``get_score`` (the pipeline that governs
-    v2.0): the judgment is uppercased and the LAST label found wins, so an
-    explanation that mentions earlier labels still parses from its final
-    verdict; only a judgment with no label at all is unparseable.
-    """
-
-    name = "arena-hard-verdict"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        text = strip_thinking_tags(judge_completion).upper()
-        matches = [m for m in _ARENA_HARD_VERDICT_PATTERN.findall(text) if m]
-        if not matches:
-            matches = [
-                m for m in _ARENA_HARD_VERDICT_FALLBACK_PATTERN.findall(text) if m
-            ]
-        if not matches:
-            return None
-        label = matches[-1].strip()
-        preference = ARENA_HARD_VERDICT_PREFERENCES.get(label)
-        if preference is None:
-            return None
-        return ParsedPreference(preference=preference, label=label)
-
-
 def _json_judge_field(judge_completion: str, field: str) -> dict:
     """Read the last verdict object, retaining nested evidence after analysis/code."""
     text = strip_thinking_tags(judge_completion).strip()
@@ -235,55 +166,6 @@ class ScoreParser:
         if score is None:
             return None
         return ParsedScore(score=score, details=details)
-
-
-class WildBenchVerdict(JudgeParser):
-    """Parse WildBench's JSON choice, including its quoted-field fallback."""
-
-    name = "wildbench-reward"
-    _PREFERENCES = {"A++": 0.0, "A+": 0.25, "A=B": 0.5, "B+": 0.75, "B++": 1.0}
-
-    def parse_result(
-        self, judge_completion: str, *, top_logprobs: dict[str, float] | None = None
-    ) -> ParsedPreference | None:
-        details = _json_judge_field(judge_completion, "choice")
-        label = details.get("choice")
-        if not isinstance(label, str) or label not in self._PREFERENCES:
-            return None
-        return ParsedPreference(self._PREFERENCES[label], label=label, details=details)
-
-
-class AlpacaEvalToken(JudgeParser):
-    """Parse the official logprob-weighted AlpacaEval verdict.
-
-    The annotator prompt labels the first answer "m" and the second answer "M".
-    """
-
-    name = "alpaca-eval-token"
-    requires_top_logprobs = True
-    _TOKENS = ("m", "M")
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        if not top_logprobs:
-            return None
-        preference = weighted_token_preference(top_logprobs, self._TOKENS)
-        if preference is None:
-            return None
-        label = strip_thinking_tags(judge_completion).strip()
-        return ParsedPreference(
-            preference=preference,
-            label=label if label in self._TOKENS else None,
-            scores={
-                token: top_logprobs[token]
-                for token in self._TOKENS
-                if token in top_logprobs
-            },
-        )
 
 
 def weighted_token_preference(
@@ -494,92 +376,6 @@ class CriteriaParser(PairScore):
         )
 
 
-class MetaEvalPairScore(PairScore):
-    """Parse complete integer score pairs in the meta-evaluation format."""
-
-    name = "meta-eval-score"
-
-    def __init__(self) -> None:
-        super().__init__(temperature=0.5)
-
-    @staticmethod
-    def parse_raw_scores(
-        judge_completion: str,
-    ) -> tuple[float | None, float | None]:
-        text = strip_thinking_tags(judge_completion).lower()
-
-        def parse_score(label: str) -> float | None:
-            match = re.search(
-                rf'(?m)^[ \t\r]*["\']?score_{label}["\']?'
-                rf"[ \t\r]*:[ \t\r]*([0-9]+)[ \t\r]*,?[ \t\r]*$",
-                text,
-            )
-            if match is None:
-                return None
-            digits = match.group(1)
-            if len(digits) > 2:
-                return None
-            score = int(digits)
-            return float(score) if 0 <= score <= 10 else None
-
-        return parse_score("a"), parse_score("b")
-
-
-class AlpacaEvalJSON(JudgeParser):
-    """Parse the ordered-model JSON emitted by the meta-eval Alpaca prompt."""
-
-    name = "alpaca-eval-json"
-
-    def parse_result(
-        self,
-        judge_completion: str,
-        *,
-        top_logprobs: dict[str, float] | None = None,
-    ) -> ParsedPreference | None:
-        text = strip_thinking_tags(judge_completion)
-        fenced = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
-        if fenced:
-            text = fenced.group(1)
-        else:
-            obj_match = re.search(
-                r'\{[^{}]*"ordered_models"[^{}]*\[[^\[\]]*\][^{}]*\}',
-                text,
-                re.DOTALL,
-            )
-            if obj_match:
-                text = obj_match.group(0)
-        try:
-            data = json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        ordered_models = data.get("ordered_models")
-        if not isinstance(ordered_models, list) or len(ordered_models) != 2:
-            return None
-
-        ranks: dict[str, int] = {}
-        for entry in ordered_models:
-            if not isinstance(entry, dict):
-                return None
-            model = entry.get("model")
-            rank = entry.get("rank")
-            if not isinstance(model, str) or model not in {"m", "M"} or model in ranks:
-                return None
-            if type(rank) is not int or rank not in {1, 2}:
-                return None
-            ranks[model] = rank
-        if ranks["m"] == ranks["M"]:
-            return None
-
-        winner = "m" if ranks["m"] == 1 else "M"
-        return ParsedPreference(
-            preference=0.0 if winner == "m" else 1.0,
-            label=winner,
-            details={"ranks": ranks},
-        )
-
-
 def parser_name(parse) -> str:
     """Short identifier of a parser for run metadata.
 
@@ -594,14 +390,7 @@ def parser_name(parse) -> str:
 JUDGE_PARSERS: dict[str, OutputParser] = {
     "json-score": ScoreParser(),
     "single-score": ScoreParser("single-score", (SCALE_MIN, SCALE_MAX)),
-    "wildbench-reward": WildBenchVerdict(),
-    "wildbench-score": ScoreParser("wildbench-score", (1, 10)),
     "score": PairScore(),
-    "fastchat-verdict": FastChatVerdictParser(),
-    "meta-eval-score": MetaEvalPairScore(),
-    "arena-hard-verdict": ArenaHardVerdict(),
-    "alpaca-eval-json": AlpacaEvalJSON(),
-    "alpaca-eval-token": AlpacaEvalToken(),
 }
 
 
@@ -614,11 +403,41 @@ def register_parser[T](name: str, parser: OutputParser[T]) -> OutputParser[T]:
     return parser
 
 
+def _load_parser_file(path, symbol) -> OutputParser:
+    parser = load_python_object(path, symbol)
+    if (
+        isinstance(parser, type)
+        or not callable(getattr(parser, "parse_result", None))
+        or not isinstance(getattr(parser, "requires_top_logprobs", None), bool)
+    ):
+        raise ValueError(f"{path}:{symbol} must reference an OutputParser instance.")
+    validate_parser(parser)
+    return parser
+
+
 def resolve_judge_parser(name: str) -> OutputParser:
-    """Return the registered judge parser named in a run config."""
+    """Resolve a registered parser or an explicit Python file's parser instance."""
+    reference = parser_file_reference(name)
+    if reference is not None:
+        return _load_parser_file(*reference)
     try:
         return JUDGE_PARSERS[name]
     except KeyError as exc:
         raise ValueError(
             f"Unknown judge parser {name!r}; available: {sorted(JUDGE_PARSERS)}"
         ) from exc
+
+
+# Existing short names remain usable; task bundles reference their owning files.
+for _name, _reference in {
+    "arena-hard-verdict": "arena_hard/parsers.py:ARENA_HARD_VERDICT",
+    "alpaca-eval-token": "alpaca_eval/parsers.py:ALPACA_EVAL_TOKEN",
+    "wildbench-reward": "wildbench/parsers.py:REWARD",
+    "wildbench-score": "wildbench/parsers.py:SCORE",
+    "meta-eval-score": "meta_eval/parsers.py:PAIR_SCORE",
+    "alpaca-eval-json": "meta_eval/parsers.py:ALPACA_JSON",
+    "fastchat-verdict": "mt_bench/parsers.py:VERDICT",
+}.items():
+    JUDGE_PARSERS[_name] = resolve_judge_parser(
+        f"{Path(__file__).resolve().parents[1] / 'tasks/definitions' / _reference}"
+    )
