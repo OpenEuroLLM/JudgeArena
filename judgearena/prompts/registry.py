@@ -10,7 +10,9 @@ from typing import TYPE_CHECKING, Literal
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
+from judgearena.inference import JudgeInput
 from judgearena.prompts.criteria import configure_criteria_prompt
+from judgearena.prompts.decision import configure_decision_prompt, render_decision
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -78,6 +80,10 @@ class JudgePromptPreset:
     strip_thinking_before_judging) -> (rendering fields, judge requests, prompts).
     Rows and requests follow the sample index; see judge_single_answers.
     """
+    render_input: Callable[[dict], JudgeInput] | None = None
+    """Render prepared fields directly; replaces chat template rendering."""
+    required_fields: tuple[str, ...] = ()
+    """Prepared fields required by render_input, checked before inference."""
     judging_mode: JudgingMode = "pairwise"
     """Number of candidates the prompt judges, independent of the task's runner."""
 
@@ -105,6 +111,10 @@ class ResolvedJudgePrompt:
     aggregation: Literal["individual", "agreement"] = "individual"
     prepare_prompts: Callable | None = None
     score_renderer: Callable | None = None
+    render_input: Callable[[dict], JudgeInput] | None = None
+    """Render prepared fields directly; replaces chat template rendering."""
+    required_fields: tuple[str, ...] = ()
+    """Prepared fields required by render_input, checked before inference."""
     judging_mode: JudgingMode = "pairwise"
 
     def validate_for(
@@ -165,6 +175,38 @@ def build_chat_prompt_template(
     return ChatPromptTemplate.from_messages(message_templates)
 
 
+def canonical_prompt_field(name: str) -> str:
+    """Translate historical template placeholders at the chat-template boundary."""
+    base = name.removesuffix("_json")
+    canonical = {
+        "user_prompt": "instruction",
+        "completion_A": "completion_a",
+        "completion_B": "completion_b",
+        "completion_A_text": "completion_a_text",
+        "completion_B_text": "completion_b_text",
+    }.get(base, base)
+    return canonical + ("_json" if name.endswith("_json") else "")
+
+
+def render_inputs(prompt: ResolvedJudgePrompt, fields: list[dict]) -> list[JudgeInput]:
+    """Render the same prepared fields as custom inputs or chat messages."""
+    if prompt.render_input is not None:
+        for row in fields:
+            missing = set(prompt.required_fields) - row.keys()
+            if missing:
+                raise ValueError(
+                    f"Judge prompt requires prepared fields: {sorted(missing)}."
+                )
+        return [prompt.render_input(row) for row in fields]
+    template = build_chat_prompt_template(prompt)
+    return template.batch(
+        [
+            {key: row[canonical_prompt_field(key)] for key in template.input_variables}
+            for row in fields
+        ]
+    )
+
+
 def prompt_metadata(
     prompts: Iterable[ResolvedJudgePrompt],
 ) -> list[dict[str, str | bool | None]]:
@@ -196,6 +238,11 @@ def _render_mt_bench_101_scores(samples, **kwargs):
 SCORE_PARSER = JUDGE_PARSERS["score"]
 
 PRESETS: dict[str, JudgePromptPreset] = {
+    "decision": JudgePromptPreset(
+        name="decision",
+        render_input=render_decision,
+        configure=configure_decision_prompt,
+    ),
     "single-score": JudgePromptPreset(
         name="single-score",
         judging_mode="single_answer",
@@ -334,6 +381,17 @@ def register_prompt(preset: JudgePromptPreset) -> JudgePromptPreset:
         raise ValueError(f"Prompt preset {preset.name!r} is already registered.")
     if preset.inline_user is not None and preset.user_file is not None:
         raise ValueError("Choose inline_user or user_file for a prompt preset.")
+    if preset.render_input is not None and any(
+        value is not None
+        for value in (
+            preset.inline_user,
+            preset.user_file,
+            preset.inline_system,
+            preset.system_file,
+            preset.output_format_file,
+        )
+    ):
+        raise ValueError("Choose render_input or chat templates for a prompt preset.")
     PRESETS[preset.name] = preset
     return preset
 
@@ -463,7 +521,7 @@ def resolve_judge_prompt(
     system_prompt = None
     user_prompt_template = ""
     output_format = None
-    if not spec.delegated:
+    if not spec.delegated and spec.render_input is None:
         if spec.user_file is None and spec.inline_user is None:
             raise ValueError(
                 f"Judge prompt preset {spec.name!r} requires a user template."
@@ -509,6 +567,8 @@ def resolve_judge_prompt(
         prepare_prompts=spec.prepare_prompts,
         score_renderer=spec.score_renderer,
         judging_mode=spec.judging_mode,
+        render_input=spec.render_input,
+        required_fields=spec.required_fields,
     )
     if spec.configure is not None:
         prompt = spec.configure(prompt, **(options or {}))
@@ -520,7 +580,7 @@ def resolve_judge_prompt(
         if prompt.system_prompt is not None
         else None,
         user_sha256=_sha256(prompt.user_prompt_template)
-        if not prompt.delegated
+        if not prompt.delegated and prompt.render_input is None
         else None,
     )
 

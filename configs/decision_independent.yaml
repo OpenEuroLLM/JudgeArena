@@ -1,0 +1,32 @@
+# judgearena --config_path configs/decision_independent.yaml --task alpaca-eval
+model:
+  name: OpenRouter/google/gemma-4-31b-it
+judge:
+  model: OpenRouter/typesafe/jev-1.14
+  prompt:
+    preset: decision
+    options:
+      judging_mode: single_answer
+      questions:
+        quality:
+          type: score
+          instructions: How well does completion satisfy instruction?
+          criteria:
+            - Incorrect or does not address the instruction.
+            - Partially correct with substantial omissions.
+            - Mostly correct with minor shortcomings.
+            - Correct, relevant and complete.
+      result:
+        score:
+          question: quality
+protocol:
+  runner: single_answer
+  generation:
+    mode: single_turn_chat
+  judge:
+    default_prompt_preset: decision
+  scoring:
+    metrics:
+      - metric: mean_score
+generation:
+  n_instructions: 4

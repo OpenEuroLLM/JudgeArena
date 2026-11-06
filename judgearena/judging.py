@@ -11,6 +11,7 @@ from langchain_core.prompt_values import PromptValue
 from judgearena.battles import swap_comparison_slots
 from judgearena.cache.inference import JudgementCacheRowMetadata
 from judgearena.datasets.data import _require_columns, validate_messages
+from judgearena.inference import JudgeInput
 from judgearena.log import get_logger
 from judgearena.models import InferenceResult, do_inference
 from judgearena.prompts.parsing import (
@@ -25,7 +26,7 @@ from judgearena.prompts.registry import ResolvedJudgePrompt
 @dataclass(frozen=True)
 class JudgeRequest[T]:
     id: str
-    input: str | PromptValue
+    input: JudgeInput
     parser: OutputParser[T]
     cache_metadata: JudgementCacheRowMetadata | None = None
 

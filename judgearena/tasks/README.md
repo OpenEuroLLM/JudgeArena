@@ -237,9 +237,9 @@ metadata names must be renamed in the adapter. Exports JSON-encode nested and
 mixed-type columns, including mixed integer/string IDs; use `json.loads` on
 those columns to restore original values before joining.
 
-Standard prompt fields `completion` (or `completion_A`/`completion_B`) render
+Standard prompt fields `completion` (or `completion_a`/`completion_b`) render
 complete conversations when available. Use `completion_text` (or
-`completion_A_text`/`completion_B_text`) for the answer text alone, for example
+`completion_a_text`/`completion_b_text`) for the answer text alone, for example
 when your template already includes the history. Both respect thinking removal
 and truncation settings.
 
@@ -321,7 +321,7 @@ protocol:
         breakdown_by: [category]
 ```
 
-The standard renderer supplies `{user_prompt}`, `{completion}`, their `_json`
+The standard renderer supplies `{instruction}`, `{completion}`, their `_json`
 forms, and dataset metadata such as `{checklist}` or `{history}`. Required
 metadata is checked after saved answers are loaded and before generation. Each preset pairs its template with an
 `OutputParser`: `parse_result()` returns a dataclass, a JSON-compatible value,
@@ -382,11 +382,11 @@ custom metrics and breakdowns; metrics must account for its reference-pool rows.
 Standard pairwise prompt templates can reference adapter metadata columns such
 as `{history}` or `{checklist}`. Saved answers load before field validation,
 so their metadata is available before generation starts.
-The shared renderer supplies `{user_prompt}`, `{completion_A}`, `{completion_B}`
+The shared renderer supplies `{instruction}`, `{completion_a}`, `{completion_b}`
 and their `_json` variants; these fields take precedence over source metadata
 and follow the actual answer order.
 
-Independent templates receive `{user_prompt}`, `{completion}`, their `_json`
+Independent templates receive `{instruction}`, `{completion}`, their `_json`
 variants, and adapter metadata. Within a `single_answer` protocol, use:
 
 ```yaml

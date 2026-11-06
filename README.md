@@ -187,6 +187,8 @@ judgearena \
   --generation.n_instructions 10
 ```
 
+See [decision judging](judgearena/prompts/README.md) for runnable Choice and Score configurations.
+
 ### Running locally with LlamaCpp
 
 LlamaCpp allows you to run GGUF models locally with high efficiency across various hardware, including CPUs, Apple Silicon (Metal), and NVIDIA GPUs. This is ideal for testing your setup without relying on external API keys or high-end server GPUs.

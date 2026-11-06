@@ -5,9 +5,9 @@ from dataclasses import dataclass, replace
 from functools import partial
 
 import pandas as pd
-from langchain_core.prompt_values import PromptValue
 
 from judgearena.cache.inference import JudgementCacheRowMetadata
+from judgearena.inference import JudgeInput
 from judgearena.judging import (
     JudgeRequest,
     answer_text,
@@ -20,7 +20,9 @@ from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     build_chat_prompt_template,
+    canonical_prompt_field,
     group_judge_prompts,
+    render_inputs,
     resolve_judge_prompt,
 )
 from judgearena.prompts.registry import (
@@ -85,7 +87,7 @@ class JudgeAnnotation:
     completion_A: str  # completion of the first model
     completion_B: str  # completion of the second model
     judge_completion: str  # output of the judge
-    judge_input: str | None = None  # input that was passed to the judge
+    judge_input: JudgeInput | None = None  # input that was passed to the judge
     prompt_preset: str = DEFAULT_JUDGE_PROMPT_PRESET
     # first-token top logprobs, only collected for logprob-weighted presets
     judge_top_logprobs: dict[str, float] | None = None
@@ -104,7 +106,14 @@ def _prompt_fields(**fields):
 
 def validate_prompt_fields(prompt: ResolvedJudgePrompt, columns, supplied) -> None:
     """Require template fields on the prepared rows used for judging."""
-    required = set(build_chat_prompt_template(prompt).input_variables)
+    required = (
+        set(prompt.required_fields)
+        if prompt.render_input is not None
+        else {
+            canonical_prompt_field(key)
+            for key in build_chat_prompt_template(prompt).input_variables
+        }
+    )
     if columns is None:
         return  # Lazy output metadata is checked once its rows are loaded.
     missing = (
@@ -119,11 +128,11 @@ def validate_battle_prompt_fields(prompt: ResolvedJudgePrompt, columns) -> None:
         prompt,
         columns,
         (
-            "user_prompt",
-            "completion_A",
-            "completion_B",
-            "completion_A_text",
-            "completion_B_text",
+            "instruction",
+            "completion_a",
+            "completion_b",
+            "completion_a_text",
+            "completion_b_text",
         ),
     )
 
@@ -136,10 +145,8 @@ def render_battle_inputs(
     truncate_input_chars: int | None,
     *,
     metadata: list[dict[str, object]] | None = None,
-) -> list[PromptValue]:
+) -> list[JudgeInput]:
     """Render text comparisons, preserving JSON escaping and answer truncation."""
-    prompt_template = build_chat_prompt_template(prompt)
-
     prompt_inputs = []
     for user_prompt, completion_A, completion_B, row in zip(
         instructions,
@@ -154,21 +161,21 @@ def render_battle_inputs(
             {
                 **row,
                 **_prompt_fields(
-                    user_prompt=user_prompt,
-                    completion_A=completion_A,
-                    completion_B=completion_B,
-                    completion_A_text=truncate(
+                    instruction=user_prompt,
+                    completion_a=completion_A,
+                    completion_b=completion_B,
+                    completion_a_text=truncate(
                         row.get("completion_a_text", completion_A),
                         max_len=truncate_input_chars,
                     ),
-                    completion_B_text=truncate(
+                    completion_b_text=truncate(
                         row.get("completion_b_text", completion_B),
                         max_len=truncate_input_chars,
                     ),
                 ),
             }
         )
-    return prompt_template.batch(prompt_inputs)
+    return render_inputs(prompt, prompt_inputs)
 
 
 def annotate_battles(
@@ -339,7 +346,7 @@ def render_single_requests(
 ):
     """Render one answer with its metadata; preserve parser-defined result types."""
     validate_prompt_fields(
-        prompt, samples.columns, ("user_prompt", "completion", "completion_text")
+        prompt, samples.columns, ("instruction", "completion", "completion_text")
     )
     inputs = []
     for row in samples.to_dict("records"):
@@ -352,7 +359,7 @@ def render_single_requests(
             {
                 **row,
                 **_prompt_fields(
-                    user_prompt=row["instruction"],
+                    instruction=row["instruction"],
                     completion=truncate(completion, max_len=truncate_input_chars),
                     completion_text=truncate(
                         answer_text(
@@ -364,7 +371,7 @@ def render_single_requests(
                 ),
             }
         )
-    rendered = build_chat_prompt_template(prompt).batch(inputs)
+    rendered = render_inputs(prompt, inputs)
     requests = [
         JudgeRequest(str(identity), value, prompt.parser)
         for identity, value in zip(samples.index, rendered, strict=True)
@@ -407,7 +414,7 @@ def prepare_single_answer_judging(
                 None
                 if available_columns is None
                 else set(available_columns) | {"instruction", "model", "completion"},
-                ("user_prompt", "completion", "completion_text"),
+                ("instruction", "completion", "completion_text"),
             )
             render = partial(render_single_requests, prompt=prompt, **kwargs)
         renderers.append((ids, render))

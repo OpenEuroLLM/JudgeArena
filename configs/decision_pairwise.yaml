@@ -1,0 +1,34 @@
+# judgearena --config_path configs/decision_pairwise.yaml --task alpaca-eval
+model:
+  name: OpenRouter/google/gemma-4-31b-it
+judge:
+  model: OpenRouter/typesafe/jev-1.14
+  prompt:
+    preset: decision
+    options:
+      judging_mode: pairwise
+      questions:
+        winner:
+          type: choice
+          instructions: Which answer better satisfies instruction?
+          criteria:
+            A: completion_a is better.
+            B: completion_b is better.
+            tie: Both answers are equally good or equally poor.
+      result:
+        preference:
+          question: winner
+          values: {A: 0.0, B: 1.0, tie: 0.5}
+          aggregation: expected
+protocol:
+  runner: pairwise
+  generation:
+    mode: single_turn_chat
+  judge:
+    default_prompt_preset: decision
+    default_swap_mode: fixed
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+generation:
+  n_instructions: 4

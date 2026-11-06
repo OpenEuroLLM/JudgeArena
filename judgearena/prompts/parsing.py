@@ -580,6 +580,28 @@ class AlpacaEvalJSON(JudgeParser):
         )
 
 
+class DecisionAnswersParser:
+    """Retain every named decision, including distributions and provider details."""
+
+    name = "decision-answers"
+    result_type = dict
+    requires_top_logprobs = False
+
+    def parse_result(self, judge_completion, *, top_logprobs=None):
+        try:
+            response = json.loads(judge_completion)
+        except (TypeError, ValueError):
+            return None
+        answers = response.get("answers") if isinstance(response, dict) else None
+        if (
+            isinstance(answers, dict)
+            and answers
+            and all(isinstance(answer, dict) for answer in answers.values())
+        ):
+            return answers
+        return None
+
+
 def parser_name(parse) -> str:
     """Short identifier of a parser for run metadata.
 
@@ -592,6 +614,7 @@ def parser_name(parse) -> str:
 # Parsers selectable by name for runtime prompt overrides (judge.parser);
 # presets reference these same instances.
 JUDGE_PARSERS: dict[str, OutputParser] = {
+    "decision-answers": DecisionAnswersParser(),
     "json-score": ScoreParser(),
     "single-score": ScoreParser("single-score", (SCALE_MIN, SCALE_MAX)),
     "wildbench-reward": WildBenchVerdict(),
