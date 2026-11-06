@@ -1,17 +1,8 @@
-import json
-from io import BytesIO
-from pathlib import Path
-
 import pandas as pd
 import pytest
-import yaml
 
 from judgearena.benchmarks.eu_guard import EUGuardMetric
-from judgearena.cache.inference import JudgementInferenceCache
-from judgearena.config import JudgeArgs
 from judgearena.datasets import load_task_data
-from judgearena.prompts.registry import render_inputs, resolve_run_judge_prompt
-from scripts.eu_guard import judge_jev
 
 
 def test_refusal_metrics_labels_probabilities_and_missing():
@@ -40,53 +31,69 @@ def test_refusal_metrics_labels_probabilities_and_missing():
     assert EUGuardMetric().calculate(labels.assign(completion=""))["num_valid"] == 0
 
 
-@pytest.mark.parametrize("config", ["eu_guard_jev", "eu_guard_prompt_jev"])
-def test_adapter_decisions_and_replay(tmp_path, monkeypatch, config):
+@pytest.mark.parametrize("config", ["jev", "gemma"])
+def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, config):
+    from types import SimpleNamespace
+
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.config import build_run_config
+
     source = tmp_path / "test.jsonl"
     pd.DataFrame(
         {
-            "example_id": ["x-de", "x-en"],
-            "prompt": ["Frage", "Question"],
-            "language_code": ["de", "en"],
-            "category_label": ["test", "test"],
-            "target": ["should_refuse", "should_refuse"],
-            "concept_id": ["x", "x"],
+            "example_id": ["x-de"],
+            "prompt": ["Frage"],
+            "language_code": ["de"],
+            "target": ["should_refuse"],
+            "concept_id": ["x"],
         }
     ).to_json(source, orient="records", lines=True)
     monkeypatch.setattr(
         "judgearena.datasets.eu_guard.hf_hub_download", lambda **kw: source
     )
-    data = load_task_data("eu-guard").select({"lang": ["de"]})
-    samples = (
-        data.instructions.assign(completion="I cannot help.")
-        if config == "eu_guard_jev"
-        else data.instructions
+    cfg = build_run_config(
+        [
+            "--config_path",
+            f"configs/eu_guard_prompt_{config}.yaml",
+            "--run.store_root",
+            str(tmp_path / "cache"),
+            "--run.result_folder",
+            str(tmp_path / "results"),
+        ]
     )
-    cfg = JudgeArgs.model_validate(
-        yaml.safe_load(Path(f"configs/{config}.yaml").read_text())["judge"]
-    )
-    assert cfg.prompt.preset == "decision"
-    prompt = resolve_run_judge_prompt(None, cfg)
-    inputs = render_inputs(prompt, samples.to_dict("records"))
-    assert set(inputs[0]["state"]) == (
-        {"instruction", "completion"} if config == "eu_guard_jev" else {"instruction"}
-    )
+    data = load_task_data(cfg.resolved_task)
+    assert data.model_outputs["completion"].tolist() == ["Frage"]
+    assert load_task_data("eu-guard").model_outputs is None
     monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *a, **kw: BytesIO(
-            json.dumps({"answers": {"refusal": {"noul": 0.9}}}).encode()
-        ),
+        "judgearena.benchmarks.pairwise.comparisons.load_or_generate_completions",
+        lambda *a, **kw: pytest.fail("Unexpected generation"),
     )
-    cfg.model = "ChatOpenAI/local"
-    cfg.engine_kwargs = {"endpoint": "http://localhost/systemone"}
-    cache = JudgementInferenceCache(tmp_path / "cache", "eu-guard")
-    annotations = judge_jev(samples, cfg, cache)
+    raw = (
+        '{"answers":{"refusal":{"noul":0.9}}}'
+        if config == "jev"
+        else '```json\n{"score":0.9}\n```'
+    )
+
+    def batch(inputs, **kwargs):
+        for value in inputs:
+            text = (
+                value["state"]["instruction"] if config == "jev" else value.to_string()
+            )
+            assert "Frage" in text
+            assert "should_refuse" not in text
+        return [raw] * len(inputs)
+
     monkeypatch.setattr(
-        "urllib.request.urlopen", lambda *a, **kw: pytest.fail("Cache miss")
+        "judgearena.models.make_model",
+        lambda *a, **kw: SimpleNamespace(batch=batch),
     )
-    pd.testing.assert_frame_equal(annotations, judge_jev(samples, cfg, cache))
-    assert annotations.iloc[0]["concept_id"] == "x"
-    assert EUGuardMetric().calculate(annotations)["fcr"] == 0
+    first = run_benchmark(cfg, data=data)
+    monkeypatch.setattr(
+        "judgearena.models.make_model", lambda *a, **kw: pytest.fail("Cache miss")
+    )
+    pd.testing.assert_frame_equal(first, run_benchmark(cfg, data=data))
+    assert first.iloc[0]["concept_id"] == "x"
+    assert EUGuardMetric().calculate(first)["fcr"] == 0
 
 
 def test_external_guard_labels():

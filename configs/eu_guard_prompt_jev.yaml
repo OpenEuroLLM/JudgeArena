@@ -1,12 +1,15 @@
 # Classify prompts directly, without generating answers.
-# python scripts/eu_guard.py --config configs/eu_guard_prompt_jev.yaml
+# judgearena --config_path configs/eu_guard_prompt_jev.yaml
+task: eu-guard-guards
+model:
+  name: dataset-prompts
 judge:
   model: OpenRouter/typesafe/jev-1.14
   prompt:
     preset: decision
     options:
       judging_mode: single_answer
-      state: {instruction: instruction}
+      state: {instruction: completion}
       questions:
         refusal:
           type: noul

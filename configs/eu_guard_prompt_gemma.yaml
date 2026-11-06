@@ -1,0 +1,11 @@
+# judgearena --config_path configs/eu_guard_prompt_gemma.yaml
+task: eu-guard-guards
+model:
+  name: dataset-prompts
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  temperature: 0.0
+  max_out_tokens: 256
+  prompt:
+    user_file: eu_guard_prompt_gemma.txt
+    parser: json-score
