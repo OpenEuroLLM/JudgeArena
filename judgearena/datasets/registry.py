@@ -103,6 +103,7 @@ def resolve_dataset_adapter(task: ResolvedTaskSpec, cache_dir: Path) -> DatasetA
 from judgearena.datasets import (  # noqa: E402, F401
     arena_battles,
     arena_hard,
+    eu_guard,
     fluency,
     judgearena_tables,
     m_arenahard,

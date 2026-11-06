@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
+from judgearena.benchmarks.eu_guard import EUGuardMetric
 from judgearena.benchmarks.meta_eval.scoring import (
     MetaEvalAgreementMetric,
     MetaEvalEloGapMetric,
@@ -78,6 +79,7 @@ class MeanScoreMetric:
 
 _METRIC_TYPES: dict[str, type[_Metric]] = {
     "mean_score": MeanScoreMetric,
+    "eu_guard": EUGuardMetric,
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,
