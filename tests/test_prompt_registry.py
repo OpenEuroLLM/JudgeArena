@@ -452,3 +452,49 @@ def test_prepared_field_validation_accepts_model_fields(preset):
             instructions,
             available_columns={"instruction"},
         )
+
+
+@pytest.mark.parametrize("decision", [False, True])
+def test_yaml_bundle_survives_source_removal_and_run_move(tmp_path, decision):
+    import shutil
+
+    import yaml
+
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    bundle = (
+        {
+            "preset": "decision",
+            "options": {
+                "judging_mode": "single_answer",
+                "state": {"text": "completion"},
+                "questions": {
+                    "safe": {"type": "noul", "instructions": "Is text safe?"}
+                },
+                "result": {"score": {"question": "safe"}},
+            },
+        }
+        if decision
+        else {"user": "Classify {completion}", "parser": "json-score"}
+    )
+    source = tmp_path / "prompt.yaml"
+    source.write_text(yaml.safe_dump(bundle))
+    cfg = RunConfig(
+        task="eu-guard-guards",
+        judge={"model": "Dummy/test", "prompt": {"file": source}},
+    )
+    before = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    source.unlink()
+    moved = tmp_path / "moved"
+    shutil.move(run, moved)
+    replay = load_config(moved / "config.yaml")
+    after = resolve_run_judge_prompt(replay.resolved_task, replay.judge)
+    from judgearena.prompts.registry import render_inputs
+
+    assert after.metadata() == before.metadata()
+    assert render_inputs(after, [{"completion": "Example"}]) == render_inputs(
+        before, [{"completion": "Example"}]
+    )
+    assert replay.judge.prompt.model_dump() == cfg.judge.prompt.model_dump()

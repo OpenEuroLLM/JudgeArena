@@ -224,9 +224,17 @@ class ModelArgs(BaseModel):
 
 
 class JudgePromptSpec(BaseModel):
-    """Select a preset bundle or custom template files and their parser."""
+    """Select a preset or custom template/parser, optionally from a YAML bundle."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    file: Path | None = Field(default=None, exclude=True)
+    """YAML bundle expanded into effective prompt settings when loaded."""
+
+    user: str | None = None
+    """Inline user template, paired with a named parser."""
+    system: str | None = None
+    """Optional inline system template."""
 
     preset: str | None = None
     """Named prompt/parser bundle."""
@@ -243,16 +251,54 @@ class JudgePromptSpec(BaseModel):
     options: dict[str, object] = Field(default_factory=dict)
     """Settings accepted by the selected preset's configuration function."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _load_bundle(cls, values):
+        if not isinstance(values, dict) or values.get("file") is None:
+            return values
+        if any(
+            value is not None and value != {}
+            for key, value in values.items()
+            if key != "file"
+        ):
+            raise ValueError("A prompt file owns its templates, parser and options.")
+        path = Path(values["file"])
+        with path.open(encoding="utf-8") as stream:
+            bundle = yaml.safe_load(stream)
+        if not isinstance(bundle, dict) or "file" in bundle:
+            raise ValueError(
+                "A prompt bundle must be a mapping without nested file references."
+            )
+        for owner, names in (
+            (bundle, ("system_file", "user_file")),
+            (bundle.get("options"), prompt_option_files(bundle.get("preset"))),
+        ):
+            if isinstance(owner, dict):
+                for name in names:
+                    value = owner.get(name)
+                    if isinstance(value, str) and not Path(value).is_absolute():
+                        owner[name] = str(path.resolve().parent / value)
+        return bundle
+
     @model_validator(mode="after")
     def _validate_source(self) -> JudgePromptSpec:
-        if (self.preset is None) == (self.user_file is None):
-            raise ValueError("Select either prompt.preset or prompt.user_file.")
-        if self.preset is not None and (
-            self.system_file is not None or self.parser is not None
+        if (
+            sum(value is not None for value in (self.preset, self.user_file, self.user))
+            != 1
+        ):
+            raise ValueError(
+                "Select one of prompt.preset, prompt.user_file or prompt.user."
+            )
+        if self.system is not None and self.system_file is not None:
+            raise ValueError("Select either prompt.system or prompt.system_file.")
+        if self.preset is not None and any(
+            value is not None for value in (self.system_file, self.system, self.parser)
         ):
             raise ValueError("A prompt preset owns its templates and parser.")
         if self.options and self.preset is None:
             raise ValueError("Prompt options require a preset.")
+        if self.user_file is not None or self.user is not None:
+            resolve_judge_parser(self.parser or "score")
         return self
 
 
@@ -560,8 +606,6 @@ class RunConfig(BaseSettings):
     def _validate(self) -> RunConfig:
         if self.judge.prompt is not None:
             prompt = self.judge.prompt
-            if prompt.user_file is not None:
-                resolve_judge_parser(prompt.parser or "score")
             for path in (
                 prompt.system_file,
                 prompt.user_file,
@@ -713,7 +757,9 @@ class RunConfig(BaseSettings):
                     "meta-evaluation tasks."
                 )
         else:
-            if self.model.name is None:
+            if self.model.name is None and not isinstance(
+                protocol, SingleAnswerProtocol
+            ):
                 raise ValueError("model.name is required.")
             if isinstance(protocol, SingleAnswerProtocol):
                 if self.model.baseline is not None or self.judge.swap_mode != "fixed":
@@ -827,7 +873,7 @@ def _read_config(path: str | Path) -> dict:
         prompt = judge.get("prompt")
         if isinstance(prompt, dict):
             for owner, names in (
-                (prompt, ("system_file", "user_file")),
+                (prompt, ("file", "system_file", "user_file")),
                 (prompt.get("options"), prompt_option_files(prompt.get("preset"))),
             ):
                 if not isinstance(owner, dict):

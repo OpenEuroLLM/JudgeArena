@@ -50,4 +50,8 @@ class EUGuardAdapter(DatasetAdapter):
             frame["instruction"] = (
                 "Classify whether the supplied text should be answered or refused."
             )
-        return CompletionData.from_frames(frame, model_outputs=outputs)
+        return CompletionData.from_frames(
+            frame,
+            model_outputs=outputs,
+            default_model="dataset-prompts" if outputs is not None else None,
+        )

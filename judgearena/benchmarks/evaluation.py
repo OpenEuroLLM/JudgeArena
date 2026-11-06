@@ -57,6 +57,16 @@ def run_evaluation(
     task_data = (data if data is not None else load_task_data(resolved_task)).select(
         resolve_dataset_filters(resolved_task, cfg.run.filters)
     )
+    if independent and cfg.model.name is None:
+        if task_data.default_model is None:
+            raise ValueError(
+                "Specify model.name; this dataset has no default output collection."
+            )
+        cfg = cfg.model_copy(
+            update={
+                "model": cfg.model.model_copy(update={"name": task_data.default_model})
+            }
+        )
     instructions_df = task_data.instructions
     n_instructions = cfg.generation.n_instructions
     if n_instructions is not None:

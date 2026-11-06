@@ -1,4 +1,30 @@
-# Decision judging
+# Prompt bundles
+
+A YAML bundle keeps a template and its parser together:
+
+```yaml
+# grammar.yaml
+parser: json-score
+user: |
+  Rate grammatical correctness from 1 to 10.
+  Answer: {completion}
+  Return JSON: {{"score": number}}
+```
+
+Select it in your run config:
+
+```yaml
+judge:
+  prompt:
+    file: grammar.yaml
+```
+
+Paths are relative to the containing YAML file. A bundle can also contain
+`preset` and `options`, as in the [EU-Guard Jev bundle](templates/eu-guard-prompt-jev.yaml).
+Saved run configs contain the expanded settings, so replay does not require
+the original bundle file.
+
+## Decision judging
 
 Use `OpenRouter/typesafe/jev-1.14` with the `decision` prompt preset. Export
 `OPENROUTER_API_KEY`, then run an example from the repository root:

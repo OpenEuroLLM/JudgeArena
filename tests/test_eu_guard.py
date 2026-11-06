@@ -61,6 +61,7 @@ def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, conf
             str(tmp_path / "results"),
         ]
     )
+    assert cfg.model.name is None
     data = load_task_data(cfg.resolved_task)
     assert data.model_outputs["completion"].tolist() == ["Frage"]
     assert load_task_data("eu-guard").model_outputs is None
@@ -91,6 +92,7 @@ def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, conf
     monkeypatch.setattr(
         "judgearena.models.make_model", lambda *a, **kw: pytest.fail("Cache miss")
     )
+    cfg.model.name = "dataset-prompts"
     pd.testing.assert_frame_equal(first, run_benchmark(cfg, data=data))
     assert first.iloc[0]["concept_id"] == "x"
     assert EUGuardMetric().calculate(first)["fcr"] == 0

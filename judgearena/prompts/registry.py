@@ -442,35 +442,41 @@ def _materialize_user_template(
     return text
 
 
-def _resolve_file_prompt(
+def _resolve_custom_prompt(
     *,
     system_file: str | Path | None,
-    user_file: str | Path,
+    user_file: str | Path | None,
+    user: str | None,
+    system: str | None,
     multi_turn: bool,
     parser: OutputParser,
     judging_mode: JudgingMode,
 ) -> ResolvedJudgePrompt:
     system_path = Path(system_file) if system_file is not None else None
-    user_path = Path(user_file)
+    user_path = Path(user_file) if user_file is not None else None
     system_prompt = (
-        system_path.read_text(encoding="utf-8") if system_path is not None else None
+        system_path.read_text(encoding="utf-8") if system_path is not None else system
     )
     user_prompt_template = _materialize_user_template(
-        user_path.read_text(encoding="utf-8"),
+        user_path.read_text(encoding="utf-8") if user_path is not None else user,
         multi_turn=multi_turn,
         with_explanation=False,
     )
     return ResolvedJudgePrompt(
-        preset_name=f"file:{system_path.name}+{user_path.name}"
-        if system_path
-        else f"file:{user_path.name}",
+        preset_name=(
+            f"file:{system_path.name}+{user_path.name}"
+            if system_path
+            else f"file:{user_path.name}"
+        )
+        if user_path
+        else "inline",
         parser=parser,
         system_prompt=system_prompt,
         user_prompt_template=user_prompt_template,
-        source="file",
+        source="file" if user_path else "override",
         judging_mode=judging_mode,
         system_path=str(system_path) if system_path is not None else None,
-        user_path=str(user_path),
+        user_path=str(user_path) if user_path else None,
         system_sha256=_sha256(system_prompt) if system_prompt is not None else None,
         user_sha256=_sha256(user_prompt_template),
     )
@@ -482,26 +488,38 @@ def resolve_judge_prompt(
     preset: str | None = None,
     system_file: str | Path | None = None,
     user_file: str | Path | None = None,
+    user: str | None = None,
+    system: str | None = None,
     multi_turn: bool = False,
     parser: str | None = None,
     options: dict[str, object] | None = None,
     judging_mode: JudgingMode = "pairwise",
 ) -> ResolvedJudgePrompt:
-    """Load a preset, or custom files whose judging_mode is supplied by the caller.
+    """Load a preset or custom templates with a caller-supplied judging mode.
 
-    Presets own their mode and parser; custom files use the requested mode and
+    Presets own their mode and parser; custom templates use the requested mode and
     named parser. Consumers validate compatibility before generating answers.
     """
     if preset is None:
         preset = default_preset_for_task(task)
-    if system_file is not None and user_file is None:
-        raise ValueError("A judge user prompt file is required with a system file.")
-    if user_file is not None:
+    if user_file is not None and user is not None:
+        raise ValueError("Select either a user template or a user file.")
+    if system_file is not None and system is not None:
+        raise ValueError("Select either a system template or a system file.")
+    if (
+        (system_file is not None or system is not None)
+        and user_file is None
+        and user is None
+    ):
+        raise ValueError("A judge user template is required with a system template.")
+    if user_file is not None or user is not None:
         if options:
             raise ValueError("Prompt options require a preset.")
-        return _resolve_file_prompt(
+        return _resolve_custom_prompt(
             system_file=system_file,
             user_file=user_file,
+            user=user,
+            system=system,
             multi_turn=multi_turn,
             parser=resolve_judge_parser(parser or "score"),
             judging_mode=judging_mode,
@@ -597,7 +615,7 @@ def resolve_run_judge_prompt(
 
         task = get_packaged_task(task)
     protocol = task.spec.protocol if task is not None else None
-    if prompt is not None and prompt.user_file is not None:
+    if prompt is not None and (prompt.user_file is not None or prompt.user is not None):
         result_type = resolve_judge_parser(prompt.parser or "score").result_type
         mode = (
             "pairwise" if issubclass(result_type, ParsedPreference) else "single_answer"
@@ -615,6 +633,8 @@ def resolve_run_judge_prompt(
         preset=prompt.preset if prompt is not None else None,
         system_file=prompt.system_file if prompt is not None else None,
         user_file=prompt.user_file if prompt is not None else None,
+        user=prompt.user if prompt is not None else None,
+        system=prompt.system if prompt is not None else None,
         multi_turn=multi_turn,
         parser=prompt.parser if prompt is not None else None,
     )
