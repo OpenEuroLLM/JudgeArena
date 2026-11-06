@@ -1,5 +1,4 @@
-# judgearena --config_path configs/decision_independent.yaml
-task: alpaca-eval-ja
+# judgearena --config_path configs/decision_independent.yaml --task alpaca-eval
 model:
   name: OpenRouter/google/gemma-4-31b-it
 judge:
@@ -31,5 +30,3 @@ protocol:
       - metric: mean_score
 generation:
   n_instructions: 4
-run:
-  store_root: ./cache/decisions

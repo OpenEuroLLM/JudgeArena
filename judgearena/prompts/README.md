@@ -4,9 +4,9 @@ Use `OpenRouter/typesafe/jev-1.14` with the `decision` prompt preset. Export
 `OPENROUTER_API_KEY`, then run an example from the repository root:
 
 ```bash
-judgearena --config_path configs/decision_pairwise.yaml
-judgearena --config_path configs/decision_noul.yaml
-judgearena --config_path configs/decision_independent.yaml
+judgearena --config_path configs/decision_pairwise.yaml --task alpaca-eval
+judgearena --config_path configs/decision_noul.yaml --task alpaca-eval
+judgearena --config_path configs/decision_independent.yaml --task alpaca-eval
 ```
 
 [Pairwise](../../configs/decision_pairwise.yaml) generates four Gemma answers
@@ -17,8 +17,9 @@ converts the yes probability to a preference with `invert: true`.
 using Score and reports their mean, without a baseline. These are custom
 evaluations on AlpacaEval data, not its official judging protocol.
 
-The configs inherit the dataset from the task and supply a complete replacement
-protocol. Change the candidate, judge, questions or metrics in the config.
+Select the dataset with `--task`. Pairwise examples inherit its baseline; the
+independent example replaces the protocol to score answers without a baseline.
+Change the candidate, judge, questions or metrics in the config.
 
 ## Inputs and results
 

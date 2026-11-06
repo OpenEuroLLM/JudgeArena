@@ -1,5 +1,4 @@
-# judgearena --config_path configs/decision_noul.yaml
-task: alpaca-eval-ja
+# judgearena --config_path configs/decision_noul.yaml --task alpaca-eval
 model:
   name: OpenRouter/google/gemma-4-31b-it
 judge:
@@ -20,9 +19,6 @@ protocol:
   runner: pairwise
   generation:
     mode: single_turn_chat
-  baseline:
-    strategy: task_default
-    reference_id: gpt4_1106_preview
   judge:
     default_prompt_preset: decision
     default_swap_mode: fixed
@@ -31,5 +27,3 @@ protocol:
       - metric: pairwise_win_rate
 generation:
   n_instructions: 4
-run:
-  store_root: ./cache/decisions

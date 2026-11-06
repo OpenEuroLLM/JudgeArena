@@ -1,5 +1,7 @@
 """WildBench conversations and saved model answers for shared judging."""
 
+import json
+
 import pandas as pd
 from datasets import get_dataset_config_names, load_dataset
 
@@ -21,12 +23,32 @@ class WildBenchAdapter(DatasetAdapter):
     def _load_examples(self):
         source = self._source("examples")
         return load_dataset(
-            source.repo_id, source.config, revision=source.revision, split="test"
+            source.repo_id,
+            source.config,
+            revision=source.revision,
+            split="test",
+            cache_dir=str(self.source_dir / "datasets"),
         )
+
+    def _output_models(self) -> list[str]:
+        path = self.source_dir / "output-models.json"
+        if path.exists():
+            return json.loads(path.read_text())
+        source = self._source("outputs")
+        models = get_dataset_config_names(
+            source.repo_id,
+            revision=source.revision,
+            cache_dir=str(self.source_dir / "datasets"),
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(models))
+        return models
 
     def download(self) -> None:
         """Cache example rows; saved answers are downloaded when a model is selected."""
         self._load_examples()
+        if "outputs" in self.task.spec.dataset.sources:
+            self._output_models()
 
     def load_data(self) -> CompletionData:
         """Keep supplied history for generation and checklist text for the judge.
@@ -69,18 +91,24 @@ class WildBenchAdapter(DatasetAdapter):
         loader = None
         if "outputs" in self.task.spec.dataset.sources:
             outputs = self._source("outputs")
-            models = get_dataset_config_names(
-                outputs.repo_id, revision=outputs.revision
-            )
+            models = self._output_models()
 
             def loader(model):
                 if model not in models:
                     return None
                 answers = load_dataset(
-                    outputs.repo_id, model, revision=outputs.revision, split="train"
+                    outputs.repo_id,
+                    model,
+                    revision=outputs.revision,
+                    split="train",
+                    cache_dir=str(self.source_dir / "datasets"),
                 )
                 frame = pd.DataFrame(answers).rename(
-                    columns={"session_id": "instruction_index", "output": "completion"}
+                    columns={
+                        "session_id": "instruction_index",
+                        "output": "completion",
+                        "primary_tag": "output_primary_tag",
+                    }
                 )
                 frame["completion"] = frame["completion"].map(
                     lambda value: value[0] if isinstance(value, list) else value

@@ -103,7 +103,7 @@ class FluencyAdapter(DatasetAdapter):
             repo_type="dataset",
             revision=source.revision,
             allow_patterns=list(source.allow_patterns) or None,
-            local_dir=_source_local_dir(source, self.cache_dir),
+            local_dir=_source_local_dir(source, self.source_dir),
             force_download=False,
         )
 
@@ -129,7 +129,7 @@ class FluencyAdapter(DatasetAdapter):
         """Load the sentence contexts for the languages selected by the invocation."""
         fields = self.fields
         self.download()
-        root = _source_local_dir(self._source(), self.cache_dir)
+        root = _source_local_dir(self._source(), self.source_dir)
 
         frames: list[pd.DataFrame] = []
         for language in self._selected_languages():

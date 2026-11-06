@@ -1,4 +1,4 @@
-"""Implement ``judgearena tasks list|show|validate`` inspection commands."""
+"""Implement ``judgearena tasks list|show|validate|download`` inspection commands."""
 
 from __future__ import annotations
 
@@ -27,6 +27,14 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = commands.add_parser("validate", help="Validate packaged tasks.")
     validate.add_argument("task", nargs="?")
+    download = commands.add_parser(
+        "download", help="Prepare task data and scoring assets."
+    )
+    download.add_argument("task", nargs="*")
+    download.add_argument(
+        "--config_path",
+        help="Use the effective dataset, baselines and metrics from a run YAML.",
+    )
     return parser
 
 
@@ -50,6 +58,28 @@ def run_task_command(
             if args.resolved:
                 output["_provenance"] = asdict(resolved.provenance)
             print(yaml.safe_dump(output, sort_keys=False).rstrip())
+        elif args.command == "download":
+            from judgearena.config import load_config
+            from judgearena.utils.io import download_task
+
+            if args.config_path:
+                if args.task:
+                    parser.error("Use task names or --config_path, not both.")
+                cfg = load_config(args.config_path)
+                download_task(
+                    cfg.resolved_task,
+                    model=cfg.model.name,
+                    baseline=cfg.model.baseline,
+                    filters=cfg.run.filters,
+                )
+                print(f"Prepared task {cfg.task!r}.")
+            else:
+                if not args.task:
+                    parser.error("Provide task names or --config_path.")
+                for name in args.task:
+                    task = _require(parser, tasks, name)
+                    download_task(task)
+                    print(f"Prepared task {task.task!r}.")
         elif args.command == "validate":
             if args.task is not None:
                 _require(parser, tasks, args.task)
