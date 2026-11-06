@@ -57,12 +57,14 @@ def test_reward_penalty_preserves_strong_wins_and_strict_length_boundary():
 def test_wildbench_composes_saved_or_generated_answers_with_metrics(
     monkeypatch, tmp_path, metric
 ):
+    from judgearena import utils
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.datasets import wildbench
     from judgearena.models import DummyModel
     from judgearena.tasks.registry import get_packaged_task
     from judgearena.tasks.schema import TaskSpec
 
+    monkeypatch.setattr(utils, "data_root", tmp_path)
     records = [
         {
             "session_id": "session-1",
@@ -137,7 +139,9 @@ def test_wildbench_composes_saved_or_generated_answers_with_metrics(
             "use_tqdm": False,
         },
     )
-    data = wildbench.WildBenchAdapter(cfg.resolved_task, tmp_path).load_data()
+    data = wildbench.WildBenchAdapter(
+        cfg.resolved_task, tmp_path / "tables"
+    ).load_data()
     assert (
         data.instructions.loc["session-1", "messages"]
         == records[0]["conversation_input"]
@@ -148,6 +152,11 @@ def test_wildbench_composes_saved_or_generated_answers_with_metrics(
     )
     assert data.model_completion("candidate").tolist() == ["42"]
     assert data.model_completion("new-model") is None
+    monkeypatch.setattr(
+        wildbench,
+        "get_dataset_config_names",
+        lambda *a, **kw: pytest.fail("Model discovery must work offline"),
+    )
     prefs = run_benchmark(cfg)
     assert prefs.tolist() == ([0.25] if generate else [0.25, 0.75])
     annotations = pd.read_csv(next((tmp_path / "results").rglob("*-annotations.csv")))
@@ -343,3 +352,49 @@ def test_all_references_rejects_empty_or_duplicate_models(references):
 def test_all_references_rejects_reference_override_and_self_comparison(model):
     with pytest.raises(ValueError, match="all_references"):
         RunConfig(task="wildbench-reward-mix", model=model, judge={"model": "Dummy/A"})
+
+
+def test_independent_saved_answer_preserves_both_primary_tags(monkeypatch, tmp_path):
+    from judgearena import utils
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.datasets import wildbench
+
+    monkeypatch.setattr(utils, "data_root", tmp_path)
+    monkeypatch.setattr(
+        wildbench, "get_dataset_config_names", lambda *a, **kw: ["saved"]
+    )
+    monkeypatch.setattr(
+        wildbench,
+        "load_dataset",
+        lambda repo, *a, **kw: Dataset.from_list(
+            [
+                {
+                    "session_id": "q",
+                    "conversation_input": [{"role": "user", "content": "Hi"}],
+                    "checklist": ["Be polite"],
+                    "primary_tag": "Greeting",
+                }
+                if repo == "allenai/WildBench"
+                else {
+                    "session_id": "q",
+                    "output": ["Hello!"],
+                    "primary_tag": "Answer tag",
+                }
+            ]
+        ),
+    )
+    cfg = RunConfig(
+        task="wildbench-score",
+        model={"name": "saved"},
+        judge={"model": 'Dummy/{"score": 8}'},
+        run={
+            "store_root": None,
+            "result_folder": str(tmp_path / "results"),
+            "no_log_file": True,
+            "use_tqdm": False,
+        },
+    )
+    annotations = run_benchmark(cfg)
+    assert annotations[["primary_tag", "output_primary_tag", "score"]].to_dict(
+        "records"
+    ) == [{"primary_tag": "Greeting", "output_primary_tag": "Answer tag", "score": 8.0}]

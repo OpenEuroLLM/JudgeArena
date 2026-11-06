@@ -14,6 +14,7 @@ from judgearena.datasets.arena_hard import (
     _build_instructions,
     _build_model_outputs,
 )
+from judgearena.datasets.registry import source_cache_dir
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -40,9 +41,10 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
         "snapshot_download",
         lambda **kwargs: downloads.append(kwargs),
     )
-    instructions_dir = tmp_path / "instructions"
-    outputs_dir = tmp_path / "model_outputs"
-    instructions_dir.mkdir()
+    root = source_cache_dir(get_packaged_task("alpaca-eval"), tmp_path)
+    instructions_dir = root / "instructions"
+    outputs_dir = root / "model_outputs"
+    instructions_dir.mkdir(parents=True)
     outputs_dir.mkdir()
     pd.DataFrame(
         {
@@ -103,14 +105,15 @@ def test_table_adapter_loads_mapped_battles_with_repeated_question_ids(
     )
     spec["dataset"]["sources"]["tables"]["allow_patterns"] = ["battles/custom.csv"]
     task = replace(task, spec=type(task.spec).model_validate(spec))
-    (tmp_path / "battles").mkdir()
+    root = source_cache_dir(task, tmp_path)
+    (root / "battles").mkdir(parents=True)
     rows = battle_rows.iloc[:2].assign(
         source=["human", "llm-judge"], reference_pref=None
     )
     if observed:
         rows = rows.drop(columns="reference_pref").assign(winner=["left", "right"])
     rows.rename(columns={v: k for k, v in mapping.items()}).to_csv(
-        tmp_path / "battles/custom.csv",
+        root / "battles/custom.csv",
         index=False,
     )
 
@@ -135,7 +138,11 @@ def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_p
     task = get_packaged_task("m-arena-hard-v2.0-EU")
     assert task is not None
     source = task.spec.dataset.sources["examples"]
-    source_root = tmp_path / "_sources" / source.repo_id.replace("/", "--")
+    source_root = (
+        source_cache_dir(task, tmp_path)
+        / "_sources"
+        / source.repo_id.replace("/", "--")
+    )
     for language in ("cs", "uk", "ar"):
         language_dir = source_root / language
         language_dir.mkdir(parents=True)
@@ -167,8 +174,9 @@ def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_p
 def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp_path):
     task = get_packaged_task("m-arena-hard-v0.1-uk")
     assert task is not None
-    output_path = tmp_path / "model_outputs" / f"{task.task}.csv.zip"
-    output_path.parent.mkdir()
+    root = source_cache_dir(task, tmp_path)
+    output_path = root / "model_outputs" / f"{task.task}.csv.zip"
+    output_path.parent.mkdir(parents=True)
     expected = pd.DataFrame(
         {
             "instruction_index": ["q1-uk"],
@@ -184,7 +192,7 @@ def test_m_arena_hard_adapter_loads_invocation_specific_outputs(monkeypatch, tmp
 
     loaded = m_arenahard.MArenaHardAdapter(task, tmp_path).load_model_outputs()
 
-    assert downloads[0]["local_dir"] == tmp_path
+    assert downloads[0]["local_dir"] == root
     assert downloads[0]["allow_patterns"] == [f"model_outputs/{task.task}.csv.zip"]
     assert loaded is not None
     pd.testing.assert_frame_equal(
@@ -328,7 +336,8 @@ def test_fluency_adapter_loads_selected_language(monkeypatch, tmp_path):
     assert task is not None
     monkeypatch.setattr(fluency.FluencyAdapter, "download", lambda self: None)
     root = fluency._source_local_dir(
-        fluency.FluencyAdapter(task, tmp_path)._source(), tmp_path
+        fluency.FluencyAdapter(task, tmp_path)._source(),
+        source_cache_dir(task, tmp_path),
     )
     (root / "French").mkdir(parents=True)
     pd.DataFrame({"sentence": ["Le chat", "La maison"]}).to_parquet(
@@ -553,3 +562,59 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
     assert loaded.question_id.tolist() == [0, 1, 3]
     normalized = normalize_battles(loaded, "ComparIA")
     assert normalized.battles.question_id.tolist() == [0, 1]
+
+
+def test_download_config_reuses_selected_revision_offline(monkeypatch, tmp_path):
+    import yaml
+
+    from judgearena import utils
+    from judgearena.config import load_config
+    from judgearena.tasks.cli import run_task_command
+
+    monkeypatch.setattr(utils, "data_root", tmp_path)
+    online = True
+
+    def snapshot(**kwargs):
+        root = kwargs["local_dir"]
+        if online:
+            (root / "instructions").mkdir(parents=True, exist_ok=True)
+            (root / "model_outputs").mkdir(exist_ok=True)
+            pd.DataFrame(
+                {
+                    "instruction_index": [0],
+                    "instruction": [kwargs["revision"]],
+                    "domain": ["test"],
+                }
+            ).to_csv(root / "instructions/alpaca-eval.csv", index=False)
+            pd.DataFrame(
+                {"instruction_index": [0], "model": ["saved"], "output": ["answer"]}
+            ).to_csv(root / "model_outputs/alpaca-eval.csv.zip", index=False)
+        elif not root.exists():
+            raise FileNotFoundError("Revision not cached")
+        return str(root)
+
+    monkeypatch.setattr(judgearena_tables, "snapshot_download", snapshot)
+    path = tmp_path / "run.yaml"
+    for revision in ("a" * 40, "b" * 40):
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "task": "alpaca-eval",
+                    "model": {"name": "saved", "baseline": "saved"},
+                    "judge": {"model": "Dummy/j"},
+                    "dataset": {"sources": {"tables": {"revision": revision}}},
+                    "protocol": {
+                        "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]}
+                    },
+                }
+            )
+        )
+        run_task_command(["download", "--config_path", str(path)])
+    online = False
+    values = yaml.safe_load(path.read_text())
+    values["dataset"]["sources"]["tables"]["revision"] = "a" * 40
+    path.write_text(yaml.safe_dump(values))
+    run_task_command(["download", "--config_path", str(path)])
+    data = instruction_dataset.load_task_data(load_config(path).resolved_task)
+    assert data.instructions["instruction"].tolist() == ["a" * 40]
+    assert data.model_completion("saved").tolist() == ["answer"]

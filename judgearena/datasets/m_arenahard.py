@@ -39,9 +39,9 @@ class MArenaHardAdapter(DatasetAdapter):
     ) -> None:
         declared_source = self._source(name)
         local_dir = (
-            _source_local_dir(declared_source, self.cache_dir)
+            _source_local_dir(declared_source, self.source_dir)
             if name == "examples"
-            else self.cache_dir
+            else self.source_dir
         )
         snapshot_download(
             repo_id=declared_source.repo_id,
@@ -72,7 +72,7 @@ class MArenaHardAdapter(DatasetAdapter):
         fields = self.fields
         self._download_source("examples")
         source = self._source()
-        source_root = _source_local_dir(source, self.cache_dir)
+        source_root = _source_local_dir(source, self.source_dir)
         selected = set(self._selected_languages())
 
         frames: list[pd.DataFrame] = []
@@ -128,9 +128,9 @@ class MArenaHardAdapter(DatasetAdapter):
         """Load pre-generated outputs when the selected task view ships them."""
         if self.task.selection is None:
             return None
-        path = self.cache_dir / "model_outputs" / f"{self.task.task}.csv.zip"
+        path = self.source_dir / "model_outputs" / f"{self.task.task}.csv.zip"
         self._download_source(
-            "outputs", allow_patterns=[path.relative_to(self.cache_dir).as_posix()]
+            "outputs", allow_patterns=[path.relative_to(self.source_dir).as_posix()]
         )
         return (
             pd.read_csv(path).rename(columns={"output": "completion"})
