@@ -14,7 +14,7 @@ from judgearena.benchmarks.meta_eval.sampling import (
     sample_battles_per_model,
     select_top_models,
 )
-from judgearena.prompts.parsing import JUDGE_PARSERS
+from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
 
@@ -70,25 +70,24 @@ def test_meta_eval_protocol_accepts_metrics_and_requires_no_baseline():
 
 
 def test_meta_eval_pair_score_preserves_scores():
-    result = JUDGE_PARSERS["meta-eval-score"].parse_result(
+    result = resolve_judge_parser("meta-eval-score").parse_result(
         '<think>ignore score_A: 0</think>\n"score_A": 9,\n"score_B": 1'
     )
 
     assert result is not None
     assert result.preference == pytest.approx(0.01798620996)
     assert result.scores == {"A": 9.0, "B": 1.0}
-
-
-def test_meta_eval_pair_score_rejects_fractional_scores():
     assert (
-        JUDGE_PARSERS["meta-eval-score"].parse_result("score_A: 8.9\nscore_B: 8")
-        is None
+        resolve_judge_parser("meta-eval-score").parse_result(
+            '{"score_A": 9, "score_B": 1}'
+        )
+        == result
     )
 
 
 def test_alpaca_eval_json_rejects_incomplete_rankings():
     assert (
-        JUDGE_PARSERS["alpaca-eval-json"].parse_result(
+        resolve_judge_parser("alpaca-eval-json").parse_result(
             '{"ordered_models": [{"model": "m", "rank": 1}]}'
         )
         is None

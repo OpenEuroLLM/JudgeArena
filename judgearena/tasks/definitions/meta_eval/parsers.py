@@ -1,4 +1,4 @@
-"""Parsers for the meta-evaluation prompt variants."""
+"""Parsers for score-pair and ordered-model ranking prompts."""
 
 from __future__ import annotations
 
@@ -9,39 +9,8 @@ from judgearena.prompts.parsing import JudgeParser, PairScore, ParsedPreference
 from judgearena.utils import strip_thinking_tags
 
 
-class MetaEvalPairScore(PairScore):
-    """Parse complete integer score pairs in the meta-evaluation format."""
-
-    name = "meta-eval-score"
-
-    def __init__(self) -> None:
-        super().__init__(temperature=0.5)
-
-    @staticmethod
-    def parse_raw_scores(
-        judge_completion: str,
-    ) -> tuple[float | None, float | None]:
-        text = strip_thinking_tags(judge_completion).lower()
-
-        def parse_score(label: str) -> float | None:
-            match = re.search(
-                rf'(?m)^[ \t\r]*["\']?score_{label}["\']?'
-                rf"[ \t\r]*:[ \t\r]*([0-9]+)[ \t\r]*,?[ \t\r]*$",
-                text,
-            )
-            if match is None:
-                return None
-            digits = match.group(1)
-            if len(digits) > 2:
-                return None
-            score = int(digits)
-            return float(score) if 0 <= score <= 10 else None
-
-        return parse_score("a"), parse_score("b")
-
-
 class AlpacaEvalJSON(JudgeParser):
-    """Parse the ordered-model JSON emitted by the meta-eval Alpaca prompt."""
+    """Parse the ordered-model JSON emitted by the Alpaca ranking prompt."""
 
     name = "alpaca-eval-json"
 
@@ -95,5 +64,5 @@ class AlpacaEvalJSON(JudgeParser):
         )
 
 
-PAIR_SCORE = MetaEvalPairScore()
+PAIR_SCORE = PairScore(temperature=0.5)
 ALPACA_JSON = AlpacaEvalJSON()

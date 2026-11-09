@@ -679,7 +679,7 @@ def test_run_elo_temperature_reuses_validated_scores(monkeypatch, tmp_path):
         "batch",
         lambda self, inputs, **kwargs: [
             "Score_A: 6\nScore_B: 8",
-            "Score_A: 6\nScore_B: 8.5",
+            "Score_A: 6\nScore_B: missing",
         ],
     )
     cfg = _default_args(result_folder=str(tmp_path), n_instructions=2, swap_mode="both")

@@ -103,12 +103,20 @@ def test_annotation_swaps_and_aggregates_battles(strip_thinking):
 
 
 @pytest.mark.parametrize("provided_id", [None, "adapter:comparison-1"])
+@pytest.mark.parametrize(
+    "preset,output,expected_preference",
+    [
+        (
+            "meta-eval-alpaca-eval-json",
+            '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}',
+            1.0,
+        ),
+        ("meta-eval-pair-score", "score_A: 9\nscore_B: 1", 0.017986209962091555),
+    ],
+)
 def test_annotation_preserves_parser_details_and_replays_battle_ids(
-    tmp_path, provided_id
+    tmp_path, provided_id, preset, output, expected_preference
 ):
-    output = (
-        '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}'
-    )
     sample = _sample().drop(columns="battle_id")
     sample = sample.assign(instruction_index="q1", reference_pref=0.0)
     if provided_id is not None:
@@ -130,15 +138,18 @@ def test_annotation_preserves_parser_details_and_replays_battle_ids(
         comparisons = prepare_reference_comparisons(sample)
         execute, _ = prepare_pairwise_judging(
             _config("fixed"),
-            resolve_judge_prompt(preset="meta-eval-alpaca-eval-json"),
+            resolve_judge_prompt(preset=preset),
             comparisons,
         )
         rows, _, _ = execute(judge, comparisons)
     assert rows.loc[0, "conversation_a"] == "opaque source metadata"
-    assert rows.loc[0, "parsed"]["label"] == "M"
-    assert rows.loc[0, "parsed"]["details"] == {"ranks": {"M": 1, "m": 2}}
+    if preset == "meta-eval-alpaca-eval-json":
+        assert rows.loc[0, "parsed"]["label"] == "M"
+        assert rows.loc[0, "parsed"]["details"] == {"ranks": {"M": 1, "m": 2}}
+    else:
+        assert rows.loc[0, "parsed"]["scores"] == {"A": 9.0, "B": 1.0}
     battles = aggregate_battle_preferences(rows, swap_mode="fixed")
-    assert battles["pref"].tolist() == [1.0]
+    assert battles["pref"].tolist() == pytest.approx([expected_preference])
     with JudgementCache(next(tmp_path.rglob("judgements.db"))) as cache:
         cached = cache.query()
     assert cached[
