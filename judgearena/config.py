@@ -804,9 +804,16 @@ def _read_config(path: str | Path) -> dict:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
+    resolved = data.get("resolved_task")
+    hash_matches = isinstance(resolved, dict) and resolved.get("provenance", {}).get(
+        "resolved_sha256"
+    ) == _canonical_sha256(resolved.get("spec", {}))
     resolve_component_paths(data, Path(path).resolve().parent)
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
+    if hash_matches:
+        # Path resolution changes the definition, not its source provenance.
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])
     return data
 
 

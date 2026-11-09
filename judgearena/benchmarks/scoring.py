@@ -154,9 +154,6 @@ def build_metrics(
         )
         try:
             metric = build_metric(request.metric, parameters)
-            name = getattr(request, "name", None)
-            if name and name not in _METRIC_TYPES:
-                register_metric(name)(type(metric))
             configured.append((request, metric))
         except Exception as exc:
             logger.warning("Skipping metric %r: %s", request.metric, exc)
@@ -246,15 +243,25 @@ def _indent(text: str, prefix: str = "  ") -> str:
     return "\n".join(f"{prefix}{line}" for line in text.splitlines())
 
 
-def render_metrics(results: Mapping[str, dict[str, object]]) -> str:
-    """Render metric results in their configured dictionary order."""
+def render_metrics(
+    results: Mapping[str, dict[str, object]], metrics: ConfiguredMetrics = ()
+) -> str:
+    """Render with this run's metrics, falling back to registered names."""
+    configured = {
+        getattr(request, "name", None) or request.metric: metric
+        for request, metric in metrics
+    }
     sections: list[str] = []
     for name, result in results.items():
         if "error" in result:
             sections.append(f"{name}: failed — {result['error']}")
             continue
         try:
-            metric_type = _metric_type(name)
+            metric_type = configured.get(name)
+            if metric_type is None:
+                metric_type = _metric_type(name)
+            if isinstance(metric_type, Exception):
+                raise metric_type
             overall = {
                 key: value
                 for key, value in result.items()

@@ -100,6 +100,8 @@ def prepare_run_directory(
     for index, (owner, key) in enumerate(references):
         reference = python_reference(owner.get(key))
         if reference is not None:
+            if key == "metric" and not owner.get("name"):
+                owner["name"] = owner[key]
             source, symbol = reference
             target = output_dir / "components" / str(index) / source.name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +114,10 @@ def prepare_run_directory(
             target.parent.mkdir(parents=True, exist_ok=True)
             copyfile(source, target)
             owner[name] = str(target.relative_to(output_dir))
+    from judgearena.tasks.registry import _canonical_sha256
+
+    resolved = saved["resolved_task"]
+    resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])
     (output_dir / "config.yaml").write_text(
         yaml.safe_dump(saved, sort_keys=False), encoding="utf-8"
     )

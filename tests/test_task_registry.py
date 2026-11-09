@@ -764,6 +764,11 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
             "protocol": {"judge": {"prompt": {"system": "Judge carefully."}}},
         },
     )
+    from judgearena.datasets.registry import source_cache_dir
+    from judgearena.tasks.registry import get_packaged_task
+
+    packaged = get_packaged_task("alpaca-eval")
+    packaged_cache = source_cache_dir(packaged, tmp_path)
     task = load_tasks(root)["test-task"]
     assert task.spec.protocol.judge.prompt.system == "Judge carefully."
     cfg = RunConfig(
@@ -786,7 +791,6 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
         calculate_metrics,
         render_metrics,
     )
-    from judgearena.datasets.registry import source_cache_dir
 
     source_cache = source_cache_dir(cfg.resolved_task, tmp_path)
     run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
@@ -794,13 +798,15 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
     shutil.move(run, tmp_path / "moved")
     replay = load_config(tmp_path / "moved/config.yaml")
     assert source_cache_dir(replay.resolved_task, tmp_path) == source_cache
+    assert source_cache_dir(packaged, tmp_path) == packaged_cache
     requests = replay.resolved_task.spec.protocol.scoring.metrics
+    metrics = build_metrics(requests)
     values = calculate_metrics(
         pd.DataFrame({"model_a": ["candidate"], "model_b": ["other"], "pref": [0.0]}),
-        build_metrics(requests),
+        metrics,
     )
     assert len(values) == 2 and all("error" not in value for value in values.values())
-    assert render_metrics(values)
+    assert render_metrics(values, metrics)
     parsed = resolve_run_judge_prompt(replay.resolved_task, replay.judge).parser
     from judgearena.prompts.parsing import PairScore
 

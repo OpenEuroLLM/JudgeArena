@@ -560,7 +560,7 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
 
 @pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
 def test_public_api_runs_file_components_and_replays(
-    tmp_path, monkeypatch, source_kind, capsys
+    tmp_path, monkeypatch, source_kind, capsys, caplog
 ):
     import yaml
 
@@ -707,7 +707,22 @@ def test_public_api_runs_file_components_and_replays(
 
     moved = tmp_path / "moved-run"
     shutil.move(saved.parent, moved)
+    from judgearena.benchmarks.scoring import _METRIC_TYPES
+    from judgearena.tasks.registry import _canonical_sha256
+
+    saved_data = yaml.safe_load((moved / saved.name).read_text())
+    resolved = saved_data["resolved_task"]
+    assert resolved["provenance"]["resolved_sha256"] == _canonical_sha256(
+        resolved["spec"]
+    )
+    registered_metrics = dict(_METRIC_TYPES)
+    caplog.clear()
     replay = load_config(moved / saved.name)
+    assert "stale definition hash" not in caplog.text
+    assert (
+        replay.resolved_task.provenance.source_sha256
+        == cfg.resolved_task.provenance.source_sha256
+    )
     assert source_cache_dir(replay.resolved_task, tmp_path / "cache") == source_cache
     monkeypatch.setattr(
         "judgearena.models.make_model",
@@ -716,14 +731,14 @@ def test_public_api_runs_file_components_and_replays(
     capsys.readouterr()
     repeated = run_benchmark(replay)
     assert "Mean score: 8.0" in capsys.readouterr().out
+    assert _METRIC_TYPES == registered_metrics
     assert repeated.score.tolist() == [8]
     assert repeated.prompt_preset.tolist() == fresh.prompt_preset.tolist()
     reports = [
         json.loads(path.read_text()) for path in tmp_path.rglob("results-*.json")
     ]
     assert len(reports) == 2
-    if source_kind == "registered":
-        assert all(set(report["metrics"]) == {"grammar-metric"} for report in reports)
+    assert reports[0]["metrics"] == reports[1]["metrics"]
     assert all(
         next(iter(report["metrics"].values()))["score"] == 8 for report in reports
     )

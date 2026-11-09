@@ -46,8 +46,12 @@ _loading_registrations = False
 
 
 def load_python_object(path: Path, symbol: str):
-    obj = getattr(load_python_module(path), symbol, None)
-    if obj is not None:
+    module = load_python_module(path)
+    obj = getattr(module, symbol, None)
+    # Re-exporting a class must not change its defining file or cache identity.
+    if obj is not None and (
+        not isinstance(obj, type) or obj.__module__ == module.__name__
+    ):
         _object_references[id(obj)] = f"{path.resolve()}:{symbol}"
     return obj
 
