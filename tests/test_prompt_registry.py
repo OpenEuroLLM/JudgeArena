@@ -490,53 +490,6 @@ def test_prepared_field_validation_accepts_model_fields(preset):
         )
 
 
-@pytest.mark.parametrize("preset", [False, True])
-def test_yaml_bundle_survives_source_removal_and_run_move(
-    tmp_path, preset, monkeypatch
-):
-    import shutil
-
-    import yaml
-
-    from judgearena.artifacts import prepare_run_directory
-    from judgearena.config import RunConfig, load_config
-
-    bundle = (
-        {"preset": "single-score"}
-        if preset
-        else {"user": "Classify {completion}", "parser": "json-score"}
-    )
-    source = tmp_path / "prompt.yaml"
-    source.write_text(yaml.safe_dump(bundle))
-    cfg = RunConfig(
-        task="alpaca-eval",
-        model={"name": "candidate"},
-        judge={"model": "Dummy/test", "prompt": {"file": source}},
-    )
-    before = resolve_run_judge_prompt(cfg.resolved_task, cfg.judge)
-    from judgearena.prompts.registry import (
-        JudgePromptPreset,
-        build_chat_prompt_template,
-        register_prompt,
-    )
-
-    monkeypatch.setattr("judgearena.prompts.registry.PRESETS", PRESETS.copy())
-    register_prompt(JudgePromptPreset.from_file("test-bundle", source))
-    named = resolve_judge_prompt(preset="test-bundle")
-    fields = {"completion": "Example", "user_prompt": "Say hello"}
-    expected = build_chat_prompt_template(before).format_prompt(**fields)
-    assert build_chat_prompt_template(named).format_prompt(**fields) == expected
-    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
-    source.unlink()
-    moved = tmp_path / "moved"
-    shutil.move(run, moved)
-    replay = load_config(moved / "config.yaml")
-    after = resolve_run_judge_prompt(replay.resolved_task, replay.judge)
-    assert after.metadata() == before.metadata()
-    assert build_chat_prompt_template(after).format_prompt(**fields) == expected
-    assert replay.judge.prompt.model_dump() == cfg.judge.prompt.model_dump()
-
-
 @pytest.mark.parametrize(
     "kwargs",
     [

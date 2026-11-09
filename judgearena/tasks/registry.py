@@ -319,6 +319,7 @@ def load_tasks(
     if definitions_root is None and adapters is None:
         return _load_packaged_tasks()
     root = definitions_root or files("judgearena.tasks").joinpath("definitions")
+    load_task_components()  # Custom registrations may reuse packaged components.
     load_task_components(root)
     return _discover_tasks(root, adapters or AdapterCatalog())
 

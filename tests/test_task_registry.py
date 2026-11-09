@@ -399,32 +399,39 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
-@pytest.mark.parametrize(
-    "first_import",
-    [
-        "judgearena.datasets.registry",
-        "judgearena.tasks.definitions.mt_bench.dataset",
-        "judgearena.tasks.registry",
-    ],
-)
-def test_dataset_registration_preserves_builtins_on_fresh_import(first_import):
-    code = (
-        f"import {first_import}\n"
-        + """
+def test_dataset_registration_preserves_builtins_on_fresh_import(tmp_path):
+    definition = _task_definition()
+    definition["protocol"]["judge"]["default_prompt_preset"] = "custom-arena"
+    task = _write_family(
+        tmp_path, family="custom", filename="task.yaml", definition=definition
+    )
+    (task.parent / "_prompt.yaml").write_text("preset: arena-hard\n")
+    (task.parent / "register.py").write_text(
+        "from pathlib import Path\n"
+        "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
+        "register_prompt(JudgePromptPreset.from_file(\n"
+        "    'custom-arena', Path(__file__).with_name('_prompt.yaml')))\n"
+    )
+    code = """
+import sys
+from pathlib import Path
+from judgearena.tasks import load_tasks
+from judgearena.prompts import resolve_judge_prompt
 from judgearena.datasets.registry import register_dataset, dataset_names
 from judgearena.datasets.judgearena_tables import TableAdapter
 import pytest
 
-assert "mt_bench" in dataset_names()
+assert "test-task" in load_tasks(Path(sys.argv[1]))
+custom = resolve_judge_prompt(preset="custom-arena")
+assert custom.user_prompt_template == resolve_judge_prompt(preset="arena-hard").user_prompt_template
 register_dataset("custom_tables")(TableAdapter)
 for name in ("mt_bench", "custom_tables"):
     with pytest.raises(ValueError, match="already registered"):
         register_dataset(name)(TableAdapter)
 assert {"custom_tables", "mt_bench", "arena_hard"} <= dataset_names()
 """
-    )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
 

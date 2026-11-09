@@ -592,6 +592,8 @@ def test_public_api_runs_file_components_and_replays(
             register_parser(name, value)
     rubric = tmp_path / "grammar.txt"
     rubric.write_text("Rate grammar from 1 to 10: {completion}. Return a number.")
+    bundle = tmp_path / "_prompt.yaml"
+    bundle.write_text("user_file: grammar.txt\nparser: ./parser.py:PARSER\n")
     components = tmp_path / "components.py"
     components.write_text(
         "import pandas as pd\n"
@@ -618,7 +620,7 @@ def test_public_api_runs_file_components_and_replays(
         model={"name": "saved"},
         judge={
             "model": "Dummy/8",
-            "prompt": {"user_file": "grammar.txt", "parser": "./parser.py:PARSER"},
+            "prompt": {"file": "_prompt.yaml"},
         },
         run={
             "result_folder": str(tmp_path),
@@ -641,7 +643,7 @@ def test_public_api_runs_file_components_and_replays(
         # A task family contains its YAML and referenced implementation files.
         family = tmp_path / "definitions" / "grammar"
         family.mkdir(parents=True)
-        for file in (components, source, rubric):
+        for file in (components, source, rubric, bundle):
             (family / file.name).write_bytes(file.read_bytes())
         if source_kind == "registered":
             (family / "_prompt.yaml").write_text(
@@ -687,6 +689,7 @@ def test_public_api_runs_file_components_and_replays(
     components.unlink()
     source.unlink()
     rubric.unlink()
+    bundle.unlink()
     if source_kind != "config":
         import shutil
 
@@ -700,7 +703,11 @@ def test_public_api_runs_file_components_and_replays(
         _METRIC_TYPES.pop("grammar-metric")
         PRESETS.pop("grammar-judge")
         parsing.JUDGE_PARSERS.pop("grammar-verdict")
-    replay = load_config(saved)
+    import shutil
+
+    moved = tmp_path / "moved-run"
+    shutil.move(saved.parent, moved)
+    replay = load_config(moved / saved.name)
     assert source_cache_dir(replay.resolved_task, tmp_path / "cache") == source_cache
     monkeypatch.setattr(
         "judgearena.models.make_model",
