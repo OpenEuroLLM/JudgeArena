@@ -334,7 +334,7 @@ def test_category_prompt_validates_parser_during_preparation(monkeypatch):
         )
 
 
-def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
+def test_inline_prompt_registration_is_available_to_resolution(monkeypatch, tmp_path):
     from judgearena.prompts import (
         JudgePromptPreset,
         available_prompt_presets,
@@ -392,6 +392,52 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
         assert all(
             prompt.parser.parse_result('{"score": 8}') is None for prompt, _ in groups
         )
+        from judgearena.artifacts import prepare_run_directory
+        from judgearena.config import load_config
+
+        bundle = tmp_path / "configured.yaml"
+        bundle.write_text(f"preset: {name}\noptions: {{maximum: 5}}\n")
+        register_prompt(JudgePromptPreset.from_file("configured-bundle", bundle))
+        configured = RunConfig(
+            evaluation_name="category-replay",
+            protocol=cfg.protocol.model_copy(
+                update={
+                    "judge": cfg.protocol.judge.model_copy(
+                        update={
+                            "default_prompt_preset": "configured-bundle",
+                        }
+                    ),
+                }
+            ),
+            model=cfg.model,
+            judge={"model": "Dummy/j", "prompt": {"preset": "configured-bundle"}},
+        )
+        rows = pd.DataFrame({"category": ["regular", "creative"]})
+        before = group_judge_prompts(
+            configured,
+            rows,
+            resolve_run_judge_prompt(
+                configured.resolved_task,
+                configured.judge,
+            ),
+        )
+        run = prepare_run_directory(configured, tmp_path / "run", attach_log=False)
+        bundle.unlink()
+        from judgearena.prompts import registry
+
+        registry.PRESETS.pop("configured-bundle")
+        replay = load_config(run / "config.yaml")
+        after = group_judge_prompts(
+            replay,
+            rows,
+            resolve_run_judge_prompt(
+                replay.resolved_task,
+                replay.judge,
+            ),
+        )
+        assert [
+            (p.preset_name, p.user_prompt_template, list(ids)) for p, ids in after
+        ] == [(p.preset_name, p.user_prompt_template, list(ids)) for p, ids in before]
         with pytest.raises(TypeError, match="unexpected keyword"):
             resolve_judge_prompt(preset=name, options={"maximumm": 5})
         with pytest.raises(ValueError, match="already registered"):

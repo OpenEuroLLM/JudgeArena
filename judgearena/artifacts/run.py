@@ -18,8 +18,17 @@ import yaml
 
 from judgearena.artifacts.metadata import to_jsonable, write_run_metadata
 from judgearena.log import attach_file_handler, get_logger, make_run_log_path
-from judgearena.prompts.spec import config_prompts, prompt_file_fields
-from judgearena.utils.extensions import component_references, python_reference
+from judgearena.prompts.parsing import resolve_judge_parser
+from judgearena.prompts.spec import (
+    config_prompts,
+    expand_registered_prompt,
+    prompt_file_fields,
+)
+from judgearena.utils.extensions import (
+    component_references,
+    python_object_reference,
+    python_reference,
+)
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -71,6 +80,29 @@ def prepare_run_directory(
             run_handlers.append(handler)
 
     saved = cfg.model_dump(mode="json")
+    runtime_prompt = cfg.judge.prompt
+    task_judge = cfg.resolved_task.spec.protocol.judge
+    if (
+        runtime_prompt is not None
+        and runtime_prompt.preset is not None
+        and not runtime_prompt.options
+        and (
+            runtime_prompt == task_judge.prompt
+            or (
+                task_judge.prompt is None
+                and runtime_prompt.preset == task_judge.default_prompt_preset
+            )
+        )
+    ):
+        # Inherit the identical task selection, including its category routing.
+        saved["judge"]["prompt"] = None
+    for prompt in config_prompts(saved, expand_names=True):
+        expand_registered_prompt(prompt)
+        parser = (
+            resolve_judge_parser(prompt["parser"]) if prompt.get("parser") else None
+        )
+        if parser is not None and (reference := python_object_reference(parser)):
+            prompt["parser"] = reference
     references = list(component_references(saved))
     references.extend((prompt, "parser") for prompt in config_prompts(saved))
     for index, (owner, key) in enumerate(references):

@@ -44,16 +44,24 @@ file that declares them, including inherited task files. `judge.prompt` in a run
 config overrides the task's prompt and category routing.
 
 Existing preset names such as `alpaca-eval` and `arena-hard` remain available.
-For your own named bundle, register it before loading the config:
+Place a `register.py` beside a task family to make its names available globally:
 
 ```python
+# tasks/definitions/my_task/register.py
+from pathlib import Path
 from judgearena.prompts import JudgePromptPreset, register_prompt
+from judgearena.prompts.parsing import register_parser, resolve_judge_parser
 
-register_prompt(JudgePromptPreset.from_file("my-judge", "prompts/judge.yaml"))
+here = Path(__file__).resolve().parent
+register_parser("my-verdict", resolve_judge_parser(f"{here}/parsers.py:PARSER"))
+register_prompt(JudgePromptPreset.from_file("my-judge", here / "prompts/judge.yaml"))
 ```
 
-Then use `prompt: {preset: my-judge}` in a task or run config. Parsers and
-specialized renderers remain Python components.
+Then use `prompt: {preset: my-judge}` in any task or run config. Names are freely
+chosen; they need not match the folder or task name. Duplicate names raise errors.
+Packaged `*/register.py` files load once. For external task folders, call
+`load_tasks(definitions_root=...)` before loading the experiment config.
+Registration files should only register components, without loading data or models.
 
 A benchmark-specific parser can be referenced directly, without registration:
 
@@ -70,4 +78,5 @@ metadata `name`. Shared parsers still use names such as `json-score`.
 
 The Python path is relative to the YAML that declares it. Saved runs copy the
 referenced source file for replay; its imported dependencies come from the Python
-environment. No parser files are discovered automatically.
+environment. Discovery imports only `register.py`; other Python files load when
+explicitly referenced. Registered YAML bundles are expanded into saved configs.

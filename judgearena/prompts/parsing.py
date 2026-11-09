@@ -7,7 +7,6 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -15,7 +14,7 @@ import pandas as pd
 
 from judgearena.prompts.criteria import SCALE_MAX, SCALE_MIN
 from judgearena.utils import strip_thinking_tags
-from judgearena.utils.extensions import load_python_object
+from judgearena.utils.extensions import load_python_object, load_task_components
 from judgearena.utils.extensions import python_reference as parser_file_reference
 
 
@@ -420,24 +419,10 @@ def resolve_judge_parser(name: str) -> OutputParser:
     reference = parser_file_reference(name)
     if reference is not None:
         return _load_parser_file(*reference)
+    load_task_components()
     try:
         return JUDGE_PARSERS[name]
     except KeyError as exc:
         raise ValueError(
             f"Unknown judge parser {name!r}; available: {sorted(JUDGE_PARSERS)}"
         ) from exc
-
-
-# Existing short names remain usable; task bundles reference their owning files.
-for _name, _reference in {
-    "arena-hard-verdict": "arena_hard/parsers.py:ARENA_HARD_VERDICT",
-    "alpaca-eval-token": "alpaca_eval/parsers.py:ALPACA_EVAL_TOKEN",
-    "wildbench-reward": "wildbench/parsers.py:REWARD",
-    "wildbench-score": "wildbench/parsers.py:SCORE",
-    "meta-eval-score": "meta_eval/parsers.py:PAIR_SCORE",
-    "alpaca-eval-json": "meta_eval/parsers.py:ALPACA_JSON",
-    "fastchat-verdict": "mt_bench/parsers.py:VERDICT",
-}.items():
-    JUDGE_PARSERS[_name] = resolve_judge_parser(
-        f"{Path(__file__).resolve().parents[1] / 'tasks/definitions' / _reference}"
-    )

@@ -1,4 +1,4 @@
-"""Load explicitly referenced Python components without registry discovery."""
+"""Load Python components and task-local registrations."""
 
 import hashlib
 import importlib.util
@@ -18,7 +18,7 @@ def python_reference(name: str | None) -> tuple[Path, str] | None:
     return Path(filename), symbol
 
 
-def load_python_object(path: Path, symbol: str):
+def load_python_module(path: Path):
     path = path.resolve()
     try:
         source = path.read_bytes()
@@ -37,7 +37,45 @@ def load_python_object(path: Path, symbol: str):
         except Exception:
             sys.modules.pop(module_name, None)
             raise
-    return getattr(module, symbol, None)
+    return module
+
+
+_object_references = {}
+_loaded_registrations = set()
+_loading_registrations = False
+
+
+def load_python_object(path: Path, symbol: str):
+    obj = getattr(load_python_module(path), symbol, None)
+    if obj is not None:
+        _object_references[id(obj)] = f"{path.resolve()}:{symbol}"
+    return obj
+
+
+def python_object_reference(obj):
+    """Return the explicit file export used to load this object, when known."""
+    return _object_references.get(id(obj))
+
+
+def load_task_components(root=None):
+    """Import each task family's register.py once, before resolving public names."""
+    global _loading_registrations
+    if _loading_registrations:
+        return
+    root = (
+        Path(root)
+        if root is not None
+        else Path(__file__).resolve().parents[1] / "tasks/definitions"
+    )
+    _loading_registrations = True
+    try:
+        for path in sorted(root.glob("*/register.py")):
+            path = path.resolve()
+            if path not in _loaded_registrations:
+                load_python_module(path)
+                _loaded_registrations.add(path)
+    finally:
+        _loading_registrations = False
 
 
 def config_definitions(data):

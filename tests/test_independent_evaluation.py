@@ -558,8 +558,10 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     )
 
 
-@pytest.mark.parametrize("from_task", [False, True])
-def test_public_api_runs_file_components_and_replays(tmp_path, monkeypatch, from_task):
+@pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
+def test_public_api_runs_file_components_and_replays(
+    tmp_path, monkeypatch, source_kind
+):
     import yaml
 
     import judgearena.prompts.parsing as parsing
@@ -625,7 +627,7 @@ def test_public_api_runs_file_components_and_replays(tmp_path, monkeypatch, from
     )
     experiment = tmp_path / "experiment.yaml"
     experiment.write_text(yaml.safe_dump(declaration))
-    if from_task:
+    if source_kind != "config":
         task = {
             "schema_version": 1,
             "task": "grammar",
@@ -640,14 +642,30 @@ def test_public_api_runs_file_components_and_replays(tmp_path, monkeypatch, from
         family.mkdir(parents=True)
         for file in (components, source, rubric):
             (family / file.name).write_bytes(file.read_bytes())
+        if source_kind == "registered":
+            (family / "_prompt.yaml").write_text(
+                "parser: grammar-verdict\nuser_file: grammar.txt\n"
+            )
+            (family / "register.py").write_text(
+                "from pathlib import Path\n"
+                "from judgearena.prompts.registry import JudgePromptPreset, register_prompt\n"
+                "from judgearena.prompts.parsing import register_parser\n"
+                "from judgearena.utils.extensions import load_python_object\n"
+                "here = Path(__file__).parent\n"
+                "register_parser('grammar-verdict', load_python_object(here / 'parser.py', 'PARSER'))\n"
+                "register_prompt(JudgePromptPreset.from_file('grammar-judge', here / '_prompt.yaml'))\n"
+            )
+            task["protocol"]["judge"]["prompt"] = {"preset": "grammar-judge"}
         (family / "task.yaml").write_text(yaml.safe_dump(task))
         experiment.unlink()
         resolved = load_tasks(family.parent)["grammar"]
+        assert load_tasks(family.parent)["grammar"] == resolved
         cfg = RunConfig(resolved_task=resolved, **declaration)
     else:
         cfg = load_config(experiment)
         experiment.unlink()
-    assert run_benchmark(cfg).score.tolist() == [8]
+    fresh = run_benchmark(cfg)
+    assert fresh.score.tolist() == [8]
     import json
 
     report = json.loads(next(tmp_path.rglob("results-*.json")).read_text())
@@ -659,13 +677,20 @@ def test_public_api_runs_file_components_and_replays(tmp_path, monkeypatch, from
     components.unlink()
     source.unlink()
     rubric.unlink()
-    if from_task:
+    if source_kind != "config":
         import shutil
 
         shutil.rmtree(family.parent)
+    if source_kind == "registered":
+        from judgearena.prompts.registry import PRESETS
+
+        PRESETS.pop("grammar-judge")
+        parsing.JUDGE_PARSERS.pop("grammar-verdict")
     replay = load_config(saved)
     monkeypatch.setattr(
         "judgearena.models.make_model",
         lambda *a, **kw: pytest.fail("Replay must not construct a backend"),
     )
-    assert run_benchmark(replay).score.tolist() == [8]
+    repeated = run_benchmark(replay)
+    assert repeated.score.tolist() == [8]
+    assert repeated.prompt_preset.tolist() == fresh.prompt_preset.tolist()

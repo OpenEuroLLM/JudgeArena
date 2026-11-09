@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -41,8 +42,11 @@ def resolve_prompt_paths(prompt, directory):
             owner[name] = str(directory / value)
 
 
-def config_prompts(data):
+def config_prompts(data, *, expand_names=False):
     """Yield prompt settings in a run or task, including category overrides."""
+    if expand_names:
+        from judgearena.prompts.registry import PRESETS
+
     judges = [data.get("judge")]
     for definition in config_definitions(data):
         protocol = definition.get("protocol")
@@ -50,17 +54,54 @@ def config_prompts(data):
             judges.append(protocol.get("judge"))
     for judge in judges:
         if isinstance(judge, dict):
+            if (
+                expand_names
+                and judge.get("prompt") is None
+                and (preset := PRESETS.get(judge.get("default_prompt_preset")))
+                is not None
+                and preset.bundle_spec is not None
+            ):
+                judge["prompt"] = {"preset": judge["default_prompt_preset"]}
             categories = judge.get("category_prompts")
+            if expand_names and isinstance(categories, dict):
+                for category, selection in categories.items():
+                    if (
+                        isinstance(selection, str)
+                        and (preset := PRESETS.get(selection)) is not None
+                        and preset.bundle_spec is not None
+                    ):
+                        categories[category] = {"preset": selection}
             selections = categories.values() if isinstance(categories, dict) else ()
             for prompt in (judge.get("prompt"), *selections):
                 if isinstance(prompt, dict):
                     yield prompt
 
 
+def expand_registered_prompt(prompt):
+    """Pin a registered YAML bundle's settings before saving a run."""
+    from judgearena.prompts.registry import PRESETS
+
+    name = prompt.get("name") or prompt.get("preset")
+    while (preset := PRESETS.get(prompt.get("preset"))) is not None:
+        if preset.bundle_spec is None:
+            break
+        expanded = deepcopy(preset.bundle_spec)
+        expanded["options"] = {
+            **expanded.get("options", {}),
+            **prompt.get("options", {}),
+        }
+        expanded["name"] = name
+        prompt.clear()
+        prompt.update(expanded)
+
+
 class JudgePromptSpec(BaseModel):
     """Select a preset or custom template/parser, optionally from a YAML bundle."""
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
+
+    name: str | None = None
+    """Optional display name, retained when a registered bundle is saved for replay."""
 
     file: Path | None = Field(default=None, exclude=True)
     """YAML bundle expanded into effective prompt settings when loaded."""

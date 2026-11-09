@@ -31,7 +31,11 @@ from judgearena.tasks.schema import (
     TaskSelection,
     TaskSpec,
 )
-from judgearena.utils.extensions import python_reference, resolve_component_paths
+from judgearena.utils.extensions import (
+    load_task_components,
+    python_reference,
+    resolve_component_paths,
+)
 
 logger = get_logger(__name__)
 
@@ -315,6 +319,7 @@ def load_tasks(
     if definitions_root is None and adapters is None:
         return _load_packaged_tasks()
     root = definitions_root or files("judgearena.tasks").joinpath("definitions")
+    load_task_components(root)
     return _discover_tasks(root, adapters or AdapterCatalog())
 
 
