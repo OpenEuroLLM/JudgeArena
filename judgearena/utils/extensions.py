@@ -57,6 +57,21 @@ def python_object_reference(obj):
     return _object_references.get(id(obj))
 
 
+def external_component_reference(component):
+    """Locate a custom class for replay; installed built-ins keep their names."""
+    reference = python_object_reference(component)
+    if reference is None:
+        module = sys.modules.get(component.__module__)
+        path = getattr(module, "__file__", None)
+        if path and getattr(module, component.__name__, None) is component:
+            reference = f"{Path(path).resolve()}:{component.__name__}"
+    if reference is not None:
+        path, _ = python_reference(reference)
+        if not path.is_relative_to(Path(__file__).resolve().parents[1]):
+            return reference
+    return None
+
+
 def load_task_components(root=None):
     """Import each task family's register.py once, before resolving public names."""
     global _loading_registrations

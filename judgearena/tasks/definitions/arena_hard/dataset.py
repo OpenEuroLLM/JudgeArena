@@ -7,7 +7,6 @@ from huggingface_hub import snapshot_download
 from judgearena.datasets.data import CompletionData
 from judgearena.datasets.registry import (
     DatasetAdapter,
-    register_dataset,
     source_cache_dir,
 )
 from judgearena.tasks.schema import HuggingFaceDatasetSource
@@ -134,7 +133,6 @@ def _turns_to_text(turns_value: Any) -> str:
     return str(turns_value)
 
 
-@register_dataset("arena_hard")
 class ArenaHardAdapter(DatasetAdapter):
     def _source(self) -> HuggingFaceDatasetSource:
         source = self.task.spec.dataset.sources.get("examples")

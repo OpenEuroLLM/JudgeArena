@@ -4,17 +4,17 @@ import pandas as pd
 import pytest
 
 import judgearena.datasets as instruction_dataset
-import judgearena.datasets.arena_hard as arena_hard
 import judgearena.datasets.data as pairwise_data
-import judgearena.datasets.fluency as fluency
 import judgearena.datasets.judgearena_tables as judgearena_tables
-import judgearena.datasets.m_arenahard as m_arenahard
+import judgearena.tasks.definitions.arena_hard.dataset as arena_hard
+import judgearena.tasks.definitions.fluency.dataset as fluency
+import judgearena.tasks.definitions.m_arena_hard.dataset as m_arenahard
 from judgearena.datasets.arena_battles import normalize_battles
-from judgearena.datasets.arena_hard import (
+from judgearena.datasets.registry import source_cache_dir
+from judgearena.tasks.definitions.arena_hard.dataset import (
     _build_instructions,
     _build_model_outputs,
 )
-from judgearena.datasets.registry import source_cache_dir
 from judgearena.tasks.registry import get_packaged_task
 
 

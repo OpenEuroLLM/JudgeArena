@@ -11,15 +11,15 @@ import pandas as pd
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompt_values import ChatPromptValue
 
-from judgearena.datasets.mt_bench_101 import (
-    MT_BENCH_101_REFERENCE_TASKS,
-)
 from judgearena.judging import JudgeRequest
 from judgearena.prompts.parsing import ParsedScore
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
     ResolvedJudgePrompt,
+)
+from judgearena.tasks.definitions.mt_bench_101.dataset import (
+    MT_BENCH_101_REFERENCE_TASKS,
 )
 from judgearena.tasks.definitions.mt_bench_101.parsers import MTBench101ScoreParser
 from judgearena.utils import safe_text, strip_thinking_tags

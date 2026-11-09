@@ -63,11 +63,11 @@ exclude = ["slurmpilot_scripts*"]
 "judgearena.tasks" = [
     "definitions/*/*.yaml",
     "definitions/*/*.py",
+    "definitions/*/*.csv.gz",
     "definitions/*/prompts/*.yaml",
     "definitions/*/prompts/*.txt",
     "definitions/*/prompts/*.json",
 ]
-"judgearena.benchmarks.pairwise.scoring" = ["*.csv.gz"]
 
 [dependency-groups]
 dev = [

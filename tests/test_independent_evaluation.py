@@ -7,11 +7,11 @@ import pytest
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.config import RunConfig
-from judgearena.datasets.arena_hard import ArenaHardAdapter
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.wildbench import WildBenchAdapter
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import resolve_judge_prompt
+from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
+from judgearena.tasks.definitions.wildbench.dataset import WildBenchAdapter
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
 
@@ -560,7 +560,7 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
 
 @pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
 def test_public_api_runs_file_components_and_replays(
-    tmp_path, monkeypatch, source_kind
+    tmp_path, monkeypatch, source_kind, capsys
 ):
     import yaml
 
@@ -598,6 +598,7 @@ def test_public_api_runs_file_components_and_replays(
         "from judgearena.datasets.registry import DatasetAdapter\n"
         "from judgearena.datasets.data import CompletionData\n"
         "from judgearena.benchmarks.scoring import MeanScoreMetric\n"
+        "class Metric(MeanScoreMetric): pass\n"
         "class Adapter(DatasetAdapter):\n"
         "    def load_data(self):\n"
         "        return CompletionData(\n"
@@ -650,12 +651,18 @@ def test_public_api_runs_file_components_and_replays(
                 "from pathlib import Path\n"
                 "from judgearena.prompts.registry import JudgePromptPreset, register_prompt\n"
                 "from judgearena.prompts.parsing import register_parser\n"
+                "from judgearena.datasets.registry import register_dataset\n"
+                "from judgearena.benchmarks.scoring import register_metric\n"
                 "from judgearena.utils.extensions import load_python_object\n"
                 "here = Path(__file__).parent\n"
+                "register_dataset('grammar-data')(load_python_object(here / 'components.py', 'Adapter'))\n"
+                "register_metric('grammar-metric')(load_python_object(here / 'components.py', 'Metric'))\n"
                 "register_parser('grammar-verdict', load_python_object(here / 'parser.py', 'PARSER'))\n"
                 "register_prompt(JudgePromptPreset.from_file('grammar-judge', here / '_prompt.yaml'))\n"
             )
             task["protocol"]["judge"]["prompt"] = {"preset": "grammar-judge"}
+            task["dataset"]["adapter"] = "grammar-data"
+            task["protocol"]["scoring"]["metrics"] = [{"metric": "grammar-metric"}]
         (family / "task.yaml").write_text(yaml.safe_dump(task))
         experiment.unlink()
         resolved = load_tasks(family.parent)["grammar"]
@@ -664,6 +671,9 @@ def test_public_api_runs_file_components_and_replays(
     else:
         cfg = load_config(experiment)
         experiment.unlink()
+    from judgearena.datasets.registry import source_cache_dir
+
+    source_cache = source_cache_dir(cfg.resolved_task, tmp_path / "cache")
     fresh = run_benchmark(cfg)
     assert fresh.score.tolist() == [8]
     import json
@@ -682,15 +692,31 @@ def test_public_api_runs_file_components_and_replays(
 
         shutil.rmtree(family.parent)
     if source_kind == "registered":
+        from judgearena.benchmarks.scoring import _METRIC_TYPES
+        from judgearena.datasets.registry import _DATASETS
         from judgearena.prompts.registry import PRESETS
 
+        _DATASETS.pop("grammar-data")
+        _METRIC_TYPES.pop("grammar-metric")
         PRESETS.pop("grammar-judge")
         parsing.JUDGE_PARSERS.pop("grammar-verdict")
     replay = load_config(saved)
+    assert source_cache_dir(replay.resolved_task, tmp_path / "cache") == source_cache
     monkeypatch.setattr(
         "judgearena.models.make_model",
         lambda *a, **kw: pytest.fail("Replay must not construct a backend"),
     )
+    capsys.readouterr()
     repeated = run_benchmark(replay)
+    assert "Mean score: 8.0" in capsys.readouterr().out
     assert repeated.score.tolist() == [8]
     assert repeated.prompt_preset.tolist() == fresh.prompt_preset.tolist()
+    reports = [
+        json.loads(path.read_text()) for path in tmp_path.rglob("results-*.json")
+    ]
+    assert len(reports) == 2
+    if source_kind == "registered":
+        assert all(set(report["metrics"]) == {"grammar-metric"} for report in reports)
+    assert all(
+        next(iter(report["metrics"].values()))["score"] == 8 for report in reports
+    )

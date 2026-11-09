@@ -1,11 +1,13 @@
-"""Register this task family's reusable prompts and parsers."""
+"""Register this task family's reusable components."""
 
+from judgearena.datasets.registry import register_dataset
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import (
     FLUENCY_JUDGE_PROMPT_PRESET,
     JudgePromptPreset,
     register_prompt,
 )
+from judgearena.tasks.definitions.fluency.dataset import FluencyAdapter
 
 FLUENCY_SYSTEM_PROMPT = (
     "You are a highly efficient assistant, who evaluates and selects the best "
@@ -28,3 +30,6 @@ register_prompt(
         output_format_file="score-output.txt",
     )
 )
+
+
+register_dataset("fluency")(FluencyAdapter)

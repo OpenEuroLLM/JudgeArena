@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from judgearena.tasks.schema import DatasetFields, ResolvedTaskSpec
-from judgearena.utils.extensions import load_python_object, python_reference
+from judgearena.utils.extensions import (
+    external_component_reference,
+    load_python_object,
+    load_task_components,
+    python_reference,
+)
 
 if TYPE_CHECKING:
     from judgearena.datasets.data import CompletionData
@@ -20,7 +25,12 @@ if TYPE_CHECKING:
 def source_cache_dir(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
     """Keep downloaded and normalized data specific to its declared inputs."""
     declaration = task.spec.dataset.model_dump(mode="json")
-    reference = python_reference(declaration["adapter"])
+    adapter = declaration["adapter"]
+    reference = python_reference(adapter)
+    if reference is None:
+        reference = python_reference(
+            external_component_reference(dataset_adapter_type(adapter))
+        )
     if reference is not None:
         path, symbol = reference
         declaration["adapter"] = (
@@ -101,6 +111,7 @@ def register_dataset[T: type[DatasetAdapter]](name: str) -> Callable[[T], T]:
 
 
 def dataset_names() -> frozenset[str]:
+    load_task_components()
     return frozenset(_DATASETS)
 
 
@@ -115,20 +126,12 @@ def dataset_adapter_type(name: str) -> type[DatasetAdapter]:
         if not isinstance(adapter, type) or not issubclass(adapter, DatasetAdapter):
             raise ValueError(f"{name!r} must reference a DatasetAdapter class.")
         return adapter
+    load_task_components()
     try:
         return _DATASETS[name]
     except KeyError as exc:
         raise ValueError(f"Unknown dataset adapter {name!r}.") from exc
 
 
-# Load built-ins after defining the API so decorators can register their classes.
-from judgearena.datasets import (  # noqa: E402, F401
-    arena_battles,
-    arena_hard,
-    fluency,
-    judgearena_tables,
-    m_arenahard,
-    mt_bench,
-    mt_bench_101,
-    wildbench,
-)
+# Shared adapters are used by multiple task families.
+from judgearena.datasets import arena_battles, judgearena_tables  # noqa: E402, F401

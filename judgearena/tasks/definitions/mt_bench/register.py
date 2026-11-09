@@ -1,13 +1,15 @@
-"""Register this task family's reusable prompts and parsers."""
+"""Register this task family's reusable components."""
 
 from pathlib import Path
 
+from judgearena.datasets.registry import register_dataset
 from judgearena.prompts.parsing import register_parser, resolve_judge_parser
 from judgearena.prompts.registry import (
     FASTCHAT_PAIRWISE_PROMPT_PRESET,
     JudgePromptPreset,
     register_prompt,
 )
+from judgearena.tasks.definitions.mt_bench.dataset import MTBenchAdapter
 
 HERE = Path(__file__).resolve().parent
 
@@ -28,3 +30,6 @@ register_prompt(
         aggregation="agreement",
     )
 )
+
+
+register_dataset("mt_bench")(MTBenchAdapter)

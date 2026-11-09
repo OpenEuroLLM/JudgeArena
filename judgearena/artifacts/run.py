@@ -26,6 +26,7 @@ from judgearena.prompts.spec import (
 )
 from judgearena.utils.extensions import (
     component_references,
+    external_component_reference,
     python_object_reference,
     python_reference,
 )
@@ -103,7 +104,22 @@ def prepare_run_directory(
         )
         if parser is not None and (reference := python_object_reference(parser)):
             prompt["parser"] = reference
+    from judgearena.benchmarks.scoring import _metric_type
+    from judgearena.datasets.registry import dataset_adapter_type
+
     references = list(component_references(saved))
+    for owner, key in references:
+        if python_reference(owner[key]) is None:
+            resolve = dataset_adapter_type if key == "adapter" else _metric_type
+            try:
+                reference = external_component_reference(resolve(owner[key]))
+            except ValueError:
+                # Invalid metrics are reported by scoring; still save the run.
+                continue
+            if reference is not None:
+                if key == "metric" and not owner.get("name"):
+                    owner["name"] = owner[key]
+                owner[key] = reference
     references.extend((prompt, "parser") for prompt in config_prompts(saved))
     for index, (owner, key) in enumerate(references):
         reference = python_reference(owner.get(key))

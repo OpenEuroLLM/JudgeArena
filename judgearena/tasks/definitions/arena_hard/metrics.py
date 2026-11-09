@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from importlib import resources
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -45,9 +45,7 @@ _CODE_BLOCK = re.compile(r"```([^`]*)```")
 @lru_cache(maxsize=1)
 def _load_style_calibration() -> pd.DataFrame:
     """Load the compact joint population derived from pinned upstream data."""
-    resource = resources.files(__package__).joinpath(
-        "arena_hard_v20_calibration.csv.gz"
-    )
+    resource = Path(__file__).with_name("arena_hard_v20_calibration.csv.gz")
     with resource.open("rb") as calibration_file:
         return pd.read_csv(calibration_file, compression="gzip")
 

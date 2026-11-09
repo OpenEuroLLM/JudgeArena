@@ -435,11 +435,25 @@ Metrics implement `calculate(rows)` and `render(result)`; optional
 `required_columns` are checked before calculation. Public entrypoints are available
 from `judgearena`, including `register_dataset`, `register_prompt`,
 `register_metric`, and `register_parser(name, parser)`. Duplicate names raise an
-error. Import registrations before loading tasks or replaying saved configs. See
+error. Task-family `register.py` files load once when components are listed or
+resolved. External collections load through `load_tasks(definitions_root=...)`. See
 [prompt registration](../prompts/registry.py), [parsers](../prompts/parsing.py)
 and [metrics](../benchmarks/scoring.py).
 
-Task-local components can be referenced directly, without registration:
+A task family's `register.py` can publish adapters and metrics alongside its prompts:
+
+```python
+from judgearena.datasets.registry import register_dataset
+from judgearena.benchmarks.scoring import register_metric
+from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
+from judgearena.tasks.definitions.arena_hard.metrics import ArenaHardV20Metric
+
+register_dataset("arena_hard")(ArenaHardAdapter)
+register_metric("arena_hard_v20")(ArenaHardV20Metric)
+```
+
+Shared adapters and metrics stay in the common modules. Task-local components can
+also be referenced directly, without registration:
 
 ```yaml
 dataset:
@@ -456,9 +470,12 @@ Paths start beside the YAML that declares them, including inherited task files.
 Adapters subclass `DatasetAdapter`; metrics implement the same `calculate` and
 `render` methods as registered metrics. Metric parameters are constructor arguments.
 Registered names remain available for shared components. Result dictionaries use
-the configured metric selector as their key, including file references.
+the configured metric selector as their key, including file references. When a
+named external metric is copied for replay, its saved `name` preserves that result key.
 
-Saved runs copy referenced Python files alongside their config for replay. Imported
+Saved runs copy referenced Python files and registered external adapter/metric
+classes alongside their config for replay. Packaged adapters and metrics retain
+their names. Imported
 packages and other files used by those implementations must still be available.
 Only load task definitions and Python files you trust.
 

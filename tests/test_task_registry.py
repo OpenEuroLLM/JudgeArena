@@ -403,7 +403,7 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
     "first_import",
     [
         "judgearena.datasets.registry",
-        "judgearena.datasets.mt_bench",
+        "judgearena.tasks.definitions.mt_bench.dataset",
         "judgearena.tasks.registry",
     ],
 )
@@ -415,6 +415,7 @@ from judgearena.datasets.registry import register_dataset, dataset_names
 from judgearena.datasets.judgearena_tables import TableAdapter
 import pytest
 
+assert "mt_bench" in dataset_names()
 register_dataset("custom_tables")(TableAdapter)
 for name in ("mt_bench", "custom_tables"):
     with pytest.raises(ValueError, match="already registered"):

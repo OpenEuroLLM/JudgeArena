@@ -1,4 +1,4 @@
-"""Register this task family's reusable prompts and parsers."""
+"""Register this task family's reusable components."""
 
 from pathlib import Path
 

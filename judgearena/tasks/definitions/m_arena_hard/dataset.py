@@ -8,7 +8,7 @@ import pandas as pd
 from huggingface_hub import snapshot_download
 
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 
@@ -17,7 +17,6 @@ def _source_local_dir(source: HuggingFaceDatasetSource, root: Path) -> Path:
     return root / "_sources" / source.repo_id.replace("/", "--")
 
 
-@register_dataset("m_arena_hard")
 class MArenaHardAdapter(DatasetAdapter):
     def _source(self, name: str = "examples") -> HuggingFaceDatasetSource:
         source = self.task.spec.dataset.sources.get(name)

@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 import judgearena.benchmarks.evaluation as mt_bench_runner
-import judgearena.datasets.mt_bench as mt_bench
+import judgearena.tasks.definitions.mt_bench.dataset as mt_bench
 import judgearena.utils as judgearena_utils
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData

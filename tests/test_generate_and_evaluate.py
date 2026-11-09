@@ -78,7 +78,7 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
-    from judgearena.benchmarks.pairwise.scoring import alpaca_eval
+    from judgearena.tasks.definitions.alpaca_eval import metrics as alpaca_eval
 
     captured: dict[str, object] = {}
 

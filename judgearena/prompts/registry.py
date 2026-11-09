@@ -589,7 +589,3 @@ def group_judge_prompts(
         )
         groups.append((prompt, rows.index))
     return groups
-
-
-# Populate public registries after their APIs are defined.
-load_task_components()

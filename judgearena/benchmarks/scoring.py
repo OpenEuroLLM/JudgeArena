@@ -16,25 +16,17 @@ from judgearena.benchmarks.meta_eval.scoring import (
     MetaEvalEloGapMetric,
     MetaEvalRankingMetric,
 )
-from judgearena.benchmarks.pairwise.scoring.alpaca_eval import (
-    AlpacaEvalLengthControlledMetric,
-)
-from judgearena.benchmarks.pairwise.scoring.arena_hard import (
-    ArenaHardV01Metric,
-    ArenaHardV20Metric,
-)
 from judgearena.benchmarks.pairwise.scoring.metrics import (
     AbsoluteScoreMetric,
     LengthControlledWinrateMetric,
     PairwiseWinRateMetric,
 )
-from judgearena.benchmarks.pairwise.scoring.wildbench import (
-    WildBenchRewardMetric,
-    WildBenchRewardMixMetric,
-    WildBenchScoreMetric,
-)
 from judgearena.log import get_logger
-from judgearena.utils.extensions import load_python_object, python_reference
+from judgearena.utils.extensions import (
+    load_python_object,
+    load_task_components,
+    python_reference,
+)
 
 logger = get_logger(__name__)
 
@@ -82,16 +74,10 @@ _METRIC_TYPES: dict[str, type[_Metric]] = {
     "pairwise_win_rate": PairwiseWinRateMetric,
     "length_controlled_winrate": LengthControlledWinrateMetric,
     "bradley_terry": BradleyTerryMetric,
-    "arena_hard_v01": ArenaHardV01Metric,
-    "arena_hard_v20": ArenaHardV20Metric,
-    "alpaca_eval_length_controlled": AlpacaEvalLengthControlledMetric,
     "meta_eval_agreement": MetaEvalAgreementMetric,
     "meta_eval_elo_gap": MetaEvalEloGapMetric,
     "meta_eval_ranking": MetaEvalRankingMetric,
     "absolute_score": AbsoluteScoreMetric,
-    "wildbench_reward": WildBenchRewardMetric,
-    "wildbench_reward_mix": WildBenchRewardMixMetric,
-    "wildbench_score": WildBenchScoreMetric,
 }
 
 ConfiguredMetrics = tuple[tuple[MetricRequest, _Metric | Exception], ...]
@@ -119,6 +105,7 @@ def register_metric[T: type[_Metric]](name: str):
 
 def available_metrics() -> tuple[str, ...]:
     """Return the stable set of supported metric identifiers."""
+    load_task_components()
     return tuple(sorted(_METRIC_TYPES))
 
 
@@ -134,6 +121,7 @@ def _metric_type(name: str) -> type[_Metric]:
                 f"{name!r} must reference a metric class with calculate and render."
             )
         return metric
+    load_task_components()
     try:
         return _METRIC_TYPES[name]
     except KeyError as exc:
@@ -161,9 +149,15 @@ def build_metrics(
     configured: list[tuple[MetricRequest, _Metric | Exception]] = []
     for request in requests:
         parameters = dict(request.parameters)
-        parameters.update(overrides.get(request.metric, {}))
+        parameters.update(
+            overrides.get(getattr(request, "name", None) or request.metric, {})
+        )
         try:
-            configured.append((request, build_metric(request.metric, parameters)))
+            metric = build_metric(request.metric, parameters)
+            name = getattr(request, "name", None)
+            if name and name not in _METRIC_TYPES:
+                register_metric(name)(type(metric))
+            configured.append((request, metric))
         except Exception as exc:
             logger.warning("Skipping metric %r: %s", request.metric, exc)
             configured.append((request, exc))
@@ -200,6 +194,7 @@ def calculate_metrics(
     runtime = runtime or {}
     calculated: dict[str, dict[str, object]] = {}
     for request, metric in metrics:
+        name = getattr(request, "name", None) or request.metric
         try:
             if isinstance(metric, Exception):
                 raise metric
@@ -219,7 +214,7 @@ def calculate_metrics(
             values = dict(metric.calculate(battles, **kwargs))
         except Exception as exc:
             logger.warning("Skipping metric %r: %s", request.metric, exc)
-            calculated[request.metric] = {"error": str(exc)}
+            calculated[name] = {"error": str(exc)}
             continue
         if request.breakdown_by:
             groups: dict[str, list[dict[str, object]]] = {}
@@ -243,7 +238,7 @@ def calculate_metrics(
                         exc,
                     )
             values["groups"] = groups
-        calculated[request.metric] = values
+        calculated[name] = values
     return calculated
 
 

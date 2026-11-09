@@ -9,8 +9,8 @@ import pytest
 from langchain_core.language_models.fake import FakeListLLM
 
 import judgearena.benchmarks.evaluation as runner
-import judgearena.datasets.mt_bench_101 as mt_bench_101
 import judgearena.models as models
+import judgearena.tasks.definitions.mt_bench_101.dataset as mt_bench_101
 from judgearena.benchmarks.evaluation import run_evaluation
 from judgearena.benchmarks.pairwise.scoring.metrics import score_outcomes
 from judgearena.benchmarks.scoring import build_metric
@@ -22,7 +22,6 @@ from judgearena.cache.sqlite import (
 )
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.mt_bench_101 import expand_mt_bench_101_records
 from judgearena.judging import judge_single_answers
 from judgearena.prompts.mt_bench_101 import (
     MTBench101ScoreParser,
@@ -32,6 +31,9 @@ from judgearena.prompts.mt_bench_101 import (
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
+)
+from judgearena.tasks.definitions.mt_bench_101.dataset import (
+    expand_mt_bench_101_records,
 )
 from judgearena.tasks.registry import get_packaged_task
 
