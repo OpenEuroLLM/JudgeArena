@@ -23,17 +23,17 @@ from judgearena.cache.sqlite import (
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
 from judgearena.judging import judge_single_answers
-from judgearena.prompts.mt_bench_101 import (
-    MTBench101ScoreParser,
-    load_mt_bench_101_prompts,
-    render_mt_bench_101_requests,
-)
 from judgearena.prompts.registry import (
     MT_BENCH_101_CLEAN_PROMPT_PRESET,
     MT_BENCH_101_PROMPT_PRESET,
 )
 from judgearena.tasks.definitions.mt_bench_101.dataset import (
     expand_mt_bench_101_records,
+)
+from judgearena.tasks.definitions.mt_bench_101.rendering import (
+    MTBench101ScoreParser,
+    load_mt_bench_101_prompts,
+    render_mt_bench_101_requests,
 )
 from judgearena.tasks.registry import get_packaged_task
 

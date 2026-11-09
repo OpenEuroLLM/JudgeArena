@@ -11,7 +11,9 @@ from judgearena.tasks.definitions.mt_bench_101.dataset import MTBench101Adapter
 
 
 def _render_mt_bench_101_scores(samples, **kwargs):
-    from judgearena.prompts.mt_bench_101 import render_mt_bench_101_requests
+    from judgearena.tasks.definitions.mt_bench_101.rendering import (
+        render_mt_bench_101_requests,
+    )
 
     return render_mt_bench_101_requests(samples, **kwargs)
 

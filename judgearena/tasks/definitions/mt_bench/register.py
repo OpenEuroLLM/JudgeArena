@@ -17,7 +17,7 @@ register_parser("fastchat-verdict", resolve_judge_parser(f"{HERE}/parsers.py:VER
 
 
 def _prepare_mt_bench_prompts(cfg, prompt, instructions):
-    from judgearena.prompts.mt_bench import prepare_mt_bench_prompts
+    from judgearena.tasks.definitions.mt_bench.rendering import prepare_mt_bench_prompts
 
     return prepare_mt_bench_prompts(cfg, prompt, instructions)
 

@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from judgearena.prompts.parsing import parser_file_reference, resolve_judge_parser
-from judgearena.utils.extensions import config_definitions
+from judgearena.utils.extensions import config_definitions, python_object_reference
 
 
 def prompt_file_fields(prompt):
@@ -93,6 +93,33 @@ def expand_registered_prompt(prompt):
         expanded["name"] = name
         prompt.clear()
         prompt.update(expanded)
+
+
+def serialize_run_prompts(cfg, saved):
+    """Pin prompt settings in a saved config while preserving category routing."""
+    runtime_prompt = cfg.judge.prompt
+    task_judge = cfg.resolved_task.spec.protocol.judge
+    if (
+        runtime_prompt is not None
+        and runtime_prompt.preset is not None
+        and not runtime_prompt.options
+        and (
+            runtime_prompt == task_judge.prompt
+            or (
+                task_judge.prompt is None
+                and runtime_prompt.preset == task_judge.default_prompt_preset
+            )
+        )
+    ):
+        # Inherit the identical task selection, including its category routing.
+        saved["judge"]["prompt"] = None
+    for prompt in config_prompts(saved, expand_names=True):
+        expand_registered_prompt(prompt)
+        parser = (
+            resolve_judge_parser(prompt["parser"]) if prompt.get("parser") else None
+        )
+        if parser is not None and (reference := python_object_reference(parser)):
+            prompt["parser"] = reference
 
 
 class JudgePromptSpec(BaseModel):

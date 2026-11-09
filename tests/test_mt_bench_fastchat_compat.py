@@ -3,10 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from judgearena.prompts.mt_bench import (
+from judgearena.tasks.definitions.mt_bench.parsers import FastChatVerdictParser
+from judgearena.tasks.definitions.mt_bench.rendering import (
     _select_prompt,
 )
-from judgearena.tasks.definitions.mt_bench.parsers import FastChatVerdictParser
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")
 
