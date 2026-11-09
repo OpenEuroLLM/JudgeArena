@@ -107,11 +107,11 @@ def test_annotation_swaps_and_aggregates_battles(strip_thinking):
     "preset,output,expected_preference",
     [
         (
-            "meta-eval-alpaca-eval-json",
+            "alpaca-eval-json",
             '{"ordered_models": [{"model": "M", "rank": 1}, {"model": "m", "rank": 2}]}',
             1.0,
         ),
-        ("meta-eval-pair-score", "score_A: 9\nscore_B: 1", 0.017986209962091555),
+        ("alpaca-eval-pair-score", "score_A: 9\nscore_B: 1", 0.017986209962091555),
     ],
 )
 def test_annotation_preserves_parser_details_and_replays_battle_ids(
@@ -143,7 +143,7 @@ def test_annotation_preserves_parser_details_and_replays_battle_ids(
         )
         rows, _, _ = execute(judge, comparisons)
     assert rows.loc[0, "conversation_a"] == "opaque source metadata"
-    if preset == "meta-eval-alpaca-eval-json":
+    if preset == "alpaca-eval-json":
         assert rows.loc[0, "parsed"]["label"] == "M"
         assert rows.loc[0, "parsed"]["details"] == {"ranks": {"M": 1, "m": 2}}
     else:

@@ -49,6 +49,8 @@ file that declares them, including inherited task files. `judge.prompt` in a run
 config overrides the task's prompt and category routing.
 
 Existing preset names such as `alpaca-eval` and `arena-hard` remain available.
+`alpaca-eval-json` and `alpaca-eval-pair-score` select the JSON ranking and
+score-pair variants; either can be used with compatible pairwise workflows.
 Place a `register.py` beside a task family to make its names available globally:
 
 ```python

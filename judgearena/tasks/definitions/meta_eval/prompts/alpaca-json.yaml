@@ -1,4 +1,0 @@
-judging_mode: pairwise
-parser: ../parsers.py:ALPACA_JSON
-system_file: meta-eval-alpaca-eval-system-prompt.txt
-user_file: meta-eval-alpaca-eval-json-prompt.txt

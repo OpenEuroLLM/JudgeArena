@@ -109,7 +109,7 @@ def test_meta_eval_alpaca_prompt_embeds_json_safe_inputs(monkeypatch):
         instructions=[instruction],
         completions_A=outputs[:1],
         completions_B=outputs[1:],
-        prompt_preset="meta-eval-alpaca-eval-json",
+        prompt_preset="alpaca-eval-json",
         truncate_input_chars=None,
     )
 
