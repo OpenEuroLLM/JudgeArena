@@ -1,3 +1,4 @@
+judging_mode: pairwise
 parser: ../parsers.py:ALPACA_EVAL_TOKEN
 system_file: alpaca-eval-system-prompt.txt
 user_file: alpaca-eval-prompt.txt

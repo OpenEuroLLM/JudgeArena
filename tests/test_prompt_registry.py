@@ -436,8 +436,12 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch, tmp_
             ),
         )
         assert [
-            (p.preset_name, p.user_prompt_template, list(ids)) for p, ids in after
-        ] == [(p.preset_name, p.user_prompt_template, list(ids)) for p, ids in before]
+            (p.preset_name, p.judging_mode, p.user_prompt_template, list(ids))
+            for p, ids in after
+        ] == [
+            (p.preset_name, p.judging_mode, p.user_prompt_template, list(ids))
+            for p, ids in before
+        ]
         with pytest.raises(TypeError, match="unexpected keyword"):
             resolve_judge_prompt(preset=name, options={"maximumm": 5})
         with pytest.raises(ValueError, match="already registered"):
@@ -457,6 +461,24 @@ def test_standalone_user_prompt_needs_no_system_file(tmp_path):
         ("human", "Grade Answer.")
     ]
     assert prompt.system_path is None and prompt.system_sha256 is None
+
+    from judgearena.prompts.registry import JudgePromptPreset, resolve_prompt_spec
+    from judgearena.prompts.spec import JudgePromptSpec
+
+    bundle = tmp_path / "judge.yaml"
+    for mode in ("single_answer", "pairwise"):
+        bundle.write_text(
+            f"judging_mode: {mode}\nparser: json-score\nuser_file: judge.txt\n"
+        )
+        selection = JudgePromptSpec(file=bundle)
+        resolved = resolve_prompt_spec(selection)
+        assert resolved.judging_mode == mode
+        assert JudgePromptPreset.from_file("grammar", bundle).judging_mode == mode
+        if mode == "pairwise":
+            with pytest.raises(ValueError):
+                resolved.validate_for(mode)
+    with pytest.raises(ValueError, match="owns.*mode"):
+        JudgePromptSpec(preset="single-score", judging_mode="pairwise")
 
 
 @pytest.mark.parametrize("preset", ["single-score", "default"])

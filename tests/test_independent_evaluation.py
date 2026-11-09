@@ -593,7 +593,9 @@ def test_public_api_runs_file_components_and_replays(
     rubric = tmp_path / "grammar.txt"
     rubric.write_text("Rate grammar from 1 to 10: {completion}. Return a number.")
     bundle = tmp_path / "_prompt.yaml"
-    bundle.write_text("user_file: grammar.txt\nparser: ./parser.py:PARSER\n")
+    bundle.write_text(
+        "judging_mode: single_answer\nuser_file: grammar.txt\nparser: ./parser.py:PARSER\n"
+    )
     components = tmp_path / "components.py"
     components.write_text(
         "import pandas as pd\n"
@@ -647,7 +649,7 @@ def test_public_api_runs_file_components_and_replays(
             (family / file.name).write_bytes(file.read_bytes())
         if source_kind == "registered":
             (family / "_prompt.yaml").write_text(
-                "parser: grammar-verdict\nuser_file: grammar.txt\n"
+                "judging_mode: single_answer\nparser: grammar-verdict\nuser_file: grammar.txt\n"
             )
             (family / "register.py").write_text(
                 "from pathlib import Path\n"

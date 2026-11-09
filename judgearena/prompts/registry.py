@@ -110,9 +110,7 @@ class JudgePromptPreset:
             user_file=str(bundle.user_file) if bundle.user_file else None,
             inline_system=bundle.system,
             inline_user=bundle.user,
-            judging_mode="pairwise"
-            if issubclass(parser.result_type, ParsedPreference)
-            else "single_answer",
+            judging_mode=bundle.judging_mode,
         )
 
 
@@ -521,14 +519,8 @@ def resolve_run_judge_prompt(
 
 def resolve_prompt_spec(prompt, *, multi_turn: bool = False) -> ResolvedJudgePrompt:
     """Resolve the shared task/config selection through the existing registry."""
-    mode = "pairwise"
-    if prompt.user_file is not None or prompt.user is not None:
-        result_type = resolve_judge_parser(prompt.parser or "score").result_type
-        mode = (
-            "pairwise" if issubclass(result_type, ParsedPreference) else "single_answer"
-        )
     resolved = resolve_judge_prompt(
-        judging_mode=mode,
+        judging_mode=prompt.judging_mode or "pairwise",
         options=prompt.options,
         preset=prompt.preset,
         system_file=prompt.system_file,

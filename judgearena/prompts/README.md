@@ -4,6 +4,7 @@ A YAML bundle keeps a template and its parser together:
 
 ```yaml
 # grammar.yaml
+judging_mode: single_answer
 parser: json-score
 user: |
   Rate grammatical correctness from 1 to 10.
@@ -18,6 +19,10 @@ judge:
   prompt:
     file: grammar.yaml
 ```
+
+`judging_mode` describes whether the prompt receives one answer (`single_answer`)
+or two (`pairwise`). A preset selection inherits its mode; it cannot override it.
+For existing standalone configs that omit the mode, it is inferred from the parser.
 
 Paths are relative to the containing YAML file. A bundle can also contain
 `preset` and `options` to configure a registered bundle.
@@ -67,6 +72,7 @@ A benchmark-specific parser can be referenced directly, without registration:
 
 ```yaml
 # arena_hard/prompts/pairwise.yaml
+judging_mode: pairwise
 parser: ../parsers.py:ARENA_HARD_VERDICT
 system_file: arena-hard-system-prompt.txt
 user_file: arena-hard-prompt.txt

@@ -1,3 +1,4 @@
+judging_mode: pairwise
 parser: ../parsers.py:ARENA_HARD_VERDICT
 system_file: arena-hard-creative-system-prompt.txt
 user_file: arena-hard-prompt.txt

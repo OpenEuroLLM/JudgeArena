@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from judgearena.prompts.parsing import parser_file_reference, resolve_judge_parser
+from judgearena.prompts.parsing import (
+    ParsedPreference,
+    parser_file_reference,
+    resolve_judge_parser,
+)
 from judgearena.utils.extensions import config_definitions, python_object_reference
 
 
@@ -150,6 +155,9 @@ class JudgePromptSpec(BaseModel):
     parser: str | None = None
     """Parser for custom files; defaults to ``score``. Presets own their parser."""
 
+    judging_mode: Literal["pairwise", "single_answer"] | None = None
+    """Candidate inputs for a standalone prompt; presets supply their own mode."""
+
     options: dict[str, object] = Field(default_factory=dict)
     """Settings accepted by the selected preset's configuration function."""
 
@@ -189,8 +197,17 @@ class JudgePromptSpec(BaseModel):
             value is not None for value in (self.system_file, self.system, self.parser)
         ):
             raise ValueError("A prompt preset owns its templates and parser.")
+        if self.preset is not None and self.judging_mode is not None:
+            raise ValueError("A prompt preset owns its judging mode.")
         if self.options and self.preset is None:
             raise ValueError("Prompt options require a preset.")
         if self.user_file is not None or self.user is not None:
-            resolve_judge_parser(self.parser or "score")
+            parser = resolve_judge_parser(self.parser or "score")
+            if self.judging_mode is None:
+                # Preserve custom configs written before bundles declared their mode.
+                self.judging_mode = (
+                    "pairwise"
+                    if issubclass(parser.result_type, ParsedPreference)
+                    else "single_answer"
+                )
         return self

@@ -1,2 +1,3 @@
+judging_mode: single_answer
 parser: ../parsers.py:SCORE
 user_file: wildbench-score.txt
