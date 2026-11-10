@@ -4,11 +4,10 @@ import pandas as pd
 from huggingface_hub import hf_hub_download
 
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 
-@register_dataset("eu_guard")
 class EUGuardAdapter(DatasetAdapter):
     def _path(self):
         source = self.task.spec.dataset.sources.get("benchmark")

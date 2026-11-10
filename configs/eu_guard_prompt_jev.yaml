@@ -2,5 +2,3 @@
 task: eu-guard-guards
 judge:
   model: OpenRouter/typesafe/jev-1.14
-  prompt:
-    file: ../judgearena/prompts/templates/eu-guard-prompt-jev.yaml

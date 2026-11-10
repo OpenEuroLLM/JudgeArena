@@ -5,4 +5,4 @@ judge:
   temperature: 0.0
   max_out_tokens: 256
   prompt:
-    file: ../judgearena/prompts/templates/eu-guard-prompt-gemma.yaml
+    file: ../judgearena/tasks/definitions/eu_guard/prompts/guard-gemma.yaml

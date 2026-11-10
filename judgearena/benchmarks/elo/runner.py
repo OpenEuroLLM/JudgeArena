@@ -285,7 +285,7 @@ def run_elo(
         sampling_metadata=sampling_metadata,
     )
     results = report.to_dict()
-    report.render()
+    report.render(metrics)
     result_path = report.save(res_dir / f"results-{safe_filename(model_name)}.json")
 
     # Persist only the run's own llm-judge battles (a few KB). The reference arena

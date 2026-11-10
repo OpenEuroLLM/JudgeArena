@@ -10,12 +10,12 @@ from judgearena.benchmarks.pairwise.comparisons import conversation_comparisons
 from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.judging import execute_pairwise
 from judgearena.models import do_inference, prepare_model
-from judgearena.prompts.mt_bench import (
-    build_mt_bench_preset_prompts,
-    render_mt_bench_requests,
-)
 from judgearena.prompts.registry import (
     resolve_judge_prompt,
+)
+from judgearena.tasks.definitions.mt_bench.rendering import (
+    build_mt_bench_preset_prompts,
+    render_mt_bench_requests,
 )
 
 REFERENCE_CATEGORIES = ("math", "reasoning", "coding", "arena-hard-200")

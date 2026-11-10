@@ -4,8 +4,6 @@ model:
   name: OpenRouter/google/gemma-4-31b-it
 judge:
   model: OpenRouter/typesafe/jev-1.14
-  prompt:
-    file: ../judgearena/prompts/templates/eu-guard-jev.yaml
 generation:
   n_instructions: 4
 run:

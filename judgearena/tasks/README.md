@@ -26,7 +26,8 @@ Executable behavior lives outside the definitions:
 
 - `judgearena/datasets/` downloads and normalizes upstream data.
 - `judgearena/benchmarks/` runs the selected evaluation workflow.
-- `judgearena/prompts/` owns reusable judge prompt presets.
+- `judgearena/prompts/` owns reusable judge prompt presets. Benchmark templates
+  live beside their tasks in `prompts/`; see [prompt bundles](../prompts/README.md).
 
 ## Prepare an offline run
 
@@ -434,9 +435,49 @@ Metrics implement `calculate(rows)` and `render(result)`; optional
 `required_columns` are checked before calculation. Public entrypoints are available
 from `judgearena`, including `register_dataset`, `register_prompt`,
 `register_metric`, and `register_parser(name, parser)`. Duplicate names raise an
-error. Import registrations before loading tasks or replaying saved configs. See
+error. Task-family `register.py` files load once when components are listed or
+resolved. External collections load through `load_tasks(definitions_root=...)`. See
 [prompt registration](../prompts/registry.py), [parsers](../prompts/parsing.py)
 and [metrics](../benchmarks/scoring.py).
+
+A task family's `register.py` can publish adapters and metrics alongside its prompts:
+
+```python
+from judgearena.datasets.registry import register_dataset
+from judgearena.benchmarks.scoring import register_metric
+from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
+from judgearena.tasks.definitions.arena_hard.metrics import ArenaHardV20Metric
+
+register_dataset("arena_hard")(ArenaHardAdapter)
+register_metric("arena_hard_v20")(ArenaHardV20Metric)
+```
+
+Shared adapters and metrics stay in the common modules. Task-local components can
+also be referenced directly, without registration:
+
+```yaml
+dataset:
+  adapter: ./dataset.py:MyDatasetAdapter
+protocol:
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: ./metrics.py:MyMetric
+        parameters: {threshold: 0.5}
+```
+
+Paths start beside the YAML that declares them, including inherited task files.
+Adapters subclass `DatasetAdapter`; metrics implement the same `calculate` and
+`render` methods as registered metrics. Metric parameters are constructor arguments.
+Registered names remain available for shared components. Result dictionaries use
+the configured metric selector as their key, including file references. When a
+named external metric is copied for replay, its saved `name` preserves that result key.
+
+Saved runs copy referenced Python files and registered external adapter/metric
+classes alongside their config for replay. Packaged adapters and metrics retain
+their names. Imported
+packages and other files used by those implementations must still be available.
+Only load task definitions and Python files you trust.
 
 Metrics can request runtime inputs by declaring keyword parameters, for example
 `calculate(self, rows, *, seed, references)`. Shared execution supplies accepted

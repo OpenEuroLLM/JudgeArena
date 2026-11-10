@@ -4,3 +4,7 @@ description: Classify EU-Guard prompts as answer or refuse using saved dataset t
 dataset:
   options:
     prompts_as_outputs: true
+protocol:
+  judge:
+    prompt:
+      file: prompts/guard-jev.yaml

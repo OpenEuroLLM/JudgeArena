@@ -1,8 +1,8 @@
 import pandas as pd
 import pytest
 
-from judgearena.benchmarks.eu_guard import EUGuardMetric
 from judgearena.datasets import load_task_data
+from judgearena.tasks.definitions.eu_guard.metrics import EUGuardMetric
 
 
 def test_refusal_metrics_labels_probabilities_and_missing():
@@ -31,12 +31,17 @@ def test_refusal_metrics_labels_probabilities_and_missing():
     assert EUGuardMetric().calculate(labels.assign(completion=""))["num_valid"] == 0
 
 
-@pytest.mark.parametrize("config", ["jev", "gemma"])
-def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, config):
+@pytest.mark.parametrize(
+    "config, response", [("jev", False), ("gemma", False), ("jev", True)]
+)
+def test_guard_runner_uses_saved_prompts_and_replays(
+    tmp_path, monkeypatch, config, response
+):
+    from dataclasses import replace
     from types import SimpleNamespace
 
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.config import build_run_config
+    from judgearena.config import build_run_config, load_config
 
     source = tmp_path / "test.jsonl"
     pd.DataFrame(
@@ -49,21 +54,38 @@ def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, conf
         }
     ).to_json(source, orient="records", lines=True)
     monkeypatch.setattr(
-        "judgearena.datasets.eu_guard.hf_hub_download", lambda **kw: source
+        "judgearena.tasks.definitions.eu_guard.dataset.hf_hub_download",
+        lambda **kw: source,
     )
     cfg = build_run_config(
         [
             "--config_path",
-            f"configs/eu_guard_prompt_{config}.yaml",
+            "configs/eu_guard_jev.yaml"
+            if response
+            else f"configs/eu_guard_prompt_{config}.yaml",
             "--run.store_root",
             str(tmp_path / "cache"),
             "--run.result_folder",
             str(tmp_path / "results"),
         ]
     )
-    assert cfg.model.name is None
+    if response:
+        cfg.model.name = "saved-response"
+        cfg.run.filters = {}
+    else:
+        assert cfg.model.name is None
     data = load_task_data(cfg.resolved_task)
-    assert data.model_outputs["completion"].tolist() == ["Frage"]
+    if response:
+        outputs = pd.DataFrame(
+            {
+                "instruction_index": data.instructions.index,
+                "model": ["saved-response"],
+                "completion": ["I cannot help with that."],
+            }
+        )
+        data = replace(data, model_outputs=outputs)
+    else:
+        assert data.model_outputs["completion"].tolist() == ["Frage"]
     assert load_task_data("eu-guard").model_outputs is None
     monkeypatch.setattr(
         "judgearena.benchmarks.pairwise.comparisons.load_or_generate_completions",
@@ -82,6 +104,8 @@ def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, conf
             )
             assert "Frage" in text
             assert "should_refuse" not in text
+            if response:
+                assert value["state"]["completion"] == "I cannot help with that."
         return [raw] * len(inputs)
 
     monkeypatch.setattr(
@@ -92,8 +116,8 @@ def test_guard_runner_uses_saved_prompts_and_replays(tmp_path, monkeypatch, conf
     monkeypatch.setattr(
         "judgearena.models.make_model", lambda *a, **kw: pytest.fail("Cache miss")
     )
-    cfg.model.name = "dataset-prompts"
-    pd.testing.assert_frame_equal(first, run_benchmark(cfg, data=data))
+    saved = next((tmp_path / "results").rglob("config.yaml"))
+    pd.testing.assert_frame_equal(first, run_benchmark(load_config(saved), data=data))
     assert first.iloc[0]["concept_id"] == "x"
     assert EUGuardMetric().calculate(first)["fcr"] == 0
 

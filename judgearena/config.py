@@ -21,8 +21,12 @@ from pydantic_settings import (
 
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs
-from judgearena.prompts.parsing import resolve_judge_parser
 from judgearena.prompts.registry import prompt_option_files
+from judgearena.prompts.spec import (
+    JudgePromptSpec,
+    config_prompts,
+    resolve_prompt_paths,
+)
 from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
 from judgearena.tasks.schema import (
     AllReferencesBaseline,
@@ -38,6 +42,7 @@ from judgearena.tasks.schema import (
     TaskProvenance,
     TaskSpec,
 )
+from judgearena.utils.extensions import resolve_component_paths
 
 logger = get_logger(__name__)
 
@@ -57,6 +62,10 @@ def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
 
 def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     """Merge fields, replacing collections and sections whose implementation changes."""
+    if (path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)) and any(
+        key in overrides for key in ("file", "preset", "user", "user_file")
+    ):
+        return overrides.copy()
     identity = {
         ("protocol",): "runner",
         ("dataset",): "adapter",
@@ -68,6 +77,18 @@ def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     if identity in overrides and overrides[identity] != defaults.get(identity):
         return overrides.copy()
     merged = defaults.copy()
+    if path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",):
+        for field, opposite in (("system", "system_file"), ("system_file", "system")):
+            if overrides.get(field) is not None and opposite not in overrides:
+                merged.pop(opposite, None)
+    if path == ("protocol", "judge"):
+        if (
+            overrides.get("default_prompt_preset") is not None
+            and "prompt" not in overrides
+        ):
+            merged.pop("prompt", None)
+        elif overrides.get("prompt") is not None:
+            merged.pop("default_prompt_preset", None)
     for key, value in overrides.items():
         if isinstance(value, dict) and value and isinstance(merged.get(key), dict):
             merged[key] = _merge_overrides(merged[key], value, (*path, key))
@@ -221,85 +242,6 @@ class ModelArgs(BaseModel):
             )
         )
         return kwargs
-
-
-class JudgePromptSpec(BaseModel):
-    """Select a preset or custom template/parser, optionally from a YAML bundle."""
-
-    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
-
-    file: Path | None = Field(default=None, exclude=True)
-    """YAML bundle expanded into effective prompt settings when loaded."""
-
-    user: str | None = None
-    """Inline user template, paired with a named parser."""
-    system: str | None = None
-    """Optional inline system template."""
-
-    preset: str | None = None
-    """Named prompt/parser bundle."""
-
-    system_file: Path | None = None
-    """Path to the judge system prompt file."""
-
-    user_file: Path | None = None
-    """Path to the judge user-prompt template file."""
-
-    parser: str | None = None
-    """Parser for custom files; defaults to ``score``. Presets own their parser."""
-
-    options: dict[str, object] = Field(default_factory=dict)
-    """Settings accepted by the selected preset's configuration function."""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _load_bundle(cls, values):
-        if not isinstance(values, dict) or values.get("file") is None:
-            return values
-        if any(
-            value is not None and value != {}
-            for key, value in values.items()
-            if key != "file"
-        ):
-            raise ValueError("A prompt file owns its templates, parser and options.")
-        path = Path(values["file"])
-        with path.open(encoding="utf-8") as stream:
-            bundle = yaml.safe_load(stream)
-        if not isinstance(bundle, dict) or "file" in bundle:
-            raise ValueError(
-                "A prompt bundle must be a mapping without nested file references."
-            )
-        for owner, names in (
-            (bundle, ("system_file", "user_file")),
-            (bundle.get("options"), prompt_option_files(bundle.get("preset"))),
-        ):
-            if isinstance(owner, dict):
-                for name in names:
-                    value = owner.get(name)
-                    if isinstance(value, str) and not Path(value).is_absolute():
-                        owner[name] = str(path.resolve().parent / value)
-        return bundle
-
-    @model_validator(mode="after")
-    def _validate_source(self) -> JudgePromptSpec:
-        if (
-            sum(value is not None for value in (self.preset, self.user_file, self.user))
-            != 1
-        ):
-            raise ValueError(
-                "Select one of prompt.preset, prompt.user_file or prompt.user."
-            )
-        if self.system is not None and self.system_file is not None:
-            raise ValueError("Select either prompt.system or prompt.system_file.")
-        if self.preset is not None and any(
-            value is not None for value in (self.system_file, self.system, self.parser)
-        ):
-            raise ValueError("A prompt preset owns its templates and parser.")
-        if self.options and self.preset is None:
-            raise ValueError("Prompt options require a preset.")
-        if self.user_file is not None or self.user is not None:
-            resolve_judge_parser(self.parser or "score")
-        return self
 
 
 class JudgeArgs(BaseModel):
@@ -863,30 +805,27 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
 
 
 def _read_config(path: str | Path) -> dict:
-    """Read YAML, resolving judge asset paths relative to the configuration file."""
+    """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    judge = data.get("judge")
-    if isinstance(judge, dict):
-        prompt = judge.get("prompt")
-        if isinstance(prompt, dict):
-            for owner, names in (
-                (prompt, ("file", "system_file", "user_file")),
-                (prompt.get("options"), prompt_option_files(prompt.get("preset"))),
-            ):
-                if not isinstance(owner, dict):
-                    continue
-                for name in names:
-                    value = owner.get(name)
-                    if isinstance(value, str) and not Path(value).is_absolute():
-                        owner[name] = str(Path(path).resolve().parent / value)
+    resolved = data.get("resolved_task")
+    hash_matches = isinstance(resolved, dict) and resolved.get("provenance", {}).get(
+        "resolved_sha256"
+    ) == _canonical_sha256(resolved.get("spec", {}))
+    resolve_component_paths(data, Path(path).resolve().parent)
+    data = RunConfig._merge_task_overrides(data)
+    for prompt in config_prompts(data):
+        resolve_prompt_paths(prompt, Path(path).resolve().parent)
+    if hash_matches:
+        # Path resolution changes the definition, not its source provenance.
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])
     return data
 
 
 def load_config(path: str | Path) -> RunConfig:
-    """Load YAML; relative judge prompt and rubric paths start beside the YAML file."""
+    """Load YAML; relative component and prompt paths start beside the YAML file."""
     return RunConfig(**_read_config(path))
 
 

@@ -1,0 +1,3 @@
+judging_mode: pairwise
+parser: ../parsers.py:REWARD
+user_file: wildbench-reward.txt

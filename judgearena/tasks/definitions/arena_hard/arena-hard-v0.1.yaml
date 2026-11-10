@@ -18,7 +18,8 @@ protocol:
     strategy: task_default
     reference_id: gpt-4-0314
   judge:
-    default_prompt_preset: arena-hard
+    prompt:
+      preset: arena-hard
     default_swap_mode: both
     default_temperature: 0
     # The official prompt has the judge answer the question itself before the
