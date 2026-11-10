@@ -571,8 +571,10 @@ def test_public_api_runs_file_components_and_replays(
         run_benchmark,
     )
     from judgearena.config import load_config
+    from judgearena.prompts import registry as prompt_registry
     from judgearena.tasks import load_tasks
 
+    monkeypatch.setattr(prompt_registry, "PRESETS", prompt_registry.PRESETS.copy())
     source = tmp_path / "parser.py"
     source.write_text(
         "from judgearena.prompts.parsing import PairScore, ScoreParser, register_parser\n"
@@ -598,8 +600,13 @@ def test_public_api_runs_file_components_and_replays(
         "from judgearena.datasets.registry import DatasetAdapter, register_dataset\n"
         "from judgearena.datasets.data import CompletionData\n"
         "from judgearena.benchmarks.scoring import MeanScoreMetric, register_metric\n"
+        f"IMPORTED = register_metric('replay-imported-{source_kind}')(MeanScoreMetric)\n"
         f"@register_metric('replay-metric-{source_kind}')\n"
         "class Metric(MeanScoreMetric): pass\n"
+        "from judgearena.datasets.judgearena_tables import TableAdapter\n"
+        f"TABLE = register_dataset('replay-table-{source_kind}')(TableAdapter)\n"
+        "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
+        f"PROMPT = register_prompt(JudgePromptPreset(name='replay-prompt-{source_kind}'))\n"
         f"@register_dataset('replay-data-{source_kind}')\n"
         "class Adapter(DatasetAdapter):\n"
         "    def load_data(self):\n"
@@ -750,6 +757,12 @@ def test_public_api_runs_file_components_and_replays(
             "-c",
             """
 import sys
+from pathlib import Path
+from judgearena.utils.extensions import load_python_object
+component = next(Path(sys.argv[1]).parent.rglob("components.py"))
+load_python_object(component, "Adapter")
+from judgearena.datasets.registry import dataset_names
+assert {"arena_battles", "judgearena_tables"} <= dataset_names()
 from judgearena import run_benchmark
 from judgearena.config import load_config
 import judgearena.models as models

@@ -103,7 +103,7 @@ def register_dataset[T: type[DatasetAdapter]](name: str) -> Callable[[T], T]:
     """
 
     def register(adapter: T) -> T:
-        if loading_component(adapter):
+        if loading_component():
             return adapter
         if name in _DATASETS:
             raise ValueError(f"Dataset adapter {name!r} is already registered.")

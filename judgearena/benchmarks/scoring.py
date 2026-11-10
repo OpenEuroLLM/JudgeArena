@@ -96,7 +96,7 @@ def register_metric[T: type[_Metric]](name: str):
     """
 
     def register(metric: T) -> T:
-        if loading_component(metric):
+        if loading_component():
             return metric
         if not name or name in _METRIC_TYPES:
             raise ValueError(f"Metric {name!r} is empty or already registered.")

@@ -12,7 +12,7 @@ import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 
 from judgearena.prompts.criteria import configure_criteria_prompt
-from judgearena.utils.extensions import load_task_components
+from judgearena.utils.extensions import load_task_components, loading_component
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
@@ -264,10 +264,12 @@ def register_prompt(preset: JudgePromptPreset) -> JudgePromptPreset:
     """Register a prompt/parser bundle before constructing or loading a task."""
     if not preset.name.strip():
         raise ValueError("Prompt preset names must not be empty.")
-    if preset.name in PRESETS:
-        raise ValueError(f"Prompt preset {preset.name!r} is already registered.")
     if preset.inline_user is not None and preset.user_file is not None:
         raise ValueError("Choose inline_user or user_file for a prompt preset.")
+    if loading_component():
+        return preset
+    if preset.name in PRESETS:
+        raise ValueError(f"Prompt preset {preset.name!r} is already registered.")
     PRESETS[preset.name] = preset
     return preset
 

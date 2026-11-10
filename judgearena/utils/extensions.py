@@ -22,12 +22,9 @@ def python_reference(name: str | None) -> tuple[Path, str] | None:
 _component_module = ContextVar("component_module", default=None)
 
 
-def loading_component(component=None):
+def loading_component():
     """Explicit file references load objects without publishing registry names."""
-    module = _component_module.get()
-    return module is not None and (
-        component is None or module == getattr(component, "__module__", None)
-    )
+    return _component_module.get() is not None
 
 
 def load_python_module(path: Path, *, publish: bool = True):
@@ -61,6 +58,7 @@ _loading_registrations = False
 
 
 def load_python_object(path: Path, symbol: str):
+    load_task_components()
     module = load_python_module(path, publish=False)
     obj = getattr(module, symbol, None)
     # Re-exporting a class must not change its defining file or cache identity.
