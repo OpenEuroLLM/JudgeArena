@@ -15,7 +15,6 @@ from pydantic import Field, model_validator
 from judgearena.judging import JudgeRequest
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
-    FASTCHAT_PAIRWISE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     build_chat_prompt_template,
     resolve_run_judge_prompt,
@@ -112,7 +111,7 @@ def _load_pairwise_prompt(
         multi_turn=multi_turn, ref_based=ref_based
     )
     return ResolvedJudgePrompt(
-        preset_name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
+        preset_name="fastchat-pairwise",
         variant_name=name,
         parser=FastChatVerdictParser(),
         source="preset",

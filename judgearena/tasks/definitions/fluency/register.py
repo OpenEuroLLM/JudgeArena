@@ -3,7 +3,6 @@
 from judgearena.datasets.registry import register_dataset
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import (
-    FLUENCY_JUDGE_PROMPT_PRESET,
     JudgePromptPreset,
     register_prompt,
 )
@@ -23,7 +22,7 @@ SCORE_PARSER = JUDGE_PARSERS["score"]
 
 register_prompt(
     JudgePromptPreset(
-        name=FLUENCY_JUDGE_PROMPT_PRESET,
+        name="fluency",
         parser=SCORE_PARSER,
         inline_system=FLUENCY_SYSTEM_PROMPT,
         user_file="prompt.txt",

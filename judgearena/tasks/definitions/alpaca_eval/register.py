@@ -5,9 +5,6 @@ from pathlib import Path
 from judgearena.benchmarks.scoring import register_metric
 from judgearena.prompts.parsing import register_parser, resolve_judge_parser
 from judgearena.prompts.registry import (
-    ALPACA_EVAL_JSON_PROMPT_PRESET,
-    ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-    ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET,
     JudgePromptPreset,
     register_prompt,
 )
@@ -22,10 +19,7 @@ register_parser(
 )
 
 register_prompt(
-    JudgePromptPreset.from_file(
-        ALPACA_EVAL_JUDGE_PROMPT_PRESET,
-        HERE / "prompts/pairwise.yaml",
-    )
+    JudgePromptPreset.from_file("alpaca-eval", HERE / "prompts/pairwise.yaml")
 )
 
 
@@ -35,12 +29,8 @@ register_parser(
     "alpaca-eval-json", resolve_judge_parser(f"{HERE}/parsers.py:ALPACA_JSON")
 )
 register_prompt(
-    JudgePromptPreset.from_file(
-        ALPACA_EVAL_JSON_PROMPT_PRESET, HERE / "prompts/json.yaml"
-    )
+    JudgePromptPreset.from_file("alpaca-eval-json", HERE / "prompts/json.yaml")
 )
 register_prompt(
-    JudgePromptPreset.from_file(
-        ALPACA_EVAL_PAIR_SCORE_PROMPT_PRESET, HERE / "prompts/score.yaml"
-    )
+    JudgePromptPreset.from_file("alpaca-eval-pair-score", HERE / "prompts/score.yaml")
 )

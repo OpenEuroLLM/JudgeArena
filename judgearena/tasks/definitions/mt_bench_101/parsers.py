@@ -5,10 +5,9 @@ from __future__ import annotations
 import re
 
 from judgearena.prompts.parsing import ParsedScore
-from judgearena.prompts.registry import (
-    MT_BENCH_101_CLEAN_PROMPT_PRESET,
-    MT_BENCH_101_PROMPT_PRESET,
-)
+
+MT_BENCH_101_PROMPT_PRESET = "mt-bench-101"
+MT_BENCH_101_CLEAN_PROMPT_PRESET = "mt-bench-101-clean"
 
 DOUBLE_BRACKET_PATTERN = re.compile(r"\[\[(\d+)\]\]")
 UPSTREAM_SCORE_PATTERN = re.compile(r"\[([0-9]+)\]")

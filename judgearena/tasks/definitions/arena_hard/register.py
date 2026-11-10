@@ -6,8 +6,6 @@ from judgearena.benchmarks.scoring import register_metric
 from judgearena.datasets.registry import register_dataset
 from judgearena.prompts.parsing import register_parser, resolve_judge_parser
 from judgearena.prompts.registry import (
-    ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
-    ARENA_HARD_JUDGE_PROMPT_PRESET,
     JudgePromptPreset,
     register_prompt,
 )
@@ -24,17 +22,11 @@ register_parser(
 )
 
 register_prompt(
-    JudgePromptPreset.from_file(
-        ARENA_HARD_JUDGE_PROMPT_PRESET,
-        HERE / "prompts/pairwise.yaml",
-    )
+    JudgePromptPreset.from_file("arena-hard", HERE / "prompts/pairwise.yaml")
 )
 
 register_prompt(
-    JudgePromptPreset.from_file(
-        ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET,
-        HERE / "prompts/creative.yaml",
-    )
+    JudgePromptPreset.from_file("arena-hard-creative", HERE / "prompts/creative.yaml")
 )
 
 
