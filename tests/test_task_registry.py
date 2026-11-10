@@ -919,3 +919,60 @@ def test_inherited_rubric_paths_and_replay(tmp_path, monkeypatch):
             "description: " + tmp_path.name
             in Path(prompt.options["criteria_file"]).read_text()
         )
+
+
+@pytest.mark.parametrize("system_key", ["system", "system_file"])
+def test_partial_system_prompt_override(tmp_path, system_key):
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    template = tmp_path / "system.txt"
+    template.write_text("New system")
+    definition = _task_definition()
+    prompt = {
+        "user": "Compare {completion_a} {completion_b}",
+        "parser": "score",
+        "system": "Old system",
+    }
+    definition["protocol"]["judge"].update(
+        prompt=prompt, category_prompts={"coding": prompt}
+    )
+    root = tmp_path / "tasks"
+    _write_family(root, family="test", filename="test.yaml", definition=definition)
+    task = load_tasks(root)["test-task"]
+    override = {
+        system_key: str(template) if system_key == "system_file" else "New system"
+    }
+    cfg = RunConfig(
+        resolved_task=task,
+        model={"name": "Dummy/model"},
+        judge={"model": "Dummy/judge"},
+        protocol={
+            "judge": {
+                "prompt": {"system_file": str(template)},
+                "category_prompts": {"coding": {"system_file": str(template)}},
+            }
+        }
+        if system_key == "system"
+        else None,
+    )
+    cfg = RunConfig(
+        **{
+            **cfg.model_dump(mode="json"),
+            "protocol": {
+                "judge": {"prompt": override, "category_prompts": {"coding": override}}
+            },
+        }
+    )
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    template.unlink()
+    replay = load_config(run / "config.yaml")
+    for selection in (
+        replay.protocol.judge.prompt,
+        replay.protocol.judge.category_prompts["coding"],
+    ):
+        assert selection.user == prompt["user"] and selection.parser == "score"
+        assert (
+            selection.system == "New system"
+            or selection.system_file.read_text() == "New system"
+        )

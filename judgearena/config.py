@@ -77,6 +77,10 @@ def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     if identity in overrides and overrides[identity] != defaults.get(identity):
         return overrides.copy()
     merged = defaults.copy()
+    if path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",):
+        for field, opposite in (("system", "system_file"), ("system_file", "system")):
+            if overrides.get(field) is not None and opposite not in overrides:
+                merged.pop(opposite, None)
     if path == ("protocol", "judge"):
         if (
             overrides.get("default_prompt_preset") is not None
