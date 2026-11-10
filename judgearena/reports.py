@@ -5,6 +5,10 @@ from __future__ import annotations
 import abc
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from judgearena.benchmarks.scoring import ConfiguredMetrics
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -30,7 +34,7 @@ class Report(BaseModel, abc.ABC):
         return type(self).__name__
 
     @abc.abstractmethod
-    def render(self) -> None: ...
+    def render(self, metrics: ConfiguredMetrics = ()) -> None: ...
 
     def to_dict(self) -> dict:
         return self.model_dump(by_alias=True, exclude_none=True)
@@ -57,7 +61,7 @@ class BattleReport(Report):
     preferences: list = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
 
-    def render(self) -> None:
+    def render(self, metrics: ConfiguredMetrics = ()) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
         print("\n" + "=" * 60)
@@ -66,7 +70,7 @@ class BattleReport(Report):
         print(f"🤖 Competitors: Model A: {self.model_a} vs Model B: {self.model_b}")
         print(f"⚖️ Judge: {self.judge_model}")
         print("📈 Metrics:")
-        print(render_metrics(self.metrics))
+        print(render_metrics(self.metrics, metrics))
         if self.result_folder:
             print(f"📁 Results: {self.result_folder}")
         print("=" * 60 + "\n")
@@ -82,12 +86,12 @@ class EloReport(Report):
     model_name: str
     sampling_metadata: dict[str, object]
 
-    def render(self) -> None:
+    def render(self, metrics: ConfiguredMetrics = ()) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
         print(f"\n=== Results for {self.model_name} ===")
         print(f"Arena: {self.arena} | Judge: {self.judge_model}")
-        print(render_metrics(self.metrics))
+        print(render_metrics(self.metrics, metrics))
 
 
 class MetaEvalReport(Report):
@@ -103,7 +107,7 @@ class MetaEvalReport(Report):
     swap_mode: str
     metrics: dict[str, dict[str, object]]
 
-    def render(self) -> None:
+    def render(self, metrics: ConfiguredMetrics = ()) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
         print(f"\n=== Meta-eval: {self.task} ===")
@@ -112,7 +116,7 @@ class MetaEvalReport(Report):
             f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
             f"Swap mode: {self.swap_mode}"
         )
-        print(render_metrics(self.metrics))
+        print(render_metrics(self.metrics, metrics))
 
 
 class AnnotationReport(Report):
@@ -126,11 +130,11 @@ class AnnotationReport(Report):
     metadata: dict
     result_folder: str
 
-    def render(self) -> None:
+    def render(self, metrics: ConfiguredMetrics = ()) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
         print(
             f"\n{self.model} on {self.task}: {self.num_samples} answers judged by {self.judge_model}"
         )
-        print(render_metrics(self.metrics))
+        print(render_metrics(self.metrics, metrics))
         print(f"Results: {self.result_folder}")

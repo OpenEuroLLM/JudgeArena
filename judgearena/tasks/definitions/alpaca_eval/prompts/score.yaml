@@ -1,0 +1,4 @@
+judging_mode: pairwise
+parser: ../parsers.py:PAIR_SCORE
+system_file: alpaca-eval-ranking-system-prompt.txt
+user_file: alpaca-eval-pair-score-prompt.txt

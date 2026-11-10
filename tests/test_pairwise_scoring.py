@@ -282,3 +282,12 @@ def test_registered_metrics_receive_only_named_runtime_and_are_order_independent
     assert result["custom"]["draw"] == result["other"]["draw"]
     assert calculate_metrics(rows, metrics, runtime=runtime) == result
     assert calculate_metrics(rows, metrics[::-1], runtime=runtime) == result
+    for name in ("pairwise_win_rate", "mean_score"):
+        configured = build_metrics((MetricSpec(metric=name, name="same-result"),))
+        values = calculate_metrics(
+            pd.DataFrame({"pref": [0.0], "score": [8.0]}), configured
+        )
+        assert render_metrics(values, configured) == configured[0][1].render(
+            values["same-result"]
+        )
+    assert "same-result" not in scoring._METRIC_TYPES

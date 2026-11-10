@@ -6,11 +6,10 @@ import pandas as pd
 from datasets import get_dataset_config_names, load_dataset
 
 from judgearena.datasets.data import CompletionData, validate_messages
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 
-@register_dataset("wildbench")
 class WildBenchAdapter(DatasetAdapter):
     def _source(self, name: str) -> HuggingFaceDatasetSource:
         source = self.task.spec.dataset.sources.get(name)

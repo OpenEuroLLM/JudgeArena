@@ -202,7 +202,7 @@ def run_evaluation(
             },
         )
     results = report.to_dict()
-    report.render()
+    report.render(metrics)
     report.save(res_folder / f"results-{name}.json")
 
     eval_instruction_index = annotations["instruction_index"].drop_duplicates().tolist()

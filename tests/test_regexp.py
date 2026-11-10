@@ -7,13 +7,14 @@ from judgearena.prompts.parsing import (
     JUDGE_PARSERS,
     PairScore,
     ParsedPreference,
+    resolve_judge_parser,
     score_preference,
 )
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.utils import strip_thinking_tags
 
-parse_arena_hard_verdict = JUDGE_PARSERS["arena-hard-verdict"]
-parse_alpaca_eval_token = JUDGE_PARSERS["alpaca-eval-token"]
+parse_arena_hard_verdict = resolve_judge_parser("arena-hard-verdict")
+parse_alpaca_eval_token = resolve_judge_parser("alpaca-eval-token")
 
 
 def test_pair_score():

@@ -59,8 +59,8 @@ def test_wildbench_composes_saved_or_generated_answers_with_metrics(
 ):
     from judgearena import utils
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.datasets import wildbench
     from judgearena.models import DummyModel
+    from judgearena.tasks.definitions.wildbench import dataset as wildbench
     from judgearena.tasks.registry import get_packaged_task
     from judgearena.tasks.schema import TaskSpec
 
@@ -222,7 +222,7 @@ def test_reward_mix_generates_candidate_once_before_expanding_references(
 ):
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.datasets.data import CompletionData
-    from judgearena.datasets.wildbench import WildBenchAdapter
+    from judgearena.tasks.definitions.wildbench.dataset import WildBenchAdapter
     from judgearena.tasks.registry import get_packaged_task
 
     task = get_packaged_task("wildbench-reward-mix")
@@ -357,7 +357,7 @@ def test_all_references_rejects_reference_override_and_self_comparison(model):
 def test_independent_saved_answer_preserves_both_primary_tags(monkeypatch, tmp_path):
     from judgearena import utils
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.datasets import wildbench
+    from judgearena.tasks.definitions.wildbench import dataset as wildbench
 
     monkeypatch.setattr(utils, "data_root", tmp_path)
     monkeypatch.setattr(

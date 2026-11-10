@@ -153,8 +153,11 @@ def test_decision_scalar_conversions(kind, output, invert, value, expected):
 
 
 def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
+    import yaml
+
+    from judgearena.artifacts import prepare_run_directory
     from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
-    from judgearena.config import RunConfig
+    from judgearena.config import JudgePromptSpec, RunConfig, load_config
     from judgearena.prompts.registry import resolve_run_judge_prompt
 
     cfg = RunConfig(
@@ -176,6 +179,12 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
             },
         },
     )
+    bundle = tmp_path / "decision.yaml"
+    bundle.write_text(
+        yaml.safe_dump(cfg.judge.prompt.model_dump(mode="json", exclude_none=True))
+    )
+    cfg.judge.prompt = JudgePromptSpec(file=bundle)
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
     pairs = pd.DataFrame(
         [
             {
@@ -208,6 +217,14 @@ def test_decision_scores_use_shared_pairwise_conversion(monkeypatch, tmp_path):
     annotations, outcomes, _ = execute(model, pairs)
     monkeypatch.setattr(
         "urllib.request.urlopen", lambda *a, **k: pytest.fail("Cache miss")
+    )
+    bundle.unlink()
+    restored = load_config(run / "config.yaml")
+    execute, _ = prepare_pairwise_judging(
+        restored,
+        resolve_run_judge_prompt(restored.resolved_task, restored.judge),
+        pairs,
+        available_columns=pairs.columns,
     )
     replay, replay_outcomes, _ = execute(model, pairs)
     pd.testing.assert_frame_equal(annotations, replay)

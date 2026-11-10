@@ -6,7 +6,8 @@ tags: [single-answer, instruction-following, multi-turn, wildbench]
 protocol:
   runner: single_answer
   judge:
-    default_prompt_preset: wildbench-score
+    prompt:
+      preset: wildbench-score
     default_temperature: 0.0
     default_max_out_tokens: 4096
   scoring:
