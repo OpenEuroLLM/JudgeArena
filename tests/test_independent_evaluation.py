@@ -575,18 +575,14 @@ def test_public_api_runs_file_components_and_replays(
 
     source = tmp_path / "parser.py"
     source.write_text(
-        "from judgearena.prompts.parsing import ParsedScore\n"
-        "class GrammarParser:\n"
-        "    name = 'grammar'\n"
-        "    result_type = ParsedScore\n"
-        "    requires_top_logprobs = False\n"
-        "    def parse_result(self, text, *, top_logprobs=None):\n"
-        "        return ParsedScore(float(text))\n"
-        "PARSER = GrammarParser()\n"
+        "from judgearena.prompts.parsing import PairScore, ScoreParser, register_parser\n"
+        "PARSER = register_parser('grammar-file', ScoreParser())\n"
+        "PAIR = register_parser('grammar-pair', PairScore(temperature=0.5))\n"
     )
     reference = f"{source}:PARSER"
     monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
     parser = register_parser("grammar", parsing.resolve_judge_parser(reference))
+    assert not {"grammar-file", "grammar-pair"} & parsing.JUDGE_PARSERS.keys()
     for name, value in [("", parser), ("grammar", parser), ("broken", object())]:
         with pytest.raises(ValueError):
             register_parser(name, value)
@@ -629,7 +625,7 @@ def test_public_api_runs_file_components_and_replays(
         },
         model={"name": "saved"},
         judge={
-            "model": "Dummy/8",
+            "model": 'Dummy/{"score": 8}',
             "prompt": {"file": "_prompt.yaml"},
         },
         run={

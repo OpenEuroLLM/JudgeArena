@@ -22,10 +22,12 @@ def python_reference(name: str | None) -> tuple[Path, str] | None:
 _component_module = ContextVar("component_module", default=None)
 
 
-def loading_component(component):
+def loading_component(component=None):
     """Explicit file references load objects without publishing registry names."""
     module = _component_module.get()
-    return module is not None and module == getattr(component, "__module__", None)
+    return module is not None and (
+        component is None or module == getattr(component, "__module__", None)
+    )
 
 
 def load_python_module(path: Path, *, publish: bool = True):

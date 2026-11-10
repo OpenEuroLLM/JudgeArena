@@ -399,7 +399,7 @@ JUDGE_PARSERS: dict[str, OutputParser] = {
 
 def register_parser[T](name: str, parser: OutputParser[T]) -> OutputParser[T]:
     """Register a parser instance for use by name in custom prompt configs."""
-    if loading_component(type(parser)):
+    if loading_component():
         validate_parser(parser)
         return parser
     if not name.strip() or name in JUDGE_PARSERS:
