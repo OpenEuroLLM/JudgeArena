@@ -250,7 +250,11 @@ def _resolve(
         )
     base_path = _resolve_extends(normalized_path, extends)
     base, base_resources = _resolve(root, base_path, chain=(*chain, normalized_path))
-    return _merge_mapping(base, data), (*base_resources, digest)
+    merged = _merge_mapping(base, data)
+    # Options-only overrides need the inherited preset to identify file paths.
+    for prompt in config_prompts(merged):
+        resolve_prompt_paths(prompt, Path(str(resource)).resolve().parent)
+    return merged, (*base_resources, digest)
 
 
 def _resolve_extends(child_path: str, extends: str) -> str:

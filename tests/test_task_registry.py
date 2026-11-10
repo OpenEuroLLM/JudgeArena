@@ -852,3 +852,70 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
         user="override {completion}", parser="json-score"
     )
     assert templates(replay) == ["override {completion}"]
+
+
+def test_inherited_rubric_paths_and_replay(tmp_path, monkeypatch):
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    root = tmp_path / "definitions"
+    definition = _task_definition()
+    definition.pop("task")
+    selection = {
+        "preset": "criteria-score",
+        "options": {"criteria_file": "_rubric.yaml"},
+    }
+    definition["protocol"]["judge"].update(
+        prompt=selection, category_prompts={"coding": selection}
+    )
+    _write_family(root, family="base", filename="_base.yaml", definition=definition)
+    override = {"options": {"criteria_file": "_rubric.yaml"}}
+    _write_family(
+        root,
+        family="child",
+        filename="task.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "test-task",
+            "protocol": {"judge": {"prompt": override}},
+        },
+    )
+    for directory in (root / "base", root / "child", tmp_path):
+        (directory / "_rubric.yaml").write_text(
+            f"criteria: [{{name: grammar, description: {directory.name}}}]\n"
+        )
+    monkeypatch.chdir(tmp_path.parent)
+    task = load_tasks(root)["test-task"]
+    judge = task.spec.protocol.judge
+    assert Path(judge.prompt.options["criteria_file"]) == root / "child/_rubric.yaml"
+    assert (
+        Path(judge.category_prompts["coding"].options["criteria_file"])
+        == root / "base/_rubric.yaml"
+    )
+    values = RunConfig(
+        resolved_task=task,
+        model={"name": "Dummy/answer"},
+        judge={"model": "Dummy/judge"},
+    ).model_dump(mode="json")
+    values["protocol"] = {
+        "judge": {"prompt": override, "category_prompts": {"coding": override}}
+    }
+    config = tmp_path / "experiment.yaml"
+    config.write_text(yaml.safe_dump(values))
+    cfg = load_config(config)
+    for prompt in (
+        cfg.protocol.judge.prompt,
+        cfg.protocol.judge.category_prompts["coding"],
+    ):
+        assert Path(prompt.options["criteria_file"]) == tmp_path / "_rubric.yaml"
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    (tmp_path / "_rubric.yaml").unlink()
+    replay = load_config(run / "config.yaml")
+    for prompt in (
+        replay.protocol.judge.prompt,
+        replay.protocol.judge.category_prompts["coding"],
+    ):
+        assert (
+            "description: " + tmp_path.name
+            in Path(prompt.options["criteria_file"]).read_text()
+        )

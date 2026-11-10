@@ -809,6 +809,7 @@ def _read_config(path: str | Path) -> dict:
         "resolved_sha256"
     ) == _canonical_sha256(resolved.get("spec", {}))
     resolve_component_paths(data, Path(path).resolve().parent)
+    data = RunConfig._merge_task_overrides(data)
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
     if hash_matches:
