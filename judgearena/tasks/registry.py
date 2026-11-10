@@ -121,7 +121,9 @@ def _strict_yaml_mapping(text: str, *, path: str) -> dict[str, Any]:
     return data
 
 
-def _merge_mapping(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+def _merge_mapping(
+    parent: dict[str, Any], child: dict[str, Any], path: tuple = ()
+) -> dict[str, Any]:
     """Apply the documented recursive-map/replace-list/null-delete merge."""
     merged = deepcopy(parent)
     if child.get("default_prompt_preset") is not None and "prompt" not in child:
@@ -132,7 +134,7 @@ def _merge_mapping(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, A
         if value is None:
             merged.pop(key, None)
         elif (
-            key == "prompt"
+            (key == "prompt" or path[-1:] == ("category_prompts",))
             and isinstance(value, dict)
             and any(
                 source in value for source in ("file", "preset", "user", "user_file")
@@ -140,7 +142,7 @@ def _merge_mapping(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, A
         ):
             merged[key] = deepcopy(value)
         elif isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_mapping(merged[key], value)
+            merged[key] = _merge_mapping(merged[key], value, (*path, key))
         else:
             merged[key] = deepcopy(value)
     return merged

@@ -97,15 +97,20 @@ def prepare_run_directory(
                     owner["name"] = owner[key]
                 owner[key] = reference
     references.extend((prompt, "parser") for prompt in config_prompts(saved))
+    copied_components = {}
     for index, (owner, key) in enumerate(references):
         reference = python_reference(owner.get(key))
         if reference is not None:
             if key == "metric" and not owner.get("name"):
                 owner["name"] = owner[key]
             source, symbol = reference
-            target = output_dir / "components" / str(index) / source.name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            copyfile(source, target)
+            source = source.resolve()
+            target = copied_components.get(source)
+            if target is None:
+                target = output_dir / "components" / str(index) / source.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                copyfile(source, target)
+                copied_components[source] = target
             owner[key] = f"{target.relative_to(output_dir)}:{symbol}"
     for index, prompt in enumerate(config_prompts(saved)):
         for owner, name in prompt_file_fields(prompt):

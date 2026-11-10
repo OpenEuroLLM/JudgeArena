@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import sys
+from contextvars import ContextVar
 from pathlib import Path
 
 
@@ -18,7 +19,16 @@ def python_reference(name: str | None) -> tuple[Path, str] | None:
     return Path(filename), symbol
 
 
-def load_python_module(path: Path):
+_component_module = ContextVar("component_module", default=None)
+
+
+def loading_component(component):
+    """Explicit file references load objects without publishing registry names."""
+    module = _component_module.get()
+    return module is not None and module == getattr(component, "__module__", None)
+
+
+def load_python_module(path: Path, *, publish: bool = True):
     path = path.resolve()
     try:
         source = path.read_bytes()
@@ -31,12 +41,15 @@ def load_python_module(path: Path):
         spec = importlib.util.spec_from_file_location(module_name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
+        token = _component_module.set(None if publish else module_name)
         try:
             # Compile the read source: same-size edits can leave timestamp-based pyc stale.
             exec(compile(source, str(path), "exec"), module.__dict__)
         except Exception:
             sys.modules.pop(module_name, None)
             raise
+        finally:
+            _component_module.reset(token)
     return module
 
 
@@ -46,7 +59,7 @@ _loading_registrations = False
 
 
 def load_python_object(path: Path, symbol: str):
-    module = load_python_module(path)
+    module = load_python_module(path, publish=False)
     obj = getattr(module, symbol, None)
     # Re-exporting a class must not change its defining file or cache identity.
     if obj is not None and (

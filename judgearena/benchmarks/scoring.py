@@ -25,6 +25,7 @@ from judgearena.log import get_logger
 from judgearena.utils.extensions import (
     load_python_object,
     load_task_components,
+    loading_component,
     python_reference,
 )
 
@@ -95,6 +96,8 @@ def register_metric[T: type[_Metric]](name: str):
     """
 
     def register(metric: T) -> T:
+        if loading_component(metric):
+            return metric
         if not name or name in _METRIC_TYPES:
             raise ValueError(f"Metric {name!r} is empty or already registered.")
         _METRIC_TYPES[name] = metric

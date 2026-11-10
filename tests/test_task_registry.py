@@ -792,6 +792,35 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
         render_metrics,
     )
 
+    category_override = {
+        "judge": {"category_prompts": {"coding": {"preset": "default"}}}
+    }
+    overridden = RunConfig(
+        resolved_task=task,
+        protocol=category_override,
+        model=cfg.model,
+        judge=cfg.judge,
+    )
+    assert (
+        overridden.resolved_task.spec.protocol.judge.category_prompts["coding"].preset
+        == "default"
+    )
+    _write_family(
+        root,
+        family="override",
+        filename="task.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "override-task",
+            "protocol": category_override,
+        },
+    )
+    assert (
+        load_tasks(root)["override-task"]
+        .spec.protocol.judge.category_prompts["coding"]
+        .preset
+        == "default"
+    )
     source_cache = source_cache_dir(cfg.resolved_task, tmp_path)
     run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
     shutil.rmtree(root)

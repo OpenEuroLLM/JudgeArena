@@ -15,6 +15,7 @@ from judgearena.utils.extensions import (
     external_component_reference,
     load_python_object,
     load_task_components,
+    loading_component,
     python_reference,
 )
 
@@ -102,6 +103,8 @@ def register_dataset[T: type[DatasetAdapter]](name: str) -> Callable[[T], T]:
     """
 
     def register(adapter: T) -> T:
+        if loading_component(adapter):
+            return adapter
         if name in _DATASETS:
             raise ValueError(f"Dataset adapter {name!r} is already registered.")
         _DATASETS[name] = adapter

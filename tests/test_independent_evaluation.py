@@ -599,10 +599,12 @@ def test_public_api_runs_file_components_and_replays(
     components = tmp_path / "components.py"
     components.write_text(
         "import pandas as pd\n"
-        "from judgearena.datasets.registry import DatasetAdapter\n"
+        "from judgearena.datasets.registry import DatasetAdapter, register_dataset\n"
         "from judgearena.datasets.data import CompletionData\n"
-        "from judgearena.benchmarks.scoring import MeanScoreMetric\n"
+        "from judgearena.benchmarks.scoring import MeanScoreMetric, register_metric\n"
+        f"@register_metric('replay-metric-{source_kind}')\n"
         "class Metric(MeanScoreMetric): pass\n"
+        f"@register_dataset('replay-data-{source_kind}')\n"
         "class Adapter(DatasetAdapter):\n"
         "    def load_data(self):\n"
         "        return CompletionData(\n"
@@ -610,6 +612,12 @@ def test_public_api_runs_file_components_and_replays(
         "            pd.DataFrame({'instruction_index': [0], 'model': ['saved'],\n"
         "                          'completion': ['Hello.']}))\n"
     )
+    if source_kind == "config":
+        from judgearena.utils.extensions import load_python_module
+
+        load_python_module(
+            components
+        )  # Decorators have already registered these names.
     declaration = dict(
         dataset={"adapter": "./components.py:Adapter"},
         evaluation_name="grammar",
@@ -617,7 +625,7 @@ def test_public_api_runs_file_components_and_replays(
             "runner": "single_answer",
             "generation": {"mode": "single_turn_chat"},
             "judge": {"default_prompt_preset": "single-score"},
-            "scoring": {"metrics": [{"metric": "./components.py:MeanScoreMetric"}]},
+            "scoring": {"metrics": [{"metric": "./components.py:Metric"}]},
         },
         model={"name": "saved"},
         judge={
@@ -717,6 +725,7 @@ def test_public_api_runs_file_components_and_replays(
     assert resolved["provenance"]["resolved_sha256"] == _canonical_sha256(
         resolved["spec"]
     )
+    assert len(list(moved.rglob("components.py"))) == 1
     registered_metrics = dict(_METRIC_TYPES)
     caplog.clear()
     replay = load_config(moved / saved.name)
@@ -736,11 +745,35 @@ def test_public_api_runs_file_components_and_replays(
     assert _METRIC_TYPES == registered_metrics
     assert repeated.score.tolist() == [8]
     assert repeated.prompt_preset.tolist() == fresh.prompt_preset.tolist()
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+from judgearena import run_benchmark
+from judgearena.config import load_config
+import judgearena.models as models
+def forbidden(*args, **kwargs):
+    raise AssertionError("Replay must not construct a backend")
+models.make_model = forbidden
+assert run_benchmark(load_config(sys.argv[1])).score.tolist() == [8]
+""",
+            str(moved / saved.name),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
     reports = [
         json.loads(path.read_text()) for path in tmp_path.rglob("results-*.json")
     ]
-    assert len(reports) == 2
-    assert reports[0]["metrics"] == reports[1]["metrics"]
+    assert len(reports) == 3
+    assert all(report["metrics"] == reports[0]["metrics"] for report in reports)
     assert all(
         next(iter(report["metrics"].values()))["score"] == 8 for report in reports
     )

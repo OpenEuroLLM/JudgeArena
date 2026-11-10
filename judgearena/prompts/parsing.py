@@ -14,7 +14,11 @@ import pandas as pd
 
 from judgearena.prompts.criteria import SCALE_MAX, SCALE_MIN
 from judgearena.utils import strip_thinking_tags
-from judgearena.utils.extensions import load_python_object, load_task_components
+from judgearena.utils.extensions import (
+    load_python_object,
+    load_task_components,
+    loading_component,
+)
 from judgearena.utils.extensions import python_reference as parser_file_reference
 
 
@@ -395,6 +399,9 @@ JUDGE_PARSERS: dict[str, OutputParser] = {
 
 def register_parser[T](name: str, parser: OutputParser[T]) -> OutputParser[T]:
     """Register a parser instance for use by name in custom prompt configs."""
+    if loading_component(type(parser)):
+        validate_parser(parser)
+        return parser
     if not name.strip() or name in JUDGE_PARSERS:
         raise ValueError(f"Parser {name!r} is empty or already registered.")
     validate_parser(parser)

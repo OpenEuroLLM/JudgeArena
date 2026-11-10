@@ -62,7 +62,7 @@ def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
 
 def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     """Merge fields, replacing collections and sections whose implementation changes."""
-    if path[-1:] == ("prompt",) and any(
+    if (path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)) and any(
         key in overrides for key in ("file", "preset", "user", "user_file")
     ):
         return overrides.copy()
