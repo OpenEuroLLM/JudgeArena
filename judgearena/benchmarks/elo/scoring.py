@@ -21,6 +21,7 @@ class BradleyTerryMetric:
     soft: bool = True
     fit_mode: Literal["joint", "frozen"] = "joint"
     reference_min_battles: int = 0
+    bootstrap_group: str = "question_id"
 
     def __post_init__(self) -> None:
         if (
@@ -45,27 +46,6 @@ class BradleyTerryMetric:
         reference_ratings: pd.DataFrame | None = None,
     ) -> dict[str, object]:
         """Calculate Bradley-Terry ratings from battle rows."""
-        if reference_ratings is not None:
-            models = battles["evaluation_model"].dropna().unique()
-            if len(models) != 1:
-                raise ValueError("Frozen fitting requires one evaluation model")
-            groups = []
-            for language, frame in battles.groupby("lang", sort=True):
-                references = (
-                    reference_ratings.loc[reference_ratings.lang.eq(language)]
-                    .set_index("model")
-                    .rating.to_dict()
-                )
-                values = fit_frozen_rating(
-                    frame,
-                    models[0],
-                    references,
-                    hard=not self.soft,
-                    n_bootstraps=self.n_bootstraps,
-                    seed=seed,
-                )
-                groups.append({"group": language, "values": values})
-            return {"groups": {"lang": groups}}
         if self.reference_min_battles and "evaluation_model" in battles:
             is_reference = battles.evaluation_model.isna().to_numpy()
             keep = ~is_reference
@@ -83,7 +63,9 @@ class BradleyTerryMetric:
         if not self.soft:
             scoring_battles["pref"] = scoring_battles["pref_hard"]
         if self.fit_mode == "frozen":
-            return self._calculate_frozen(scoring_battles, seed=seed)
+            return self._calculate_frozen(
+                scoring_battles, seed=seed, reference_ratings=reference_ratings
+            )
         point_ratings = fit_bradley_terry(
             scoring_battles, pref_col="pref", baseline_model=self.baseline_model
         )
@@ -186,24 +168,49 @@ class BradleyTerryMetric:
             "reference_anchor_battles": len(reference_battles),
         }
 
-    def _calculate_frozen(self, battles: pd.DataFrame, *, seed: int) -> dict:
+    def _calculate_frozen(
+        self,
+        battles: pd.DataFrame,
+        *,
+        seed: int,
+        reference_ratings: pd.DataFrame | None = None,
+    ) -> dict:
+        """Fit the candidate against saved per-language ratings, or ones fitted here."""
         candidates = battles["evaluation_model"].dropna().unique()
         if len(candidates) != 1:
             raise ValueError("Frozen Elo requires exactly one model under evaluation.")
         candidate = str(candidates[0])
-        reference_battles = battles.loc[battles.evaluation_model.isna()]
-        references = fit_bradley_terry(
-            reference_battles, baseline_model=self.baseline_model
-        )
         judgments = battles.loc[battles.evaluation_model.notna()]
-        values = fit_frozen_rating(
-            judgments,
-            candidate,
-            references,
-            group_col="question_id",
-            n_bootstraps=self.n_bootstraps,
-            seed=seed,
+
+        def fit(frame, references):
+            return fit_frozen_rating(
+                frame,
+                candidate,
+                references,
+                group_col=self.bootstrap_group,
+                n_bootstraps=self.n_bootstraps,
+                seed=seed,
+            )
+
+        if reference_ratings is not None:
+            groups = [
+                {
+                    "group": language,
+                    "values": fit(
+                        frame,
+                        reference_ratings.loc[reference_ratings.lang.eq(language)]
+                        .set_index("model")
+                        .rating.to_dict(),
+                    ),
+                }
+                for language, frame in judgments.groupby("lang", sort=True)
+            ]
+            return {"groups": {"lang": groups}}
+        references = fit_bradley_terry(
+            battles.loc[battles.evaluation_model.isna()],
+            baseline_model=self.baseline_model,
         )
+        values = fit(judgments, references)
         ratings = {**references, candidate: values["rating"]}
         counts = pd.concat([battles.model_a, battles.model_b]).value_counts()
         return {
@@ -363,7 +370,10 @@ def frozen_metric_inputs(requests, *, ratings, methods, n_bootstraps, seed):
             (
                 MetricSpec(metric="bradley_terry", name=name),
                 BradleyTerryMetric(
-                    soft=method["soft"], n_bootstraps=n_bootstraps, fit_mode="frozen"
+                    soft=method["soft"],
+                    n_bootstraps=n_bootstraps,
+                    fit_mode="frozen",
+                    bootstrap_group="split_group",
                 ),
             )
         )
