@@ -908,8 +908,9 @@ def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
     if hash_matches:
-        # Path resolution changes the definition, not its source provenance.
-        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])
+        # Resolve paths and newly introduced schema defaults without changing provenance.
+        normalized = TaskSpec.model_validate(resolved["spec"]).model_dump(mode="json")
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(normalized)
     return data
 
 

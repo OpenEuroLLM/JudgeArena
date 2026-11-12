@@ -706,6 +706,21 @@ def test_saved_configuration_keeps_supplied_task_definition(
     import yaml
 
     saved = yaml.safe_load(path.read_text())
+    # Older snapshots omit defaults introduced by newer schemas.
+    definition = saved["resolved_task"]["spec"]
+    for key in (
+        "preference_temperature",
+        "calibrate_temperature",
+        "calibration_size",
+        "calibration_min_battles",
+    ):
+        definition["protocol"]["judge"].pop(key)
+    saved["resolved_task"]["provenance"]["resolved_sha256"] = (
+        config_module._canonical_sha256(definition)
+    )
+    path.write_text(yaml.safe_dump(saved))
+    assert load_config(path).resolved_task == cfg.resolved_task
+    assert "hash" not in caplog.text
     saved["resolved_task"]["spec"]["description"] = "Edited saved task."
     path.write_text(yaml.safe_dump(saved))
     reloaded = load_config(path)
