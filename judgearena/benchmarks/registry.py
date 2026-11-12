@@ -23,6 +23,8 @@ class BenchmarkRunner(Protocol):
         /,
         *,
         data: CompletionData | None = None,
+        output_dir: str | None = None,
+        **runner_options,
     ) -> object: ...
 
 

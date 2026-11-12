@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 from judgearena.battles import hard_preferences, summarize_bootstrap
-from judgearena.benchmarks.elo.rating import fit_bradley_terry
+from judgearena.benchmarks.elo.rating import fit_bradley_terry, fit_frozen_rating
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -18,8 +19,17 @@ class BradleyTerryMetric:
     n_bootstraps: int = 0
     baseline_model: str | None = None
     soft: bool = True
+    fit_mode: Literal["joint", "frozen"] = "joint"
+    reference_min_battles: int = 0
 
     def __post_init__(self) -> None:
+        if (
+            type(self.reference_min_battles) is not int
+            or self.reference_min_battles < 0
+        ):
+            raise ValueError("reference_min_battles must be a non-negative integer")
+        if self.fit_mode not in {"joint", "frozen"}:
+            raise ValueError("fit_mode must be frozen or joint")
         if type(self.n_bootstraps) is not int or self.n_bootstraps < 0:
             raise ValueError("n_bootstraps must be a non-negative integer")
         if self.baseline_model is not None and not isinstance(self.baseline_model, str):
@@ -34,6 +44,15 @@ class BradleyTerryMetric:
         seed: int = 0,
     ) -> dict[str, object]:
         """Calculate Bradley-Terry ratings from battle rows."""
+        if self.reference_min_battles and "evaluation_model" in battles:
+            reference_mask = battles.evaluation_model.isna()
+            references = battles.loc[reference_mask]
+            counts = pd.concat([references.model_a, references.model_b]).value_counts()
+            eligible = counts[counts >= self.reference_min_battles].index
+            battles = battles.loc[
+                ~reference_mask
+                | (battles.model_a.isin(eligible) & battles.model_b.isin(eligible))
+            ]
         required = {"model_a", "model_b", "pref"}
         if not self.soft:
             required.add("pref_hard")
@@ -43,6 +62,8 @@ class BradleyTerryMetric:
         scoring_battles = battles.copy()
         if not self.soft:
             scoring_battles["pref"] = scoring_battles["pref_hard"]
+        if self.fit_mode == "frozen":
+            return self._calculate_frozen(scoring_battles, seed=seed)
         point_ratings = fit_bradley_terry(
             scoring_battles, pref_col="pref", baseline_model=self.baseline_model
         )
@@ -145,9 +166,55 @@ class BradleyTerryMetric:
             "reference_anchor_battles": len(reference_battles),
         }
 
+    def _calculate_frozen(self, battles: pd.DataFrame, *, seed: int) -> dict:
+        candidates = battles["evaluation_model"].dropna().unique()
+        if len(candidates) != 1:
+            raise ValueError("Frozen Elo requires exactly one model under evaluation.")
+        candidate = str(candidates[0])
+        reference_battles = battles.loc[battles.evaluation_model.isna()]
+        references = fit_bradley_terry(
+            reference_battles, baseline_model=self.baseline_model
+        )
+        judgments = battles.loc[battles.evaluation_model.notna()]
+        values = fit_frozen_rating(
+            judgments,
+            candidate,
+            references,
+            group_col="question_id",
+            n_bootstraps=self.n_bootstraps,
+            seed=seed,
+        )
+        ratings = {**references, candidate: values["rating"]}
+        counts = pd.concat([battles.model_a, battles.model_b]).value_counts()
+        return {
+            **values,
+            "ratings": ratings,
+            "rating_entries": [
+                {
+                    "model": model,
+                    "rating": rating,
+                    "ci_low": values["ci_low"] if model == candidate else rating,
+                    "ci_high": values["ci_high"] if model == candidate else rating,
+                    "n_battles": int(counts[model]),
+                    "source": "evaluated" if model == candidate else "reference",
+                }
+                for model, rating in ratings.items()
+            ],
+            "reference_ratings": references,
+            "evaluation_model": candidate,
+            "fit_mode": "frozen",
+            "intervals": "conditional on frozen references",
+        }
+
     @staticmethod
     def render(values: dict[str, object]) -> str:
         """Render point or arena-anchored Bradley-Terry values."""
+        if "rating" in values and "ratings" not in values:
+            return (
+                f"Rating: {values['rating']:.1f} "
+                f"[{values['ci_low']:.1f}, {values['ci_high']:.1f}] "
+                "(conditional on frozen references)"
+            )
         if "method" not in values:
             lines = ["bradley_terry ratings:"]
             ratings = values["ratings"]
@@ -159,6 +226,12 @@ class BradleyTerryMetric:
                     for model, rating in sorted(
                         ratings.items(), key=lambda item: -item[1]
                     )
+                )
+            if values.get("fit_mode") == "frozen":
+                lines.append(
+                    f"{values['evaluation_model']}: {values['rating']:.1f} "
+                    f"[{values['ci_low']:.1f}, {values['ci_high']:.1f}] "
+                    "(conditional on frozen references)"
                 )
             return "\n".join(lines)
         lines = [
@@ -197,3 +270,28 @@ class BradleyTerryMetric:
         else:
             lines.append("No overlapping arena models to compute MAE.")
         return "\n".join(lines)
+
+
+def elo_metrics(cfg):
+    """Translate legacy Elo options into ordinary metric requests."""
+    from judgearena.benchmarks.scoring import build_metrics
+
+    requests = cfg.resolved_task.spec.protocol.scoring.metrics
+    overrides = {
+        "bradley_terry": {
+            "n_bootstraps": cfg.elo.n_bootstraps,
+            "baseline_model": cfg.elo.baseline_model,
+            "soft": cfg.elo.soft_elo,
+            "fit_mode": cfg.elo.fit_mode,
+        }
+    }
+    for request in requests:
+        if request.metric != "bradley_terry":
+            continue
+        parameters = overrides.setdefault(
+            request.name or request.metric, {"fit_mode": cfg.elo.fit_mode}
+        )
+        parameters["reference_min_battles"] = request.parameters.get(
+            "reference_min_battles", 500 if cfg.elo.fit_mode == "joint" else 0
+        )
+    return build_metrics(requests, parameter_overrides_by_metric=overrides)

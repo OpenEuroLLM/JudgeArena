@@ -1,13 +1,15 @@
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-import judgearena.benchmarks.elo.calibration as elo_calibration
 import judgearena.benchmarks.elo.runner as estimate_elo_ratings
 import judgearena.benchmarks.evaluation as pairwise_runner
+import judgearena.benchmarks.pairwise.calibration as elo_calibration
 import judgearena.benchmarks.pairwise.comparisons as preparation
 import judgearena.models as models
 from judgearena.benchmarks.elo.rating import (
@@ -292,6 +294,7 @@ def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
                 MetricSpec(
                     metric="bradley_terry",
                     parameters={
+                        "fit_mode": "joint",
                         "n_bootstraps": 2,
                         "baseline_model": ARENA_MODELS[0],
                         "soft": False,
@@ -304,7 +307,7 @@ def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
     protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
     task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
     monkeypatch.setattr(
-        estimate_elo_ratings,
+        elo_calibration,
         "calibrate_pairscore_temperature",
         lambda *args, **kwargs: pytest.fail(
             "Disabled or hard Elo must not invoke calibration"
@@ -345,6 +348,13 @@ def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
     result = run_elo(cfg, task)
 
     assert set(result["metrics"]) == {"pairwise_win_rate"}
+    # Graph runs use the same saved-answer and evaluation artifacts as other tasks.
+    assert len(pd.read_parquet(next(tmp_path.rglob("answers.parquet")))) == 10
+    manifest = next(tmp_path.rglob("evaluation.json"))
+    metadata = json.loads((manifest.parent / "run-metadata.v1.json").read_text())
+    assert all(
+        (manifest.parent / item["path"]).is_file() for item in metadata["artifacts"]
+    )
     assert not list(tmp_path.rglob("bootstrap_ratings.csv"))
     assert not list(tmp_path.rglob("elo_ratings.json"))
     log_text = next(tmp_path.rglob("run-*.log")).read_text()
@@ -626,6 +636,7 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
         raise AssertionError("Cached judging and calibration must not load a model")
 
     monkeypatch.setattr(models, "make_model", unavailable)
+    cfg = load_config(Path(result["result_path"]).parent / "config.yaml")
     cfg.run.result_folder = str(tmp_path / "replay")
     replay = run_elo_with_task(cfg)
     assert _pairwise_metric(replay) == _pairwise_metric(result)
@@ -860,3 +871,76 @@ def test_elo_temperature_follows_category_parser(
     for row, pref in zip(annotations.itertuples(), rows.pref, strict=True):
         preference = 1 / (1 + math.exp(-1.6)) if row.prompt_preset == "default" else 0.0
         assert pref == pytest.approx(1 - preference if row.swapped else preference)
+
+
+@pytest.mark.parametrize(
+    "runner, temperature", [("elo", 0.7), ("pairwise", 0.7), ("pairwise", None)]
+)
+def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
+    tmp_path, monkeypatch, runner, temperature
+):
+    from judgearena.benchmarks.runner import run_benchmark
+
+    cfg = RunConfig(
+        task="elo-comparia",
+        model={"name": "Dummy/candidate"},
+        judge={"model": "Dummy/score A: 6 score B: 8"},
+        graph={"random_battles": 6},
+        protocol={
+            "runner": runner,
+            "generation": {"mode": "single_turn_chat"},
+            "baseline": {"strategy": "none"},
+            **({"arena": "ComparIA"} if runner == "elo" else {}),
+            "judge": {
+                "default_prompt_preset": "default",
+                **(
+                    {"preference_temperature": temperature}
+                    if temperature is not None
+                    else {}
+                ),
+                "calibrate_temperature": False,
+            },
+            "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]},
+        },
+        run={"store_root": str(tmp_path / "cache"), "no_log_file": True},
+    )
+    data = normalize_battles(_arena_df(30), "ComparIA")
+    first = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
+    report = json.loads(
+        (
+            first.parent / json.loads(first.read_text())["artifacts"]["report"]
+        ).read_text()
+    )
+    assert report["report_type"] == "ComparisonReport"
+    metric_data = pd.read_parquet(first.parent / "metric-data.parquet")
+    assert (
+        metric_data.loc[metric_data.evaluation_model.isna(), "completion_a"]
+        .isna()
+        .all()
+    )
+    saved = load_config(first.parent / "config.yaml")
+    spec = saved.resolved_task.spec.model_dump()
+    spec["protocol"]["scoring"]["metrics"] = [
+        {"metric": "bradley_terry", "parameters": {"soft": False, "n_bootstraps": 0}}
+    ]
+    saved.resolved_task = replace(
+        saved.resolved_task, spec=type(saved.resolved_task.spec).model_validate(spec)
+    )
+    monkeypatch.setattr(
+        models, "make_model", lambda *a, **kw: pytest.fail("Replay must use cache")
+    )
+    second = run_benchmark(saved, data=data, output_dir=tmp_path / "second")
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(first.parent / "outcomes.parquet"),
+        pd.read_parquet(second.parent / "outcomes.parquet"),
+    )
+    unlabeled = replace(data, battles=data.battles.drop(columns="reference_pref"))
+    if runner == "elo":
+        with pytest.raises(ValueError, match="requires observed reference preferences"):
+            run_benchmark(cfg, data=unlabeled, output_dir=tmp_path / "unlabeled")
+        return
+    third = run_benchmark(cfg, data=unlabeled, output_dir=tmp_path / "unlabeled")
+    assert (
+        json.loads(third.read_text())["metrics"]
+        == json.loads(first.read_text())["metrics"]
+    )

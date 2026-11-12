@@ -53,10 +53,33 @@ class MetricRequest(Protocol):
 
 @dataclass(frozen=True)
 class MeanScoreMetric:
-    """Average finite scalar annotations on their original scale."""
+    """Average scalar scores and any parsed.details.criteria scores, counting missing values."""
 
     def calculate(self, annotations: pd.DataFrame) -> dict[str, object]:
-        scores = pd.to_numeric(annotations["score"], errors="raise")
+        result = self._summarize(annotations["score"])
+        if "parsed" in annotations:
+            values = [
+                parsed.get("details", {}).get("criteria", {})
+                if isinstance(parsed, dict)
+                else {}
+                for parsed in annotations.parsed
+            ]
+            criteria = pd.DataFrame(
+                [value if isinstance(value, dict) else {} for value in values],
+                index=annotations.index,
+            ).apply(pd.to_numeric, errors="coerce")
+            criteria = criteria.replace([np.inf, -np.inf], np.nan).dropna(
+                axis=1, how="all"
+            )
+            if len(criteria.columns):
+                result["criteria"] = {
+                    name: self._summarize(criteria[name]) for name in criteria
+                }
+        return result
+
+    @staticmethod
+    def _summarize(scores: pd.Series) -> dict[str, object]:
+        scores = pd.to_numeric(scores, errors="raise")
         if not np.isfinite(scores.dropna()).all():
             raise ValueError("Scores must be finite or missing.")
         return {
@@ -270,9 +293,14 @@ def render_metrics(
                 for key, value in result.items()
                 if key not in ("groups", "breakdown_errors")
             }
-            sections.append(
-                metric_type.render(overall) if overall else f"{name}: unavailable"
-            )
+            if overall:
+                sections.append(metric_type.render(overall))
+            elif not any(
+                group["values"]
+                for groups in result.get("groups", {}).values()
+                for group in groups
+            ):
+                sections.append(f"{name}: unavailable")
             for field, error in result.get("breakdown_errors", {}).items():
                 sections.append(f"{field}: failed — {error}")
             for field, groups in result.get("groups", {}).items():

@@ -73,6 +73,15 @@ class JudgeSpec(StrictFrozenModel):
 
 
 class PairwiseJudgeSpec(JudgeSpec):
+    preference_temperature: float | None = Field(default=None, allow_inf_nan=False)
+    """Optional PairScore outcome conversion; unset retains the parser's temperature."""
+
+    calibrate_temperature: bool | None = None
+    """Fit PairScore conversion against reference preferences; None uses legacy defaults."""
+    calibration_size: int | None = Field(default=None, gt=0)
+    calibration_min_battles: int = Field(default=500, ge=0)
+    """Minimum appearances per reference model in the calibration pool."""
+
     score_temperature: float = Field(default=0.3, gt=0, allow_inf_nan=False)
     """Multiplier on independent score differences when converting them to preferences."""
     minimum_score_by: tuple[str, ...] = ()

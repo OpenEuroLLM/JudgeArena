@@ -882,3 +882,17 @@ def test_cli_dataset_override_respects_inherited_adapter(tmp_path, override, exp
     flag = "--dataset.options" if override == "{}" else "--dataset"
     cfg = build_run_config(["--config_path", str(path), flag, override])
     assert cfg.dataset.options == expected
+
+
+def test_cli_task_override_keeps_explicit_protocol(tmp_path):
+    from judgearena.config import resolve_cli_config
+
+    path = tmp_path / "run.yaml"
+    path.write_text(
+        "task: arena-hard-v0.1\nmodel: {name: Dummy/candidate}\njudge: {model: Dummy/judge}\nprotocol: {judge: {default_max_out_tokens: 17}}\n"
+    )
+    cfg = RunConfig(**resolve_cli_config(["--task", "mt-bench"], config_path=path))
+    protocol = cfg.resolved_task.spec.protocol
+    assert protocol.generation.mode == "multi_turn_chat"
+    assert protocol.baseline.reference_id == "gpt-3.5-turbo"
+    assert protocol.judge.default_max_out_tokens == 17

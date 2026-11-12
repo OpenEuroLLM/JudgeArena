@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import judgearena.benchmarks.elo.calibration as calibration
-from judgearena.benchmarks.elo.calibration import (
+import judgearena.benchmarks.pairwise.calibration as calibration
+from judgearena.benchmarks.pairwise.calibration import (
     calibrate_pairscore_temperature,
     fit_temperature,
 )

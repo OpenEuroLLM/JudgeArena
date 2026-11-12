@@ -35,6 +35,7 @@ from judgearena.tasks.schema import (
     EloProtocol,
     EloScoringSpec,
     MetaEvalProtocol,
+    NoBaseline,
     ProtocolSpec,
     ResolvedTaskSpec,
     SingleAnswerProtocol,
@@ -363,10 +364,21 @@ class GenerationArgs(BaseModel):
     means no judge-side character truncation."""
 
 
+class GraphArgs(BaseModel):
+    """Sampling of saved comparison rows, independent of scoring metrics."""
+
+    model_config = ConfigDict(extra="forbid")
+    random_battles: int | None = Field(default=None, gt=0)
+    per_language: int | None = Field(default=None, gt=0)
+
+
 class EloArgs(BaseModel):
     """Experiment settings for tasks using the ELO protocol."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
+
+    fit_mode: Literal["frozen", "joint"] = "frozen"
+    """Freeze reference ratings before fitting the candidate; joint refits all models."""
 
     baseline_model: str | None = None
     """Model anchored at 1000 ELO; ratings are reported relative to it."""
@@ -416,7 +428,7 @@ class EloArgs(BaseModel):
             "soft_elo": parameters.get("soft", scoring.default_soft),
             "soft_elo_temperature": scoring.default_temperature,
         }
-        for key in ("n_bootstraps", "baseline_model"):
+        for key in ("n_bootstraps", "baseline_model", "fit_mode"):
             if key in parameters:
                 values[key] = parameters[key]
         values.update(self.model_dump(exclude_unset=True))
@@ -506,6 +518,9 @@ class RunConfig(BaseSettings):
 
     generation: GenerationArgs = Field(default_factory=GenerationArgs)
     """Instruction count and input truncation."""
+
+    graph: GraphArgs | None = None
+    """Sample saved comparisons instead of constructing baseline pairs."""
 
     elo: EloArgs | None = None
     """Runtime settings used only by tasks with an ELO protocol."""
@@ -716,7 +731,8 @@ class RunConfig(BaseSettings):
                         "model.baseline cannot override an all_references policy."
                     )
             elif self.model.baseline is None and not isinstance(
-                protocol.baseline, (TaskDefaultBaseline, CategoryDefaultsBaseline)
+                protocol.baseline,
+                (TaskDefaultBaseline, CategoryDefaultsBaseline, NoBaseline),
             ):
                 raise ValueError(f"model.baseline is required for task {self.task!r}.")
         return self
@@ -740,6 +756,48 @@ class RunConfig(BaseSettings):
             base_engine_kwargs=self.judge_engine_kwargs(),
             fallback_chat_template=self.model.chat_template,
         )
+
+    @property
+    def graph_sampling(self) -> GraphArgs:
+        """Accept old sampling fields only when no graph settings were supplied."""
+        if self.graph is not None:
+            return self.graph
+        return GraphArgs(
+            random_battles=self.elo.elo_random_battles if self.elo else None,
+            per_language=self.elo.n_instructions_per_language if self.elo else None,
+        )
+
+    @property
+    def graph_filters(self) -> dict:
+        from judgearena.datasets import resolve_dataset_filters
+
+        legacy = {"lang": self.elo.languages} if self.elo and self.elo.languages else {}
+        return resolve_dataset_filters(self.resolved_task, self.run.filters, legacy)
+
+    @property
+    def preference_settings(self):
+        """Judge-owned conversion settings, with legacy Elo fields as fallbacks."""
+        spec = self.resolved_task.spec.protocol.judge
+        values = {}
+        if self.elo is not None:
+            legacy = self.elo.resolve(self.resolved_task.spec.protocol.scoring)
+            values = {
+                "preference_temperature": legacy.soft_elo_temperature
+                if legacy.soft_elo
+                else None,
+                "calibrate_temperature": legacy.calibrate_temperature
+                and legacy.soft_elo,
+                "calibration_size": legacy.calibration_size,
+            }
+        for key in (
+            "preference_temperature",
+            "calibrate_temperature",
+            "calibration_size",
+        ):
+            value = getattr(spec, key, None)
+            if value is not None:
+                values[key] = value
+        return spec.model_copy(update=values)
 
     def for_task(self, task: ResolvedTaskSpec | None) -> RunConfig:
         """Apply task defaults, retaining explicit settings (all saved settings on reload)."""
@@ -768,14 +826,33 @@ class RunConfig(BaseSettings):
         # When neither global is set (direct construction / load_config), use init kwargs.
         if _ACTIVE_CLI_ARGS is None and _ACTIVE_CONFIG_PATH is None:
             return (init_settings,)
-        values = _read_config(_ACTIVE_CONFIG_PATH) if _ACTIVE_CONFIG_PATH else {}
-        if _ACTIVE_CLI_ARGS is not None:
-            cli = CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
-            overrides = cli()
-            if "task" in overrides:
-                values = {**values, "task": overrides["task"]}
-            values = _merge_overrides(cls._merge_task_overrides(values), overrides)
+        values = resolve_cli_config(
+            _ACTIVE_CLI_ARGS or [],
+            config_path=_ACTIVE_CONFIG_PATH,
+            settings_cls=settings_cls,
+        )
         return (InitSettingsSource(settings_cls, values),)
+
+
+def resolve_cli_config(
+    argv, *, config_path=None, settings_cls=RunConfig, allowed_sections=None
+):
+    """Resolve task/config/CLI values before command-specific model validation."""
+    overrides = CliSettingsSource(settings_cls, cli_parse_args=argv)()
+    values = (
+        _read_config(config_path, task_override=overrides.get("task"))
+        if config_path
+        else {}
+    )
+    if allowed_sections is not None and (set(values) | set(overrides)) - set(
+        allowed_sections
+    ):
+        raise ValueError(
+            f"Command accepts {', '.join(sorted(allowed_sections))} settings only."
+        )
+    if "task" in overrides:
+        values = {**values, "task": overrides["task"]}
+    return _merge_overrides(settings_cls._merge_task_overrides(values), overrides)
 
 
 def build_run_config(argv: list[str] | None = None) -> RunConfig:
@@ -785,7 +862,7 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     """
     global _ACTIVE_CONFIG_PATH, _ACTIVE_CLI_ARGS
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument("--config_path", default=None)
+    pre.add_argument("--config_path", "--config", default=None)
     pre.add_argument("-v", "--verbose", action="count", default=0)
     pre.add_argument("-q", "--quiet", action="store_true")
     pre_args, rest = pre.parse_known_args(argv)
@@ -802,12 +879,15 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def _read_config(path: str | Path) -> dict:
+def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
+    if task_override is not None and task_override != data.get("task"):
+        data["task"] = task_override
+        data.pop("resolved_task", None)
     resolved = data.get("resolved_task")
     hash_matches = isinstance(resolved, dict) and resolved.get("provenance", {}).get(
         "resolved_sha256"

@@ -58,6 +58,31 @@ def test_mean_score_preserves_scale_and_counts_missing_results():
         "num_samples": 3,
         "num_missing": 1,
     }
+    criteria = metric.calculate(
+        pd.DataFrame(
+            {
+                "score": [7, 5, None],
+                "parsed": [
+                    {"details": {"criteria": {"clarity": 8, "completeness": 6}}},
+                    {"details": {"criteria": {"clarity": 5}}},
+                    None,
+                ],
+            }
+        )
+    )["criteria"]
+    assert criteria == {
+        "clarity": {"score": 6.5, "num_samples": 3, "num_missing": 1},
+        "completeness": {"score": 6.0, "num_samples": 3, "num_missing": 2},
+    }
+    for metadata in ("accuracy and clarity", {"accuracy": "high"}):
+        plain = pd.DataFrame(
+            {"score": [7], "parsed": [{"details": {"criteria": metadata}}]}
+        )
+        assert metric.calculate(plain) == {
+            "score": 7,
+            "num_samples": 1,
+            "num_missing": 0,
+        }
     assert metric.calculate(pd.DataFrame({"score": [None]}))["score"] is None
     with pytest.raises(ValueError, match="finite"):
         metric.calculate(pd.DataFrame({"score": [float("inf")]}))

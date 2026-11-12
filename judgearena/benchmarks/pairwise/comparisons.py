@@ -158,6 +158,21 @@ def preload_model_outputs(data: CompletionData, models: list[str]) -> Completion
     )
 
 
+def select_instructions(cfg, instructions):
+    """Apply the run limit, retaining whole task-defined instruction groups."""
+    n = cfg.generation.n_instructions
+    if n is not None:
+        limit_by = cfg.resolved_task.spec.protocol.limit_by
+        if limit_by is None:
+            instructions = instructions.head(n)
+        else:
+            selected = instructions[limit_by].drop_duplicates().head(n)
+            instructions = instructions.loc[instructions[limit_by].isin(selected)]
+    if instructions.empty:
+        raise ValueError("No instructions selected for evaluation.")
+    return instructions
+
+
 def prepare_answers(
     cfg,
     data: CompletionData,
@@ -228,13 +243,19 @@ def prepare_comparisons(
     data: CompletionData,
     instructions: pd.DataFrame,
     baseline_plan: BaselinePlan,
+    *,
+    answers: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """Return comparisons and their explicit source-instruction routing IDs."""
     generation = cfg.resolved_task.spec.protocol.generation
     provided_messages = generation.mode == "provided_messages"
 
     baseline = baseline_plan.aligned_to(instructions.index)
-    a = prepare_answers(cfg, data, instructions, cfg.model.name, role="A")
+    a = (
+        answers
+        if answers is not None
+        else prepare_answers(cfg, data, instructions, cfg.model.name, role="A")
+    )
     frames = []
     for model in baseline_plan.unique_models:
         ids = baseline.index[baseline == model]
