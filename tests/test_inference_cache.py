@@ -247,3 +247,68 @@ def test_cache_descriptor_validation_still_fails_loudly(tmp_path, monkeypatch):
             ["prompt"],
             cache_row_metadata=[{"instruction_id": "1"}],
         )
+
+
+def test_progress_batches_share_loop_and_replay(tmp_path, monkeypatch):
+    import asyncio
+
+    class AsyncModel:
+        loop = None
+
+        async def ainvoke(self, item, **kwargs):
+            loop = asyncio.get_running_loop()
+            if self.loop is not None:
+                assert self.loop is loop and not self.loop.is_closed()
+            self.loop = loop
+            return AIMessage(content=item)
+
+    backend = AsyncModel()
+    monkeypatch.setattr(models, "make_model", lambda *a, **kw: backend)
+    cache = CompletionInferenceCache(tmp_path, "progress")
+    model = prepare_model("Dummy/progress", cache=cache)
+    for item in ("direct", "reversed"):
+        assert do_inference(
+            model, [item], use_tqdm=True, cache_row_metadata=[{"instruction_id": item}]
+        ) == [item]
+    monkeypatch.setattr(
+        models, "make_model", lambda *a, **kw: pytest.fail("cache miss")
+    )
+    assert do_inference(
+        prepare_model("Dummy/progress", cache=cache),
+        ["direct", "reversed"],
+        use_tqdm=True,
+        cache_row_metadata=[{"instruction_id": x} for x in ("direct", "reversed")],
+    ) == ["direct", "reversed"]
+
+
+def test_progress_failure_cancels_requests_and_preserves_context(monkeypatch):
+    import asyncio
+    from contextvars import ContextVar
+
+    monkeypatch.delenv("JUDGEARENA_JUDGE_MAX_CONCURRENCY", raising=False)
+    current_run = ContextVar("test_run")
+    pending = set()
+
+    class Backend:
+        async def ainvoke(self, item, **kwargs):
+            if item == "fail":
+                await asyncio.sleep(0)
+                raise ValueError("bad request")
+            if item == "wait":
+                pending.add(item)
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    pending.remove(item)
+            return AIMessage(content=current_run.get())
+
+    backend = Backend()
+    for name in ("first", "second"):
+        token = current_run.set(name)
+        try:
+            assert do_inference(backend, ["ok"], use_tqdm=True) == [name]
+        finally:
+            current_run.reset(token)
+    with pytest.raises(ValueError, match="bad request"):
+        do_inference(backend, ["wait", "fail"], use_tqdm=True)
+    assert not pending
