@@ -148,24 +148,7 @@ def create_completion_release(cfg, data, output, *, version):
         )
 
 
-def create_release(
-    cfg,
-    battles,
-    panel,
-    output,
-    *,
-    version,
-    labels="human",
-    heldout=None,
-    preparation=None,
-):
-    """Freeze a curated graph and panel, using human labels or the configured judge.
-
-    Frames use the adapter comparison columns plus lang/split_group. The panel
-    also identifies opponent_model/opponent_slot. Curation decides the sample;
-    publication never silently prunes unsupported models or changes the panel.
-    """
-    validate_graph_task(cfg.resolved_task.spec.protocol)
+def validate_release_inputs(battles, panel, *, version, labels):
     if labels not in {"human", "judge"}:
         raise ValueError("labels must be human or judge")
     if not version or battles.empty or panel.empty:
@@ -193,6 +176,117 @@ def create_release(
             raise ValueError("Panel opponent does not match its selected slot")
     if labels == "human" and not battles.reference_pref.isin([0, 0.5, 1]).all():
         raise ValueError("Human releases require complete reference_pref labels")
+
+
+def fit_reference_ratings(outcomes, configured, *, seed):
+    """Rate every reference model per language and method, with grouped intervals."""
+    records = []
+    for lang, frame in outcomes.groupby("lang", sort=True):
+        expected_models = set(frame.model_a) | set(frame.model_b)
+        frame = frame.dropna(subset=["pref"])
+        names = set(frame.model_a) | set(frame.model_b)
+        if frame.empty or names != expected_models:
+            raise ValueError(
+                f"{lang}: insufficient valid judgments for reference models"
+            )
+        for method, metric in configured:
+            baseline = metric.baseline_model
+            bootstraps = metric.n_bootstraps
+            scoring = frame.assign(
+                reference_pref=frame.pref
+                if metric.soft
+                else hard_preferences(frame.pref)
+            )
+            connected = reference_pool(scoring, 1)
+            if len(connected) != len(scoring) or baseline not in names:
+                raise ValueError(
+                    f"{lang}/{method}: reference graph must be connected with baseline present"
+                )
+            values = replace(metric, n_bootstraps=0).calculate(
+                frame[["model_a", "model_b", "pref"]].assign(
+                    pref_hard=hard_preferences(frame.pref)
+                )
+            )["ratings"]
+            distribution = (
+                reference_intervals(
+                    scoring, baseline=baseline, bootstraps=bootstraps, seed=seed
+                )
+                if bootstraps
+                else None
+            )
+            records.extend(
+                dict(
+                    lang=lang,
+                    method=method,
+                    model=model,
+                    rating=value,
+                    **(
+                        {
+                            "ci_low": float(distribution[model].quantile(0.025)),
+                            "ci_high": float(distribution[model].quantile(0.975)),
+                            "valid_bootstraps": len(distribution),
+                        }
+                        if distribution is not None
+                        else {}
+                    ),
+                )
+                for model, value in values.items()
+            )
+    return pd.DataFrame(
+        records,
+        columns=[
+            "lang",
+            "method",
+            "model",
+            "rating",
+            "ci_low",
+            "ci_high",
+            "valid_bootstraps",
+        ],
+    )
+
+
+def release_report(battles, panel, counts, *, version, labels, rated):
+    lines = [
+        "# Leaderboard release",
+        "",
+        f"Version: {version}. Labels: {labels}.",
+        "",
+        "| Language | Reference comparisons | Valid judgments | Missing judgments | Panel comparisons |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for lang in sorted(panel.lang.unique()):
+        lines.append(
+            f"| {lang} | {(battles.lang == lang).sum()} | {counts.loc[lang, 'valid']} | {counts.loc[lang, 'missing']} | {(panel.lang == lang).sum()} |"
+        )
+    if rated:
+        lines += [
+            "",
+            "Reference ratings and grouped bootstrap intervals are in ratings.csv.",
+            "The baseline is fixed at 1000; its zero-width interval reflects anchoring.",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def create_release(
+    cfg,
+    battles,
+    panel,
+    output,
+    *,
+    version,
+    labels="human",
+    heldout=None,
+    preparation=None,
+):
+    """Freeze a curated graph and panel, using human labels or the configured judge.
+
+    Frames use the adapter comparison columns plus lang/split_group. The panel
+    also identifies opponent_model/opponent_slot. Curation decides the sample;
+    publication never silently prunes unsupported models or changes the panel.
+    """
+    validate_graph_task(cfg.resolved_task.spec.protocol)
+    validate_release_inputs(battles, panel, version=version, labels=labels)
     cfg = cfg.model_copy(deep=True)
     if cfg.elo is not None:
         cfg.elo = cfg.elo.resolve(cfg.resolved_task.spec.protocol.scoring)
@@ -219,73 +313,7 @@ def create_release(
             sorted(set(outcomes.lang) | set(panel.lang)), fill_value=0
         )
         valid_outcomes = outcomes.dropna(subset=["pref"])
-        records = []
-        for lang, frame in outcomes.groupby("lang", sort=True):
-            expected_models = set(frame.model_a) | set(frame.model_b)
-            frame = frame.dropna(subset=["pref"])
-            names = set(frame.model_a) | set(frame.model_b)
-            if frame.empty or names != expected_models:
-                raise ValueError(
-                    f"{lang}: insufficient valid judgments for reference models"
-                )
-            for method, metric in configured:
-                baseline = metric.baseline_model
-                bootstraps = metric.n_bootstraps
-                scoring = frame.assign(
-                    reference_pref=frame.pref
-                    if metric.soft
-                    else hard_preferences(frame.pref)
-                )
-                connected = reference_pool(scoring, 1)
-                if len(connected) != len(scoring) or baseline not in names:
-                    raise ValueError(
-                        f"{lang}/{method}: reference graph must be connected with baseline present"
-                    )
-                values = replace(metric, n_bootstraps=0).calculate(
-                    frame[["model_a", "model_b", "pref"]].assign(
-                        pref_hard=hard_preferences(frame.pref)
-                    )
-                )["ratings"]
-                distribution = (
-                    reference_intervals(
-                        scoring,
-                        baseline=baseline,
-                        bootstraps=bootstraps,
-                        seed=cfg.run.seed,
-                    )
-                    if bootstraps
-                    else None
-                )
-                records.extend(
-                    dict(
-                        lang=lang,
-                        method=method,
-                        model=model,
-                        rating=value,
-                        **(
-                            {
-                                "ci_low": float(distribution[model].quantile(0.025)),
-                                "ci_high": float(distribution[model].quantile(0.975)),
-                                "valid_bootstraps": len(distribution),
-                            }
-                            if distribution is not None
-                            else {}
-                        ),
-                    )
-                    for model, value in values.items()
-                )
-        ratings = pd.DataFrame(
-            records,
-            columns=[
-                "lang",
-                "method",
-                "model",
-                "rating",
-                "ci_low",
-                "ci_high",
-                "valid_bootstraps",
-            ],
-        )
+        ratings = fit_reference_ratings(outcomes, configured, seed=cfg.run.seed)
         model_names = sorted(set(outcomes.model_a) | set(outcomes.model_b))
         observed = {
             model: score_metrics(cfg, valid_outcomes, model, human=labels == "human")
@@ -320,25 +348,16 @@ def create_release(
             ratings.to_csv(output / "ratings.csv", index=False)
         if heldout is not None:
             heldout.to_parquet(output / "heldout_battles.parquet", index=False)
-        lines = [
-            "# Leaderboard release",
-            "",
-            f"Version: {version}. Labels: {labels}.",
-            "",
-            "| Language | Reference comparisons | Valid judgments | Missing judgments | Panel comparisons |",
-            "|---|---:|---:|---:|---:|",
-        ]
-        for lang in sorted(panel.lang.unique()):
-            lines.append(
-                f"| {lang} | {(battles.lang == lang).sum()} | {counts.loc[lang, 'valid']} | {counts.loc[lang, 'missing']} | {(panel.lang == lang).sum()} |"
+        (output / "report.md").write_text(
+            release_report(
+                battles,
+                panel,
+                counts,
+                version=version,
+                labels=labels,
+                rated=bool(configured),
             )
-        if configured:
-            lines += [
-                "",
-                "Reference ratings and grouped bootstrap intervals are in ratings.csv.",
-                "The baseline is fixed at 1000; its zero-width interval reflects anchoring.",
-            ]
-        (output / "report.md").write_text("\n".join(lines) + "\n")
+        )
         return write_manifest(
             cfg,
             output,
