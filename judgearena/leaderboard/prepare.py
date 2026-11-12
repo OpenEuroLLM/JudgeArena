@@ -5,6 +5,7 @@ import pandas as pd
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
+from judgearena.battles import has_support
 from judgearena.benchmarks.pairwise.judging import (
     judge_configured_comparisons as judge_comparisons,  # noqa: F401
 )
@@ -36,33 +37,37 @@ def comparison_groups(frame):
     return pd.Series([root(i) for i in range(len(frame))], index=frame.index)
 
 
-def reference_pool(frame, minimum):
-    """Prune low-support models and retain the largest strongly connected graph."""
+def _largest_component(frame):
+    """Keep comparisons among the largest strongly connected set of models."""
+    names = sorted(set(frame.model_a) | set(frame.model_b))
+    lookup = {name: i for i, name in enumerate(names)}
+    a, b = frame.model_a.map(lookup), frame.model_b.map(lookup)
+    y = frame.reference_pref
+    src = np.r_[a[y < 1], b[y > 0]]
+    dst = np.r_[b[y < 1], a[y > 0]]
+    graph = coo_matrix(
+        (np.ones(len(src)), (src, dst)), shape=(len(names), len(names))
+    ).tocsr()
+    _, labels = connected_components(graph, directed=True, connection="strong")
+    largest = np.bincount(labels).argmax()
+    keep = {name for name, label in zip(names, labels, strict=True) if label == largest}
+    return frame[frame.model_a.isin(keep) & frame.model_b.isin(keep)]
+
+
+def reference_pool(frame, minimum, *, connected=True):
+    """Prune low-support models and, by default, disconnected ones until stable."""
     while not frame.empty:
         before = len(frame)
-        counts = pd.concat([frame.model_a, frame.model_b]).value_counts()
-        keep = counts[counts >= minimum].index
-        frame = frame[frame.model_a.isin(keep) & frame.model_b.isin(keep)]
-        if frame.empty:
-            break
-        names = sorted(set(frame.model_a) | set(frame.model_b))
-        lookup = {name: i for i, name in enumerate(names)}
-        a, b = frame.model_a.map(lookup), frame.model_b.map(lookup)
-        y = frame.reference_pref
-        src = np.r_[a[y < 1], b[y > 0]]
-        dst = np.r_[b[y < 1], a[y > 0]]
-        graph = coo_matrix(
-            (np.ones(len(src)), (src, dst)), shape=(len(names), len(names))
-        ).tocsr()
-        _, labels = connected_components(graph, directed=True, connection="strong")
-        largest = np.bincount(labels).argmax()
-        keep = {
-            name for name, label in zip(names, labels, strict=True) if label == largest
-        }
-        frame = frame[frame.model_a.isin(keep) & frame.model_b.isin(keep)]
+        frame = frame[has_support(frame, minimum)]
+        if connected and not frame.empty:
+            frame = _largest_component(frame)
         if len(frame) == before:
             return frame.copy()
-    raise ValueError("No supported connected reference graph remains")
+    raise ValueError(
+        "No supported connected reference graph remains"
+        if connected
+        else "no models meet the minimum comparison count"
+    )
 
 
 def sample_battles(
@@ -109,24 +114,13 @@ def sample_battles(
             if settings.labels == "human"
             else available.assign(reference_pref=0.5)
         )
-        if require_connected:
-            connected = reference_pool(graph, sampling.minimum_model_comparisons)
-            reference = available.loc[connected.index].copy()
-        else:
-            reference = available.copy()
-            while not reference.empty:
-                counts = pd.concat(
-                    [reference.model_a, reference.model_b]
-                ).value_counts()
-                keep = counts[counts >= sampling.minimum_model_comparisons].index
-                selected = reference[
-                    reference.model_a.isin(keep) & reference.model_b.isin(keep)
-                ]
-                if len(selected) == len(reference):
-                    break
-                reference = selected
-            if reference.empty:
-                raise ValueError(f"{lang}: no models meet the minimum comparison count")
+        try:
+            pool = reference_pool(
+                graph, sampling.minimum_model_comparisons, connected=require_connected
+            )
+        except ValueError as error:
+            raise ValueError(f"{lang}: {error}") from error
+        reference = available.loc[pool.index].copy()
         models = set(reference.model_a) | set(reference.model_b)
         missing = {*(sampling.opponents or []), *baseline_models} - models
         if missing:
@@ -166,17 +160,14 @@ def sample_battles(
 
 def reference_intervals(scoring, *, baseline, bootstraps, seed):
     """Resample whole prompt groups, rejecting unidentified bootstrap fits."""
-    from judgearena.benchmarks.elo.rating import fit_bradley_terry
+    from judgearena.benchmarks.elo.rating import fit_bradley_terry, resample_clusters
 
     models = set(scoring.model_a) | set(scoring.model_b)
     scoring = scoring[["model_a", "model_b", "reference_pref", "split_group"]]
     clusters = list(scoring.groupby("split_group", sort=True).indices.values())
     rng = np.random.default_rng(seed)
     samples = []
-    for _ in range(bootstraps):
-        positions = np.concatenate(
-            [clusters[i] for i in rng.integers(len(clusters), size=len(clusters))]
-        )
+    for positions in resample_clusters(clusters, bootstraps, rng):
         sample = scoring.iloc[positions]
         try:
             connected = reference_pool(sample, 1)
