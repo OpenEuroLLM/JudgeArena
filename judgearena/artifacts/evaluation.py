@@ -14,6 +14,19 @@ def file_checksum(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def verify_files(root, files):
+    """Verify file contents and require every path to stay inside the artifact folder."""
+    root = Path(root).resolve()
+    for name, expected in files.items():
+        path = (root / name).resolve()
+        if (
+            not path.is_relative_to(root)
+            or not path.is_file()
+            or file_checksum(path) != expected
+        ):
+            raise ValueError(f"Artifact checksum mismatch: {name}")
+
+
 def metric_data_checksum(path):
     """Hash ordered rows independently of Parquet encoding and column order."""
     path = Path(path)
@@ -54,3 +67,23 @@ def finish_evaluation(output_dir, report, *, model, artifacts):
     target = output / "evaluation.json"
     target.write_text(json.dumps(to_jsonable(payload), indent=2) + "\n")
     return target
+
+
+def load_evaluation(path):
+    """Read a result only after validating its declared artifacts."""
+    path = Path(path)
+    output = path.parent.resolve()
+    result = json.loads(path.read_text())
+    artifacts, files = result.get("artifacts", {}), result.get("files", {})
+    if (
+        result.get("schema_version") != 1
+        or not {"config", "report", "metric_data"} <= artifacts.keys()
+    ):
+        raise ValueError("Evaluation has no complete artifact manifest")
+    if not set(artifacts.values()) <= files.keys():
+        raise ValueError("Evaluation artifacts are missing checksums")
+    verify_files(output, files)
+    report = json.loads((output / artifacts["report"]).read_text())
+    if report.get("metrics") != result.get("metrics"):
+        raise ValueError("Evaluation metrics do not match its report")
+    return result

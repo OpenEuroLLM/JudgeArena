@@ -202,6 +202,8 @@ def _load_arena_dataframe(
         "benchmark",
         "lang",
     ]
+    if "evaluation_session_id" in df:
+        cols.append("evaluation_session_id")
     df = df.loc[:, cols]
 
     # keep only one turn conversation for now as they are easier to evaluate

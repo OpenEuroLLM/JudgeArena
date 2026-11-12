@@ -54,24 +54,35 @@ def select_graph_battles(
     return df_battles, sampling_metadata
 
 
-def candidate_comparisons(battles, answers, *, rng):
-    """Sample an opponent and candidate order per row."""
+def candidate_comparisons(battles, answers, *, instructions=None, rng=None):
+    """Use saved opponent slots, or sample an opponent and candidate order per row."""
     from judgearena.benchmarks.pairwise.comparisons import assemble_comparisons
 
-    use_model_a = rng.choice([True, False], size=len(battles))
-    candidate_is_a = rng.choice([True, False], size=len(battles))
-    context = swap_comparison_slots(battles, use_model_a)
-    opponents = context.filter(regex="_b$").rename(columns=lambda c: c[:-2])
+    if instructions is None:
+        use_model_a = rng.choice([True, False], size=len(battles))
+        candidate_is_a = rng.choice([True, False], size=len(battles))
+        context = swap_comparison_slots(battles, use_model_a)
+        opponents = context.filter(regex="_b$").rename(columns=lambda c: c[:-2])
+    else:
+        context = instructions
+        opponents = pd.concat(
+            [
+                rows.filter(regex=f"_{slot}$").rename(columns=lambda c: c[:-2])
+                for slot, rows in battles.groupby("opponent_slot")
+            ]
+        ).reindex(battles.index)
     comparisons = assemble_comparisons(context, answers, opponents)
-    comparisons = comparisons.assign(
-        instruction_id=battles.get(
-            "instruction_id", battles["instruction_index"].astype(str)
-        ),
-        cache_orientation=np.where(candidate_is_a, "direct", "reversed"),
-        question_id=battles.get("question_id", battles["instruction_index"]),
-        source="llm-judge",
-    )
-    return swap_comparison_slots(comparisons, ~candidate_is_a)
+    if instructions is None:
+        comparisons = comparisons.assign(
+            instruction_id=battles.get(
+                "instruction_id", battles["instruction_index"].astype(str)
+            ),
+            cache_orientation=np.where(candidate_is_a, "direct", "reversed"),
+            question_id=battles.get("question_id", battles["instruction_index"]),
+            source="llm-judge",
+        )
+        comparisons = swap_comparison_slots(comparisons, ~candidate_is_a)
+    return comparisons
 
 
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:

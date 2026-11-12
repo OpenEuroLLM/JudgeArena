@@ -42,8 +42,30 @@ class BradleyTerryMetric:
         battles: pd.DataFrame,
         *,
         seed: int = 0,
+        reference_ratings: pd.DataFrame | None = None,
     ) -> dict[str, object]:
         """Calculate Bradley-Terry ratings from battle rows."""
+        if reference_ratings is not None:
+            models = battles["evaluation_model"].dropna().unique()
+            if len(models) != 1:
+                raise ValueError("Frozen fitting requires one evaluation model")
+            groups = []
+            for language, frame in battles.groupby("lang", sort=True):
+                references = (
+                    reference_ratings.loc[reference_ratings.lang.eq(language)]
+                    .set_index("model")
+                    .rating.to_dict()
+                )
+                values = fit_frozen_rating(
+                    frame,
+                    models[0],
+                    references,
+                    hard=not self.soft,
+                    n_bootstraps=self.n_bootstraps,
+                    seed=seed,
+                )
+                groups.append({"group": language, "values": values})
+            return {"groups": {"lang": groups}}
         if self.reference_min_battles and "evaluation_model" in battles:
             reference_mask = battles.evaluation_model.isna()
             references = battles.loc[reference_mask]
@@ -272,6 +294,35 @@ class BradleyTerryMetric:
         return "\n".join(lines)
 
 
+def configure_frozen_metrics(cfg, configured):
+    """Resolve rating defaults and require a fixed, language-specific reference scale."""
+    from dataclasses import replace
+
+    defaults = (
+        cfg.elo.resolve(cfg.resolved_task.spec.protocol.scoring) if cfg.elo else None
+    )
+    resolved = []
+    for request, metric in configured:
+        if isinstance(metric, BradleyTerryMetric):
+            if defaults is not None:
+                metric = replace(
+                    metric,
+                    **{
+                        key: getattr(defaults, key)
+                        for key in ("baseline_model", "n_bootstraps")
+                        if key not in request.parameters
+                    },
+                )
+            if request.breakdown_by not in ((), ("lang",)):
+                raise ValueError("Frozen ratings are grouped by lang")
+            if not metric.baseline_model:
+                raise ValueError(
+                    "Set elo.baseline_model or the metric's baseline_model"
+                )
+        resolved.append((request, metric))
+    return tuple(resolved)
+
+
 def elo_metrics(cfg):
     """Translate legacy Elo options into ordinary metric requests."""
     from judgearena.benchmarks.scoring import build_metrics
@@ -295,3 +346,33 @@ def elo_metrics(cfg):
             "reference_min_battles", 500 if cfg.elo.fit_mode == "joint" else 0
         )
     return build_metrics(requests, parameter_overrides_by_metric=overrides)
+
+
+def frozen_metric_inputs(
+    requests, *, ratings, methods, n_bootstraps, seed, score_metrics=True
+):
+    """Bind saved reference ratings to their metric without changing judging."""
+    from judgearena.benchmarks.scoring import build_metrics
+    from judgearena.tasks.schema.metrics import MetricSpec
+
+    metrics = [
+        (request, metric)
+        for request, metric in build_metrics(requests)
+        if score_metrics and not isinstance(metric, BradleyTerryMetric)
+    ]
+    runtime = {}
+    for method in methods:
+        name = method["name"]
+        metrics.append(
+            (
+                MetricSpec(metric="bradley_terry", name=name),
+                BradleyTerryMetric(
+                    soft=method["soft"], n_bootstraps=n_bootstraps, fit_mode="frozen"
+                ),
+            )
+        )
+        runtime[name] = {
+            "seed": seed,
+            "reference_ratings": ratings.loc[ratings.method.eq(name)],
+        }
+    return tuple(metrics), runtime

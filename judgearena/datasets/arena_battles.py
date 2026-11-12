@@ -100,6 +100,8 @@ def normalize_battles(
             ~ids.duplicated(keep=False),
             ids + ":row-" + pd.RangeIndex(len(rows)).astype(str),
         )
+    if "evaluation_session_id" in rows and "session" not in rows:
+        rows["session"] = rows["evaluation_session_id"]
     rows["source"] = "human"
     return PreferenceData.from_battles(
         normalize_preferences(

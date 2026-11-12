@@ -29,7 +29,10 @@ from judgearena.benchmarks.pairwise.graph import (
     prepare_graph,
     validate_graph_task,
 )
-from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
+from judgearena.benchmarks.pairwise.judging import (
+    judge_configured_comparisons,
+    prepare_pairwise_judging,
+)
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
 from judgearena.evaluate import (
@@ -82,6 +85,7 @@ def run_evaluation(
     baseline_plan=None,
     opponent_panel=None,
     metrics=None,
+    metric_runtime=None,
     sampling_metadata=None,
     reference_battles=None,
     comparison_rng=None,
@@ -108,7 +112,7 @@ def run_evaluation(
         opponent_panel, reference_battles, sampling_metadata = prepare_graph(
             cfg, task_data
         )
-    sampled_graph = opponent_panel is not None
+    sampled_graph = opponent_panel is not None and "opponent_slot" not in opponent_panel
     if sampled_graph and comparison_rng is None:
         comparison_rng = np.random.default_rng(cfg.run.seed)
     if opponent_panel is None:
@@ -210,6 +214,17 @@ def run_evaluation(
                 if resolved_task.spec.protocol.judge.turns is not None
                 else None
             )
+        else:
+            panel = opponent_panel.set_index("battle_id", drop=False)
+            samples = conversation_comparisons(
+                candidate_comparisons(panel, answers, instructions=instructions_df),
+                resolved_task.spec.protocol.judge.turns,
+            )
+            annotations, outcomes, judgment_metadata = judge_configured_comparisons(
+                cfg,
+                samples,
+                preference_temperature=cfg.preference_temperature,
+            )
     else:
         samples, source_ids = prepare_comparisons(
             cfg, task_data, instructions_df, baseline_plan, answers=answers
@@ -267,6 +282,7 @@ def run_evaluation(
                 else []
             ),
         },
+        runtime_by_metric=metric_runtime,
     )
 
     metadata = {

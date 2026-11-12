@@ -1,0 +1,179 @@
+"""Local release creation and submission commands."""
+
+import argparse
+from pathlib import Path
+
+import pandas as pd
+
+from judgearena.benchmarks.pairwise.graph import validate_graph_task
+from judgearena.config import ModelArgs, RunConfig, resolve_cli_config
+from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import PreferenceData
+from judgearena.leaderboard.evaluate import evaluate_release
+from judgearena.leaderboard.prepare import sample_battles
+from judgearena.leaderboard.release import create_completion_release, create_release
+from judgearena.leaderboard.settings import LeaderboardSettings, rating_metrics
+from judgearena.leaderboard.submissions import add_submission, submission_table
+
+
+class LeaderboardCreateConfig(RunConfig):
+    """Expose release settings alongside the ordinary run CLI fields."""
+
+    leaderboard: LeaderboardSettings
+
+
+def run_leaderboard_command(argv):
+    parser = argparse.ArgumentParser(prog="judgearena leaderboard", allow_abbrev=False)
+    commands = parser.add_subparsers(dest="command", required=True)
+    create = commands.add_parser("create", allow_abbrev=False)
+    create.add_argument("--config", "--config_path", type=Path)
+    create.add_argument("--candidate", type=Path)
+    create.add_argument("--output", type=Path, required=True)
+    evaluate = commands.add_parser(
+        "evaluate",
+        allow_abbrev=False,
+        epilog="Candidate settings: --model.name, --model.temperature, --model.engine_kwargs, etc. CLI values override the optional config.",
+    )
+    evaluate.add_argument("--leaderboard", type=Path, required=True)
+    evaluate.add_argument("--config", "--config_path", type=Path)
+    evaluate.add_argument("--output", type=Path, required=True)
+    evaluate.add_argument("--answers", type=Path)
+    evaluate.add_argument("--store-root", type=Path)
+    evaluate.add_argument(
+        "--n-bootstraps", "--bootstraps", dest="n_bootstraps", type=int, default=200
+    )
+    evaluate.add_argument("--seed", type=int, default=42)
+    add = commands.add_parser("add", allow_abbrev=False)
+    add.add_argument("--leaderboard", type=Path, required=True)
+    add.add_argument("--submission", type=Path, required=True)
+    add.add_argument("--collection", type=Path, required=True)
+    table = commands.add_parser("table", allow_abbrev=False)
+    table.add_argument("--leaderboard", type=Path, required=True)
+    table.add_argument("--collection", type=Path, required=True)
+    table.add_argument("--columns", nargs="+")
+    table.add_argument("--sort-by")
+    table.add_argument("--descending", action="store_true")
+    args, overrides = parser.parse_known_args(argv)
+    if args.command in ("add", "table"):
+        if overrides:
+            parser.error(f"Unrecognized arguments: {' '.join(overrides)}")
+        if args.command == "add":
+            print(add_submission(args.leaderboard, args.submission, args.collection))
+        else:
+            print(
+                submission_table(
+                    args.leaderboard,
+                    args.collection,
+                    columns=args.columns,
+                    sort_by=args.sort_by,
+                    ascending=not args.descending,
+                ).to_string(index=False)
+            )
+        return
+    if args.command == "create":
+        declaration = resolve_cli_config(
+            overrides, config_path=args.config, settings_cls=LeaderboardCreateConfig
+        )
+        settings = LeaderboardSettings.model_validate(
+            declaration.pop("leaderboard", {})
+        )
+        # Creation has no candidate; this identity is never sent to a backend.
+        declaration.setdefault("model", {}).setdefault(
+            "name", f"leaderboard:{settings.version}"
+        )
+        cfg = RunConfig(**declaration)
+        runner = cfg.resolved_task.spec.protocol.runner
+        if runner not in {"pairwise", "single_answer", "elo"}:
+            raise ValueError(
+                f"Leaderboard submissions do not support runner {runner!r}"
+            )
+        graph = (
+            runner == "elo"
+            or bool(args.candidate)
+            or (runner == "pairwise" and "sampling" in settings.model_fields_set)
+        )
+        if graph:
+            validate_graph_task(cfg.resolved_task.spec.protocol)
+        if args.output.exists():
+            raise FileExistsError(args.output)
+        configured = rating_metrics(cfg)
+        filters = resolve_dataset_filters(cfg.resolved_task, cfg.run.filters)
+        heldout = None
+        if args.candidate:
+            battles = pd.read_parquet(args.candidate / "reference_battles.parquet")
+            panel = pd.read_parquet(args.candidate / "panel.parquet")
+            heldout_path = args.candidate / "heldout_battles.parquet"
+            if not heldout_path.exists():
+                heldout_path = args.candidate / "validation_battles.parquet"
+            if heldout_path.exists():
+                heldout = pd.read_parquet(heldout_path)
+        else:
+            data = load_task_data(cfg.resolved_task).select(filters)
+            if not graph:
+                if "sampling" in settings.model_fields_set:
+                    raise ValueError(
+                        "Completion releases use generation.n_instructions and run.filters, not graph sampling"
+                    )
+                if "labels" in settings.model_fields_set and settings.labels != "judge":
+                    raise ValueError(
+                        "Completion releases use judge labels for submissions"
+                    )
+                create_completion_release(
+                    cfg, data, args.output, version=settings.version
+                )
+                print(f"Release written to {args.output.resolve()}")
+                return
+            if not isinstance(data, PreferenceData):
+                raise ValueError(
+                    "Graph sampling requires PreferenceData with comparisons"
+                )
+            battles, panel, heldout = sample_battles(
+                data.battles,
+                settings,
+                seed=cfg.run.seed,
+                baseline_models=[m.baseline_model for _, m in configured],
+                languages=filters.get("lang"),
+                require_connected=bool(configured),
+            )
+        print(
+            f"Preparing {len(battles)} reference comparisons and {len(panel)} panel comparisons; labels={settings.labels}, swap_mode={cfg.judge.swap_mode}",
+            flush=True,
+        )
+        create_release(
+            cfg,
+            battles,
+            panel,
+            args.output,
+            version=settings.version,
+            labels=settings.labels,
+            heldout=heldout,
+            preparation={
+                **settings.model_dump(),
+                "input": "candidate" if args.candidate else "task",
+                "languages": sorted(panel.lang.unique().tolist()),
+                "sampling": None
+                if args.candidate
+                else {
+                    **settings.sampling.model_dump(),
+                    "opponents": panel.opponent_model.drop_duplicates().tolist(),
+                },
+                "split_population": "provided candidate"
+                if args.candidate
+                else "selected dataset",
+            },
+        )
+        print(f"Release written to {args.output.resolve()}")
+    else:
+        declaration = resolve_cli_config(
+            overrides, config_path=args.config, allowed_sections={"model"}
+        )
+        result = evaluate_release(
+            args.leaderboard,
+            ModelArgs(**declaration.get("model", {})),
+            args.output,
+            model_outputs=pd.read_parquet(args.answers) if args.answers else None,
+            n_bootstraps=args.n_bootstraps,
+            seed=args.seed,
+            store_root=args.store_root,
+        )
+        print(result.to_string(index=False))

@@ -1,0 +1,27 @@
+task: arena-hard-v0.1
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  temperature: 0
+  max_out_tokens: 2048
+generation:
+  n_instructions: 10
+run:
+  seed: 42
+  use_tqdm: true
+  store_root: ./cache/leaderboard
+protocol:
+  runner: single_answer
+  generation:
+    mode: single_turn_chat
+    default_temperature: 0
+    default_max_out_tokens: 4096
+  judge:
+    prompt:
+      preset: criteria-score
+      options:
+        criteria_file: ./quality-rubric.yaml
+  scoring:
+    metrics:
+      - metric: mean_score
+leaderboard:
+  version: arena-hard-quality-v1

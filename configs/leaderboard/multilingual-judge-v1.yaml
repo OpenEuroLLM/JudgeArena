@@ -1,0 +1,40 @@
+task: elo-lmarena-140k
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  prompt:
+    preset: arena-hard
+  swap_mode: both
+  temperature: 0.0
+  max_out_tokens: 2048
+generation:
+  truncate_judge_input_chars: null
+run:
+  seed: 42
+  use_tqdm: true
+  store_root: ./cache/leaderboard
+  filters:
+    lang:
+    - en
+    - de
+leaderboard:
+  version: multilingual-judge-v1
+  labels: judge
+  sampling:
+    validation_fraction: 0.1
+    minimum_model_comparisons: 50
+    comparisons_per_opponent: 10
+    max_reference_comparisons: 2000
+elo:
+  baseline_model: gemma-3-27b-it
+  n_bootstraps: 200
+protocol:
+  scoring:
+    metrics:
+    - metric: bradley_terry
+      name: elo
+      parameters:
+        soft: false
+    - metric: bradley_terry
+      name: soft_elo
+      parameters:
+        soft: true

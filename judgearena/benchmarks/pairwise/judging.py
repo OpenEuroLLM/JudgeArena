@@ -456,3 +456,29 @@ def judge_independent_comparisons(
             ),
         },
     )
+
+
+def judge_configured_comparisons(
+    cfg, comparisons, *, instructions=None, source_ids=None, preference_temperature=None
+):
+    """Use standard prompt routing, parser, answer orders and inference cache."""
+    from judgearena.benchmarks.execution import build_judge
+    from judgearena.evaluate import resolve_run_judge_prompt
+
+    instructions = comparisons if instructions is None else instructions
+    prompt = resolve_run_judge_prompt(
+        cfg.resolved_task,
+        cfg.judge,
+        multi_turn=cfg.resolved_task.spec.protocol.generation.mode == "multi_turn_chat",
+    )
+    run, temperature = prepare_pairwise_judging(
+        cfg,
+        prompt,
+        instructions,
+        preference_temperature=preference_temperature,
+    )
+    return run(
+        build_judge(cfg, default_temperature=temperature),
+        comparisons,
+        source_ids=source_ids,
+    )

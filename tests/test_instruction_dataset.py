@@ -554,6 +554,7 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
         model_b_name="b",
         chosen_model_name="a",
         both_equal=False,
+        evaluation_session_id=["s1", "s1", "s2", "s3"],
     )
     monkeypatch.setattr(source, "_download_arena_dataset", lambda **kwargs: "/unused")
     monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
@@ -562,6 +563,7 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
     assert loaded.question_id.tolist() == [0, 1, 3]
     normalized = normalize_battles(loaded, "ComparIA")
     assert normalized.battles.question_id.tolist() == [0, 1]
+    assert normalized.battles.session.tolist() == ["s1", "s1"]
 
 
 def test_download_config_reuses_selected_revision_offline(monkeypatch, tmp_path):

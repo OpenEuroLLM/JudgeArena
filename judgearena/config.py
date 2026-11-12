@@ -799,6 +799,17 @@ class RunConfig(BaseSettings):
                 values[key] = value
         return spec.model_copy(update=values)
 
+    @property
+    def preference_temperature(self) -> float | None:
+        temperature = getattr(
+            self.resolved_task.spec.protocol.judge, "preference_temperature", None
+        )
+        if temperature is None and self.elo is not None:
+            temperature = self.elo.resolve(
+                self.resolved_task.spec.protocol.scoring
+            ).soft_elo_temperature
+        return temperature
+
     def for_task(self, task: ResolvedTaskSpec | None) -> RunConfig:
         """Apply task defaults, retaining explicit settings (all saved settings on reload)."""
         if task is None or task == self.resolved_task:
