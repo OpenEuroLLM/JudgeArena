@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +12,7 @@ import pytest
 from langchain_core.language_models.fake import FakeListLLM
 
 import judgearena.benchmarks.meta_eval.runner as runner_module
+from judgearena.benchmarks.meta_eval.sampling import _prepare_model_battles
 from judgearena.config import RunConfig
 from judgearena.datasets.data import PreferenceData
 from judgearena.tasks.registry import get_packaged_task
@@ -50,18 +52,18 @@ def _config(tmp_path: Path) -> RunConfig:
     )
 
 
-def test_prepare_arena_battles_drops_self_comparisons():
+def test_prepare_model_battles_drops_self_comparisons():
     arena = _arena().iloc[:2].copy()
     arena.loc[0, "model_b"] = arena.loc[0, "model_a"]
-    prepared = runner_module._prepare_arena_battles(
-        PreferenceData.from_battles(arena),
+    prepared = _prepare_model_battles(
+        PreferenceData.from_battles(arena).battles,
         task="meta-eval-test",
     )
     assert prepared["battle_id"].tolist() == ["1"]
 
 
 @pytest.mark.parametrize("battle_ids", [["ab", "ac"], ["ab", "ab"], ["ab", None]])
-def test_prepare_arena_battles_preserves_unique_physical_ids(battle_ids):
+def test_prepare_model_battles_preserves_unique_physical_ids(battle_ids):
     arena = (
         _arena()
         .iloc[:2]
@@ -78,12 +80,17 @@ def test_prepare_arena_battles_preserves_unique_physical_ids(battle_ids):
             PreferenceData.from_battles(arena)
         return
     data = PreferenceData.from_battles(arena)
-    prepared = runner_module._prepare_arena_battles(data, task="test")
+    prepared = _prepare_model_battles(data.battles, task="test")
     assert prepared["battle_id"].tolist() == ["ab", "ac"]
 
 
-def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("named_arena", [False, True])
+def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys, named_arena):
     task = deepcopy(get_packaged_task("meta-eval-comparia"))
+    if not named_arena:
+        spec = task.spec.model_dump()
+        spec["protocol"]["arena"] = None
+        task = replace(task, spec=type(task.spec).model_validate(spec))
     for request in task.spec.protocol.scoring.metrics:
         if "n_bootstraps" in request.parameters:
             request.parameters["n_bootstraps"] = 2
@@ -139,7 +146,9 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     correct = sample.iloc[1:]["reference_pref"].eq(0.0).sum()
     assert agreement["accuracy_attempted"] == pytest.approx(correct / len(sample))
     assert saved["metrics"]["meta_eval_elo_gap"]["soft"][0]["n_seeds_valid"] == 2
-    assert f"complete {len(sample) - 1}/{len(sample)}" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert f"complete {len(sample) - 1}/{len(sample)}" in output
+    assert ("Arena:" if named_arena else "Dataset:") in output
     metadata = json.loads((result_path.parent / "run-metadata.v1.json").read_text())
     assert metadata["dataset_statistics"]["battle_id_count"] == len(sample)
 

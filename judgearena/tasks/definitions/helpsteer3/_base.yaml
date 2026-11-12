@@ -1,0 +1,41 @@
+schema_version: 1
+task_version: 1
+tags: [pairwise, preference, multilingual, judge]
+
+variants:
+  selector: lang
+  values: [de, en, es, fr, id, it, ja, ko, nl, pl, pt, ru, vi, zh]
+  groups:
+    EU: [de, en, es, fr, it, nl, pl, pt]
+
+dataset:
+  adapter: ./dataset.py:HelpSteer3Adapter
+  sources:
+    preference:
+      type: huggingface_dataset
+      repo_id: nvidia/HelpSteer3
+      revision: f6d145777bcbde96137596340fab89793acd1031
+      config: preference
+      allow_patterns: [preference/validation.jsonl.gz]
+  options:
+    split: validation
+
+protocol:
+  runner: pairwise
+  generation:
+    mode: provided_messages
+    default_truncate_input: false
+  baseline:
+    strategy: runtime_required
+  judge:
+    prompt:
+      file: prompts/pairwise.yaml
+    default_swap_mode: both
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+        breakdown_by: [domain, lang]
+
+metadata:
+  reference_implementation: https://huggingface.co/datasets/nvidia/HelpSteer3
+  paper: https://arxiv.org/abs/2505.11475

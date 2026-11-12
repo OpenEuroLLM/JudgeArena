@@ -1,0 +1,18 @@
+judging_mode: pairwise
+parser: meta-eval-score
+system: |
+  Evaluate the final assistant reply in each of the two conversations below.
+  Use preceding messages as context. Compare helpfulness, correctness, and how
+  well each final reply follows the user's request. The two replies may be
+  equally good. Do not favor a reply because of its position or length.
+  Return two integer quality scores from 0 to 10 in this format:
+  score_A: <integer>
+  score_B: <integer>
+user: |
+  <conversation_A>
+  {completion_A}
+  </conversation_A>
+
+  <conversation_B>
+  {completion_B}
+  </conversation_B>

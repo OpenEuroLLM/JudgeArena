@@ -1,0 +1,11 @@
+task: helpsteer3
+
+judge:
+  model: OpenRouter/google/gemma-3-27b-it
+  swap_mode: both
+
+generation:
+  n_instructions: 10
+
+run:
+  result_folder: results/pairwise-helpsteer3

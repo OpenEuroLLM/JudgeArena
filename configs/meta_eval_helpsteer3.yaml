@@ -1,0 +1,17 @@
+task: meta-eval-helpsteer3
+
+judge:
+  model: OpenRouter/google/gemma-3-27b-it
+  swap_mode: both
+
+generation:
+  n_instructions: 100
+
+run:
+  seed: 0
+  result_folder: results/meta-eval-helpsteer3
+  # Optional metadata selection; code examples have lang=en and retain their
+  # programming language in the original language column.
+  # filters:
+  #   lang: [en, fr]
+  #   domain: [general, multilingual]

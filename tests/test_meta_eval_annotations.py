@@ -8,7 +8,7 @@ from langchain_core.language_models.fake import FakeListLLM
 from judgearena.benchmarks.meta_eval.annotate import (
     prepare_reference_comparisons,
 )
-from judgearena.benchmarks.meta_eval.runner import _prepare_arena_battles
+from judgearena.benchmarks.meta_eval.sampling import _prepare_model_battles
 from judgearena.benchmarks.meta_eval.scoring import aggregate_battle_preferences
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.inference import JudgementInferenceCache
@@ -121,8 +121,8 @@ def test_annotation_preserves_parser_details_and_replays_battle_ids(
     sample = sample.assign(instruction_index="q1", reference_pref=0.0)
     if provided_id is not None:
         sample["battle_id"] = provided_id
-    sample = _prepare_arena_battles(
-        normalize_battles(sample.assign(question_id="q1"), "arena"), task="test"
+    sample = _prepare_model_battles(
+        normalize_battles(sample.assign(question_id="q1"), "arena").battles, task="test"
     )
     sample["instruction_id"] = "upstream-id"
     sample["conversation_a"] = "opaque source metadata"

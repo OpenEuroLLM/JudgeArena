@@ -55,13 +55,18 @@ def test_sampling_rejects_insufficient_quota():
         sample_battles_per_model(battles, ["a", "b"], battles_per_model=2, seed=0)
 
 
-def test_meta_eval_protocol_accepts_metrics_and_requires_no_baseline():
+@pytest.mark.parametrize("sampling", [None, "arena_per_model", "per_model"])
+def test_meta_eval_protocol_accepts_metrics_and_requires_no_baseline(sampling):
     definition = get_packaged_task("meta-eval-comparia").spec.model_dump()
     protocol = definition["protocol"]
+    if sampling is None:
+        protocol.pop("sampling")
+    else:
+        protocol["sampling"] = sampling
     metric = protocol["scoring"]["metrics"][0]
     metric["metric"] = "pairwise_win_rate"
     metric["breakdown_by"] = ["category"]
-    TaskSpec.model_validate(definition)
+    assert TaskSpec.model_validate(definition).protocol.sampling == "per_model"
 
     metric["metric"] = "meta_eval_agreement"
     protocol["baseline"] = {"strategy": "runtime_required"}

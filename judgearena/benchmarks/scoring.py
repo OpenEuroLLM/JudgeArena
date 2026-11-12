@@ -91,7 +91,8 @@ def register_metric[T: type[_Metric]](name: str):
     ``required_columns`` lists its input fields; failures are saved as ``error``.
     Pairwise rows have model_a/model_b/pref; independent rows have model/parsed.
     Scalar score and candidate score_A/score_B depend on the selected parser.
-    Declare seed for metric-owned randomness and references for: pairwise baselines,
+    Optional ``validate_input(comparisons)`` checks dataset requirements before
+    judging, without requiring parsed prediction columns. Declare seed for metric-owned randomness and references for: pairwise baselines,
     Elo anchor models, or the selected meta-evaluation model pool, respectively.
     """
 
@@ -172,6 +173,19 @@ def prefetch_metrics(requests: Sequence[MetricRequest]) -> None:
         prefetch = getattr(metric, "prefetch", None)
         if prefetch is not None:
             prefetch()
+
+
+def validate_metric_inputs(
+    comparisons: pd.DataFrame, metrics: ConfiguredMetrics
+) -> None:
+    """Check metric-owned dataset requirements before spending judge inference."""
+    for request, metric in metrics:
+        validate = getattr(metric, "validate_input", None)
+        if validate is not None:
+            try:
+                validate(comparisons)
+            except ValueError as exc:
+                raise ValueError(f"Metric {request.metric!r}: {exc}") from exc
 
 
 def _group_value(value: object) -> object:

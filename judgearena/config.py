@@ -428,14 +428,14 @@ class MetaEvalArgs(BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
-    top_models: int = Field(default=20, ge=2)
-    """Number of the arena's most-battled models to include."""
+    top_models: int | None = Field(default=None, ge=2)
+    """Number of the dataset's most-battled models; defaults to 20 for per-model sampling."""
 
-    battles_per_model: int = Field(default=50, gt=0)
-    """Minimum number of sampled incident battles for each selected model."""
+    battles_per_model: int | None = Field(default=None, gt=0)
+    """Minimum incident battles per model; defaults to 50 for per-model sampling."""
 
     languages: list[str] | None = None
-    """Restrict arena battles to these language codes. Defaults to all languages."""
+    """Restrict comparisons to these language codes. Defaults to all languages."""
 
 
 class RunArgs(BaseModel):
@@ -688,6 +688,19 @@ class RunConfig(BaseSettings):
         elif is_meta_eval:
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
+            meta_eval_fields = self.meta_eval.model_fields_set.copy()
+            if protocol.sampling == "uniform_pairs":
+                for field in ("top_models", "battles_per_model"):
+                    if getattr(self.meta_eval, field) is not None:
+                        raise ValueError(
+                            f"meta_eval.{field} is only valid for per_model sampling."
+                        )
+            else:
+                self.meta_eval.top_models = self.meta_eval.top_models or 20
+                self.meta_eval.battles_per_model = (
+                    self.meta_eval.battles_per_model or 50
+                )
+            self.meta_eval.model_fields_set.intersection_update(meta_eval_fields)
             if self.model.name is not None or self.model.baseline is not None:
                 raise ValueError(
                     "model.name and model.baseline are not supported for "

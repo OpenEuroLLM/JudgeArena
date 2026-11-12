@@ -1,0 +1,3 @@
+extends: _base.yaml
+task: helpsteer3
+description: Compare model responses on HelpSteer3 preference validation prompts.

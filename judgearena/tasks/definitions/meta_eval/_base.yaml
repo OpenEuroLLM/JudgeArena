@@ -11,6 +11,7 @@ dataset:
 
 protocol:
   runner: meta_eval
+  sampling: per_model
   baseline:
     strategy: none
   judge:

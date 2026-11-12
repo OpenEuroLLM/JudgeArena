@@ -528,3 +528,26 @@ Previously, omitted fields in a supplied section used schema defaults. They now
 inherit task settings when the runner/adapter stays the same. Set those fields
 explicitly if you need the previous schema defaults. Prompt/parser/metric
 compatibility remains the user's responsibility.
+
+## HelpSteer3
+
+`helpsteer3` compares generated model answers using pairwise win rate. Use
+`configs/pairwise_helpsteer3.yaml` with `model.name` and `model.baseline`.
+`meta-eval-helpsteer3` inherits its dataset, prompt and language variants,
+and judges the saved answer pairs against their human reference labels.
+
+Run `judgearena --config_path configs/meta_eval_helpsteer3.yaml` after setting
+`judge.model`. The task uses the pinned preference validation split and compares
+final replies with their full conversation context. Human labels stay out of the
+judge prompt. Negative/zero/positive labels map to A/tie/B; raw annotations remain
+in artifacts. Results include domain and language breakdowns (`lang=en` for code).
+
+`protocol.sampling: uniform_pairs` selects labeled pairs by ID and run seed.
+Set `generation.n_instructions` to limit the panel; omit it to use all filtered pairs.
+`run.filters` applies before sampling. Existing arena tasks retain
+`per_model` sampling and their per-model quotas.
+
+The adapter labels saved response collections as `helpsteer3/response1` and
+`helpsteer3/response2`; these are placeholders, not generating model identities.
+Metrics may implement `validate_input(comparisons)` to reject incompatible
+reference labels before inference.

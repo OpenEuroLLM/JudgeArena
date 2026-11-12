@@ -1,4 +1,4 @@
-"""Deterministic arena battle sampling for judge meta-evaluation."""
+"""Deterministic comparison sampling for judge meta-evaluation."""
 
 from __future__ import annotations
 
@@ -10,6 +10,16 @@ import pandas as pd
 
 class MetaEvalSamplingError(ValueError):
     """Raised when filtering or sampling yields an unusable battle subset."""
+
+
+def _prepare_model_battles(battles: pd.DataFrame, *, task: str) -> pd.DataFrame:
+    """Keep model comparisons from an already selected reference pool."""
+    battles = battles.loc[battles["model_a"] != battles["model_b"]]
+    if battles.empty:
+        raise MetaEvalSamplingError(
+            f"Task {task!r} has no selected battles between different models."
+        )
+    return battles.reset_index(drop=True)
 
 
 def count_battles_per_model(df: pd.DataFrame) -> dict[str, int]:
@@ -68,7 +78,9 @@ def select_top_models(
 ) -> tuple[list[str], pd.DataFrame]:
     """Pick the most-battled models and require one connected induced pool."""
     if (df["model_a"] == df["model_b"]).any():
-        raise MetaEvalSamplingError("Meta-evaluation does not allow self-comparisons.")
+        raise MetaEvalSamplingError(
+            "Per-model sampling does not allow self-comparisons."
+        )
     battle_counts = count_battles_per_model(df)
     if not battle_counts:
         raise MetaEvalSamplingError("Cannot select top models from an empty dataframe.")
@@ -88,6 +100,28 @@ def select_top_models(
 def _stable_priority(battle_id: object, *, seed: int) -> str:
     payload = f"{seed}\0{battle_id}".encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def _ordered_battles(comparisons: pd.DataFrame, *, seed: int) -> pd.DataFrame:
+    """Order comparisons reproducibly, independently of source row order."""
+    priorities = comparisons["battle_id"].map(
+        lambda value: _stable_priority(value, seed=seed)
+    )
+    return comparisons.assign(_sample_priority=priorities).sort_values(
+        ["_sample_priority", "battle_id"], kind="stable", ignore_index=True
+    )
+
+
+def sample_uniform_pairs(
+    comparisons: pd.DataFrame, *, n_instructions: int | None, seed: int
+) -> pd.DataFrame:
+    """Choose pairs independently of model identities and source row order."""
+    if n_instructions is not None and n_instructions <= 0:
+        raise MetaEvalSamplingError("n_instructions must be positive.")
+    ordered = _ordered_battles(comparisons, seed=seed)
+    if n_instructions is not None:
+        ordered = ordered.head(n_instructions)
+    return ordered.drop(columns="_sample_priority").reset_index(drop=True)
 
 
 def _spanning_battle_ids(df: pd.DataFrame, top_models: list[str]) -> set[object]:
@@ -130,13 +164,7 @@ def sample_battles_per_model(
     target deterministically. Connectivity can make some models exceed the
     target, which is preferable to an unidentified ranking graph.
     """
-    working = df_top.copy()
-    working["_sample_priority"] = working["battle_id"].map(
-        lambda battle_id: _stable_priority(battle_id, seed=seed)
-    )
-    working = working.sort_values(
-        ["_sample_priority", "battle_id"], kind="stable", ignore_index=True
-    )
+    working = _ordered_battles(df_top, seed=seed)
     available_counts = count_battles_per_model(working)
     shortfalls = {
         model: available_counts.get(model, 0)

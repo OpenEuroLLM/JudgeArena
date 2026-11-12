@@ -98,11 +98,11 @@ class MetaEvalReport(Report):
     """Configured metrics and run context for judge meta-evaluation."""
 
     task: str
-    arena: str
+    arena: str | None = None
     judge_model: str
     prompt_preset: str
     languages: list[str]
-    top_models: list[str]
+    top_models: list[str] | None = None
     n_sampled_battles: int
     swap_mode: str
     metrics: dict[str, dict[str, object]]
@@ -111,11 +111,21 @@ class MetaEvalReport(Report):
         from judgearena.benchmarks.scoring import render_metrics
 
         print(f"\n=== Meta-eval: {self.task} ===")
-        print(f"Arena: {self.arena} | Judge: {self.judge_model}")
-        print(
-            f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
-            f"Swap mode: {self.swap_mode}"
+        source = (
+            f"Arena: {self.arena}"
+            if self.arena is not None
+            else f"Dataset: {self.task}"
         )
+        print(f"{source} | Judge: {self.judge_model}")
+        if self.top_models is not None:
+            print(
+                f"Models: {len(self.top_models)} | Sampled battles: {self.n_sampled_battles} | "
+                f"Swap mode: {self.swap_mode}"
+            )
+        else:
+            print(
+                f"Sampled pairs: {self.n_sampled_battles} | Swap mode: {self.swap_mode}"
+            )
         print(render_metrics(self.metrics, metrics))
 
 

@@ -673,6 +673,23 @@ def test_meta_eval_block_is_rejected_for_non_meta_task():
         RunConfig(**data)
 
 
+def test_meta_eval_rebinding_keeps_only_explicit_sampling_settings():
+    cfg = RunConfig(task="meta-eval-comparia", judge={"model": "Dummy/j"})
+    assert (cfg.meta_eval.top_models, cfg.meta_eval.battles_per_model) == (20, 50)
+    pairs = get_packaged_task("meta-eval-helpsteer3")
+    spec = pairs.spec.model_dump()
+    spec["protocol"].pop("sampling")
+    spec["protocol"].pop("baseline")
+    pairs = replace(pairs, spec=type(pairs.spec).model_validate(spec))
+    settings = cfg.for_task(pairs).meta_eval
+    assert (settings.top_models, settings.battles_per_model) == (None, None)
+    explicit = RunConfig(
+        task=cfg.task, judge={"model": "Dummy/j"}, meta_eval={"top_models": 3}
+    )
+    with pytest.raises(ValueError, match="top_models"):
+        explicit.for_task(pairs)
+
+
 @pytest.mark.parametrize("name", ["custom-evaluation", "alpaca-eval"])
 def test_saved_configuration_keeps_supplied_task_definition(
     tmp_path, monkeypatch, name, caplog
