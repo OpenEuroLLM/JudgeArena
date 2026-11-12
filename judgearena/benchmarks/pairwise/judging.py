@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import pandas as pd
 
-from judgearena.battles import agreement_outcomes, swap_comparison_slots
+from judgearena.battles import (
+    agreement_outcomes,
+    has_support,
+    swap_comparison_slots,
+)
 from judgearena.benchmarks.pairwise.scoring.metrics import score_outcomes
 from judgearena.datasets.data import _require_columns, validate_messages
 from judgearena.evaluate import (
@@ -360,16 +364,10 @@ def prepare_pairwise_judging(
                 calibrate_pairscore_temperature,
             )
 
-            counts = pd.concat(
-                [reference_battles.model_a, reference_battles.model_b]
-            ).value_counts()
-            eligible = counts[counts >= spec.calibration_min_battles].index
-            calibration = reference_battles.loc[
-                reference_battles.model_a.isin(eligible)
-                & reference_battles.model_b.isin(eligible)
-            ]
             fitted = calibrate_pairscore_temperature(
-                calibration,
+                reference_battles.loc[
+                    has_support(reference_battles, spec.calibration_min_battles)
+                ],
                 sample_size=spec.calibration_size,
                 rng=calibration_rng
                 if calibration_rng is not None

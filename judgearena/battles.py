@@ -73,6 +73,13 @@ def hard_preferences(values: pd.Series) -> pd.Series:
     return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
 
 
+def has_support(battles: pd.DataFrame, minimum: int) -> pd.Series:
+    """Mark rows whose two models each appear in at least ``minimum`` rows."""
+    counts = pd.concat([battles["model_a"], battles["model_b"]]).value_counts()
+    supported = counts[counts >= minimum].index
+    return battles["model_a"].isin(supported) & battles["model_b"].isin(supported)
+
+
 def swap_comparison_slots(
     comparisons: pd.DataFrame, reverse_order: pd.Series | np.ndarray
 ) -> pd.DataFrame:

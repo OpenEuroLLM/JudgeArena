@@ -8,10 +8,15 @@ from scipy.optimize import brentq
 from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 
-from judgearena.battles import hard_preferences
-from judgearena.benchmarks.pairwise.graph import select_seeded_random_battles
+from judgearena.battles import hard_preferences, has_support
 
-select_seeded_random_arena_battles = select_seeded_random_battles
+
+def resample_clusters(clusters, n, rng):
+    """Yield row positions for ``n`` bootstrap draws of whole clusters."""
+    for _ in range(n):
+        yield np.concatenate(
+            [clusters[i] for i in rng.integers(len(clusters), size=len(clusters))]
+        )
 
 
 def fit_bradley_terry(
@@ -124,12 +129,7 @@ def fit_frozen_rating(
 
     rng = np.random.default_rng(seed)
     samples = [
-        fit(
-            np.concatenate(
-                [clusters[i] for i in rng.integers(len(clusters), size=len(clusters))]
-            )
-        )
-        for _ in range(n_bootstraps)
+        fit(positions) for positions in resample_clusters(clusters, n_bootstraps, rng)
     ]
     # Order-statistic quantiles preserve infinite endpoints without inf-inf arithmetic.
     low, high = (
@@ -153,11 +153,6 @@ def arena_anchor_battles(
     """Build scoring anchors from selected reference comparisons."""
     frame = df_arena_all.loc[:, ["model_a", "model_b", "reference_pref"]].copy()
     frame["pref"] = frame["reference_pref"]
-    counts = pd.concat([frame["model_a"], frame["model_b"]]).value_counts()
-    well_represented = set(counts[counts >= min_battles].index)
-    frame = frame[
-        frame["model_a"].isin(well_represented)
-        & frame["model_b"].isin(well_represented)
-    ]
+    frame = frame[has_support(frame, min_battles)]
     frame["pref_hard"] = hard_preferences(frame["pref"])
     return frame

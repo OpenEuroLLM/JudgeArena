@@ -8,7 +8,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-from judgearena.battles import hard_preferences, summarize_bootstrap
+from judgearena.battles import hard_preferences, has_support, summarize_bootstrap
 from judgearena.benchmarks.elo.rating import fit_bradley_terry, fit_frozen_rating
 
 
@@ -45,14 +45,12 @@ class BradleyTerryMetric:
     ) -> dict[str, object]:
         """Calculate Bradley-Terry ratings from battle rows."""
         if self.reference_min_battles and "evaluation_model" in battles:
-            reference_mask = battles.evaluation_model.isna()
-            references = battles.loc[reference_mask]
-            counts = pd.concat([references.model_a, references.model_b]).value_counts()
-            eligible = counts[counts >= self.reference_min_battles].index
-            battles = battles.loc[
-                ~reference_mask
-                | (battles.model_a.isin(eligible) & battles.model_b.isin(eligible))
-            ]
+            is_reference = battles.evaluation_model.isna().to_numpy()
+            keep = ~is_reference
+            keep[is_reference] = has_support(
+                battles.loc[is_reference], self.reference_min_battles
+            ).to_numpy()
+            battles = battles.loc[keep]
         required = {"model_a", "model_b", "pref"}
         if not self.soft:
             required.add("pref_hard")
