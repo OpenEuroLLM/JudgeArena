@@ -138,6 +138,14 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
         "b": "Second",
     }
     add_submission(release, output, collection)
+    receipt_path = output / "release.json"
+    saved_receipt = receipt_path.read_text()
+    receipt = json.loads(saved_receipt)
+    receipt["submission_files"].pop("evaluation.json")
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="evaluation manifest"):
+        add_submission(release, output, collection)
+    receipt_path.write_text(saved_receipt)
     monkeypatch.setattr(PreparedModel, "materialize", no_inference)
     from judgearena.benchmarks import evaluation as execution
 

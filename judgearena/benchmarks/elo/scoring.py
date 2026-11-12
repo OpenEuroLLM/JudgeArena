@@ -348,9 +348,7 @@ def elo_metrics(cfg):
     return build_metrics(requests, parameter_overrides_by_metric=overrides)
 
 
-def frozen_metric_inputs(
-    requests, *, ratings, methods, n_bootstraps, seed, score_metrics=True
-):
+def frozen_metric_inputs(requests, *, ratings, methods, n_bootstraps, seed):
     """Bind saved reference ratings to their metric without changing judging."""
     from judgearena.benchmarks.scoring import build_metrics
     from judgearena.tasks.schema.metrics import MetricSpec
@@ -358,7 +356,7 @@ def frozen_metric_inputs(
     metrics = [
         (request, metric)
         for request, metric in build_metrics(requests)
-        if score_metrics and not isinstance(metric, BradleyTerryMetric)
+        if not isinstance(metric, BradleyTerryMetric)
     ]
     runtime = {}
     for method in methods:

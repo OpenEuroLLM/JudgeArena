@@ -28,16 +28,6 @@ def _entries(collection, manifest):
 
 def _result_metrics(result):
     metrics = deepcopy(result["metrics"])
-    for rating in result.get("ratings", []):
-        values = {
-            key: value
-            for key, value in rating.items()
-            if key not in {"method", "lang", "model"}
-        }
-        groups = metrics.setdefault(rating["method"], {"groups": {"lang": []}})[
-            "groups"
-        ]["lang"]
-        groups.append({"group": rating["lang"], "values": values})
     for metric in metrics.values():
         for groups in metric.get("groups", {}).values():
             groups.sort(key=lambda group: json.dumps(group["group"], sort_keys=True))
@@ -54,34 +44,14 @@ def add_submission(release, submission, collection):
     if not files:
         raise ValueError("Submission has no artifact checksums; replay it first")
     verify_files(submission, files)
-    if "evaluation.json" in files:
-        evaluation = load_evaluation(submission / "evaluation.json")
-        result = {"model": evaluation["model"], "metrics": evaluation["metrics"]}
-        config_path = evaluation["artifacts"]["config"]
-        outcomes_hash = metric_data_checksum(
-            submission / evaluation["artifacts"]["metric_data"]
-        )
-    else:
-        # Existing local submissions predate the common evaluation manifest.
-        rows_file = (
-            "annotations.parquet"
-            if manifest.get("input") == "independent"
-            else "outcomes.parquet"
-        )
-        required = {
-            "config.yaml",
-            "answers.parquet",
-            "annotations.parquet",
-            rows_file,
-            "results.json",
-        }
-        if not required <= files.keys():
-            raise ValueError(
-                "Submission has no complete artifact checksums; replay it first"
-            )
-        result = json.loads((submission / "results.json").read_text())
-        config_path = "config.yaml"
-        outcomes_hash = metric_data_checksum(submission / rows_file)
+    if "evaluation.json" not in files:
+        raise ValueError("Submission has no evaluation manifest; replay it first")
+    evaluation = load_evaluation(submission / "evaluation.json")
+    result = {"model": evaluation["model"], "metrics": evaluation["metrics"]}
+    config_path = evaluation["artifacts"]["config"]
+    outcomes_hash = metric_data_checksum(
+        submission / evaluation["artifacts"]["metric_data"]
+    )
     model = result["model"]
     config = yaml.safe_load((submission / config_path).read_text())
     if model != config["model"]["name"] or model in manifest.get("model_names", []):
@@ -94,7 +64,7 @@ def add_submission(release, submission, collection):
             for key in ("bootstrap_seed", "n_bootstraps")
             if key in receipt
         }
-        if manifest.get("rating_metrics", True)
+        if manifest["rating_metrics"]
         else {},
         "version": manifest["version"],
         "files": manifest["files"],
@@ -110,8 +80,6 @@ def add_submission(release, submission, collection):
     )
     if target.exists():
         previous = json.loads(target.read_text())
-        if not manifest.get("rating_metrics", True):
-            previous["bootstrap"] = {}
         # Replays can have different config paths while retaining identical outcomes.
         if (
             all(
@@ -122,23 +90,6 @@ def add_submission(release, submission, collection):
         ):
             if previous["outcomes_sha256"] == entry["outcomes_sha256"]:
                 return target
-            # Older entries hashed column order; recheck their verified rows.
-            try:
-                previous_dir = Path(previous["submission"])
-                verify_files(previous_dir, previous["submission_files"])
-                if "evaluation.json" in previous["submission_files"]:
-                    saved = load_evaluation(previous_dir / "evaluation.json")
-                    rows_file = saved["artifacts"]["metric_data"]
-                else:
-                    rows_file = (
-                        "annotations.parquet"
-                        if manifest.get("input") == "independent"
-                        else "outcomes.parquet"
-                    )
-                if metric_data_checksum(previous_dir / rows_file) == outcomes_hash:
-                    return target
-            except (OSError, ValueError):
-                pass
         raise ValueError(
             "Conflicting submission for this model: outcomes, scores or bootstrap settings differ; use matching settings or a separate collection"
         )
@@ -158,9 +109,7 @@ def _metric_columns(values):
 
 def result_rows(result):
     """Display scalar metric values, including nested values and breakdowns."""
-    rows = [
-        {**rating, "model": result["model"]} for rating in result.get("ratings", [])
-    ]
+    rows = []
     for name, metric in result["metrics"].items():
         values = _metric_columns(metric)
         if values:

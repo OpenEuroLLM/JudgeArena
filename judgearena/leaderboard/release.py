@@ -40,7 +40,7 @@ def restore_nested_columns(frame):
 def load_release(path):
     path = Path(path)
     manifest = json.loads((path / "manifest.json").read_text())
-    if manifest["schema_version"] not in (1, 2):
+    if manifest["schema_version"] != 2:
         raise ValueError("Unsupported leaderboard schema version")
     verify_files(path, manifest["files"])
     ratings = (
@@ -400,14 +400,7 @@ def release_inputs(release, manifest, ratings, model_outputs=None):
             "frozen": {
                 "panel": panel,
                 "ratings": ratings,
-                "score_metrics": manifest["schema_version"] >= 2,
-                "methods": manifest.get(
-                    "rating_metrics",
-                    [
-                        {"name": "elo", "soft": False},
-                        {"name": "soft_elo", "soft": True},
-                    ],
-                ),
+                "methods": manifest["rating_metrics"],
             }
         }
     return CompletionData(instructions, model_outputs), options

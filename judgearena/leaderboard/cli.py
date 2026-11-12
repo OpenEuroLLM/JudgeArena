@@ -103,8 +103,6 @@ def run_leaderboard_command(argv):
             battles = pd.read_parquet(args.candidate / "reference_battles.parquet")
             panel = pd.read_parquet(args.candidate / "panel.parquet")
             heldout_path = args.candidate / "heldout_battles.parquet"
-            if not heldout_path.exists():
-                heldout_path = args.candidate / "validation_battles.parquet"
             if heldout_path.exists():
                 heldout = pd.read_parquet(heldout_path)
         else:

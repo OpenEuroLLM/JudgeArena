@@ -52,7 +52,6 @@ def evaluate_release(
             cfg.resolved_task.spec.protocol.scoring.metrics,
             ratings=frozen["ratings"],
             methods=frozen["methods"],
-            score_metrics=frozen["score_metrics"],
             n_bootstraps=n_bootstraps,
             seed=seed,
         )
