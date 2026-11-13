@@ -48,10 +48,8 @@ def _summary(
 
 
 def test_report_compatibility_exports():
-    from judgearena.benchmarks.elo.runner import EloReport as RunnerEloReport
     from judgearena.utils.eval import BattleReport as UtilsBattleReport
 
-    assert RunnerEloReport is EloReport
     assert UtilsBattleReport is BattleReport
 
 

@@ -92,12 +92,12 @@ def run_leaderboard_command(argv):
         )
         cfg = RunConfig(**declaration)
         runner = cfg.resolved_task.spec.protocol.runner
-        if runner not in {"pairwise", "single_answer", "elo"}:
+        if runner not in {"pairwise", "single_answer"}:
             raise ValueError(
                 f"Leaderboard submissions do not support runner {runner!r}"
             )
         graph = (
-            runner == "elo"
+            cfg.graph is not None
             or bool(args.candidate)
             or (runner == "pairwise" and "sampling" in settings.model_fields_set)
         )

@@ -10,7 +10,8 @@ dataset:
     category: lang
 
 protocol:
-  runner: elo
+  runner: pairwise
+  graph: {}
   generation:
     mode: single_turn_chat
   baseline:
@@ -18,9 +19,13 @@ protocol:
   judge:
     default_prompt_preset: default
     default_swap_mode: fixed
+    preference_temperature: 0.3
+    calibrate_temperature: false
   scoring:
     metrics:
       - metric: pairwise_win_rate
       - metric: bradley_terry
-    default_soft: true
-    default_temperature: 0.3
+        parameters:
+          fit_mode: frozen
+          soft: true
+          n_bootstraps: 20

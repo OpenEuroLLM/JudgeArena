@@ -76,7 +76,6 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
         judge={"model": "Dummy/score A: 6 score B: 8", "swap_mode": "both"},
         protocol={
             "scoring": {
-                "default_temperature": 2,
                 "metrics": [
                     dict(metric="bradley_terry", name=name, parameters=dict(soft=soft))
                     for name, soft in (("elo", False), ("soft_elo", True))
@@ -84,15 +83,15 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
                 + [dict(metric="pairwise_win_rate")],
             }
         },
-        elo={"baseline_model": "a", "n_bootstraps": 0},
+        elo={"baseline_model": "a", "n_bootstraps": 0, "soft_elo_temperature": 2},
         run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
     )
     if runner == "pairwise":
         protocol = cfg.resolved_task.spec.protocol.model_dump(mode="json")
-        protocol.pop("arena")
+        protocol.pop("arena", None)
         protocol["runner"] = "pairwise"
-        protocol["scoring"].pop("default_soft")
-        protocol["scoring"].pop("default_temperature")
+        protocol["scoring"].pop("default_soft", None)
+        protocol["scoring"].pop("default_temperature", None)
         protocol["judge"]["preference_temperature"] = 2
         for request in protocol["scoring"]["metrics"]:
             if request["metric"] == "bradley_terry":
@@ -108,19 +107,26 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
         tmp_path / p for p in ("release", "first", "entries")
     ]
     create = partial(create_release, cfg, battles, panel, version="v1", labels="judge")
-    if cfg.elo is not None:
-        cfg.elo.calibrate_temperature = True
-        from judgearena.benchmarks.pairwise.judging import judge_configured_comparisons
-        from judgearena.prompts.parsing import score_preference
-
-        _, raw, _ = judge_configured_comparisons(cfg, battles)
-        assert raw.pref.iloc[0] == pytest.approx(
-            score_preference(6, 8, temperature=0.3)
+    calibrated = cfg.model_copy(deep=True)
+    calibrated.protocol = calibrated.resolved_task.spec.protocol.model_copy(
+        update={
+            "judge": calibrated.preference_settings.model_copy(
+                update={"calibrate_temperature": True}
+            )
+        }
+    )
+    calibrated.resolved_task = None
+    calibrated = RunConfig.model_validate(calibrated.model_dump(mode="json"))
+    with pytest.raises(ValueError, match="fixed protocol.judge.preference_temperature"):
+        create_release(
+            calibrated,
+            battles,
+            panel,
+            tmp_path / "calibrated",
+            version="v1",
+            labels="judge",
         )
-        with pytest.raises(ValueError, match="fixed soft_elo_temperature"):
-            create(release)
-        assert not release.exists()
-        cfg.elo.calibrate_temperature = False
+    assert not (tmp_path / "calibrated").exists()
     create(release)
     from judgearena.prompts.parsing import score_preference
 

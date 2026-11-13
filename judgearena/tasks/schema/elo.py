@@ -1,4 +1,4 @@
-"""Schema for arena-anchored ELO rating tasks."""
+"""Legacy Elo input schemas, translated to pairwise settings by RunConfig."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class EloScoringSpec(ScoringSpec):
 
 
 class EloProtocol(StrictFrozenModel):
-    """Policy used by the specialized arena battle and ELO runner."""
+    """Accepted old task format; it has no separate execution runner."""
 
     runner: Literal["elo"]
     arena: str = Field(min_length=1)

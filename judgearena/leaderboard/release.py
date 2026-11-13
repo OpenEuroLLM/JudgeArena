@@ -202,7 +202,7 @@ def fit_reference_ratings(outcomes, configured, *, seed):
                 raise ValueError(
                     f"{lang}/{method}: reference graph must be connected with baseline present"
                 )
-            values = replace(metric, n_bootstraps=0).calculate(
+            values = replace(metric, n_bootstraps=0, fit_mode="joint").calculate(
                 frame[["model_a", "model_b", "pref"]].assign(
                     pref_hard=hard_preferences(frame.pref)
                 )
@@ -288,13 +288,9 @@ def create_release(
     validate_graph_task(cfg.resolved_task.spec.protocol)
     validate_release_inputs(battles, panel, version=version, labels=labels)
     cfg = cfg.model_copy(deep=True)
-    if cfg.elo is not None:
-        cfg.elo = cfg.elo.resolve(cfg.resolved_task.spec.protocol.scoring)
-    if cfg.preference_settings.calibrate_temperature or (
-        cfg.elo is not None and cfg.elo.calibrate_temperature
-    ):
+    if cfg.preference_settings.calibrate_temperature:
         raise ValueError(
-            "Set a fixed soft_elo_temperature or protocol.judge.preference_temperature before creating the release"
+            "Set a fixed protocol.judge.preference_temperature before creating the release"
         )
     configured = rating_metrics(cfg)
     with release_directory(cfg, output) as output:

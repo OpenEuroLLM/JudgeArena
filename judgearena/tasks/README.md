@@ -251,6 +251,32 @@ Extra columns remain metadata. Use `--run.filters '{"category": ["coding"]}'`
 to select any available metadata field. Task variants and runtime filters are
 intersected; empty selections raise an error.
 
+## Graph comparisons and Elo
+
+Arena tasks use `runner: pairwise` with `graph: {}` in the protocol. Graph
+sampling selects saved opponents; judging and metrics use the same execution as
+baseline comparisons. Experiment configs can override sampling and metrics:
+
+```yaml
+task: elo-comparia
+graph:
+  per_language: 100
+run:
+  filters: {lang: [en, fr]}
+protocol:
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: bradley_terry
+        parameters: {fit_mode: frozen, soft: true, n_bootstraps: 20}
+```
+
+Old `runner: elo` and `elo:` settings translate on load into graph sampling,
+judge settings and metric parameters. Saved configs contain those resolved
+settings. Results use `evaluation.json`, the report and Parquet annotations;
+`elo_ratings.json`, `bootstrap_ratings.csv` and the duplicate `battles.parquet`
+export are no longer produced. Ratings and bootstrap values remain in the report.
+
 ## Multi-turn pairwise judging
 
 Use the shared pairwise runner with these protocol settings:

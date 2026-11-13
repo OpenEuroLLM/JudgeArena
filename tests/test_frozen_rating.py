@@ -184,23 +184,46 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
             "no_log_file": True,
         },
     )
-    result = run_benchmark(cfg, data=data)
-    first = Path(result["result_path"]).parent
+    manifest = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
+    first = manifest.parent
+    result = {
+        "result_path": str(
+            first / json.loads(manifest.read_text())["artifacts"]["report"]
+        )
+    }
     results = json.loads(Path(result["result_path"]).read_text())["metrics"]
     frozen = results["bradley_terry"]
     assert frozen["fit_mode"] == "frozen"
     assert results["hard"]["n_bootstraps"] == 0
     assert frozen["rating"] == 1000
-    assert (first / "elo_ratings.json").exists()
+    assert not (first / "elo_ratings.json").exists()
     monkeypatch.setattr(
         PreparedModel, "materialize", lambda *a, **kw: pytest.fail("cache miss")
     )
     replay = load_config(first / "config.yaml")
-    result = run_benchmark(replay, data=data)
-    assert json.loads(Path(result["result_path"]).read_text())["metrics"] == results
-    replay.elo.fit_mode = "joint"
-    result = run_benchmark(replay, data=data)
-    joint = json.loads(Path(result["result_path"]).read_text())["metrics"][
-        "bradley_terry"
-    ]
+    manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "replay")
+    assert json.loads(manifest.read_text())["metrics"] == results
+    requests = replay.resolved_task.spec.protocol.scoring.metrics
+    replay = RunConfig(
+        **{
+            **replay.model_dump(),
+            "protocol": {
+                "scoring": {
+                    "metrics": [
+                        {
+                            **request.model_dump(),
+                            "parameters": {
+                                **request.parameters,
+                                "fit_mode": "joint",
+                                "reference_min_battles": 0,
+                            },
+                        }
+                        for request in requests
+                    ]
+                }
+            },
+        }
+    )
+    manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "joint")
+    joint = json.loads(manifest.read_text())["metrics"]["bradley_terry"]
     assert joint["ratings"] == frozen["ratings"]

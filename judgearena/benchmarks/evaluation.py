@@ -202,9 +202,7 @@ def run_evaluation(
             comparisons = candidate_comparisons(
                 opponent_panel,
                 answers.reindex(instruction_ids).set_axis(opponent_panel.index),
-                rng=comparison_rng
-                if comparison_rng is not None
-                else np.random.default_rng(cfg.run.seed),
+                rng=comparison_rng,
             )
             samples = conversation_comparisons(
                 comparisons, resolved_task.spec.protocol.judge.turns
@@ -235,8 +233,7 @@ def run_evaluation(
             judge_chat_model, samples, source_ids=source_ids
         )
     judge_prompt_variants = judgment_metadata["judge_prompts"]
-    if opponent_panel is None or sampled_graph:
-        annotations = annotations.assign(judge=cfg.judge.model)
+    annotations = annotations.assign(judge=cfg.judge.model)
     write_annotations(annotations, res_folder / f"{name}-annotations.csv")
 
     metric_data = (

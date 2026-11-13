@@ -93,10 +93,18 @@ class PairwiseJudgeSpec(JudgeSpec):
     default_swap_mode: SwapMode = "fixed"
 
 
+class GraphArgs(StrictFrozenModel):
+    """Sampling of saved comparison rows, independent of scoring metrics."""
+
+    random_battles: int | None = Field(default=None, gt=0)
+    per_language: int | None = Field(default=None, gt=0)
+
+
 class PairwiseProtocol(StrictFrozenModel):
     """Task-owned generation, baseline, judging, and scoring behavior."""
 
     runner: Literal["pairwise"]
+    graph: GraphArgs | None = None
     limit_by: str | None = Field(default=None, min_length=1)
     """Count complete groups in this column when applying n_instructions."""
     generation: SingleTurnGeneration | MultiTurnGeneration

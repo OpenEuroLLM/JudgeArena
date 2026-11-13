@@ -9,8 +9,11 @@ judge:
   model: OpenRouter/google/gemma-4-31b-it
 generation:
   n_instructions: 200
-elo:
-  n_bootstraps: 20
-  # Restrict the arena to these language codes. Defaults to English here; add
-  # more to evaluate multilingually, e.g. languages: ["en", "fr", "de"].
-  languages: ["en"]
+run:
+  filters: {lang: [en]}
+protocol:
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: bradley_terry
+        parameters: {fit_mode: frozen, soft: true, n_bootstraps: 20}

@@ -260,14 +260,13 @@ def load_arena_dataframe(
 def main():
     from judgearena.datasets import load_battles
     from judgearena.tasks.registry import load_tasks
-    from judgearena.tasks.schema import EloProtocol
 
     for task_id, task in load_tasks().items():
-        if not isinstance(task.spec.protocol, EloProtocol):
+        if task.spec.dataset.adapter != "arena_battles":
             continue
         logger.info("Loading %s", task_id)
         df = load_battles(task)
-        arena = task.spec.protocol.arena
+        arena = task_id
         n_battles = len(df)
         n_models = len(set(df["model_a"]) | set(df["model_b"]))
         n_languages = df["lang"].nunique()
