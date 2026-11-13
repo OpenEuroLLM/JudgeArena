@@ -385,43 +385,19 @@ judgearena \
   --generation.n_instructions 200
 ```
 
-### Key options
+### Sampling and scoring
 
-| Flag | Default | Description |
-|---|---|---|
-| `--task` | *(required)* | Packaged ELO task: `elo-lmarena-100k`, `elo-lmarena-140k`, `elo-lmarena`, or `elo-comparia` |
-| `--model.name` | *(required)* | Model under evaluation (same format as pairwise tasks) |
-| `--judge.model` | *(required)* | LLM judge (same format as pairwise tasks) |
-| `--generation.n_instructions` | all | Number of arena battles to use for evaluation |
-| `--elo.n_instructions_per_language` | all | Cap battles per language (useful for balanced multilingual eval) |
-| `--elo.languages` | all | Restrict to specific language codes (JSON list), e.g. `'["en", "fr", "de"]'` |
-| `--elo.n_bootstraps` | `20` | Bootstrap samples for ELO confidence intervals |
-| `--elo.elo_random_battles` | off | Sample N arena rows uniformly at random (seeded by `--run.seed`) instead of the first N |
-| `--judge.swap_mode` | `fixed` | `fixed`: single judge pass; `both`: correct for position bias |
-| `--run.result_folder` | `results` | Directory where annotations and results are saved |
-| `--elo.soft_elo` | `true` | Soft Bradley-Terry (continuous preferences); set `false` for hard win/loss/tie labels |
-| `--elo.soft_elo_temperature` | `0.3` | Initial softmax temperature for soft-ELO; overridden if calibration succeeds |
-| `--elo.calibrate_temperature` | off | MLE-calibrate the score-to-preference temperature against human arena annotations |
-| `--elo.calibration_size` | all | Number of human battles to sample for calibration (requires `--elo.calibrate_temperature`) |
+These tasks use pairwise judging with opponents sampled from arena battles.
+Use `--graph.per_language` or `--graph.random_battles` to control sampling and
+`--run.filters '{"lang":["en","fr"]}'` to select languages.
 
-### Soft-ELO & temperature calibration
+Configure `bradley_terry` through metric parameters: `fit_mode` (`frozen` or
+`joint`), `soft`, `n_bootstraps` and `baseline_model`. Preference conversion and
+calibration belong to `protocol.judge` (`preference_temperature`,
+`calibrate_temperature`, `calibration_size`). See
+[the graph configuration example](judgearena/tasks/README.md#graph-comparisons-and-elo).
 
-By default, judge scores are converted into continuous preferences via a softmax (temperature `0.3`) and fed into a soft
-Bradley-Terry model. Set `--elo.soft_elo false` to fall back to hard win/loss/tie labels.
-
-To let the data choose the best temperature automatically, add `--elo.calibrate_temperature`.
-JudgeArena will run the judge on a sample of human-annotated arena battles, fit the temperature $T^*$ by MLE, and
-use it for the full evaluation:
-
-```bash
-judgearena \
-  --task elo-lmarena-100k \
-  --model.name Together/meta-llama/Llama-3.3-70B-Instruct-Turbo \
-  --judge.model OpenRouter/deepseek/deepseek-chat-v3.1 \
-  --generation.n_instructions 200 \
-  --elo.calibrate_temperature \
-  --elo.calibration_size 300
-```
+Old `elo:` options still load; saved configs use the resolved pairwise settings.
 
 ### Output
 

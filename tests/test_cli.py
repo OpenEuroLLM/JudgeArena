@@ -70,7 +70,8 @@ def test_elo_task_dispatches(capture_mains, task: str):
     assert capture_mains["module"] == "benchmark"
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
-    assert cfg.elo is not None
+    assert cfg.elo is None
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.model.name == "Dummy/X"
 
 
@@ -117,12 +118,12 @@ def test_missing_judge_errors(capture_mains):
 
 
 def test_elo_requires_model_path(capture_mains):
-    with pytest.raises(SystemExit, match="model.name is required for ELO"):
+    with pytest.raises(SystemExit, match="model.name is required"):
         cli_module.cli(["--task", "elo-comparia", "--judge.model", "Dummy/J"])
 
 
 def test_elo_rejects_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is not supported for ELO"):
+    with pytest.raises(SystemExit, match="model.baseline is not supported with graph"):
         cli_module.cli(
             [
                 "--task",
@@ -198,14 +199,21 @@ def test_elo_forwards_optional_flags(capture_mains):
         ]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.elo is not None
-    assert cfg.elo.languages == ["en", "fr"]
-    assert cfg.elo.n_instructions_per_language == 50
-    assert cfg.elo.n_bootstraps == 5
+    assert cfg.elo is None
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
+    assert cfg.run.filters["lang"] == ["en", "fr"]
+    assert cfg.graph.per_language == 50
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["n_bootstraps"]
+        == 5
+    )
     assert cfg.run.seed == 7
-    assert cfg.elo.baseline_model == "gpt-4o"
-    assert cfg.elo.soft_elo_temperature == 0.5
-    assert cfg.elo.elo_random_battles == 100
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["baseline_model"]
+        == "gpt-4o"
+    )
+    assert cfg.preference_settings.preference_temperature == 0.5
+    assert cfg.graph.random_battles == 100
     assert cfg.judge.prompt.preset == "default_with_explanation"
 
 

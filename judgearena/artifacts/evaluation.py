@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-import pandas as pd
+import pyarrow.parquet as pq
 
 from judgearena.artifacts.metadata import to_jsonable
 
@@ -19,11 +19,12 @@ def metric_data_checksum(path):
     path = Path(path)
     if path.suffix != ".parquet":
         return file_checksum(path)
-    frame = pd.read_parquet(path)
+    table = pq.read_table(path)
+    table = table.select(sorted(table.column_names))
+    # Native values retain float precision and nested data across Parquet encodings.
+    payload = {"columns": table.column_names, "rows": table.to_pylist()}
     return hashlib.sha256(
-        frame.reindex(sorted(frame.columns), axis=1)
-        .to_json(orient="split", index=False)
-        .encode()
+        json.dumps(to_jsonable(payload), sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
 
 
@@ -47,7 +48,7 @@ def finish_evaluation(output_dir, report, *, model, artifacts):
             str(path.relative_to(output)): file_checksum(path)
             for path in sorted(output.rglob("*"))
             if path.is_file()
-            and path.name not in {"evaluation.json", "release.json"}
+            and path not in {output / "evaluation.json", output / "release.json"}
             and path.suffix != ".log"
         },
     }

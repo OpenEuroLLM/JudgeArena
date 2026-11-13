@@ -280,28 +280,3 @@ class BradleyTerryMetric:
         else:
             lines.append("No overlapping arena models to compute MAE.")
         return "\n".join(lines)
-
-
-def elo_metrics(cfg):
-    """Translate legacy Elo options into ordinary metric requests."""
-    from judgearena.benchmarks.scoring import build_metrics
-
-    requests = cfg.resolved_task.spec.protocol.scoring.metrics
-    overrides = {
-        "bradley_terry": {
-            "n_bootstraps": cfg.elo.n_bootstraps,
-            "baseline_model": cfg.elo.baseline_model,
-            "soft": cfg.elo.soft_elo,
-            "fit_mode": cfg.elo.fit_mode,
-        }
-    }
-    for request in requests:
-        if request.metric != "bradley_terry":
-            continue
-        parameters = overrides.setdefault(
-            request.name or request.metric, {"fit_mode": cfg.elo.fit_mode}
-        )
-        parameters["reference_min_battles"] = request.parameters.get(
-            "reference_min_battles", 500 if cfg.elo.fit_mode == "joint" else 0
-        )
-    return build_metrics(requests, parameter_overrides_by_metric=overrides)

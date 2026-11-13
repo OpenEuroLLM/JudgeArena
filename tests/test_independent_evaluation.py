@@ -509,7 +509,7 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     )
     criteria_preset = "custom-rubric" if mode == "custom" else "criteria-score"
     option_key = "rubric" if mode == "custom" else "criteria_file"
-    user = tmp_path / "rubric.txt"
+    user = tmp_path / "release.json"
     system = tmp_path / "system.txt"
     user.write_text('Rate {completion}. Return {{"score": number}}')
     system.write_text("Judge grammar only.")
@@ -558,6 +558,12 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     data = CompletionData(pd.DataFrame({"instruction": ["Q"]}))
     first = run_benchmark(cfg, data=data)
     saved = next((tmp_path / "results").rglob("config.yaml"))
+    manifest = json.loads((saved.parent / "evaluation.json").read_text())
+    assert all(
+        str(path.relative_to(saved.parent)) in manifest["files"]
+        for path in (saved.parent / "prompts").rglob("*")
+        if path.is_file()
+    )
     user.unlink()
     system.unlink()
     criteria.unlink()

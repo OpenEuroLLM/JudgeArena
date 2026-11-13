@@ -124,9 +124,13 @@ def prepare_graph(cfg, data):
     validate_graph_task(cfg.resolved_task.spec.protocol)
     if not isinstance(data, PreferenceData):
         raise ValueError("Graph preparation requires PreferenceData")
-    sampling = cfg.graph_sampling
+    from judgearena.datasets import resolve_dataset_filters
+
+    sampling = cfg.graph
     battles, metadata = select_graph_battles(
-        data.select(cfg.graph_filters).battles,
+        data.select(
+            resolve_dataset_filters(cfg.resolved_task, cfg.run.filters)
+        ).battles,
         seed=cfg.run.seed,
         random_battles=sampling.random_battles,
         per_language=sampling.per_language,

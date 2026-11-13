@@ -97,8 +97,9 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert arena_v20.spec.protocol.baseline.references["hard_prompt"] == (
         "o3-mini-2025-01-31"
     )
-    assert elo_comparia.spec.protocol.runner == "elo"
-    assert elo_comparia.spec.protocol.arena == "ComparIA"
+    assert elo_comparia.spec.protocol.runner == "pairwise"
+    assert elo_comparia.spec.protocol.graph is not None
+    assert elo_comparia.spec.dataset.format == "ComparIA"
     assert [metric.metric for metric in elo_comparia.spec.protocol.scoring.metrics] == [
         "pairwise_win_rate",
         "bradley_terry",
@@ -106,7 +107,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert elo_comparia.spec.dataset.sources["comparia"].revision == (
         "7a40bce496c1f2aa3be4001da85a49cb4743042b"
     )
-    assert elo_lmarena.spec.protocol.arena == "LMArena"
+    assert elo_lmarena.spec.dataset.format == "LMArena"
     assert len(elo_lmarena.spec.dataset.sources) == 3
     fluency = resolve_task(tasks, "fluency-french")
     assert fluency is not None

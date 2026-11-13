@@ -57,12 +57,12 @@ def load_battles(dataset: str | ResolvedTaskSpec) -> pd.DataFrame:
 
 
 def resolve_dataset_filters(
-    task: ResolvedTaskSpec, *requested: Mapping[str, Collection[object]]
+    task: ResolvedTaskSpec | None, *requested: Mapping[str, Collection[object]]
 ) -> dict[str, list[object]]:
     """Intersect task variants and runtime filters on their declared metadata fields."""
     filters = (
         {task.selection.selector: list(task.selection.values)}
-        if task.selection is not None
+        if task is not None and task.selection is not None
         else {}
     )
     for selection in requested:

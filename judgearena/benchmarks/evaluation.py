@@ -125,10 +125,8 @@ def run_evaluation(
             )
     else:
         validate_graph_task(resolved_task.spec.protocol)
-        instructions_df = task_data.instructions
-        if sampled_graph:
-            instruction_ids = pd.Index(opponent_panel["instruction_index"])
-            instructions_df = instructions_df.loc[instruction_ids.unique()]
+        instruction_ids = pd.Index(opponent_panel["instruction_index"])
+        instructions_df = task_data.instructions.loc[instruction_ids.unique()]
     task_data = preload_model_outputs(
         task_data,
         [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
@@ -139,7 +137,7 @@ def run_evaluation(
         judge = prepare_independent_judge(
             cfg, task_data, instructions_df, resolved_prompt
         )
-    elif opponent_panel is None or sampled_graph:
+    else:
         context = opponent_panel if sampled_graph else instructions_df
         output_columns = {"model", "completion"}
         if task_data.model_outputs is not None:
@@ -193,35 +191,31 @@ def run_evaluation(
         samples = answer_samples(instructions_df, answers)
         annotations, prompts = judge(build_judge(cfg), samples)
         judgment_metadata = {"judge_prompts": prompt_metadata(prompts)}
-    elif opponent_panel is not None:
-        if sampled_graph:
-            comparisons = candidate_comparisons(
-                opponent_panel,
-                answers.reindex(instruction_ids).set_axis(opponent_panel.index),
-                rng=comparison_rng
-                if comparison_rng is not None
-                else np.random.default_rng(cfg.run.seed),
-            )
-            samples = conversation_comparisons(
-                comparisons, resolved_task.spec.protocol.judge.turns
-            )
-            source_ids = (
-                samples["source_instruction_index"]
-                if resolved_task.spec.protocol.judge.turns is not None
-                else None
-            )
+    elif sampled_graph:
+        comparisons = candidate_comparisons(
+            opponent_panel,
+            answers.reindex(instruction_ids).set_axis(opponent_panel.index),
+            rng=comparison_rng,
+        )
+        samples = conversation_comparisons(
+            comparisons, resolved_task.spec.protocol.judge.turns
+        )
+        source_ids = (
+            samples["source_instruction_index"]
+            if resolved_task.spec.protocol.judge.turns is not None
+            else None
+        )
     else:
         samples, source_ids = prepare_comparisons(
             cfg, task_data, instructions_df, baseline_plan, answers=answers
         )
-    if not independent and (opponent_panel is None or sampled_graph):
+    if not independent:
         judge_chat_model = build_judge(cfg, default_temperature=default_temperature)
         annotations, outcomes, judgment_metadata = judge(
             judge_chat_model, samples, source_ids=source_ids
         )
     judge_prompt_variants = judgment_metadata["judge_prompts"]
-    if opponent_panel is None or sampled_graph:
-        annotations = annotations.assign(judge=cfg.judge.model)
+    annotations = annotations.assign(judge=cfg.judge.model)
     write_annotations(annotations, res_folder / f"{name}-annotations.csv")
 
     metric_data = (
