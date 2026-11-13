@@ -729,6 +729,10 @@ def test_public_api_runs_file_components_and_replays(
         resolved["spec"]
     )
     assert len(list(moved.rglob("components.py"))) == 1
+    original_metric = cfg.resolved_task.spec.protocol.scoring.metrics[0]
+    assert resolved["spec"]["protocol"]["scoring"]["metrics"][0]["name"] == (
+        original_metric.name or original_metric.metric
+    )
     registered_metrics = dict(_METRIC_TYPES)
     caplog.clear()
     replay = load_config(moved / saved.name)

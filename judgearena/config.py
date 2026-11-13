@@ -62,8 +62,13 @@ def _drop_none(kwargs: dict[str, object]) -> dict[str, object]:
 
 def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     """Merge fields, replacing collections and sections whose implementation changes."""
-    if (path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)) and any(
-        key in overrides for key in ("file", "preset", "user", "user_file")
+    is_prompt = path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)
+    if is_prompt and (
+        any(key in overrides for key in ("file", "preset"))
+        or (
+            defaults.get("preset") is not None
+            and any(key in overrides for key in ("user", "user_file"))
+        )
     ):
         return overrides.copy()
     identity = {
@@ -77,8 +82,13 @@ def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     if identity in overrides and overrides[identity] != defaults.get(identity):
         return overrides.copy()
     merged = defaults.copy()
-    if path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",):
-        for field, opposite in (("system", "system_file"), ("system_file", "system")):
+    if is_prompt:
+        for field, opposite in (
+            ("system", "system_file"),
+            ("system_file", "system"),
+            ("user", "user_file"),
+            ("user_file", "user"),
+        ):
             if overrides.get(field) is not None and opposite not in overrides:
                 merged.pop(opposite, None)
     if path == ("protocol", "judge"):
