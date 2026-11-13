@@ -51,6 +51,13 @@ def run_leaderboard_command(argv):
     table.add_argument("--leaderboard", type=Path, required=True)
     table.add_argument("--collection", type=Path, required=True)
     table.add_argument("--columns", nargs="+")
+    view = table.add_mutually_exclusive_group()
+    view.add_argument(
+        "--overall", action="store_true", help="Show overall metrics only"
+    )
+    view.add_argument(
+        "--breakdown", metavar="FIELD", help="Show one metric breakdown, e.g. lang"
+    )
     table.add_argument("--sort-by")
     table.add_argument("--descending", action="store_true")
     args, overrides = parser.parse_known_args(argv)
@@ -65,6 +72,8 @@ def run_leaderboard_command(argv):
                     args.leaderboard,
                     args.collection,
                     columns=args.columns,
+                    overall=args.overall,
+                    breakdown=args.breakdown,
                     sort_by=args.sort_by,
                     ascending=not args.descending,
                 ).to_string(index=False)

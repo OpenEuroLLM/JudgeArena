@@ -272,6 +272,10 @@ judgearena leaderboard table \
 
 Any scalar or nested metric value can be displayed this way. Metrics remain
 stored in full, including breakdowns; selecting columns does not change scores.
+Use `--overall` to show overall results only, or `--breakdown lang` to show
+results grouped by language. The selected breakdown column is included even when
+`--columns` omits it. Any stored breakdown field can be selected. Without
+either option, the table includes overall results and all breakdowns.
 
 ### Ordinary Elo runs
 

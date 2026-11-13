@@ -169,6 +169,9 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
     table = submission_table(release, collection)
     references = table[table.entry_type == "reference"]
     assert len(references) == 8 and len(table) == 13
+    by_language = submission_table(release, collection, breakdown="lang")
+    assert len(by_language) == 12 and by_language.lang.notna().all()
+    assert len(submission_table(release, collection, overall=True)) == 1
     assert set(first.method) == {"elo", "soft_elo", "pairwise_win_rate"}
     assert set(first.lang.dropna()) == {"en", "de"}
     evaluate(tmp_path / "conflict", n_bootstraps=11)
@@ -359,7 +362,7 @@ def test_baseline_cli_replay(tmp_path, monkeypatch, with_comparisons):
             cli(command + [flag, "changed"])
 
 
-def test_custom_criteria_task_and_portable_replay(tmp_path, monkeypatch):
+def test_custom_criteria_task_and_portable_replay(tmp_path, monkeypatch, capsys):
     config = yaml.safe_load(
         Path("configs/leaderboard/arena-hard-quality-v1.yaml").read_text()
     )
@@ -437,6 +440,46 @@ class Metric:
         ascending=False,
     )
     assert selected["custom.count"].dropna().tolist() == [2, 2, 1, 1, 1, 1]
+    overall = submission_table(release, tmp_path / "entries", overall=True)
+    assert overall["custom.count"].dropna().tolist() == [2, 2]
+    grouped = submission_table(release, tmp_path / "entries", breakdown="lang")
+    assert grouped["custom.count"].tolist() == [1, 1, 1, 1]
+    assert set(grouped.lang) == {"en", "de"}
+    with pytest.raises(ValueError, match="Unknown breakdown"):
+        submission_table(release, tmp_path / "entries", breakdown="missing")
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "judgearena.leaderboard.submissions._entries",
+            lambda *args: [
+                {
+                    "result": {
+                        "model": "empty",
+                        "metrics": {"custom": {"count": 0, "groups": {"category": []}}},
+                    }
+                }
+            ],
+        )
+        empty = submission_table(release, tmp_path / "entries", breakdown="category")
+        assert empty.empty and "category" in empty.columns
+    capsys.readouterr()
+    cli(
+        [
+            "leaderboard",
+            "table",
+            "--leaderboard",
+            str(release),
+            "--collection",
+            str(tmp_path / "entries"),
+            "--breakdown",
+            "lang",
+            "--columns",
+            "model",
+            "custom.count",
+        ]
+    )
+    displayed = capsys.readouterr().out
+    assert "NaN" not in displayed and "en" in displayed and "de" in displayed
+
     monkeypatch.setattr(PreparedModel, "materialize", no_inference)
     evaluate_release(
         release,

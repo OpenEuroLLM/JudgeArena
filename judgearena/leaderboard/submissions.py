@@ -107,14 +107,16 @@ def _metric_columns(values):
     return {k: v for k, v in flat.items() if not isinstance(v, (dict, list))}
 
 
-def result_rows(result):
+def result_rows(result, *, overall=False, breakdown=None):
     """Display scalar metric values, including nested values and breakdowns."""
     rows = []
     for name, metric in result["metrics"].items():
         values = _metric_columns(metric)
-        if values:
+        if values and breakdown is None:
             rows.append({**values, "model": result["model"], "method": name})
         for field, groups in metric.get("groups", {}).items():
+            if overall or (breakdown is not None and field != breakdown):
+                continue
             for group in groups:
                 rows.append(
                     {
@@ -128,17 +130,57 @@ def result_rows(result):
 
 
 def submission_table(
-    release, collection, *, columns=None, sort_by=None, ascending=True
+    release,
+    collection,
+    *,
+    columns=None,
+    sort_by=None,
+    ascending=True,
+    overall=False,
+    breakdown=None,
 ):
     manifest, references = load_release(Path(release))
+    if overall and breakdown is not None:
+        raise ValueError("Select overall or a breakdown, not both")
+    entries = _entries(collection, manifest)
     rows = []
-    for entry in _entries(collection, manifest):
+    for entry in entries:
         rows.extend(result_rows(entry["result"]))
     table = pd.DataFrame(rows).assign(entry_type="submission")
     if not references.empty:
         table = pd.concat(
             [references.assign(entry_type="reference"), table], ignore_index=True
         )
+    if overall or breakdown is not None:
+        available = {
+            field
+            for entry in entries
+            for metric in entry["result"]["metrics"].values()
+            for field in metric.get("groups", {})
+        }
+        if not references.empty:
+            available.add("lang")
+        if breakdown is not None and breakdown not in available:
+            raise ValueError(
+                f"Unknown breakdown: {breakdown}; available: {sorted(available)}"
+            )
+        selected = pd.DataFrame(
+            [
+                row
+                for entry in entries
+                for row in result_rows(
+                    entry["result"], overall=overall, breakdown=breakdown
+                )
+            ]
+        ).assign(entry_type="submission")
+        if breakdown == "lang" and not references.empty:
+            selected = pd.concat(
+                [references.assign(entry_type="reference"), selected], ignore_index=True
+            )
+        fields = list(table.columns)
+        if breakdown is not None and breakdown not in fields:
+            fields.append(breakdown)
+        table = selected.reindex(columns=fields)
     order = [column for column in ("lang", "method", "model") if column in table]
     if sort_by is not None:
         if sort_by not in table:
@@ -153,6 +195,8 @@ def submission_table(
     ]
     if columns is None:
         columns = leading + [column for column in table if column not in leading]
+    if breakdown is not None and breakdown not in columns:
+        columns = [breakdown, *columns]
     unknown = set(columns) - set(table.columns)
     if unknown:
         raise ValueError(f"Unknown table columns: {sorted(unknown)}")
