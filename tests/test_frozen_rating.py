@@ -105,6 +105,25 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
         seed=42,
     )
     assert all(result[key] == value for key, value in expected.items())
+    # Separated reference labels give the same fits as older mixed artifacts.
+    separated = battles.copy()
+    reference_rows = separated.evaluation_model.isna()
+    separated["reference_pref"] = separated.pref.where(reference_rows)
+    separated.loc[reference_rows, ["pref", "pref_hard"]] = np.nan
+    original = separated.copy(deep=True)
+    for mode in ("frozen", "joint"):
+        for soft in (False, True):
+            configured = BradleyTerryMetric(fit_mode=mode, soft=soft, n_bootstraps=20)
+            legacy = configured.calculate(battles, seed=42)
+            current = configured.calculate(separated, seed=42)
+            assert current["ratings"] == legacy["ratings"]
+            assert current["rating"] == legacy["rating"]
+            if mode == "frozen":
+                assert current["ci_low"] == legacy["ci_low"]
+                assert current["ci_high"] == legacy["ci_high"]
+            else:
+                assert current["bootstrap_ratings"] == legacy["bootstrap_ratings"]
+    pd.testing.assert_frame_equal(separated, original)
     changed = battles.copy()
     changed.loc[changed.evaluation_model.notna(), "pref"] = 0.1
     assert metric.calculate(changed)["reference_ratings"] == result["reference_ratings"]

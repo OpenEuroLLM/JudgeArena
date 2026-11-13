@@ -918,6 +918,9 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         .isna()
         .all()
     )
+    reference_rows = metric_data.evaluation_model.isna()
+    assert metric_data.loc[reference_rows, ["pref", "pref_hard"]].isna().all().all()
+    assert metric_data.loc[reference_rows, "reference_pref"].notna().all()
     saved = load_config(first.parent / "config.yaml")
     spec = saved.resolved_task.spec.model_dump()
     spec["protocol"]["scoring"]["metrics"] = [
