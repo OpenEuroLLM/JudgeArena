@@ -18,7 +18,6 @@ from langchain_core.globals import set_llm_cache
 
 from judgearena.evaluate import PairScore, annotate_battles
 from judgearena.models import make_model
-from judgearena.prompts.registry import FLUENCY_JUDGE_PROMPT_PRESET
 from judgearena.utils import data_root
 
 
@@ -163,7 +162,7 @@ def main():
         instructions=instructions,
         completions_A=completions_A,
         completions_B=completions_B,
-        prompt_preset=FLUENCY_JUDGE_PROMPT_PRESET,
+        prompt_preset="fluency",
         use_tqdm=args.use_tqdm,
     )
 
@@ -177,7 +176,7 @@ def main():
             instructions=instructions,
             completions_A=completions_B,
             completions_B=completions_A,
-            prompt_preset=FLUENCY_JUDGE_PROMPT_PRESET,
+            prompt_preset="fluency",
             use_tqdm=args.use_tqdm,
         )
         prefs_swapped = [
