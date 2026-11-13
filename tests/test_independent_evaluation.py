@@ -7,11 +7,11 @@ import pytest
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.config import RunConfig
-from judgearena.datasets.arena_hard import ArenaHardAdapter
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.wildbench import WildBenchAdapter
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import resolve_judge_prompt
+from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
+from judgearena.tasks.definitions.wildbench.dataset import WildBenchAdapter
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
 
@@ -558,49 +558,235 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     )
 
 
-def test_public_api_runs_custom_file_parser(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
+def test_public_api_runs_file_components_and_replays(
+    tmp_path, monkeypatch, source_kind, capsys, caplog
+):
+    import yaml
+
     import judgearena.prompts.parsing as parsing
     from judgearena import (
-        CompletionData,
-        ParsedScore,
         RunConfig,
         register_parser,
         run_benchmark,
     )
+    from judgearena.config import load_config
+    from judgearena.prompts import registry as prompt_registry
+    from judgearena.tasks import load_tasks
 
-    class GrammarParser:
-        name = "grammar"
-        result_type = ParsedScore
-        requires_top_logprobs = False
-
-        def parse_result(self, text, *, top_logprobs=None):
-            return ParsedScore(float(text))
-
+    monkeypatch.setattr(prompt_registry, "PRESETS", prompt_registry.PRESETS.copy())
+    source = tmp_path / "parser.py"
+    source.write_text(
+        "from judgearena.prompts.parsing import PairScore, ScoreParser, register_parser\n"
+        "PARSER = register_parser('grammar-file', ScoreParser())\n"
+        "PAIR = register_parser('grammar-pair', PairScore(temperature=0.5))\n"
+    )
+    reference = f"{source}:PARSER"
     monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
-    parser = register_parser("grammar", GrammarParser())
+    parser = register_parser("grammar", parsing.resolve_judge_parser(reference))
+    assert not {"grammar-file", "grammar-pair"} & parsing.JUDGE_PARSERS.keys()
     for name, value in [("", parser), ("grammar", parser), ("broken", object())]:
         with pytest.raises(ValueError):
             register_parser(name, value)
     rubric = tmp_path / "grammar.txt"
     rubric.write_text("Rate grammar from 1 to 10: {completion}. Return a number.")
-    cfg = RunConfig(
+    bundle = tmp_path / "_prompt.yaml"
+    bundle.write_text(
+        "judging_mode: single_answer\nuser_file: grammar.txt\nparser: ./parser.py:PARSER\n"
+    )
+    components = tmp_path / "components.py"
+    components.write_text(
+        "import pandas as pd\n"
+        "from judgearena.datasets.registry import DatasetAdapter, register_dataset\n"
+        "from judgearena.datasets.data import CompletionData\n"
+        "from judgearena.benchmarks.scoring import MeanScoreMetric, register_metric\n"
+        f"IMPORTED = register_metric('replay-imported-{source_kind}')(MeanScoreMetric)\n"
+        f"@register_metric('replay-metric-{source_kind}')\n"
+        "class Metric(MeanScoreMetric): pass\n"
+        "from judgearena.datasets.judgearena_tables import TableAdapter\n"
+        f"TABLE = register_dataset('replay-table-{source_kind}')(TableAdapter)\n"
+        "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
+        f"PROMPT = register_prompt(JudgePromptPreset(name='replay-prompt-{source_kind}'))\n"
+        f"@register_dataset('replay-data-{source_kind}')\n"
+        "class Adapter(DatasetAdapter):\n"
+        "    def load_data(self):\n"
+        "        return CompletionData(\n"
+        "            pd.DataFrame({'instruction': ['Say hello']}),\n"
+        "            pd.DataFrame({'instruction_index': [0], 'model': ['saved'],\n"
+        "                          'completion': ['Hello.']}))\n"
+    )
+    if source_kind == "config":
+        from judgearena.utils.extensions import load_python_module
+
+        load_python_module(
+            components
+        )  # Decorators have already registered these names.
+    declaration = dict(
+        dataset={"adapter": "./components.py:Adapter"},
         evaluation_name="grammar",
         protocol={
             "runner": "single_answer",
             "generation": {"mode": "single_turn_chat"},
             "judge": {"default_prompt_preset": "single-score"},
+            "scoring": {"metrics": [{"metric": "./components.py:Metric"}]},
         },
         model={"name": "saved"},
         judge={
-            "model": "Dummy/8",
-            "prompt": {"user_file": rubric, "parser": "grammar"},
+            "model": 'Dummy/{"score": 8}',
+            "prompt": {"file": "_prompt.yaml"},
         },
-        run={"result_folder": str(tmp_path), "store_root": None, "no_log_file": True},
+        run={
+            "result_folder": str(tmp_path),
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+        },
     )
-    data = CompletionData(
-        pd.DataFrame({"instruction": ["Say hello"]}),
-        pd.DataFrame(
-            {"instruction_index": [0], "model": ["saved"], "completion": ["Hello."]}
-        ),
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(yaml.safe_dump(declaration))
+    if source_kind != "config":
+        task = {
+            "schema_version": 1,
+            "task": "grammar",
+            "task_version": 1,
+            "description": "Score saved answers.",
+            "dataset": declaration.pop("dataset"),
+            "protocol": declaration.pop("protocol"),
+        }
+        task["protocol"]["judge"]["prompt"] = declaration["judge"].pop("prompt")
+        # A task family contains its YAML and referenced implementation files.
+        family = tmp_path / "definitions" / "grammar"
+        family.mkdir(parents=True)
+        for file in (components, source, rubric, bundle):
+            (family / file.name).write_bytes(file.read_bytes())
+        if source_kind == "registered":
+            (family / "_prompt.yaml").write_text(
+                "judging_mode: single_answer\nparser: grammar-verdict\nuser_file: grammar.txt\n"
+            )
+            (family / "register.py").write_text(
+                "from pathlib import Path\n"
+                "from judgearena.prompts.registry import JudgePromptPreset, register_prompt\n"
+                "from judgearena.prompts.parsing import register_parser\n"
+                "from judgearena.datasets.registry import register_dataset\n"
+                "from judgearena.benchmarks.scoring import register_metric\n"
+                "from judgearena.utils.extensions import load_python_object\n"
+                "here = Path(__file__).parent\n"
+                "register_dataset('grammar-data')(load_python_object(here / 'components.py', 'Adapter'))\n"
+                "register_metric('grammar-metric')(load_python_object(here / 'components.py', 'Metric'))\n"
+                "register_parser('grammar-verdict', load_python_object(here / 'parser.py', 'PARSER'))\n"
+                "register_prompt(JudgePromptPreset.from_file('grammar-judge', here / '_prompt.yaml'))\n"
+            )
+            task["protocol"]["judge"]["prompt"] = {"preset": "grammar-judge"}
+            task["dataset"]["adapter"] = "grammar-data"
+            task["protocol"]["scoring"]["metrics"] = [{"metric": "grammar-metric"}]
+        (family / "task.yaml").write_text(yaml.safe_dump(task))
+        experiment.unlink()
+        resolved = load_tasks(family.parent)["grammar"]
+        assert load_tasks(family.parent)["grammar"] == resolved
+        cfg = RunConfig(resolved_task=resolved, **declaration)
+    else:
+        cfg = load_config(experiment)
+        experiment.unlink()
+    from judgearena.datasets.registry import source_cache_dir
+
+    source_cache = source_cache_dir(cfg.resolved_task, tmp_path / "cache")
+    fresh = run_benchmark(cfg)
+    assert fresh.score.tolist() == [8]
+    import json
+
+    report = json.loads(next(tmp_path.rglob("results-*.json")).read_text())
+    assert next(iter(report["metrics"].values()))["score"] == 8
+
+    from judgearena.config import load_config
+
+    saved = next(tmp_path.rglob("config.yaml"))
+    components.unlink()
+    source.unlink()
+    rubric.unlink()
+    bundle.unlink()
+    if source_kind != "config":
+        import shutil
+
+        shutil.rmtree(family.parent)
+    if source_kind == "registered":
+        from judgearena.benchmarks.scoring import _METRIC_TYPES
+        from judgearena.datasets.registry import _DATASETS
+        from judgearena.prompts.registry import PRESETS
+
+        _DATASETS.pop("grammar-data")
+        _METRIC_TYPES.pop("grammar-metric")
+        PRESETS.pop("grammar-judge")
+        parsing.JUDGE_PARSERS.pop("grammar-verdict")
+    import shutil
+
+    moved = tmp_path / "moved-run"
+    shutil.move(saved.parent, moved)
+    from judgearena.benchmarks.scoring import _METRIC_TYPES
+    from judgearena.tasks.registry import _canonical_sha256
+
+    saved_data = yaml.safe_load((moved / saved.name).read_text())
+    resolved = saved_data["resolved_task"]
+    assert resolved["provenance"]["resolved_sha256"] == _canonical_sha256(
+        resolved["spec"]
     )
-    assert run_benchmark(cfg, data=data).score.tolist() == [8]
+    assert len(list(moved.rglob("components.py"))) == 1
+    original_metric = cfg.resolved_task.spec.protocol.scoring.metrics[0]
+    assert resolved["spec"]["protocol"]["scoring"]["metrics"][0]["name"] == (
+        original_metric.name or original_metric.metric
+    )
+    registered_metrics = dict(_METRIC_TYPES)
+    caplog.clear()
+    replay = load_config(moved / saved.name)
+    assert "stale definition hash" not in caplog.text
+    assert (
+        replay.resolved_task.provenance.source_sha256
+        == cfg.resolved_task.provenance.source_sha256
+    )
+    assert source_cache_dir(replay.resolved_task, tmp_path / "cache") == source_cache
+    monkeypatch.setattr(
+        "judgearena.models.make_model",
+        lambda *a, **kw: pytest.fail("Replay must not construct a backend"),
+    )
+    capsys.readouterr()
+    repeated = run_benchmark(replay)
+    assert "Mean score: 8.0" in capsys.readouterr().out
+    assert _METRIC_TYPES == registered_metrics
+    assert repeated.score.tolist() == [8]
+    assert repeated.prompt_preset.tolist() == fresh.prompt_preset.tolist()
+    import subprocess
+    import sys
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
+import sys
+from pathlib import Path
+from judgearena.utils.extensions import load_python_object
+component = next(Path(sys.argv[1]).parent.rglob("components.py"))
+load_python_object(component, "Adapter")
+from judgearena.datasets.registry import dataset_names
+assert {"arena_battles", "judgearena_tables"} <= dataset_names()
+from judgearena import run_benchmark
+from judgearena.config import load_config
+import judgearena.models as models
+def forbidden(*args, **kwargs):
+    raise AssertionError("Replay must not construct a backend")
+models.make_model = forbidden
+assert run_benchmark(load_config(sys.argv[1])).score.tolist() == [8]
+""",
+            str(moved / saved.name),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    reports = [
+        json.loads(path.read_text()) for path in tmp_path.rglob("results-*.json")
+    ]
+    assert len(reports) == 3
+    assert all(report["metrics"] == reports[0]["metrics"] for report in reports)
+    assert all(
+        next(iter(report["metrics"].values()))["score"] == 8 for report in reports
+    )

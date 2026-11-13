@@ -136,7 +136,7 @@ def run_meta_eval(
         metrics=metric_results,
     )
     results = report.to_dict()
-    report.render()
+    report.render(metrics)
     result_path = report.save(result_dir / "results.json")
     write_run_metadata_safely(
         task=cfg.resolved_task,

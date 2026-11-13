@@ -16,10 +16,6 @@ from judgearena.prompts import resolve_judge_prompt as public_resolve_judge_prom
 from judgearena.prompts.parsing import PairScore
 from judgearena.prompts.registry import (
     DEFAULT_WITH_EXPLANATION_PRESET,
-    FASTCHAT_PAIRWISE_PROMPT_PRESET,
-    FLUENCY_JUDGE_PROMPT_PRESET,
-    MT_BENCH_101_CLEAN_PROMPT_PRESET,
-    MT_BENCH_101_PROMPT_PRESET,
     PRESETS,
     default_preset_for_task,
     resolve_judge_prompt,
@@ -33,8 +29,8 @@ def test_default_presets_are_owned_by_task_yaml():
 
 
 def test_default_preset_for_fluency_prefix():
-    assert default_preset_for_task("fluency-french") == FLUENCY_JUDGE_PROMPT_PRESET
-    assert default_preset_for_task("fluency-spanish") == FLUENCY_JUDGE_PROMPT_PRESET
+    assert default_preset_for_task("fluency-french") == "fluency"
+    assert default_preset_for_task("fluency-spanish") == "fluency"
 
 
 def test_m_arena_hard_prompt_defaults_are_owned_by_task_yaml():
@@ -50,7 +46,7 @@ def test_default_preset_for_unknown_task():
 def test_mt_bench_default_is_delegated_fastchat():
     resolved = resolve_judge_prompt(task="mt-bench")
 
-    assert resolved.preset_name == FASTCHAT_PAIRWISE_PROMPT_PRESET
+    assert resolved.preset_name == "fastchat-pairwise"
     assert resolved.delegated is True
     assert resolved.system_prompt is None
     assert resolved.user_prompt_template == ""
@@ -60,18 +56,18 @@ def test_mt_bench_default_is_delegated_fastchat():
 
 def test_mt_bench_101_prompt_presets_are_delegated():
     default = resolve_judge_prompt(task="mt-bench-101")
-    cleaned = resolve_judge_prompt(preset=MT_BENCH_101_CLEAN_PROMPT_PRESET)
+    cleaned = resolve_judge_prompt(preset="mt-bench-101-clean")
 
-    assert default.preset_name == MT_BENCH_101_PROMPT_PRESET
+    assert default.preset_name == "mt-bench-101"
     assert default.delegated is True
-    assert cleaned.preset_name == MT_BENCH_101_CLEAN_PROMPT_PRESET
+    assert cleaned.preset_name == "mt-bench-101-clean"
     assert cleaned.delegated is True
 
 
 def test_fluency_task_resolves_inline_system_prompt():
     resolved = resolve_judge_prompt(task="fluency-french")
 
-    assert resolved.preset_name == FLUENCY_JUDGE_PROMPT_PRESET
+    assert resolved.preset_name == "fluency"
     assert resolved.source == "preset"
     assert "completion of a sentence" in resolved.system_prompt
     assert "{user_prompt}" in resolved.user_prompt_template
@@ -100,7 +96,7 @@ def test_explanation_preset_renders_explanation_suffix():
 def test_resolve_judge_prompts_honors_task_default_when_preset_omitted():
     resolved = resolve_judge_prompts(task="fluency-french")
 
-    assert resolved.preset_name == FLUENCY_JUDGE_PROMPT_PRESET
+    assert resolved.preset_name == "fluency"
     assert "completion of a sentence" in resolved.system_prompt
 
 
@@ -334,7 +330,7 @@ def test_category_prompt_validates_parser_during_preparation(monkeypatch):
         )
 
 
-def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
+def test_inline_prompt_registration_is_available_to_resolution(monkeypatch, tmp_path):
     from judgearena.prompts import (
         JudgePromptPreset,
         available_prompt_presets,
@@ -392,6 +388,56 @@ def test_inline_prompt_registration_is_available_to_resolution(monkeypatch):
         assert all(
             prompt.parser.parse_result('{"score": 8}') is None for prompt, _ in groups
         )
+        from judgearena.artifacts import prepare_run_directory
+        from judgearena.config import load_config
+
+        bundle = tmp_path / "configured.yaml"
+        bundle.write_text(f"preset: {name}\noptions: {{maximum: 5}}\n")
+        register_prompt(JudgePromptPreset.from_file("configured-bundle", bundle))
+        configured = RunConfig(
+            evaluation_name="category-replay",
+            protocol=cfg.protocol.model_copy(
+                update={
+                    "judge": cfg.protocol.judge.model_copy(
+                        update={
+                            "default_prompt_preset": "configured-bundle",
+                        }
+                    ),
+                }
+            ),
+            model=cfg.model,
+            judge={"model": "Dummy/j", "prompt": {"preset": "configured-bundle"}},
+        )
+        rows = pd.DataFrame({"category": ["regular", "creative"]})
+        before = group_judge_prompts(
+            configured,
+            rows,
+            resolve_run_judge_prompt(
+                configured.resolved_task,
+                configured.judge,
+            ),
+        )
+        run = prepare_run_directory(configured, tmp_path / "run", attach_log=False)
+        bundle.unlink()
+        from judgearena.prompts import registry
+
+        registry.PRESETS.pop("configured-bundle")
+        replay = load_config(run / "config.yaml")
+        after = group_judge_prompts(
+            replay,
+            rows,
+            resolve_run_judge_prompt(
+                replay.resolved_task,
+                replay.judge,
+            ),
+        )
+        assert [
+            (p.preset_name, p.judging_mode, p.user_prompt_template, list(ids))
+            for p, ids in after
+        ] == [
+            (p.preset_name, p.judging_mode, p.user_prompt_template, list(ids))
+            for p, ids in before
+        ]
         with pytest.raises(TypeError, match="unexpected keyword"):
             resolve_judge_prompt(preset=name, options={"maximumm": 5})
         with pytest.raises(ValueError, match="already registered"):
@@ -411,6 +457,24 @@ def test_standalone_user_prompt_needs_no_system_file(tmp_path):
         ("human", "Grade Answer.")
     ]
     assert prompt.system_path is None and prompt.system_sha256 is None
+
+    from judgearena.prompts.registry import JudgePromptPreset, resolve_prompt_spec
+    from judgearena.prompts.spec import JudgePromptSpec
+
+    bundle = tmp_path / "judge.yaml"
+    for mode in ("single_answer", "pairwise"):
+        bundle.write_text(
+            f"judging_mode: {mode}\nparser: json-score\nuser_file: judge.txt\n"
+        )
+        selection = JudgePromptSpec(file=bundle)
+        resolved = resolve_prompt_spec(selection)
+        assert resolved.judging_mode == mode
+        assert JudgePromptPreset.from_file("grammar", bundle).judging_mode == mode
+        if mode == "pairwise":
+            with pytest.raises(ValueError):
+                resolved.validate_for(mode)
+    with pytest.raises(ValueError, match="owns.*mode"):
+        JudgePromptSpec(preset="single-score", judging_mode="pairwise")
 
 
 @pytest.mark.parametrize("preset", ["single-score", "default"])
@@ -442,3 +506,34 @@ def test_prepared_field_validation_accepts_model_fields(preset):
             instructions,
             available_columns={"instruction"},
         )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"system_file": "missing.txt"},
+        {"parser": "json-score"},
+        {"options": {"unknown": 1}},
+    ],
+)
+def test_task_bundle_keeps_explicit_argument_validation(kwargs):
+    with pytest.raises(ValueError):
+        resolve_judge_prompt(task="arena-hard-v0.1", **kwargs)
+
+
+def test_parser_files_are_isolated_and_edits_reloaded(tmp_path):
+    from judgearena.prompts.parsing import resolve_judge_parser
+
+    for directory in ("first", "second"):
+        (tmp_path / directory).mkdir()
+    source = "from judgearena.prompts.parsing import PairScore\nPARSER = PairScore(temperature={})\n"
+    paths = [tmp_path / name / "parsers.py" for name in ("first", "second")]
+    for path, value in zip(paths, (0.2, 0.8), strict=True):
+        path.write_text(source.format(value))
+    references = [f"{path}:PARSER" for path in paths]
+    assert [resolve_judge_parser(ref).temperature for ref in references] == [0.2, 0.8]
+    paths[0].write_text(source.format(0.9))
+    assert resolve_judge_parser(references[0]).temperature == 0.9
+    for symbol in ("Missing", "PairScore"):
+        with pytest.raises(ValueError, match="OutputParser instance"):
+            resolve_judge_parser(f"{paths[0]}:{symbol}")

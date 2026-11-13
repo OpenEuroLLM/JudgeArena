@@ -9,7 +9,7 @@ from urllib.request import urlretrieve
 import pandas as pd
 
 from judgearena.datasets.data import CompletionData
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.datasets.registry import source_cache_dir as _task_cache_dir
 from judgearena.tasks.schema import GitRawSource
 
@@ -129,7 +129,6 @@ def expand_mt_bench_101_records(records: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-@register_dataset("mt_bench_101")
 class MTBench101Adapter(DatasetAdapter):
     def _benchmark_source(self) -> GitRawSource:
         source = self.task.spec.dataset.sources.get("benchmark")

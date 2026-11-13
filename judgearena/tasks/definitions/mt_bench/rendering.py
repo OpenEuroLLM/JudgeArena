@@ -13,21 +13,19 @@ import pandas as pd
 from pydantic import Field, model_validator
 
 from judgearena.judging import JudgeRequest
-from judgearena.prompts.parsing import FastChatVerdictParser
 from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
-    FASTCHAT_PAIRWISE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     build_chat_prompt_template,
     resolve_run_judge_prompt,
 )
+from judgearena.tasks.definitions.mt_bench.parsers import FastChatVerdictParser
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.utils import strip_thinking_tags
 
 if TYPE_CHECKING:
     from judgearena.config import RunConfig
 
-_PROMPT_PACKAGE = "judgearena.prompts"
 _USER_SINGLE_BASE_FILE = "user-single-base.txt"
 _USER_MULTI_BASE_FILE = "user-multi-base.txt"
 _USER_SINGLE_REF_BLOCK_FILE = "user-single-reference-block.txt"
@@ -53,8 +51,8 @@ class MTBenchPromptOptions(StrictFrozenModel):
 
 def load_mt_bench_prompt_text(filename: str) -> str:
     return (
-        files(_PROMPT_PACKAGE)
-        .joinpath("templates", "mt_bench", filename)
+        files("judgearena.tasks")
+        .joinpath("definitions", "mt_bench", "prompts", filename)
         .read_text(encoding="utf-8")
     )
 
@@ -113,7 +111,7 @@ def _load_pairwise_prompt(
         multi_turn=multi_turn, ref_based=ref_based
     )
     return ResolvedJudgePrompt(
-        preset_name=FASTCHAT_PAIRWISE_PROMPT_PRESET,
+        preset_name="fastchat-pairwise",
         variant_name=name,
         parser=FastChatVerdictParser(),
         source="preset",

@@ -19,12 +19,22 @@ from pydantic import ValidationError
 from judgearena.benchmarks.scoring import available_metrics, build_metric
 from judgearena.log import get_logger
 from judgearena.prompts.registry import available_prompt_presets
+from judgearena.prompts.spec import (
+    JudgePromptSpec,
+    config_prompts,
+    resolve_prompt_paths,
+)
 from judgearena.tasks.schema import (
     ResolvedTaskSpec,
     ResourceDigest,
     TaskProvenance,
     TaskSelection,
     TaskSpec,
+)
+from judgearena.utils.extensions import (
+    load_task_components,
+    python_reference,
+    resolve_component_paths,
 )
 
 logger = get_logger(__name__)
@@ -111,14 +121,38 @@ def _strict_yaml_mapping(text: str, *, path: str) -> dict[str, Any]:
     return data
 
 
-def _merge_mapping(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
+def _merge_mapping(
+    parent: dict[str, Any], child: dict[str, Any], path: tuple = ()
+) -> dict[str, Any]:
     """Apply the documented recursive-map/replace-list/null-delete merge."""
+    is_prompt = path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)
+    if is_prompt and (
+        any(key in child for key in ("file", "preset"))
+        or (
+            parent.get("preset") is not None
+            and any(key in child for key in ("user", "user_file"))
+        )
+    ):
+        return deepcopy(child)
     merged = deepcopy(parent)
+    if is_prompt:
+        for field, opposite in (
+            ("system", "system_file"),
+            ("system_file", "system"),
+            ("user", "user_file"),
+            ("user_file", "user"),
+        ):
+            if child.get(field) is not None and opposite not in child:
+                merged.pop(opposite, None)
+    if child.get("default_prompt_preset") is not None and "prompt" not in child:
+        merged.pop("prompt", None)
+    elif child.get("prompt") is not None:
+        merged.pop("default_prompt_preset", None)
     for key, value in child.items():
         if value is None:
             merged.pop(key, None)
         elif isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _merge_mapping(merged[key], value)
+            merged[key] = _merge_mapping(merged[key], value, (*path, key))
         else:
             merged[key] = deepcopy(value)
     return merged
@@ -193,6 +227,23 @@ def _resolve(
     text = resource.read_text(encoding="utf-8")
     data = _strict_yaml_mapping(text, path=normalized_path)
     digest = ResourceDigest(normalized_path, _sha256(text))
+    resolve_component_paths(data, Path(str(resource)).resolve().parent)
+    for prompt in config_prompts(data):
+        resolve_prompt_paths(prompt, Path(str(resource)).resolve().parent)
+        # Expand each bundle before inheritance so its own relative paths survive.
+        expanded = (
+            JudgePromptSpec.model_validate(prompt).model_dump(mode="json")
+            if prompt.get("file") is not None
+            else prompt.copy()
+        )
+        # Pin task templates by content, independent of the installation directory.
+        for role in ("system", "user"):
+            filename = expanded.get(f"{role}_file")
+            if filename is not None and expanded.get(role) is None:
+                expanded[role] = Path(filename).read_text(encoding="utf-8")
+                expanded[f"{role}_file"] = None
+        prompt.clear()
+        prompt.update(expanded)
 
     is_base = PurePosixPath(normalized_path).name.startswith("_")
     if is_base and "task" in data:
@@ -209,7 +260,11 @@ def _resolve(
         )
     base_path = _resolve_extends(normalized_path, extends)
     base, base_resources = _resolve(root, base_path, chain=(*chain, normalized_path))
-    return _merge_mapping(base, data), (*base_resources, digest)
+    merged = _merge_mapping(base, data)
+    # Options-only overrides need the inherited preset to identify file paths.
+    for prompt in config_prompts(merged):
+        resolve_prompt_paths(prompt, Path(str(resource)).resolve().parent)
+    return merged, (*base_resources, digest)
 
 
 def _resolve_extends(child_path: str, extends: str) -> str:
@@ -280,6 +335,8 @@ def load_tasks(
     if definitions_root is None and adapters is None:
         return _load_packaged_tasks()
     root = definitions_root or files("judgearena.tasks").joinpath("definitions")
+    load_task_components()  # Custom registrations may reuse packaged components.
+    load_task_components(root)
     return _discover_tasks(root, adapters or AdapterCatalog())
 
 
@@ -313,9 +370,20 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
         "runner": (spec.protocol.runner, adapters.runners),
         "dataset adapter": (spec.dataset.adapter, adapters.datasets),
     }
+    if python_reference(spec.dataset.adapter) is not None:
+        from judgearena.datasets.registry import dataset_adapter_type
+
+        try:
+            dataset_adapter_type(spec.dataset.adapter)
+        except (ValueError, OSError) as exc:
+            raise TaskDefinitionError(f"Invalid dataset adapter: {exc}") from exc
+        references.pop("dataset adapter")
     metric_names = adapters.metrics
     for request in spec.protocol.scoring.metrics:
-        if request.metric not in metric_names:
+        if (
+            request.metric not in metric_names
+            and python_reference(request.metric) is None
+        ):
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown metric {request.metric!r}"
             )
@@ -327,7 +395,11 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
                 f"{request.metric!r}: {exc}"
             ) from exc
     judge = spec.protocol.judge
-    references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
+    if judge.prompt is not None:
+        if judge.prompt.preset is not None:
+            references["prompt"] = (judge.prompt.preset, adapters.prompts)
+    elif judge.default_prompt_preset is not None:
+        references["prompt"] = (judge.default_prompt_preset, adapters.prompts)
     for kind, (adapter_id, available) in references.items():
         if adapter_id not in available:
             raise TaskDefinitionError(
@@ -335,7 +407,9 @@ def _validate_adapter_ids(resolved: ResolvedTaskSpec, adapters: AdapterCatalog) 
             )
     category_prompts = getattr(spec.protocol.judge, "category_prompts", {})
     for category, preset in category_prompts.items():
-        if preset not in adapters.prompts:
+        if isinstance(preset, JudgePromptSpec):
+            preset = preset.preset
+        if preset is not None and preset not in adapters.prompts:
             raise TaskDefinitionError(
                 f"{resolved.provenance.source_path}: unknown prompt {preset!r} "
                 f"for category {category!r}"

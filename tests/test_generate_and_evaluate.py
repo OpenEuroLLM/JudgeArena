@@ -78,7 +78,7 @@ def mock_external_data_and_cache(monkeypatch):
 
 
 def _mock_alpaca_judge(monkeypatch, messages) -> dict[str, object]:
-    from judgearena.benchmarks.pairwise.scoring import alpaca_eval
+    from judgearena.tasks.definitions.alpaca_eval import metrics as alpaca_eval
 
     captured: dict[str, object] = {}
 
@@ -764,7 +764,9 @@ def test_independent_score_presets_compare_expanded_candidates_in_order():
     task = get_packaged_task("arena-hard-v2.0")
     judge_spec = task.spec.protocol.judge.model_copy(
         update={
-            "default_prompt_preset": "single-score",
+            "prompt": task.spec.protocol.judge.prompt.model_copy(
+                update={"preset": "single-score"}
+            ),
             "category_prompts": {"creative": "criteria-score"},
         }
     )

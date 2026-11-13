@@ -14,7 +14,7 @@ from judgearena.datasets.data import (
     validate_instruction_ids,
     validate_messages,
 )
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.tasks.schema import (
     GitRawSource,
     HuggingFaceSpaceSource,
@@ -68,7 +68,6 @@ def _extract_answer_turns(record: dict, source_name: str) -> tuple[object, list[
     return _normalize_question_id(question_id), turns
 
 
-@register_dataset("mt_bench")
 class MTBenchAdapter(DatasetAdapter):
     def _space_source(self) -> HuggingFaceSpaceSource:
         source = self.task.spec.dataset.sources.get("benchmark")

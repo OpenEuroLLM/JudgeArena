@@ -4,14 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from judgearena.benchmarks.pairwise.scoring import alpaca_eval as alpaca_scoring
-from judgearena.benchmarks.pairwise.scoring import arena_hard
-from judgearena.benchmarks.pairwise.scoring.arena_hard import (
+from judgearena.benchmarks.scoring import build_metric
+from judgearena.tasks.definitions.alpaca_eval import metrics as alpaca_scoring
+from judgearena.tasks.definitions.arena_hard import metrics as arena_hard
+from judgearena.tasks.definitions.arena_hard.metrics import (
     ArenaHardV01Metric,
     ArenaHardV20Metric,
     _style_features,
 )
-from judgearena.benchmarks.scoring import build_metric
 from judgearena.tasks.registry import get_packaged_task
 
 
