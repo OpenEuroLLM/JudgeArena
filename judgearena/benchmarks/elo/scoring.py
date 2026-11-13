@@ -58,12 +58,19 @@ class BradleyTerryMetric:
         if missing:
             raise ValueError(f"Bradley-Terry battles are missing columns: {missing}.")
         scoring_battles = battles.copy()
-        if not self.soft:
-            scoring_battles["pref"] = scoring_battles["pref_hard"]
+        scoring_battles["rating_pref"] = battles["pref" if self.soft else "pref_hard"]
+        if {"reference_pref", "evaluation_model"} <= set(battles.columns):
+            reference_rows = (
+                battles.evaluation_model.isna() & battles.reference_pref.notna()
+            )
+            labels = battles.loc[reference_rows, "reference_pref"]
+            scoring_battles.loc[reference_rows, "rating_pref"] = (
+                labels if self.soft else hard_preferences(labels)
+            )
         if self.fit_mode == "frozen":
             return self._calculate_frozen(scoring_battles, seed=seed)
         point_ratings = fit_bradley_terry(
-            scoring_battles, pref_col="pref", baseline_model=self.baseline_model
+            scoring_battles, pref_col="rating_pref", baseline_model=self.baseline_model
         )
         lifecycle_columns = {"pref_hard", "evaluation_model"}
         missing_lifecycle = sorted(lifecycle_columns - set(battles.columns))
@@ -86,11 +93,13 @@ class BradleyTerryMetric:
         reference_battles = scoring_battles.reindex(
             columns=["model_a", "model_b", "reference_pref"]
         ).dropna(subset=["reference_pref"])
-        reference_battles["pref"] = hard_preferences(
+        reference_battles["rating_pref"] = hard_preferences(
             reference_battles["reference_pref"]
         )
         reference_ratings = fit_bradley_terry(
-            reference_battles, pref_col="pref", baseline_model=self.baseline_model
+            reference_battles,
+            pref_col="rating_pref",
+            baseline_model=self.baseline_model,
         )
 
         battle_counts: dict[str, int] = {}
@@ -108,7 +117,7 @@ class BradleyTerryMetric:
             )
             bootstrap_ratings.append(
                 fit_bradley_terry(
-                    sample, pref_col="pref", baseline_model=self.baseline_model
+                    sample, pref_col="rating_pref", baseline_model=self.baseline_model
                 )
             )
 
@@ -171,13 +180,16 @@ class BradleyTerryMetric:
         candidate = str(candidates[0])
         reference_battles = battles.loc[battles.evaluation_model.isna()]
         references = fit_bradley_terry(
-            reference_battles, baseline_model=self.baseline_model
+            reference_battles,
+            pref_col="rating_pref",
+            baseline_model=self.baseline_model,
         )
         judgments = battles.loc[battles.evaluation_model.notna()]
         values = fit_frozen_rating(
             judgments,
             candidate,
             references,
+            pref_col="rating_pref",
             group_col="question_id",
             n_bootstraps=self.n_bootstraps,
             seed=seed,

@@ -119,7 +119,6 @@ def select_seeded_random_battles(
 
 def prepare_graph(cfg, data):
     """Select candidate comparisons and retain available reference labels."""
-    from judgearena.battles import hard_preferences
     from judgearena.datasets.data import PreferenceData
 
     validate_graph_task(cfg.resolved_task.spec.protocol)
@@ -133,11 +132,11 @@ def prepare_graph(cfg, data):
         per_language=sampling.per_language,
         limit=cfg.generation.n_instructions,
     )
-    references = data.battles.copy()
+    references = data.battles.drop(
+        columns=["pref", "pref_hard"], errors="ignore"
+    ).copy()
     if "reference_pref" not in references:
         references["reference_pref"] = float("nan")
     references = references.loc[references.reference_pref.notna()].copy()
-    references["pref"] = references.reference_pref
-    references["pref_hard"] = hard_preferences(references.reference_pref)
     references["evaluation_model"] = None
     return battles, references, metadata
