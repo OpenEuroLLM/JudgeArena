@@ -27,8 +27,14 @@ def test_refusal_metrics_labels_probabilities_and_missing():
         rows.at[0, "parsed"] = invalid
         missing = EUGuardMetric().calculate(rows)
         assert missing["num_missing"] == 1
-        assert missing["macro_f1"] is None
-    assert EUGuardMetric().calculate(labels.assign(completion=""))["num_valid"] == 0
+        assert missing["coverage"] == 0.8
+        assert missing["accuracy"] == 0.5
+        assert missing["fcr"] == pytest.approx(1 / 3)
+        assert missing["frr"] == 1
+        assert missing["macro_f1"] == pytest.approx(1 / 3)
+    empty = EUGuardMetric().calculate(labels.assign(completion=""))
+    assert empty["num_valid"] == 0 and empty["macro_f1"] is None
+    assert EUGuardMetric().calculate(labels.iloc[:0])["coverage"] is None
 
 
 @pytest.mark.parametrize(
