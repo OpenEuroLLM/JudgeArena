@@ -129,7 +129,12 @@ def test_guard_runner_uses_saved_prompts_and_replays(
 
 
 def test_external_guard_labels():
-    from scripts.eu_guard import parse_llama_guard
+    from pathlib import Path
+    from runpy import run_path
+
+    parse_llama_guard = run_path(Path(__file__).parents[1] / "scripts/eu_guard.py")[
+        "parse_llama_guard"
+    ]
 
     assert parse_llama_guard("safe\n")["label"] == "answer"
     assert parse_llama_guard("unsafe\nS1")["details"] == {"categories": ["S1"]}
