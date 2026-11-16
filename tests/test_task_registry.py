@@ -921,17 +921,20 @@ def test_inherited_rubric_paths_and_replay(tmp_path, monkeypatch):
         )
 
 
-@pytest.mark.parametrize("system_key", ["system", "system_file"])
-def test_partial_system_prompt_override(tmp_path, system_key):
+@pytest.mark.parametrize("template_key", ["system", "system_file", "user", "user_file"])
+@pytest.mark.parametrize("source", ["config", "task"])
+def test_partial_template_override(tmp_path, template_key, source):
     from judgearena.artifacts import prepare_run_directory
     from judgearena.config import RunConfig, load_config
 
-    template = tmp_path / "system.txt"
-    template.write_text("New system")
+    field = template_key.removesuffix("_file")
+    template = tmp_path / "template.txt"
+    template.write_text("New template")
     definition = _task_definition()
     prompt = {
         "user": "Compare {completion_a} {completion_b}",
         "parser": "score",
+        "judging_mode": "single_answer",
         "system": "Old system",
     }
     definition["protocol"]["judge"].update(
@@ -941,7 +944,9 @@ def test_partial_system_prompt_override(tmp_path, system_key):
     _write_family(root, family="test", filename="test.yaml", definition=definition)
     task = load_tasks(root)["test-task"]
     override = {
-        system_key: str(template) if system_key == "system_file" else "New system"
+        template_key: str(template)
+        if template_key.endswith("_file")
+        else "New template"
     }
     cfg = RunConfig(
         resolved_task=task,
@@ -949,11 +954,11 @@ def test_partial_system_prompt_override(tmp_path, system_key):
         judge={"model": "Dummy/judge"},
         protocol={
             "judge": {
-                "prompt": {"system_file": str(template)},
-                "category_prompts": {"coding": {"system_file": str(template)}},
+                "prompt": {f"{field}_file": str(template)},
+                "category_prompts": {"coding": {f"{field}_file": str(template)}},
             }
         }
-        if system_key == "system"
+        if not template_key.endswith("_file")
         else None,
     )
     cfg = RunConfig(
@@ -964,15 +969,45 @@ def test_partial_system_prompt_override(tmp_path, system_key):
             },
         }
     )
+    if source == "task":
+        _write_family(
+            root,
+            family="test",
+            filename="_base.yaml",
+            definition={k: v for k, v in definition.items() if k != "task"},
+        )
+        _write_family(
+            root,
+            family="test",
+            filename="child.yaml",
+            definition={
+                "extends": "_base.yaml",
+                "task": "child",
+                "protocol": {
+                    "judge": {
+                        "prompt": override,
+                        "category_prompts": {"coding": override},
+                    }
+                },
+            },
+        )
+        cfg = RunConfig(
+            resolved_task=load_tasks(root)["child"],
+            model={"name": "Dummy/model"},
+            judge={"model": "Dummy/judge"},
+        )
     run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
     template.unlink()
     replay = load_config(run / "config.yaml")
     for selection in (
-        replay.protocol.judge.prompt,
-        replay.protocol.judge.category_prompts["coding"],
+        replay.resolved_task.spec.protocol.judge.prompt,
+        replay.resolved_task.spec.protocol.judge.category_prompts["coding"],
     ):
-        assert selection.user == prompt["user"] and selection.parser == "score"
+        assert selection.parser == "score"
+        assert selection.judging_mode == "single_answer"
+        unchanged = "user" if field == "system" else "system"
+        assert getattr(selection, unchanged) == prompt[unchanged]
         assert (
-            selection.system == "New system"
-            or selection.system_file.read_text() == "New system"
+            getattr(selection, field) == "New template"
+            or getattr(selection, f"{field}_file").read_text() == "New template"
         )
