@@ -774,7 +774,7 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def _migrate_saved_elo_run(data: dict) -> dict:
+def _migrate_saved_run(data: dict) -> dict:
     """Read old run snapshots without exposing their options to new experiments."""
     resolved = data.get("resolved_task")
     if not isinstance(resolved, dict):
@@ -782,6 +782,16 @@ def _migrate_saved_elo_run(data: dict) -> dict:
     data = deepcopy(data)
     spec = data["resolved_task"]["spec"]
     protocol = spec["protocol"]
+    for graph in (
+        data.get("graph"),
+        (data.get("protocol") or {}).get("graph"),
+        protocol.get("graph"),
+    ):
+        if isinstance(graph, dict) and "per_language" in graph:
+            quota = graph.pop("per_language")
+            if quota is not None:
+                graph.setdefault("group_by", "lang")
+                graph.setdefault("per_group", quota)
     options = data.pop("elo", None) or {}
     old_runner = protocol["runner"] == "elo"
     if not old_runner and not options:
@@ -810,10 +820,12 @@ def _migrate_saved_elo_run(data: dict) -> dict:
     graph = data.get("graph") or protocol.get("graph") or {}
     for old, new in (
         ("elo_random_battles", "random_battles"),
-        ("n_instructions_per_language", "per_language"),
+        ("n_instructions_per_language", "per_group"),
     ):
         if options.get(old) is not None:
             graph.setdefault(new, options[old])
+    if graph.get("per_group") is not None:
+        graph.setdefault("group_by", "lang")
     protocol.update(runner="pairwise", graph=graph)
     data["graph"] = graph
     arena = protocol.pop("arena", None)
@@ -865,7 +877,7 @@ def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    data = _migrate_saved_elo_run(data)
+    data = _migrate_saved_run(data)
     if task_override is not None and task_override != data.get("task"):
         data["task"] = task_override
         data.pop("resolved_task", None)

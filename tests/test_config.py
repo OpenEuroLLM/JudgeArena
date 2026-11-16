@@ -414,7 +414,13 @@ def test_graph_config_and_cli_overrides(tmp_path):
         load_config(config)
     with pytest.raises(SystemExit):
         build_run_config(["--elo.n_bootstraps", "5"])
+    with pytest.raises(ValidationError, match="set together"):
+        RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
     saved = cfg.model_dump(mode="json")
+    saved["graph"] = {"per_language": 7}
+    config.write_text(yaml.safe_dump(saved))
+    migrated = load_config(config)
+    assert migrated.graph.group_by == "lang" and migrated.graph.per_group == 7
     saved["elo"] = {"soft_elo": True, "n_bootstraps": 200, "fit_mode": "joint"}
     metric = saved["resolved_task"]["spec"]["protocol"]["scoring"]["metrics"][0]
     metric["name"] = "frozen"

@@ -18,14 +18,13 @@ from judgearena.battles import judged_battles
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.comparisons import (
-    conversation_comparisons,
     preload_model_outputs,
     prepare_answers,
     prepare_comparisons,
     select_instructions,
 )
 from judgearena.benchmarks.pairwise.graph import (
-    candidate_comparisons,
+    prepare_candidate_comparisons,
     prepare_graph,
     validate_graph_task,
 )
@@ -192,18 +191,11 @@ def run_evaluation(
         annotations, prompts = judge(build_judge(cfg), samples)
         judgment_metadata = {"judge_prompts": prompt_metadata(prompts)}
     elif sampled_graph:
-        comparisons = candidate_comparisons(
+        samples, source_ids = prepare_candidate_comparisons(
             opponent_panel,
-            answers.reindex(instruction_ids).set_axis(opponent_panel.index),
+            answers,
             rng=comparison_rng,
-        )
-        samples = conversation_comparisons(
-            comparisons, resolved_task.spec.protocol.judge.turns
-        )
-        source_ids = (
-            samples["source_instruction_index"]
-            if resolved_task.spec.protocol.judge.turns is not None
-            else None
+            turns=resolved_task.spec.protocol.judge.turns,
         )
     else:
         samples, source_ids = prepare_comparisons(

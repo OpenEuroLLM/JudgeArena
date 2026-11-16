@@ -388,7 +388,7 @@ judgearena \
 ### Sampling and scoring
 
 These tasks use pairwise judging with opponents sampled from arena battles.
-Use `--graph.per_language` or `--graph.random_battles` to control sampling and
+Use `--graph.group_by lang --graph.per_group 100` or `--graph.random_battles` to control sampling and
 `--run.filters '{"lang":["en","fr"]}'` to select languages.
 
 Configure `bradley_terry` through metric parameters: `fit_mode` (`frozen` or

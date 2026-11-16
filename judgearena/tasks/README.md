@@ -260,7 +260,8 @@ baseline comparisons. Experiment configs can override sampling and metrics:
 ```yaml
 task: elo-comparia
 graph:
-  per_language: 100
+  group_by: lang
+  per_group: 100
 run:
   filters: {lang: [en, fr]}
 protocol:
@@ -270,6 +271,10 @@ protocol:
       - metric: bradley_terry
         parameters: {fit_mode: frozen, soft: true, n_bootstraps: 20}
 ```
+
+`per_group` caps battle rows in their existing order; it does not randomly balance
+groups. A total `generation.n_instructions` limit applies afterward and can reduce
+group coverage. Omit that total limit to retain each group’s quota.
 
 New tasks and configs use `runner: pairwise`, graph sampling, judge settings
 and metric parameters. Old saved runs with a `resolved_task` snapshot migrate

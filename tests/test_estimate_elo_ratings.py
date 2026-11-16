@@ -728,6 +728,8 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
         graph=None,
         elo={"fit_mode": "frozen", "n_bootstraps": 3, "calibrate_temperature": True},
     )
+    # An old per-language cap is replayed without changing the selected rows.
+    legacy["graph"] = {"per_language": 10000}
     old_path = replay_dir / "legacy-config.yaml"
     old_path.write_text(yaml.safe_dump(legacy))
     migrated = load_config(old_path)
@@ -1013,7 +1015,16 @@ def test_elo_temperature_follows_category_parser(
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     tmp_path, monkeypatch, runner, temperature
 ):
+    from judgearena.benchmarks.pairwise.graph import select_graph_battles
     from judgearena.benchmarks.runner import run_benchmark
+
+    rows = pd.DataFrame({"topic": ["code"] * 3 + ["math"] * 3})
+    selected, _ = select_graph_battles(rows, seed=42, group_by="topic", per_group=2)
+    assert selected.topic.tolist() == ["code", "code", "math", "math"]
+    limited, _ = select_graph_battles(
+        rows, seed=42, group_by="topic", per_group=2, limit=2
+    )
+    assert limited.topic.tolist() == ["code", "code"]
 
     cfg = RunConfig(
         task="elo-comparia",
@@ -1024,7 +1035,6 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
             "runner": runner,
             "generation": {"mode": "single_turn_chat"},
             "baseline": {"strategy": "none"},
-            **({"arena": "ComparIA"} if runner == "elo" else {}),
             "judge": {
                 "default_prompt_preset": "default",
                 **(

@@ -182,7 +182,9 @@ def test_elo_forwards_optional_flags(capture_mains):
             "Dummy/J",
             "--run.filters",
             '{"lang": ["en", "fr"]}',
-            "--graph.per_language",
+            "--graph.group_by",
+            "lang",
+            "--graph.per_group",
             "50",
             "--protocol.scoring.metrics",
             '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"n_bootstraps":5,"baseline_model":"gpt-4o"}}]',
@@ -200,7 +202,7 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.run.filters["lang"] == ["en", "fr"]
-    assert cfg.graph.per_language == 50
+    assert cfg.graph.group_by == "lang" and cfg.graph.per_group == 50
     assert (
         cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["n_bootstraps"]
         == 5
