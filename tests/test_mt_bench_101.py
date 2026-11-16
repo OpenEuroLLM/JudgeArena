@@ -23,10 +23,6 @@ from judgearena.cache.sqlite import (
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
 from judgearena.judging import judge_single_answers
-from judgearena.prompts.registry import (
-    MT_BENCH_101_CLEAN_PROMPT_PRESET,
-    MT_BENCH_101_PROMPT_PRESET,
-)
 from judgearena.tasks.definitions.mt_bench_101.dataset import (
     expand_mt_bench_101_records,
 )
@@ -114,20 +110,18 @@ def test_parse_mt_bench_101_rating():
     )
     reasoning_output = "<think>Perhaps [[2]]...</think>\nRating: [[9]]"
     assert parse_mt_bench_101_rating(reasoning_output) == pytest.approx(2.0)
-    assert MTBench101ScoreParser(MT_BENCH_101_CLEAN_PROMPT_PRESET).parse_result(
+    assert MTBench101ScoreParser("mt-bench-101-clean").parse_result(
         reasoning_output
     ).score == pytest.approx(9.0)
     assert parse_mt_bench_101_rating("[[7]] then invalid [[11]]") == pytest.approx(7.0)
     assert parse_mt_bench_101_rating("Rating: [[0]]") == pytest.approx(0.0)
     assert parse_mt_bench_101_rating("Rating: [6]") == pytest.approx(6.0)
-    assert (
-        MTBench101ScoreParser(MT_BENCH_101_CLEAN_PROMPT_PRESET)("Rating: [6]") is None
-    )
+    assert MTBench101ScoreParser("mt-bench-101-clean")("Rating: [6]") is None
 
 
 @pytest.mark.parametrize(
     ("preset", "expected"),
-    [(MT_BENCH_101_PROMPT_PRESET, 2.0), (MT_BENCH_101_CLEAN_PROMPT_PRESET, 9.0)],
+    [("mt-bench-101", 2.0), ("mt-bench-101-clean", 9.0)],
 )
 def test_mt_bench_101_judging_keeps_turn_alignment_with_missing_rating(
     preset, expected
@@ -179,7 +173,7 @@ def test_mt_bench_101_judging_keeps_turn_alignment_with_missing_rating(
 
 
 def test_mt_bench_101_default_prompt_matches_pinned_upstream():
-    prompts = load_mt_bench_101_prompts(MT_BENCH_101_PROMPT_PRESET)
+    prompts = load_mt_bench_101_prompts("mt-bench-101")
     system_prompts = json.dumps(
         prompts["system_prompts"],
         ensure_ascii=False,
