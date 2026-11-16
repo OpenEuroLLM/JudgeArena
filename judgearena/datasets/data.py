@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal, Self
 
 import pandas as pd
+import pyarrow as pa
 
 from judgearena.battles import (
     hard_preferences,
@@ -414,3 +415,15 @@ def normalize_preferences(
                     "Source winner labels conflict with battle preferences."
                 )
     return battles
+
+
+def restore_nested_columns(frame):
+    """Restore Python lists/dicts after pandas reads nested Parquet input columns."""
+    frame = frame.copy()
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    for column in table.schema:
+        if pa.types.is_nested(column.type):
+            frame[column.name] = pd.Series(
+                table[column.name].to_pylist(), index=frame.index
+            )
+    return frame

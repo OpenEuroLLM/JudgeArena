@@ -18,6 +18,8 @@ def evaluate_release(
     output,
     *,
     model_outputs=None,
+    stage="evaluate",
+    answers=None,
     n_bootstraps=200,
     seed=42,
     store_root=None,
@@ -35,12 +37,34 @@ def evaluate_release(
         "baseline": cfg.model.baseline,
         **model.model_dump(exclude_unset=True),
     }
+    values.update(stage=stage, answers=answers)
     cfg = RunConfig(**values)
     if store_root is not None:
         cfg.run.store_root = str(Path(store_root).resolve())
     if model_outputs is not None:
         model_outputs = model_outputs.loc[model_outputs.model == model.name]
+    identity = {key: manifest[key] for key in ("version", "files")}
+    if answers is not None:
+        generated_manifest = Path(answers).parent / "generation.json"
+        if generated_manifest.exists():
+            generated = json.loads(generated_manifest.read_text())
+            if generated.get("release") != identity:
+                raise ValueError(
+                    "Saved answers belong to a different leaderboard release"
+                )
     data, options = release_inputs(release, manifest, ratings, model_outputs)
+    if stage == "generate":
+        generated_path = run_benchmark(
+            cfg,
+            data=data,
+            output_dir=output,
+            opponent_panel=options.get("frozen", {}).get("panel"),
+        )
+        generated = json.loads(generated_path.read_text())
+        generated["release"] = identity
+        generated_path.write_text(json.dumps(generated, indent=2) + "\n")
+        return generated_path
+
     interval_settings = {}
     required_ratings = []
     if "frozen" in options:

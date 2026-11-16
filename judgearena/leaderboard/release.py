@@ -7,7 +7,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pandas as pd
-import pyarrow as pa
 
 from judgearena.artifacts import to_jsonable
 from judgearena.artifacts.evaluation import file_checksum as checksum
@@ -19,24 +18,13 @@ from judgearena.benchmarks.pairwise.graph import validate_graph_task
 from judgearena.benchmarks.pairwise.judging import (
     judge_configured_comparisons as judge_comparisons,
 )
+from judgearena.datasets.data import restore_nested_columns
 from judgearena.leaderboard.prepare import (
     reference_intervals,
     reference_pool,
 )
 from judgearena.leaderboard.scoring import score_metrics
 from judgearena.leaderboard.settings import rating_metrics
-
-
-def restore_nested_columns(frame):
-    """Restore Python lists/dicts after pandas reads nested Parquet input columns."""
-    frame = frame.copy()
-    table = pa.Table.from_pandas(frame, preserve_index=False)
-    for field in table.schema:
-        if pa.types.is_nested(field.type):
-            frame[field.name] = pd.Series(
-                table[field.name].to_pylist(), index=frame.index
-            )
-    return frame
 
 
 def load_release(path):

@@ -371,3 +371,38 @@ explicit graph and judge settings take precedence.
 Legacy joint-Elo uses a 500-appearance minimum for reference models. Set
 `reference_min_battles: 500` on a directly configured Bradley–Terry metric to
 reproduce that subset; this does not change the candidate comparisons.
+
+### Generate answers before judging
+
+Use `--stage generate` to generate candidate answers without loading a judge or
+calculating metrics. Model settings use the same config and CLI overrides as an
+ordinary submission; release instructions remain frozen.
+
+```bash
+judgearena leaderboard evaluate --leaderboard releases/my-benchmark \
+  --config model.yaml --stage generate --output results/answers
+
+judgearena leaderboard evaluate --leaderboard releases/my-benchmark \
+  --config model.yaml --answers results/answers/answers.parquet \
+  --output results/evaluated
+```
+
+Keep the generation settings in `model.yaml` the same between these commands.
+The answer folder contains `answers.parquet`, `instructions.parquet`, the effective
+`config.yaml` and a `generation.json` manifest. Judging verifies file checksums,
+instructions, model settings and release identity. Missing candidate answers are
+rejected rather than silently generated. Only scored results can be added to a
+leaderboard. Generation can be repeated using the completion cache.
+
+Ordinary runs also support `--stage generate`, without a judge or baseline:
+
+```bash
+judgearena --task arena-hard-v0.1 --stage generate \
+  --model.name VLLM/Qwen/Qwen3.5-9B --model.max_out_tokens 4096 \
+  --run.store_root ./cache --run.result_folder results/generation
+```
+
+To judge later, load the saved `config.yaml`, set `--stage evaluate`, supply
+`--judge.model`, `--answers /path/to/answers.parquet` and a baseline if the task
+requires one. Keep the answer folder together when moving it between machines.
+Finish reasons are not currently retained by the inference cache.

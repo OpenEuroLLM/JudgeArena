@@ -262,7 +262,7 @@ class JudgeArgs(BaseModel):
         protected_namespaces=(), use_attribute_docstrings=True, extra="forbid"
     )
 
-    model: str
+    model: str | None = None
     """LLM used as the judge, in ``{backend}/{model path}`` format (e.g.
     ``OpenRouter/deepseek/deepseek-chat-v3.1``)."""
 
@@ -452,7 +452,13 @@ class RunConfig(BaseSettings):
     model: ModelArgs = Field(default_factory=ModelArgs)
     """Model(s) under evaluation and their generation settings."""
 
-    judge: JudgeArgs
+    stage: Literal["evaluate", "generate"] = "evaluate"
+    """Generate answers only, or run the complete evaluation."""
+
+    answers: Path | None = None
+    """Saved candidate answers to use instead of generating them."""
+
+    judge: JudgeArgs = Field(default_factory=JudgeArgs)
     """The judge model and scoring behaviour."""
 
     generation: GenerationArgs = Field(default_factory=GenerationArgs)
@@ -498,6 +504,8 @@ class RunConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate(self) -> RunConfig:
+        if self.stage == "evaluate" and self.judge.model is None:
+            raise ValueError("judge.model is required for evaluation.")
         if self.judge.prompt is not None:
             prompt = self.judge.prompt
             for path in (
@@ -612,7 +620,7 @@ class RunConfig(BaseSettings):
             judge_values["swap_mode"] = getattr(
                 task_judge, "default_swap_mode", "fixed"
             )
-        judge_engine_kwargs = self.judge_engine_kwargs()
+        judge_engine_kwargs = self.judge_engine_kwargs() if self.judge.model else {}
         for field, engine_key in (
             ("temperature", "temperature"),
             ("max_out_tokens", "max_tokens"),
@@ -630,6 +638,14 @@ class RunConfig(BaseSettings):
             raise ValueError(
                 "meta_eval config is only valid for meta-evaluation tasks."
             )
+        if self.stage == "generate":
+            if is_meta_eval:
+                raise ValueError(
+                    "Generation is not supported for meta-evaluation tasks."
+                )
+            if self.model.name is None:
+                raise ValueError("model.name is required.")
+            return self
         if is_meta_eval:
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
@@ -889,6 +905,8 @@ def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     hash_matches = isinstance(resolved, dict) and resolved.get("provenance", {}).get(
         "resolved_sha256"
     ) == _canonical_sha256(resolved.get("spec", {}))
+    if data.get("answers") is not None:
+        data["answers"] = str((Path(path).resolve().parent / data["answers"]).resolve())
     resolve_component_paths(data, Path(path).resolve().parent)
     data = RunConfig._merge_task_overrides(data)
     for prompt in config_prompts(data):

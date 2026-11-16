@@ -115,7 +115,28 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, capsys):
     frozen = (release / "ratings.csv").read_bytes()
     candidate = ModelArgs(name="Dummy/candidate")
     evaluate = partial(evaluate_release, release, candidate, n_bootstraps=10)
-    first = evaluate(output)
+    from judgearena.cli import cli
+
+    generation_config = tmp_path / "generation.yaml"
+    generation_config.write_text("model: {name: Dummy/candidate}\nstage: generate\n")
+    cli(
+        [
+            "leaderboard",
+            "evaluate",
+            "--leaderboard",
+            str(release),
+            "--config",
+            str(generation_config),
+            "--output",
+            str(tmp_path / "generated"),
+        ]
+    )
+    generated = tmp_path / "generated/generation.json"
+    assert generated.name == "generation.json"
+    assert not (generated.parent / "evaluation.json").exists()
+    with pytest.raises(FileNotFoundError):
+        add_submission(release, generated.parent, collection)
+    first = evaluate(output, answers=generated.parent / "answers.parquet")
     assert "lang=en:" in capsys.readouterr().out
     outcomes = pd.read_parquet(output / "outcomes.parquet")
     assert outcomes.groupby("model_b").completion_b.first().to_dict() == {
@@ -288,6 +309,16 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
     path.write_text(yaml.safe_dump(config))
     create_command = ["leaderboard", "create", "--config", str(path)]
     cli([*create_command, "--output", str(release)])
+    with pytest.raises(ValueError, match="generation-only"):
+        cli(
+            [
+                *create_command,
+                "--stage",
+                "generate",
+                "--output",
+                str(tmp_path / "invalid-stage"),
+            ]
+        )
     with pytest.raises(ValueError, match="baseline.strategy: none"):
         cli(
             [
@@ -337,7 +368,7 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
     assert len(table) == 3 and set(table.winrate) == {1}
     for flag, error in (
         ("--model.baseline", "frozen baseline"),
-        ("--judge.model", "model settings only"),
+        ("--judge.model", "model, stage settings only"),
     ):
         with pytest.raises(ValueError, match=error):
             cli(command + [flag, "changed"])
@@ -387,6 +418,16 @@ class Metric:
     path.write_text(yaml.safe_dump(config))
     create_command = ["leaderboard", "create", "--config", str(path)]
     cli([*create_command, "--output", str(release)])
+    with pytest.raises(ValueError, match="generation-only"):
+        cli(
+            [
+                *create_command,
+                "--stage",
+                "generate",
+                "--output",
+                str(tmp_path / "invalid-stage"),
+            ]
+        )
     bad_prompt = dict(
         judging_mode="single_answer", parser="single-score", user="{missing_context}"
     )

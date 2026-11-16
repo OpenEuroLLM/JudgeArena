@@ -1,5 +1,6 @@
 """Shared answer generation, judging, metrics, and artifacts for model evaluation."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,6 +15,7 @@ from judgearena.artifacts import (
     write_run_metadata_safely,
 )
 from judgearena.artifacts.evaluation import finish_evaluation
+from judgearena.artifacts.generation import read_answers, save_generation
 from judgearena.battles import judged_battles
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
@@ -99,13 +101,6 @@ def run_evaluation(
     cfg = cfg.for_task(resolved_task)
     resolved_task = cfg.resolved_task
     independent = resolved_task.spec.protocol.runner == "single_answer"
-    resolved_prompt = prompt or resolve_run_judge_prompt(
-        resolved_task,
-        cfg.judge,
-        multi_turn=resolved_task.spec.protocol.generation.mode == "multi_turn_chat",
-    )
-    if metrics is None:
-        metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = data if data is not None else load_task_data(resolved_task)
     if opponent_panel is None and cfg.graph is not None:
         opponent_panel, reference_battles, sampling_metadata = prepare_graph(
@@ -119,7 +114,7 @@ def run_evaluation(
             resolve_dataset_filters(resolved_task, cfg.run.filters)
         )
         instructions_df = select_instructions(cfg, task_data.instructions)
-        if not independent and baseline_plan is None:
+        if cfg.stage != "generate" and not independent and baseline_plan is None:
             baseline_plan = resolve_baseline_plan(
                 task_id=cfg.task,
                 task=resolved_task,
@@ -134,9 +129,39 @@ def run_evaluation(
             instructions_df = instructions_df.loc[instruction_ids.unique()]
     task_data = preload_model_outputs(
         task_data,
-        [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
+        ([] if cfg.answers is not None else [cfg.model.name])
+        + (baseline_plan.unique_models if baseline_plan else []),
     )
 
+    if cfg.answers is not None:
+        saved = read_answers(cfg.answers, cfg, instructions_df)
+        outputs = task_data.model_outputs
+        if outputs is not None:
+            saved = pd.concat(
+                [outputs.loc[outputs.model != cfg.model.name], saved], ignore_index=True
+            )
+        task_data = replace(task_data, model_outputs=saved)
+    if cfg.stage == "generate":
+        folder = prepared_directory or prepare_run_directory(
+            cfg,
+            output_dir
+            or Path(cfg.run.result_folder)
+            / f"{cfg.task}-{cfg.model.name.replace('/', '_')}-generate-{run_started_at:%Y%m%d_%H%M%S}",
+        )
+        answers = prepare_answers(
+            cfg, task_data, instructions_df, cfg.model.name, role="A"
+        )
+        manifest = save_generation(folder, cfg, instructions_df, answers)
+        logger.info("Saved candidate answers to %s.", folder / "answers.parquet")
+        return manifest
+
+    resolved_prompt = prompt or resolve_run_judge_prompt(
+        resolved_task,
+        cfg.judge,
+        multi_turn=resolved_task.spec.protocol.generation.mode == "multi_turn_chat",
+    )
+    if metrics is None:
+        metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     name = f"{cfg.task}-{cfg.model.name}-{cfg.judge.model}"
     if independent:
         judge = prepare_independent_judge(

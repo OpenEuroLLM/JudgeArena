@@ -79,6 +79,8 @@ def prepare_run_directory(
             run_handlers.append(handler)
 
     saved = cfg.model_dump(mode="json")
+    if cfg.answers is not None:
+        saved["answers"] = "answers.parquet"
     serialize_run_prompts(cfg, saved)
     from judgearena.benchmarks.scoring import _metric_type
     from judgearena.datasets.registry import dataset_adapter_type

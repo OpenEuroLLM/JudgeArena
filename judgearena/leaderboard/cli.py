@@ -83,6 +83,10 @@ def run_leaderboard_command(argv):
         declaration = resolve_cli_config(
             overrides, config_path=args.config, settings_cls=LeaderboardCreateConfig
         )
+        if declaration.get("stage", "evaluate") != "evaluate":
+            raise ValueError(
+                "Use leaderboard evaluate --stage generate for generation-only runs"
+            )
         settings = LeaderboardSettings.model_validate(
             declaration.pop("leaderboard", {})
         )
@@ -172,15 +176,20 @@ def run_leaderboard_command(argv):
         print(f"Release written to {args.output.resolve()}")
     else:
         declaration = resolve_cli_config(
-            overrides, config_path=args.config, allowed_sections={"model"}
+            overrides, config_path=args.config, allowed_sections={"model", "stage"}
         )
         result = evaluate_release(
             args.leaderboard,
             ModelArgs(**declaration.get("model", {})),
             args.output,
-            model_outputs=pd.read_parquet(args.answers) if args.answers else None,
+            answers=args.answers,
+            stage=declaration.get("stage", "evaluate"),
             n_bootstraps=args.n_bootstraps,
             seed=args.seed,
             store_root=args.store_root,
         )
-        print(result.to_string(index=False))
+        print(
+            result.to_string(index=False)
+            if isinstance(result, pd.DataFrame)
+            else result
+        )
