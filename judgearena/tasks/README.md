@@ -253,9 +253,8 @@ intersected; empty selections raise an error.
 
 ## Graph comparisons and Elo
 
-Arena tasks use `runner: pairwise` with `graph: {}` in the protocol. Graph
-sampling selects saved opponents; judging and metrics use the same execution as
-baseline comparisons. Experiment configs can override sampling and metrics:
+Arena tasks use `runner: pairwise` with `graph: {}` in the protocol.
+Graph preparation selects saved opponents; judging and scoring are shared:
 
 ```yaml
 task: elo-comparia
@@ -276,12 +275,11 @@ protocol:
 groups. A total `generation.n_instructions` limit applies afterward and can reduce
 group coverage. Omit that total limit to retain each group’s quota.
 
-New tasks and configs use `runner: pairwise`, graph sampling, judge settings
-and metric parameters. Old saved runs with a `resolved_task` snapshot migrate
-on load; their recorded fitting mode is retained (historical runs without one
-use joint fitting). Old experiment configs and `--elo.*` flags must be updated. Results use `evaluation.json`, the report and Parquet annotations;
-`elo_ratings.json`, `bootstrap_ratings.csv` and the duplicate `battles.parquet`
-export are no longer produced. Ratings and bootstrap values remain in the report.
+Set preference conversion and calibration under `protocol.judge`. New configs
+replace `elo:` and `--elo.*` with graph, judge and metric settings. Old saved runs
+migrate on load, preserving their fitting mode (joint when historically omitted).
+Results use `evaluation.json`, the report and annotations; ratings and bootstraps
+are in the report rather than separate Elo exports.
 
 ## Multi-turn pairwise judging
 

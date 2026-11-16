@@ -130,7 +130,6 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
 
 def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
     import json
-    from pathlib import Path
 
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.config import RunConfig, load_config
@@ -159,19 +158,17 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
         protocol={
             "scoring": {
                 "metrics": [
-                    {
-                        "metric": "bradley_terry",
-                        "parameters": {"fit_mode": "frozen", "n_bootstraps": 5},
-                    },
-                    {
-                        "metric": "bradley_terry",
-                        "name": "hard",
-                        "parameters": {
-                            "soft": False,
-                            "n_bootstraps": 0,
-                            "fit_mode": "frozen",
-                        },
-                    },
+                    dict(
+                        metric="bradley_terry",
+                        name=name,
+                        parameters=dict(
+                            fit_mode="frozen", soft=soft, n_bootstraps=bootstraps
+                        ),
+                    )
+                    for name, soft, bootstraps in (
+                        ("bradley_terry", True, 5),
+                        ("hard", False, 0),
+                    )
                 ]
             }
         },
@@ -184,12 +181,7 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
     )
     manifest = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
     first = manifest.parent
-    result = {
-        "result_path": str(
-            first / json.loads(manifest.read_text())["artifacts"]["report"]
-        )
-    }
-    results = json.loads(Path(result["result_path"]).read_text())["metrics"]
+    results = json.loads(manifest.read_text())["metrics"]
     frozen = results["bradley_terry"]
     assert frozen["fit_mode"] == "frozen"
     assert results["hard"]["n_bootstraps"] == 0
@@ -199,29 +191,22 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
         PreparedModel, "materialize", lambda *a, **kw: pytest.fail("cache miss")
     )
     replay = load_config(first / "config.yaml")
+    for request in replay.resolved_task.spec.protocol.scoring.metrics:
+        expected_bootstraps = 0 if request.name == "hard" else 5
+        assert request.parameters["n_bootstraps"] == expected_bootstraps
+        assert request.parameters["soft"] is (request.name != "hard")
+        assert results[request.name]["n_bootstraps"] == expected_bootstraps
     manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "replay")
     assert json.loads(manifest.read_text())["metrics"] == results
-    requests = replay.resolved_task.spec.protocol.scoring.metrics
-    replay = RunConfig(
-        **{
-            **replay.model_dump(),
-            "protocol": {
-                "scoring": {
-                    "metrics": [
-                        {
-                            **request.model_dump(),
-                            "parameters": {
-                                **request.parameters,
-                                "fit_mode": "joint",
-                                "reference_min_battles": 0,
-                            },
-                        }
-                        for request in requests
-                    ]
-                }
-            },
-        }
-    )
+    values = replay.model_dump()
+    requests = [
+        request.model_dump()
+        for request in replay.resolved_task.spec.protocol.scoring.metrics
+    ]
+    for request in requests:
+        request["parameters"].update(fit_mode="joint", reference_min_battles=0)
+    values["protocol"] = {"scoring": {"metrics": requests}}
+    replay = RunConfig(**values)
     manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "joint")
     joint = json.loads(manifest.read_text())["metrics"]["bradley_terry"]
     assert joint["ratings"] == frozen["ratings"]
