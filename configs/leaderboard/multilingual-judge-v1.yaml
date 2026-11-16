@@ -24,9 +24,6 @@ leaderboard:
     minimum_model_comparisons: 50
     comparisons_per_opponent: 10
     max_reference_comparisons: 2000
-elo:
-  baseline_model: gemma-3-27b-it
-  n_bootstraps: 200
 protocol:
   scoring:
     metrics:
@@ -34,7 +31,11 @@ protocol:
       name: elo
       parameters:
         soft: false
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200
     - metric: bradley_terry
       name: soft_elo
       parameters:
         soft: true
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200

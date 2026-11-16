@@ -33,7 +33,6 @@ from judgearena.tasks.schema import (
     AllReferencesBaseline,
     CategoryDefaultsBaseline,
     DatasetSpec,
-    EloScoringSpec,
     GraphArgs,
     MetaEvalProtocol,
     NoBaseline,
@@ -375,70 +374,6 @@ class GenerationArgs(BaseModel):
     means no judge-side character truncation."""
 
 
-class EloArgs(BaseModel):
-    """Legacy settings translated to graph, judge and metric options on load."""
-
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
-    fit_mode: Literal["frozen", "joint"] = "frozen"
-    """Freeze reference ratings before fitting the candidate; joint refits all models."""
-
-    baseline_model: str | None = None
-    """Model anchored at 1000 ELO; ratings are reported relative to it."""
-
-    n_bootstraps: int = 20
-    """Number of bootstrap resamples used for ELO confidence intervals."""
-
-    languages: list[str] | None = None
-    """Restrict arena battles to these language codes (e.g. ``["en", "fr"]``).
-    Defaults to all languages."""
-
-    n_instructions_per_language: int | None = None
-    """Cap battles per language (useful for balanced multilingual eval)."""
-
-    elo_random_battles: int | None = None
-    """Sample N arena rows uniformly at random (seeded by ``run.seed``) instead
-    of taking the first N. Mutually exclusive with the ``n_instructions*``
-    caps."""
-
-    soft_elo: bool = True
-    """Use soft (continuous-preference) Bradley-Terry. When False, fall back to
-    hard win/loss/tie labels."""
-
-    soft_elo_temperature: float = 0.3
-    """Initial PairScore temperature for soft-ELO. Overridden by
-    ``calibrate_temperature`` when calibration succeeds."""
-
-    calibrate_temperature: bool = False
-    """MLE-fit the PairScore temperature against human-labeled arena battles
-    before the main run. Ignored when ``soft_elo`` is False."""
-
-    calibration_size: int | None = None
-    """Number of human arena battles to sample for temperature calibration.
-    Defaults to all. Requires ``calibrate_temperature``."""
-
-    def resolve(self, scoring: EloScoringSpec) -> EloArgs:
-        """Resolve the actual task's scoring settings before a run."""
-        parameters = next(
-            (
-                metric.parameters
-                for metric in scoring.metrics
-                if metric.metric == "bradley_terry"
-                and metric.name in (None, "bradley_terry")
-            ),
-            {},
-        )
-        values = {
-            "soft_elo": parameters.get("soft", getattr(scoring, "default_soft", True)),
-            "soft_elo_temperature": getattr(scoring, "default_temperature", 0.3),
-        }
-        for key in ("n_bootstraps", "baseline_model", "fit_mode"):
-            if key in parameters:
-                values[key] = parameters[key]
-        values.update(self.model_dump(exclude_unset=True))
-        return EloArgs.model_validate(values, strict=True)
-
-
 class MetaEvalArgs(BaseModel):
     """Sampling settings for judge meta-evaluation."""
 
@@ -526,9 +461,6 @@ class RunConfig(BaseSettings):
     graph: GraphArgs | None = None
     """Sample saved comparisons instead of constructing baseline pairs."""
 
-    elo: EloArgs | None = None
-    """Legacy Elo overrides; saved runs use graph, judge and metric settings."""
-
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
 
@@ -538,14 +470,14 @@ class RunConfig(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def _merge_task_overrides(cls, values):
-        return cls._resolve_task_settings(values)
-
-    @classmethod
-    def _resolve_task_settings(cls, values, *, override_source=None):
-        """Resolve inherited settings; CLI aliases retain their source precedence."""
         if not isinstance(values, dict):
             return values
         values = values.copy()
+        if "elo" in values:
+            raise ValueError(
+                "elo options are no longer supported in new configs; use graph, "
+                "protocol.judge and protocol.scoring.metrics. Load old saved runs with load_config."
+            )
         task = values.get("resolved_task")
         if task is None and isinstance(values.get("task"), str):
             task = get_packaged_task(values["task"])
@@ -554,10 +486,6 @@ class RunConfig(BaseSettings):
         )
         if isinstance(definition, BaseModel):
             definition = definition.model_dump()
-        source = values if override_source is None else override_source
-        explicit_protocol = source.get("protocol") or {}
-        if isinstance(explicit_protocol, BaseModel):
-            explicit_protocol = explicit_protocol.model_dump(exclude_unset=True)
         for section in ("protocol", "dataset"):
             overrides = values.get(section)
             if isinstance(overrides, dict) and isinstance(
@@ -566,132 +494,6 @@ class RunConfig(BaseSettings):
                 values[section] = _merge_overrides(
                     definition[section], overrides, (section,)
                 )
-        protocol = values.get("protocol") or definition.get("protocol")
-        if isinstance(protocol, BaseModel):
-            protocol = protocol.model_dump()
-        if protocol is None:
-            return values
-        legacy_protocol = protocol.get("runner") == "elo"
-        if not legacy_protocol and values.get("elo") is None:
-            return values
-
-        # Resolve old options once; execution and saved configs use pairwise settings.
-        if (
-            not legacy_protocol
-            and protocol.get("graph") is None
-            and values.get("graph") is None
-        ):
-            raise ValueError("elo config requires a pairwise graph task.")
-        options = values.get("elo") or {}
-        if isinstance(options, BaseModel):
-            options = options.model_dump(exclude_unset=True)
-        legacy = EloArgs.model_validate(options).resolve(
-            EloScoringSpec.model_validate(protocol.get("scoring", {}))
-        )
-        protocol = deepcopy(protocol)
-        graph = deepcopy(values.get("graph") or protocol.get("graph") or {})
-        if isinstance(graph, BaseModel):
-            graph = graph.model_dump()
-        sampling_override = False
-        for old, new in (
-            ("elo_random_battles", "random_battles"),
-            ("n_instructions_per_language", "per_language"),
-        ):
-            if old in options and new not in (explicit_protocol.get("graph") or {}):
-                graph[new] = options[old]
-                sampling_override = True
-        if values.get("graph") is None or (
-            override_source is not None
-            and source.get("graph") is None
-            and sampling_override
-        ):
-            values["graph"] = graph
-        protocol.update(runner="pairwise", graph=graph)
-        arena = protocol.pop("arena", None)
-        if arena is not None:
-            dataset = (
-                values.get("dataset")
-                or definition.get("dataset")
-                or {"adapter": "supplied"}
-            )
-            if isinstance(dataset, BaseModel):
-                dataset = dataset.model_dump()
-            values["dataset"] = {**dataset, "format": dataset.get("format") or arena}
-        protocol["scoring"].pop("default_soft", None)
-        protocol["scoring"].pop("default_temperature", None)
-        judge = protocol["judge"]
-        preferences = {
-            "preference_temperature": legacy.soft_elo_temperature
-            if legacy.soft_elo
-            else None,
-            "calibrate_temperature": legacy.calibrate_temperature and legacy.soft_elo,
-            "calibration_size": legacy.calibration_size,
-        }
-        preference_keys = {
-            "preference_temperature": {"soft_elo_temperature", "soft_elo"},
-            "calibrate_temperature": {"calibrate_temperature", "soft_elo"},
-            "calibration_size": {"calibration_size"},
-        }
-        for key, value in preferences.items():
-            if (explicit_protocol.get("judge") or {}).get(key) is not None:
-                continue
-            if legacy_protocol and judge.get(key) is not None:
-                continue
-            if legacy_protocol or preference_keys[key] & options.keys():
-                if (
-                    key == "preference_temperature"
-                    and "soft_elo_temperature" not in options
-                    and legacy.soft_elo
-                ):
-                    value = judge.get(key) if judge.get(key) is not None else value
-                judge[key] = value
-        for metric in protocol["scoring"]["metrics"]:
-            if metric["metric"] != "bradley_terry":
-                continue
-            parameters = metric.setdefault("parameters", {})
-            parameters["fit_mode"] = legacy.fit_mode
-            if not metric.get("name") or metric["name"] == "bradley_terry":
-                parameters.update(
-                    n_bootstraps=legacy.n_bootstraps,
-                    baseline_model=legacy.baseline_model,
-                    soft=legacy.soft_elo,
-                )
-            else:
-                explicit_parameters = next(
-                    (
-                        item.get("parameters", {})
-                        for item in explicit_protocol.get("scoring", {}).get(
-                            "metrics", []
-                        )
-                        if item.get("name") == metric["name"]
-                    ),
-                    {},
-                )
-                for key in ("baseline_model", "n_bootstraps"):
-                    if (
-                        override_source is not None
-                        and key in source.get("elo", {})
-                        and key not in explicit_parameters
-                    ):
-                        parameters[key] = getattr(legacy, key)
-                    else:
-                        parameters.setdefault(key, getattr(legacy, key))
-            parameters.setdefault(
-                "reference_min_battles", 500 if legacy.fit_mode == "joint" else 0
-            )
-        if legacy.languages:
-            from judgearena.datasets import resolve_dataset_filters
-
-            run = values.get("run") or {}
-            if isinstance(run, BaseModel):
-                run = run.model_dump()
-            values["run"] = {
-                **run,
-                "filters": resolve_dataset_filters(
-                    None, run.get("filters", {}), {"lang": legacy.languages}
-                ),
-            }
-        values.update(protocol=protocol, elo=None)
         return values
 
     @model_validator(mode="after")
@@ -949,10 +751,7 @@ def resolve_cli_config(
         )
     if "task" in overrides:
         values = {**values, "task": overrides["task"]}
-    merged = _merge_overrides(settings_cls._merge_task_overrides(values), overrides)
-    if overrides.get("elo") is not None:
-        merged = settings_cls._resolve_task_settings(merged, override_source=overrides)
-    return merged
+    return _merge_overrides(settings_cls._merge_task_overrides(values), overrides)
 
 
 def build_run_config(argv: list[str] | None = None) -> RunConfig:
@@ -979,12 +778,110 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
+def _migrate_saved_run(data: dict) -> dict:
+    """Read old run snapshots without exposing their options to new experiments."""
+    resolved = data.get("resolved_task")
+    if not isinstance(resolved, dict):
+        return data
+    data = deepcopy(data)
+    spec = data["resolved_task"]["spec"]
+    protocol = spec["protocol"]
+    for graph in (
+        data.get("graph"),
+        (data.get("protocol") or {}).get("graph"),
+        protocol.get("graph"),
+    ):
+        if isinstance(graph, dict) and "per_language" in graph:
+            quota = graph.pop("per_language")
+            if quota is not None:
+                graph.setdefault("group_by", "lang")
+                graph.setdefault("per_group", quota)
+    options = data.pop("elo", None) or {}
+    old_runner = protocol["runner"] == "elo"
+    if not old_runner and not options:
+        return data
+    if protocol["runner"] not in {"elo", "pairwise"}:
+        raise ValueError("Saved Elo settings require a pairwise task")
+
+    scoring = protocol["scoring"]
+    metrics = scoring["metrics"]
+    defaults = next(
+        (
+            m.get("parameters", {})
+            for m in metrics
+            if m["metric"] == "bradley_terry" and not m.get("name")
+        ),
+        {},
+    )
+    soft = options.get(
+        "soft_elo", defaults.get("soft", scoring.get("default_soft", True))
+    )
+    temperature = options.get(
+        "soft_elo_temperature", scoring.get("default_temperature", 0.3)
+    )
+    # Before frozen fitting existed, omitted fit_mode meant a joint fit.
+    fit_mode = options.get("fit_mode", defaults.get("fit_mode", "joint"))
+    graph = data.get("graph") or protocol.get("graph") or {}
+    for old, new in (
+        ("elo_random_battles", "random_battles"),
+        ("n_instructions_per_language", "per_group"),
+    ):
+        if options.get(old) is not None:
+            graph.setdefault(new, options[old])
+    if graph.get("per_group") is not None:
+        graph.setdefault("group_by", "lang")
+    protocol.update(runner="pairwise", graph=graph)
+    data["graph"] = graph
+    arena = protocol.pop("arena", None)
+    if arena is not None and not spec["dataset"].get("format"):
+        spec["dataset"]["format"] = arena
+    judge = protocol["judge"]
+    for key, value in {
+        "preference_temperature": temperature if soft else None,
+        "calibrate_temperature": options.get("calibrate_temperature", False) and soft,
+        "calibration_size": options.get("calibration_size"),
+    }.items():
+        if judge.get(key) is None:
+            judge[key] = value
+    for metric in metrics:
+        if metric["metric"] != "bradley_terry":
+            continue
+        parameters = metric.setdefault("parameters", {})
+        for key, value in {
+            "fit_mode": fit_mode,
+            "soft": soft,
+            "baseline_model": options.get(
+                "baseline_model", defaults.get("baseline_model")
+            ),
+            "n_bootstraps": options.get(
+                "n_bootstraps", defaults.get("n_bootstraps", 20)
+            ),
+        }.items():
+            parameters.setdefault(key, value)
+        parameters.setdefault(
+            "reference_min_battles", 500 if parameters["fit_mode"] == "joint" else 0
+        )
+    scoring.pop("default_soft", None)
+    scoring.pop("default_temperature", None)
+    if options.get("languages"):
+        from judgearena.datasets import resolve_dataset_filters
+
+        run = data.setdefault("run", {})
+        run["filters"] = resolve_dataset_filters(
+            None, run.get("filters", {}), {"lang": options["languages"]}
+        )
+    data.update(protocol=protocol, dataset=spec["dataset"])
+    data["resolved_task"]["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
+    return data
+
+
 def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
+    data = _migrate_saved_run(data)
     if task_override is not None and task_override != data.get("task"):
         data["task"] = task_override
         data.pop("resolved_task", None)

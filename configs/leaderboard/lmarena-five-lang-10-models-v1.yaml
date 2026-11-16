@@ -38,9 +38,6 @@ leaderboard:
       - llama-3.3-70b-instruct
       - amazon.nova-pro-v1:0
 
-elo:
-  baseline_model: gemma-3-27b-it
-  n_bootstraps: 200
 protocol:
   scoring:
     metrics:
@@ -48,7 +45,11 @@ protocol:
       name: elo
       parameters:
         soft: false
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200
     - metric: bradley_terry
       name: soft_elo
       parameters:
         soft: true
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200

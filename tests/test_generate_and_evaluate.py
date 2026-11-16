@@ -881,7 +881,7 @@ def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     assert "reference_pref" not in pairs
 
 
-@pytest.mark.parametrize("runner", ["elo", "meta_eval", "single_answer"])
+@pytest.mark.parametrize("runner", ["pairwise", "meta_eval", "single_answer"])
 def test_conversation_workflows_share_score_prompts_and_replay(
     tmp_path, monkeypatch, runner
 ):
@@ -938,9 +938,12 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     }
     if runner != "meta_eval":
         protocol["generation"] = {"mode": "multi_turn_chat"}
+    if runner == "pairwise":
+        protocol["graph"] = {}
     if runner != "single_answer":
-        protocol["arena"] = "custom"
         judge["turns"] = [1, 2]
+    if runner == "meta_eval":
+        protocol["arena"] = "custom"
     if runner == "meta_eval":
         metrics.append(
             {

@@ -70,7 +70,7 @@ def test_elo_task_dispatches(capture_mains, task: str):
     assert capture_mains["module"] == "benchmark"
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.model.name == "Dummy/X"
 
@@ -180,29 +180,29 @@ def test_elo_forwards_optional_flags(capture_mains):
             "Dummy/X",
             "--judge.model",
             "Dummy/J",
-            "--elo.languages",
-            '["en", "fr"]',
-            "--elo.n_instructions_per_language",
+            "--run.filters",
+            '{"lang": ["en", "fr"]}',
+            "--graph.group_by",
+            "lang",
+            "--graph.per_group",
             "50",
-            "--elo.n_bootstraps",
-            "5",
+            "--protocol.scoring.metrics",
+            '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"n_bootstraps":5,"baseline_model":"gpt-4o"}}]',
             "--run.seed",
             "7",
-            "--elo.baseline_model",
-            "gpt-4o",
-            "--elo.soft_elo_temperature",
+            "--protocol.judge.preference_temperature",
             "0.5",
-            "--elo.elo_random_battles",
+            "--graph.random_battles",
             "100",
             "--judge.prompt.preset",
             "default_with_explanation",
         ]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.run.filters["lang"] == ["en", "fr"]
-    assert cfg.graph.per_language == 50
+    assert cfg.graph.group_by == "lang" and cfg.graph.per_group == 50
     assert (
         cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["n_bootstraps"]
         == 5

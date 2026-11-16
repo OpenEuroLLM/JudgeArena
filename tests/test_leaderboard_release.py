@@ -54,8 +54,8 @@ evaluate_release(sys.argv[1], ModelArgs(name='Dummy/candidate'), sys.argv[2],
     )
 
 
-@pytest.mark.parametrize("runner", ["elo", "pairwise"])
-def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsys):
+@pytest.mark.parametrize("task", ["elo-lmarena-140k", "arena-hard-v0.1"])
+def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, task, capsys):
     battles = pd.DataFrame(
         dict(
             battle_id=[f"b{i}" for i in range(6)],
@@ -75,18 +75,22 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, runner, capsy
         model={"name": "a"},
         judge={"model": "Dummy/score A: 6 score B: 8", "swap_mode": "both"},
         protocol={
+            "judge": {"preference_temperature": 2},
             "scoring": {
                 "metrics": [
-                    dict(metric="bradley_terry", name=name, parameters=dict(soft=soft))
+                    dict(
+                        metric="bradley_terry",
+                        name=name,
+                        parameters=dict(soft=soft, baseline_model="a", n_bootstraps=0),
+                    )
                     for name, soft in (("elo", False), ("soft_elo", True))
                 ]
                 + [dict(metric="pairwise_win_rate")],
-            }
+            },
         },
-        elo={"baseline_model": "a", "n_bootstraps": 0, "soft_elo_temperature": 2},
         run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
     )
-    if runner == "pairwise":
+    if task == "arena-hard-v0.1":
         protocol = cfg.resolved_task.spec.protocol.model_dump(mode="json")
         protocol.pop("arena", None)
         protocol["runner"] = "pairwise"

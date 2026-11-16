@@ -22,16 +22,16 @@ def validate_graph_task(protocol):
 
 
 def select_graph_battles(
-    df_battles, *, seed, random_battles=None, per_language=None, limit=None
+    df_battles, *, seed, random_battles=None, group_by=None, per_group=None, limit=None
 ):
     """Select comparison rows without choosing a metric or fitting ratings."""
     random_sampling = random_battles is not None
     sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
     if random_sampling:
-        if limit is not None or per_language is not None:
+        if limit is not None or per_group is not None:
             raise ValueError(
-                "n_instructions and n_instructions_per_language cannot be combined "
-                "with elo_random_battles."
+                "generation.n_instructions and graph.per_group cannot be combined "
+                "with graph.random_battles."
             )
         df_battles, sampling_metadata = select_seeded_random_battles(
             df_battles,
@@ -39,10 +39,9 @@ def select_graph_battles(
             seed=seed,
         )
     else:
-        # Keep at most n_instructions_per_language per language
-        if per_language is not None:
+        if per_group is not None:
             df_battles = (
-                df_battles.groupby("lang").head(per_language).reset_index(drop=True)
+                df_battles.groupby(group_by).head(per_group).reset_index(drop=True)
             )
 
         # Keep at most n_instructions total (subset used for LLM-judge evaluation)
@@ -54,11 +53,17 @@ def select_graph_battles(
     return df_battles, sampling_metadata
 
 
-def candidate_comparisons(battles, answers, *, instructions=None, rng=None):
+def prepare_candidate_comparisons(
+    battles, answers, *, instructions=None, rng=None, turns=None
+):
     """Use saved opponent slots, or sample an opponent and candidate order per row."""
-    from judgearena.benchmarks.pairwise.comparisons import assemble_comparisons
+    from judgearena.benchmarks.pairwise.comparisons import (
+        assemble_comparisons,
+        conversation_comparisons,
+    )
 
     if instructions is None:
+        answers = answers.reindex(battles["instruction_index"]).set_axis(battles.index)
         use_model_a = rng.choice([True, False], size=len(battles))
         candidate_is_a = rng.choice([True, False], size=len(battles))
         context = swap_comparison_slots(battles, use_model_a)
@@ -82,7 +87,9 @@ def candidate_comparisons(battles, answers, *, instructions=None, rng=None):
             source="llm-judge",
         )
         comparisons = swap_comparison_slots(comparisons, ~candidate_is_a)
-    return comparisons
+    comparisons = conversation_comparisons(comparisons, turns)
+    source_ids = comparisons["source_instruction_index"] if turns is not None else None
+    return comparisons, source_ids
 
 
 def _sample_fingerprint(sampled: pd.DataFrame) -> str:
@@ -144,7 +151,8 @@ def prepare_graph(cfg, data):
         ).battles,
         seed=cfg.run.seed,
         random_battles=sampling.random_battles,
-        per_language=sampling.per_language,
+        group_by=sampling.group_by,
+        per_group=sampling.per_group,
         limit=cfg.generation.n_instructions,
     )
     references = data.battles.drop(

@@ -64,7 +64,8 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
     config["run"].update(
         store_root=str(tmp_path / "cache"), filters={"lang": ["en", "de"]}
     )
-    config["elo"].update(baseline_model="a", n_bootstraps=10)
+    for metric in config["protocol"]["scoring"]["metrics"]:
+        metric["parameters"].update(baseline_model="a", n_bootstraps=10)
     config["leaderboard"].update(
         version="test",
         sampling=dict(
@@ -78,9 +79,6 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
         config["leaderboard"]["labels"] = labels
         if labels == "judge":
             rows["winner"] = None  # Judge creation must not require human labels.
-            del config["elo"]["baseline_model"]
-            for metric in config["protocol"]["scoring"]["metrics"]:
-                metric["parameters"]["baseline_model"] = "a"
         path.write_text(yaml.safe_dump(config))
         output = tmp_path / labels
         command = [

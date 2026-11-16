@@ -388,7 +388,7 @@ judgearena \
 ### Sampling and scoring
 
 These tasks use pairwise judging with opponents sampled from arena battles.
-Use `--graph.per_language` or `--graph.random_battles` to control sampling and
+Use `--graph.group_by lang --graph.per_group 100` or `--graph.random_battles` to control sampling and
 `--run.filters '{"lang":["en","fr"]}'` to select languages.
 
 Configure `bradley_terry` through metric parameters: `fit_mode` (`frozen` or
@@ -397,7 +397,7 @@ calibration belong to `protocol.judge` (`preference_temperature`,
 `calibrate_temperature`, `calibration_size`). See
 [the graph configuration example](judgearena/tasks/README.md#graph-comparisons-and-elo).
 
-Old `elo:` options still load; saved configs use the resolved pairwise settings.
+New configs use graph sampling, judge settings and metric parameters. Old saved-run configs are migrated when loaded; `elo:` and `--elo.*` are no longer experiment options.
 
 ### Output
 

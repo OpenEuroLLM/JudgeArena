@@ -18,14 +18,13 @@ from judgearena.battles import judged_battles
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
 from judgearena.benchmarks.pairwise.comparisons import (
-    conversation_comparisons,
     preload_model_outputs,
     prepare_answers,
     prepare_comparisons,
     select_instructions,
 )
 from judgearena.benchmarks.pairwise.graph import (
-    candidate_comparisons,
+    prepare_candidate_comparisons,
     prepare_graph,
     validate_graph_task,
 )
@@ -198,26 +197,16 @@ def run_evaluation(
         annotations, prompts = judge(build_judge(cfg), samples)
         judgment_metadata = {"judge_prompts": prompt_metadata(prompts)}
     elif opponent_panel is not None:
-        if sampled_graph:
-            comparisons = candidate_comparisons(
-                opponent_panel,
-                answers.reindex(instruction_ids).set_axis(opponent_panel.index),
-                rng=comparison_rng,
-            )
-            samples = conversation_comparisons(
-                comparisons, resolved_task.spec.protocol.judge.turns
-            )
-            source_ids = (
-                samples["source_instruction_index"]
-                if resolved_task.spec.protocol.judge.turns is not None
-                else None
-            )
-        else:
-            panel = opponent_panel.set_index("battle_id", drop=False)
-            samples = conversation_comparisons(
-                candidate_comparisons(panel, answers, instructions=instructions_df),
-                resolved_task.spec.protocol.judge.turns,
-            )
+        samples, source_ids = prepare_candidate_comparisons(
+            opponent_panel
+            if sampled_graph
+            else opponent_panel.set_index("battle_id", drop=False),
+            answers,
+            instructions=None if sampled_graph else instructions_df,
+            rng=comparison_rng,
+            turns=resolved_task.spec.protocol.judge.turns,
+        )
+        if not sampled_graph:
             annotations, outcomes, judgment_metadata = judge_configured_comparisons(
                 cfg,
                 samples,

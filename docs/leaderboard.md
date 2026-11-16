@@ -114,18 +114,15 @@ release and sampling settings:
 ```yaml
 run:
   filters: {lang: [en, pl, de, fr, es]}
-elo:
-  baseline_model: gemma-3-27b-it
-  n_bootstraps: 200
 protocol:
   scoring:
     metrics:
       - metric: bradley_terry
         name: elo
-        parameters: {soft: false}
+        parameters: {soft: false, baseline_model: gemma-3-27b-it, n_bootstraps: 200}
       - metric: bradley_terry
         name: soft_elo
-        parameters: {soft: true}
+        parameters: {soft: true, baseline_model: gemma-3-27b-it, n_bootstraps: 200}
 leaderboard:
   version: lmarena-human-v1
   labels: human
@@ -279,16 +276,16 @@ either option, the table includes overall results and all breakdowns.
 
 ### Ordinary Elo runs
 
-`runner: elo` selects and prepares the comparison graph, then uses the same
-answer generation, judging, metric execution and artifacts as other evaluations.
-Existing `elo` settings supply sampling, calibration and rating defaults.
+Pairwise execution prepares the comparison graph and reuses answer generation,
+judging, metrics and artifacts. Configure sampling through `graph`, preference
+conversion through `protocol.judge`, and ratings through metric parameters.
 
 Ordinary Elo now fits the reference battles first and holds those ratings fixed
 while fitting the submitted model. It uses the same candidate fit and conditional
 bootstrap intervals as a leaderboard. A leaderboard also pins the panel, reference
 ratings and evaluation settings across submissions.
 
-Use `--elo.fit_mode joint` to refit references and the candidate together, as in
+Set `fit_mode: joint` in the Bradley–Terry metric parameters to refit references and the candidate together, as in
 previous versions. Cached answers and judgments remain reusable; rescoring them
 with the new default can change ratings and confidence intervals.
 
@@ -304,8 +301,8 @@ Choose ratings through `protocol.scoring.metrics`. Frozen reference ratings are
 inputs to the Bradley–Terry metric; they do not change how answers are judged.
 For PairScore prompts, `protocol.judge.preference_temperature` explicitly controls
 score-to-preference conversion. If omitted, the parser's conversion is retained.
-The explicit judge setting takes precedence over legacy Elo settings. Existing
-Elo configurations without it still use `elo.soft_elo_temperature` and task defaults. Calibration must be completed before freezing a release.
+Calibration must be completed before freezing a release. Old saved runs are
+migrated when loaded for replay.
 
 ### Graph preparation without Elo settings
 
@@ -316,7 +313,8 @@ For example, a config can inherit the LMArena dataset and use ordinary pairwise 
 ```yaml
 task: elo-lmarena-140k
 graph:
-  per_language: 100
+  group_by: lang
+  per_group: 100
 run:
   seed: 42
   filters: {lang: [en, de]}
@@ -336,9 +334,8 @@ protocol:
 
 Supply `model.name` and `judge.model` as usual. Both metrics use the same judged
 comparisons. The rating metric also consumes the available reference labels.
-Win rate in this pairwise graph workflow works without reference labels. The legacy
-`runner: elo` retains its requirement for reference labels. Graph runs save a
-`ComparisonReport`.
+Win rate in this pairwise graph workflow works without reference labels.
+Graph runs save a `ComparisonReport`.
 
 For PairScore calibration, set `protocol.judge.calibrate_temperature: true` and
 optionally `calibration_size` and `calibration_min_battles`. Calibration requires

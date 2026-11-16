@@ -9,7 +9,6 @@ import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.benchmarks import execution as execution_module
 from judgearena.config import (
-    EloArgs,
     RunConfig,
     build_run_config,
     dump_config,
@@ -17,7 +16,6 @@ from judgearena.config import (
 )
 from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
 @pytest.mark.parametrize("override", [None, 0.8])
@@ -74,7 +72,7 @@ def test_generate_config_constructs():
     assert cfg.task == "alpaca-eval"
     assert cfg.model.name == "Dummy/a"
     assert cfg.judge.model == "Dummy/j"
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
 
 
 def test_store_root_defaults_to_xdg_cache_home(monkeypatch, tmp_path):
@@ -368,126 +366,72 @@ def test_generation_truncation_defaults_preserve_explicit_overrides(
 
 def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     cfg = RunConfig(**_base_elo())
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is True
     assert cfg.preference_settings.preference_temperature == 0.3
     assert cfg.graph is not None
 
 
-@pytest.mark.parametrize(
-    ("runtime", "expected"),
-    [
-        ({}, (2, "anchor", True, 0.7)),
-        (
-            {
-                "n_bootstraps": 0,
-                "baseline_model": None,
-                "soft_elo": False,
-                "soft_elo_temperature": 0.2,
-            },
-            (0, None, False, 0.2),
-        ),
-    ],
-)
-def test_elo_resolution_prefers_runtime_then_metric_then_defaults(runtime, expected):
-    scoring = EloScoringSpec(
-        metrics=(
-            MetricSpec(
-                metric="bradley_terry",
-                parameters={
-                    "n_bootstraps": 2,
-                    "baseline_model": "anchor",
-                    "soft": True,
-                },
-            ),
-        ),
-        default_soft=False,
-        default_temperature=0.7,
-    )
-
-    resolved = EloArgs(**runtime).resolve(scoring)
-
-    assert (
-        resolved.n_bootstraps,
-        resolved.baseline_model,
-        resolved.soft_elo,
-        resolved.soft_elo_temperature,
-    ) == expected
-
-
-def test_elo_config_allows_runtime_scoring_overrides(tmp_path):
+def test_graph_config_and_cli_overrides(tmp_path):
     data = _base_elo()
-    data["elo"] = {"soft_elo": False, "soft_elo_temperature": 0.7}
-
-    cfg = RunConfig(**data)
-
-    assert cfg.elo is None
-    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
-    assert (
-        cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is False
+    data.update(
+        graph={"random_battles": 7},
+        protocol={
+            "judge": {"preference_temperature": 0.7},
+            "scoring": {
+                "metrics": [
+                    {
+                        "metric": "bradley_terry",
+                        "parameters": {"soft": False, "n_bootstraps": 0},
+                    }
+                ]
+            },
+        },
     )
-    assert cfg.preference_settings.preference_temperature is None
-
-    data["elo"] = {
-        "n_bootstraps": 0,
-        "soft_elo_temperature": 0.7,
-        "calibrate_temperature": True,
-        "languages": ["en", "fr"],
-    }
-    data["protocol"] = {
-        "judge": {"default_swap_mode": "both"},
-        "graph": {"random_battles": 7},
-    }
-    data["run"] = {"filters": {"lang": ["en"]}}
-    cfg = RunConfig(**data)
-    assert cfg.graph.random_battles == 7
-    assert cfg.preference_settings.preference_temperature == 0.7
-    assert cfg.preference_settings.calibrate_temperature is True
-    assert cfg.run.filters["lang"] == ["en"]
-    data["protocol"]["judge"]["preference_temperature"] = 0.9
-    assert RunConfig(**data).preference_settings.preference_temperature == 0.9
-    data["run"]["filters"]["lang"] = ["it"]
-    with pytest.raises(ValueError, match="no overlap"):
-        RunConfig(**data)
-
-    from judgearena.config import build_run_config
-
-    config = tmp_path / "legacy.yaml"
-    data["run"]["filters"]["lang"] = ["en"]
+    config = tmp_path / "run.yaml"
     config.write_text(yaml.safe_dump(data))
-    cli = build_run_config(
+    cfg = build_run_config(
         [
             "--config",
             str(config),
-            "--elo.soft_elo_temperature",
+            "--graph.random_battles",
+            "11",
+            "--protocol.judge.preference_temperature",
             "0.8",
-            "--elo.elo_random_battles",
-            "11",
         ]
     )
-    assert cli.preference_settings.preference_temperature == 0.8
-    assert cli.graph.random_battles == 11
-    data["protocol"]["scoring"] = {
-        "metrics": [
-            {"metric": "bradley_terry", "name": name, "parameters": {"soft": soft}}
-            for name, soft in (("elo", False), ("soft_elo", True))
-        ]
-    }
+    assert cfg.graph.random_battles == 11
+    assert cfg.preference_settings.preference_temperature == 0.8
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[0].parameters["soft"] is False
+    )
+    data["elo"] = {"n_bootstraps": 5}
+    with pytest.raises(ValidationError, match="elo"):
+        RunConfig(**data)
     config.write_text(yaml.safe_dump(data))
-    cli = build_run_config(
-        [
-            "--config",
-            str(config),
-            "--elo.n_bootstraps",
-            "11",
-            "--elo.baseline_model",
-            "new-anchor",
-        ]
+    with pytest.raises(ValueError, match="elo"):
+        load_config(config)
+    with pytest.raises(SystemExit):
+        build_run_config(["--elo.n_bootstraps", "5"])
+    with pytest.raises(ValidationError, match="set together"):
+        RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
+    saved = cfg.model_dump(mode="json")
+    saved["graph"] = {"per_language": 7}
+    config.write_text(yaml.safe_dump(saved))
+    migrated = load_config(config)
+    assert migrated.graph.group_by == "lang" and migrated.graph.per_group == 7
+    saved["elo"] = {"soft_elo": True, "n_bootstraps": 200, "fit_mode": "joint"}
+    metric = saved["resolved_task"]["spec"]["protocol"]["scoring"]["metrics"][0]
+    metric["name"] = "frozen"
+    metric["parameters"]["fit_mode"] = "frozen"
+    config.write_text(yaml.safe_dump(saved))
+    migrated = load_config(config)
+    parameters = migrated.resolved_task.spec.protocol.scoring.metrics[0].parameters
+    assert parameters["soft"] is False and parameters["n_bootstraps"] == 0
+    assert (
+        parameters["fit_mode"] == "frozen" and parameters["reference_min_battles"] == 0
     )
-    for metric in cli.resolved_task.spec.protocol.scoring.metrics:
-        assert metric.parameters["n_bootstraps"] == 11
-        assert metric.parameters["baseline_model"] == "new-anchor"
 
 
 def test_elo_requires_model_path():
@@ -637,7 +581,7 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     )
     cli_module.cli(["--config_path", str(yaml_path)])
     assert isinstance(captured["benchmark"], RunConfig)
-    assert captured["benchmark"].elo is None
+    assert "elo" not in captured["benchmark"].model_dump()
     assert captured["benchmark"].graph is not None
 
 
@@ -713,7 +657,7 @@ def test_build_run_config_elo_defaults():
             "Dummy/j",
         ]
     )
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is True
 
