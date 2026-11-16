@@ -39,20 +39,16 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
             "winner": "tie",
             "lang": ["en"] * 30 + ["de"] * 30,
             "evaluation_session_id": [f"s{i // 2}" for i in range(60)],
-            "conversation_a": [
-                [
-                    {"role": "user", "content": f"Q{i}"},
-                    {"role": "assistant", "content": "A"},
+            **{
+                f"conversation_{slot}": [
+                    [
+                        dict(role="user", content=f"Q{i}"),
+                        dict(role="assistant", content=answer),
+                    ]
+                    for i in range(60)
                 ]
-                for i in range(60)
-            ],
-            "conversation_b": [
-                [
-                    {"role": "user", "content": f"Q{i}"},
-                    {"role": "assistant", "content": "B"},
-                ]
-                for i in range(60)
-            ],
+                for slot, answer in (("a", "A"), ("b", "B"))
+            },
         }
     )
 

@@ -6,9 +6,6 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
 from judgearena.battles import has_support
-from judgearena.benchmarks.pairwise.judging import (
-    judge_configured_comparisons as judge_comparisons,  # noqa: F401
-)
 
 
 def comparison_groups(frame):

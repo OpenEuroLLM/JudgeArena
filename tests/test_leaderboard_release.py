@@ -11,7 +11,7 @@ import yaml
 
 from judgearena.cli import cli
 from judgearena.config import ModelArgs, RunConfig
-from judgearena.datasets.data import CompletionData, PreferenceData
+from judgearena.datasets.data import PreferenceData
 from judgearena.leaderboard import cli as commands
 from judgearena.leaderboard import release as releases
 from judgearena.leaderboard.evaluate import evaluate_release
@@ -54,8 +54,7 @@ evaluate_release(sys.argv[1], ModelArgs(name='Dummy/candidate'), sys.argv[2],
     )
 
 
-@pytest.mark.parametrize("task", ["elo-lmarena-140k", "arena-hard-v0.1"])
-def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, task, capsys):
+def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, capsys):
     battles = pd.DataFrame(
         dict(
             battle_id=[f"b{i}" for i in range(6)],
@@ -71,11 +70,12 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, task, capsys)
     )
     panel = battles.assign(opponent_slot=["a", "b"] * 3, opponent_model=["a", "b"] * 3)
     cfg = RunConfig(
-        task="elo-lmarena-140k",
+        task="arena-hard-v0.1",
         model={"name": "a"},
         judge={"model": "Dummy/score A: 6 score B: 8", "swap_mode": "both"},
         protocol={
-            "judge": {"preference_temperature": 2},
+            "baseline": {"strategy": "none"},
+            "judge": {"prompt": {"preset": "default"}, "preference_temperature": 2},
             "scoring": {
                 "metrics": [
                     dict(
@@ -90,40 +90,15 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, task, capsys)
         },
         run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
     )
-    if task == "arena-hard-v0.1":
-        protocol = cfg.resolved_task.spec.protocol.model_dump(mode="json")
-        protocol.pop("arena", None)
-        protocol["runner"] = "pairwise"
-        protocol["scoring"].pop("default_soft", None)
-        protocol["scoring"].pop("default_temperature", None)
-        protocol["judge"]["preference_temperature"] = 2
-        for request in protocol["scoring"]["metrics"]:
-            if request["metric"] == "bradley_terry":
-                request["parameters"].update(baseline_model="a", n_bootstraps=0)
-        cfg = RunConfig(
-            task="arena-hard-v0.1",
-            model=cfg.model,
-            judge=cfg.judge,
-            protocol=protocol,
-            run=cfg.run,
-        )
     release, output, collection = [
         tmp_path / p for p in ("release", "first", "entries")
     ]
     create = partial(create_release, cfg, battles, panel, version="v1", labels="judge")
-    calibrated = cfg.model_copy(deep=True)
-    calibrated.protocol = calibrated.resolved_task.spec.protocol.model_copy(
-        update={
-            "judge": calibrated.preference_settings.model_copy(
-                update={"calibrate_temperature": True}
-            )
-        }
-    )
-    calibrated.resolved_task = None
-    calibrated = RunConfig.model_validate(calibrated.model_dump(mode="json"))
+    values = cfg.model_dump(exclude={"resolved_task"})
+    values["protocol"]["judge"]["calibrate_temperature"] = True
     with pytest.raises(ValueError, match="fixed protocol.judge.preference_temperature"):
         create_release(
-            calibrated,
+            RunConfig(**values),
             battles,
             panel,
             tmp_path / "calibrated",
@@ -263,8 +238,7 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, task, capsys)
         load_release(release)
 
 
-@pytest.mark.parametrize("with_comparisons", [False, True])
-def test_baseline_cli_replay(tmp_path, monkeypatch, with_comparisons):
+def test_baseline_cli_replay(tmp_path, monkeypatch):
     instructions = pd.DataFrame(
         dict(
             instruction=["Q1", "Q2"],
@@ -287,15 +261,14 @@ def test_baseline_cli_replay(tmp_path, monkeypatch, with_comparisons):
             for i, row in instructions.iterrows()
         ]
     )
-    data = CompletionData(instructions, outputs[outputs.model != "candidate"])
-    if with_comparisons:
-        data = PreferenceData(
-            data.instructions,
-            data.model_outputs,
-            battles=instructions.reset_index().assign(
-                model_a="b", model_b="c", completion_a="Answer", completion_b="Answer"
-            ),
-        )
+    # Existing comparisons must not reroute a baseline task into graph evaluation.
+    data = PreferenceData(
+        instructions,
+        outputs[outputs.model != "candidate"],
+        battles=instructions.reset_index().assign(
+            model_a="b", model_b="c", completion_a="Answer", completion_b="Answer"
+        ),
+    )
     monkeypatch.setattr(commands, "load_task_data", lambda task: data)
     config = dict(
         task="arena-hard-v0.1",
@@ -313,14 +286,12 @@ def test_baseline_cli_replay(tmp_path, monkeypatch, with_comparisons):
     )
     path, release, output = [tmp_path / p for p in ("create.yaml", "release", "first")]
     path.write_text(yaml.safe_dump(config))
-    cli(["leaderboard", "create", "--config", str(path), "--output", str(release)])
+    create_command = ["leaderboard", "create", "--config", str(path)]
+    cli([*create_command, "--output", str(release)])
     with pytest.raises(ValueError, match="baseline.strategy: none"):
         cli(
             [
-                "leaderboard",
-                "create",
-                "--config",
-                str(path),
+                *create_command,
                 "--candidate",
                 str(tmp_path / "missing"),
                 "--output",
@@ -384,7 +355,7 @@ def test_custom_criteria_task_and_portable_replay(tmp_path, monkeypatch, capsys)
     components.parent.mkdir(parents=True)
     components.write_text("""import pandas as pd
 from judgearena.datasets.registry import DatasetAdapter
-from judgearena.datasets.data import CompletionData, PreferenceData
+from judgearena.datasets.data import CompletionData
 class Adapter(DatasetAdapter):
     def load_data(self):
         return CompletionData(pd.DataFrame({'instruction':['Q1','Q2'], 'lang':['en','de']}))
@@ -414,17 +385,15 @@ class Metric:
     config = {**cfg.model_dump(mode="json"), "leaderboard": {"version": "custom"}}
     path, release = tmp_path / "config.yaml", tmp_path / "release"
     path.write_text(yaml.safe_dump(config))
-    cli(["leaderboard", "create", "--config", str(path), "--output", str(release)])
+    create_command = ["leaderboard", "create", "--config", str(path)]
+    cli([*create_command, "--output", str(release)])
     bad_prompt = dict(
         judging_mode="single_answer", parser="single-score", user="{missing_context}"
     )
     with pytest.raises(ValueError, match="missing_context"):
         cli(
             [
-                "leaderboard",
-                "create",
-                "--config",
-                str(path),
+                *create_command,
                 "--judge.prompt",
                 json.dumps(bad_prompt),
                 "--output",

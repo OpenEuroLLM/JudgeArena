@@ -16,8 +16,10 @@ from judgearena.artifacts.run import prepare_run_directory, write_annotations
 from judgearena.battles import hard_preferences
 from judgearena.benchmarks.meta_eval.annotate import prepare_reference_comparisons
 from judgearena.benchmarks.pairwise.graph import validate_graph_task
+from judgearena.benchmarks.pairwise.judging import (
+    judge_configured_comparisons as judge_comparisons,
+)
 from judgearena.leaderboard.prepare import (
-    judge_comparisons,
     reference_intervals,
     reference_pool,
 )
