@@ -125,7 +125,25 @@ def _merge_mapping(
     parent: dict[str, Any], child: dict[str, Any], path: tuple = ()
 ) -> dict[str, Any]:
     """Apply the documented recursive-map/replace-list/null-delete merge."""
+    is_prompt = path[-1:] == ("prompt",) or path[-2:-1] == ("category_prompts",)
+    if is_prompt and (
+        any(key in child for key in ("file", "preset"))
+        or (
+            parent.get("preset") is not None
+            and any(key in child for key in ("user", "user_file"))
+        )
+    ):
+        return deepcopy(child)
     merged = deepcopy(parent)
+    if is_prompt:
+        for field, opposite in (
+            ("system", "system_file"),
+            ("system_file", "system"),
+            ("user", "user_file"),
+            ("user_file", "user"),
+        ):
+            if child.get(field) is not None and opposite not in child:
+                merged.pop(opposite, None)
     if child.get("default_prompt_preset") is not None and "prompt" not in child:
         merged.pop("prompt", None)
     elif child.get("prompt") is not None:
@@ -133,14 +151,6 @@ def _merge_mapping(
     for key, value in child.items():
         if value is None:
             merged.pop(key, None)
-        elif (
-            (key == "prompt" or path[-1:] == ("category_prompts",))
-            and isinstance(value, dict)
-            and any(
-                source in value for source in ("file", "preset", "user", "user_file")
-            )
-        ):
-            merged[key] = deepcopy(value)
         elif isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _merge_mapping(merged[key], value, (*path, key))
         else:
