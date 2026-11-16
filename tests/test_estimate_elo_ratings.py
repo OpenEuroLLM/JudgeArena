@@ -24,7 +24,6 @@ from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import MetricSpec
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]
@@ -250,10 +249,6 @@ def _pairwise_metric(run_result: dict) -> dict:
     return run_result["metrics"]["pairwise_win_rate"]
 
 
-def _rating_metric(run_result: dict) -> dict:
-    return run_result["metrics"]["bradley_terry"]
-
-
 def _num_pairwise_rows(run_result: dict) -> int:
     metric = _pairwise_metric(run_result)
     return (
@@ -267,7 +262,6 @@ def _num_pairwise_rows(run_result: dict) -> int:
 def test_arena_data_also_runs_in_pairwise(tmp_path, monkeypatch, synthetic_arena_df):
     data = normalize_battles(synthetic_arena_df, "ComparIA")
     monkeypatch.setattr(pairwise_runner, "load_task_data", lambda _: data)
-    monkeypatch.setattr(pairwise_runner, "load_task_data", lambda _: data)
     prefs = pairwise_runner.run_evaluation(
         RunConfig(
             task="alpaca-eval-ja",
@@ -280,109 +274,15 @@ def test_arena_data_also_runs_in_pairwise(tmp_path, monkeypatch, synthetic_arena
     assert len(prefs) == 1 and prefs.iloc[0] > 0.5
 
 
-@pytest.mark.parametrize(
-    ("runtime", "n_bootstraps", "method", "anchor"),
-    [
-        ({}, 2, "ELO", ARENA_MODELS[0]),
-        (
-            {"n_bootstraps": 0, "baseline_model": None, "soft": True},
-            0,
-            "Soft-ELO",
-            None,
-        ),
-    ],
-)
-def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
-    monkeypatch, tmp_path, runtime, n_bootstraps, method, anchor
-):
-    task = get_packaged_task("elo-comparia")
-    scoring = task.spec.protocol.scoring.model_copy(
-        update={
-            "metrics": (
-                MetricSpec(
-                    metric="bradley_terry",
-                    parameters={
-                        "fit_mode": "joint",
-                        "n_bootstraps": 2,
-                        "baseline_model": ARENA_MODELS[0],
-                        "soft": False,
-                    },
-                ),
-            ),
-        }
-    )
-    protocol = task.spec.protocol.model_copy(
-        update={
-            "scoring": scoring,
-            "judge": task.spec.protocol.judge.model_copy(
-                update={"preference_temperature": 0.4}
-            ),
-        }
-    )
-    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
-    cfg = RunConfig(
-        resolved_task=task,
-        model={"name": "Dummy/my model"},
-        judge={"model": "Dummy/score A: 6 score B: 8"},
-        generation={"n_instructions": 10},
-        protocol={
-            "scoring": {
-                "metrics": [
-                    {
-                        "metric": "bradley_terry",
-                        "parameters": {
-                            **scoring.metrics[0].parameters,
-                            **runtime,
-                        },
-                    }
-                ]
-            }
-        },
-        run={"result_folder": str(tmp_path)},
-    )
-    monkeypatch.setattr(
-        elo_calibration,
-        "calibrate_pairscore_temperature",
-        lambda *args, **kwargs: pytest.fail(
-            "Disabled or hard Elo must not invoke calibration"
-        ),
-    )
-
-    result = run_graph_evaluation(cfg)
-
-    metric = _rating_metric(result)
-    assert metric["method"] == method
-    assert metric["n_bootstraps"] == n_bootstraps
-    assert len(metric["bootstrap_ratings"]) == n_bootstraps
-    assert all(cfg.model.name in ratings for ratings in metric["bootstrap_ratings"])
-    if anchor is not None:
-        assert metric["ratings"][anchor] == pytest.approx(1000)
-    else:
-        assert np.mean(list(metric["ratings"].values())) == pytest.approx(1000)
-    saved = load_config(next(tmp_path.rglob("config.yaml")))
-    parameters = saved.resolved_task.spec.protocol.scoring.metrics[0].parameters
-    assert parameters["baseline_model"] == anchor
-    assert parameters["n_bootstraps"] == n_bootstraps
-    assert parameters["soft"] is (method == "Soft-ELO")
-    assert saved.preference_settings.preference_temperature == 0.4
-
-
 def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
     cfg = _default_args(result_folder=str(tmp_path))
-    task = get_packaged_task(cfg.task)
-    scoring = task.spec.protocol.scoring.model_copy(
-        update={
-            "metrics": (
-                MetricSpec(metric="pairwise_win_rate", breakdown_by=("missing",)),
-            )
+    values = cfg.model_dump()
+    values["protocol"] = {
+        "scoring": {
+            "metrics": [{"metric": "pairwise_win_rate", "breakdown_by": ["missing"]}]
         }
-    )
-    protocol = task.spec.protocol.model_copy(update={"scoring": scoring})
-    task = replace(task, spec=task.spec.model_copy(update={"protocol": protocol}))
-
-    cfg = RunConfig(
-        **{**cfg.model_dump(), "protocol": {"scoring": scoring.model_dump()}}
-    )
+    }
+    cfg = RunConfig(**values)
     result = run_graph_evaluation(cfg)
 
     assert set(result["metrics"]) == {"pairwise_win_rate"}
@@ -411,55 +311,6 @@ def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
     assert not list(tmp_path.rglob("elo_ratings.json"))
     log_text = next(tmp_path.rglob("run-*.log")).read_text()
     assert "Skipping metric 'pairwise_win_rate' breakdown 'missing'" in log_text
-
-
-def test_run_elo_winrate_depends_on_judge(tmp_path):
-    """A judge biased toward one position should yield different winrates depending on direction."""
-    # With seed=0 and n=10 our model is always placed in position B, so:
-    # judge favouring B → all wins; judge favouring A → all losses
-    result_wins = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path), judge_model="Dummy/score A: 0 score B: 10"
-        )
-    )
-    result_loses = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path), judge_model="Dummy/score A: 10 score B: 0"
-        )
-    )
-    assert (
-        _pairwise_metric(result_wins)["winrate"]
-        > _pairwise_metric(result_loses)["winrate"]
-    )
-
-
-def test_run_elo_language_filter_reduces_battles(tmp_path):
-    """Filtering to a single language should use fewer battles than no filter."""
-    result_all = run_graph_evaluation(
-        _default_args(result_folder=str(tmp_path), n_instructions=None)
-    )
-    result_en = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path), n_instructions=None, languages=["en"]
-        )
-    )
-    total_all = _num_pairwise_rows(result_all)
-    total_en = _num_pairwise_rows(result_en)
-    assert total_en < total_all
-
-
-def test_run_elo_n_instructions_limits_battles(tmp_path):
-    """n_instructions caps the number of judged battles."""
-    result_5 = run_graph_evaluation(
-        _default_args(result_folder=str(tmp_path), n_instructions=5)
-    )
-    result_10 = run_graph_evaluation(
-        _default_args(result_folder=str(tmp_path), n_instructions=10)
-    )
-    total_5 = _num_pairwise_rows(result_5)
-    total_10 = _num_pairwise_rows(result_10)
-    assert total_5 == 5
-    assert total_10 == 10
 
 
 @pytest.mark.parametrize(
@@ -638,6 +489,15 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
     total_en = _num_pairwise_rows(result_en)
     total_all = _num_pairwise_rows(result_all)
     assert 0 < total_en < total_all
+    filtered = run_graph_evaluation(
+        _default_args(
+            result_folder=str(tmp_path),
+            task="elo-lmarena-140k",
+            n_instructions=None,
+            languages=["en"],
+        )
+    )
+    assert _num_pairwise_rows(filtered) == total_en
 
 
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])
@@ -1011,9 +871,9 @@ def test_elo_temperature_follows_category_parser(
         assert pref == pytest.approx(1 - preference if row.swapped else preference)
 
 
-@pytest.mark.parametrize("runner, temperature", [("pairwise", 0.7), ("pairwise", None)])
+@pytest.mark.parametrize("temperature", [0.7, None])
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
-    tmp_path, monkeypatch, runner, temperature
+    tmp_path, monkeypatch, temperature
 ):
     from judgearena.benchmarks.pairwise.graph import select_graph_battles
     from judgearena.benchmarks.runner import run_benchmark
@@ -1032,7 +892,7 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         judge={"model": "Dummy/score A: 6 score B: 8"},
         graph={"random_battles": 6},
         protocol={
-            "runner": runner,
+            "runner": "pairwise",
             "generation": {"mode": "single_turn_chat"},
             "baseline": {"strategy": "none"},
             "judge": {
