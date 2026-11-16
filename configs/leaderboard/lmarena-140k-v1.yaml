@@ -21,6 +21,7 @@ run:
     - es
 leaderboard:
   version: lmarena-human-v1
+  # Human preferences set reference ratings; the judge evaluates submissions.
   labels: human
   sampling:
     validation_fraction: 0.1
@@ -28,6 +29,9 @@ leaderboard:
     comparisons_per_opponent: 10
 
 protocol:
+  # Arena-Hard supplies preferences directly; Soft-Elo needs no calibration.
+  judge:
+    calibrate_temperature: false
   scoring:
     metrics:
     - metric: bradley_terry

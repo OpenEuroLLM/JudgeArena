@@ -18,6 +18,7 @@ run:
     - de
 leaderboard:
   version: multilingual-judge-v1
+  # The same judge labels sampled references and new candidate comparisons.
   labels: judge
   sampling:
     validation_fraction: 0.1
@@ -25,6 +26,9 @@ leaderboard:
     comparisons_per_opponent: 10
     max_reference_comparisons: 2000
 protocol:
+  # Arena-Hard supplies preferences directly; Soft-Elo needs no calibration.
+  judge:
+    calibrate_temperature: false
   scoring:
     metrics:
     - metric: bradley_terry

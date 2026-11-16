@@ -149,13 +149,32 @@ identical prompt text. Task/runtime filters, including language selection, apply
 and the held-out split.
 Changing bootstrap count does not change the sampled panel.
 
-With `labels: human`, creation uses existing reference labels without inference.
-With `labels: judge`, it judges the sampled reference graph with the configured
-judge, retaining any human labels separately. The reference count and answer-order
-setting are printed before judging. Set a reference cap for a small paid trial;
-the panel quota does not limit reference-graph judging. If sampling loses a
-required opponent or sufficient connectivity, creation fails instead of quietly
-changing the requested panel.
+Choose the source of reference ratings explicitly:
+
+| Release setting | Reference graph | New candidate comparisons |
+|---|---|---|
+| `labels: human` | Dataset's human preferences; no reference judging | Configured judge |
+| `labels: judge` | Configured judge annotates the sampled graph | Same judge and prompt |
+
+Human-reference evaluation mixes human reference ratings with judge-based candidate
+comparisons. Judge-reference evaluation uses the same labeling procedure for both.
+The examples below use the same config and sampling limits:
+
+```bash
+uv run judgearena leaderboard create \
+  --config configs/leaderboard/multilingual-judge-v1.yaml \
+  --leaderboard.labels human --leaderboard.version multilingual-human-v1 \
+  --output releases/multilingual-human-v1
+
+uv run judgearena leaderboard create \
+  --config configs/leaderboard/multilingual-judge-v1.yaml \
+  --output releases/multilingual-judge-v1
+```
+
+The judge version annotates the sampled references, not all LMArena battles.
+`max_reference_comparisons` caps reference rows per language; panel quotas control
+candidate comparisons separately. Selection may differ because human releases can
+check connectivity using human labels, while judge releases select before judging.
 
 Each graph release contains reference battles, held-out battles, the fixed submission
 panel, metric results and (when requested) per-language ratings with grouped bootstrap intervals,
@@ -280,7 +299,9 @@ Pairwise execution prepares the comparison graph and reuses answer generation,
 judging, metrics and artifacts. Configure sampling through `graph`, preference
 conversion through `protocol.judge`, and ratings through metric parameters.
 
-Ordinary Elo now fits the reference battles first and holds those ratings fixed
+Ordinary LMArena Elo fits references from the supplied `reference_pref` labels
+(human labels in the packaged dataset), then judges the candidate comparisons.
+It does not rejudge the reference graph. By default, reference ratings stay fixed
 while fitting the submitted model. It uses the same candidate fit and conditional
 bootstrap intervals as a leaderboard. A leaderboard also pins the panel, reference
 ratings and evaluation settings across submissions.
@@ -301,8 +322,10 @@ Choose ratings through `protocol.scoring.metrics`. Frozen reference ratings are
 inputs to the Bradley–Terry metric; they do not change how answers are judged.
 For PairScore prompts, `protocol.judge.preference_temperature` explicitly controls
 score-to-preference conversion. If omitted, the parser's conversion is retained.
-Calibration must be completed before freezing a release. Old saved runs are
-migrated when loaded for replay.
+Soft-Elo uses continuous preferences and does not require calibration. For PairScore
+prompts, optional calibration fits the conversion temperature against reference
+labels; it does not fit reference ratings. Verdict/probability parsers can supply
+preferences directly. The Arena-Hard examples above work without calibration.
 
 ### Graph preparation without Elo settings
 
@@ -339,7 +362,9 @@ Graph runs save a `ComparisonReport`.
 
 For PairScore calibration, set `protocol.judge.calibrate_temperature: true` and
 optionally `calibration_size` and `calibration_min_battles`. Calibration requires
-reference comparisons. Frozen releases require a fixed conversion temperature.
+reference comparisons. If using calibration, fit it before creating a release and
+save the resulting `preference_temperature`; leave `calibrate_temperature: false`
+in the release config.
 Existing `elo` sampling and conversion fields remain supported for replay;
 explicit graph and judge settings take precedence.
 
