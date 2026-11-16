@@ -84,22 +84,19 @@ def prepare_run_directory(
     from judgearena.datasets.registry import dataset_adapter_type
 
     references = list(component_references(saved))
-    for owner, key in references:
-        if python_reference(owner[key]) is None:
-            resolve = dataset_adapter_type if key == "adapter" else _metric_type
-            try:
-                reference = external_component_reference(resolve(owner[key]))
-            except ValueError:
-                # Invalid metrics are reported by scoring; still save the run.
-                continue
-            if reference is not None:
-                if key == "metric" and not owner.get("name"):
-                    owner["name"] = owner[key]
-                owner[key] = reference
     references.extend((prompt, "parser") for prompt in config_prompts(saved))
     copied_components = {}
     for index, (owner, key) in enumerate(references):
         reference = python_reference(owner.get(key))
+        if reference is None and key != "parser":
+            resolve = dataset_adapter_type if key == "adapter" else _metric_type
+            try:
+                reference = python_reference(
+                    external_component_reference(resolve(owner[key]))
+                )
+            except ValueError:
+                # Data can be supplied directly; invalid metrics are reported by scoring.
+                continue
         if reference is not None:
             if key == "metric" and not owner.get("name"):
                 owner["name"] = owner[key]

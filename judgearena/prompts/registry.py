@@ -33,16 +33,6 @@ JudgingMode = Literal["pairwise", "single_answer"]
 DEFAULT_JUDGE_PROMPT_PRESET = "default"
 DEFAULT_WITH_EXPLANATION_PRESET = "default_with_explanation"
 
-# Legacy Python imports; task registration uses its own preset names.
-FLUENCY_JUDGE_PROMPT_PRESET = "fluency"
-FASTCHAT_PAIRWISE_PROMPT_PRESET = "fastchat-pairwise"
-MT_BENCH_101_PROMPT_PRESET = "mt-bench-101"
-MT_BENCH_101_CLEAN_PROMPT_PRESET = "mt-bench-101-clean"
-ARENA_HARD_JUDGE_PROMPT_PRESET = "arena-hard"
-ARENA_HARD_CREATIVE_JUDGE_PROMPT_PRESET = "arena-hard-creative"
-ALPACA_EVAL_JUDGE_PROMPT_PRESET = "alpaca-eval"
-META_EVAL_PAIR_SCORE_PROMPT_PRESET = "meta-eval-pair-score"
-
 PROMPTS_PACKAGE = "judgearena.prompts"
 _COMPLETION_LABEL_SINGLE = "Answer"
 _COMPLETION_LABEL_MULTI_TURN = "Conversation with User"
