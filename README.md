@@ -397,7 +397,7 @@ calibration belong to `protocol.judge` (`preference_temperature`,
 `calibrate_temperature`, `calibration_size`). See
 [the graph configuration example](judgearena/tasks/README.md#graph-comparisons-and-elo).
 
-Old `elo:` options still load; saved configs use the resolved pairwise settings.
+New configs use graph sampling, judge settings and metric parameters. Old saved-run configs are migrated when loaded; `elo:` and `--elo.*` are no longer experiment options.
 
 ### Output
 

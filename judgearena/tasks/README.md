@@ -271,9 +271,10 @@ protocol:
         parameters: {fit_mode: frozen, soft: true, n_bootstraps: 20}
 ```
 
-Old `runner: elo` and `elo:` settings translate on load into graph sampling,
-judge settings and metric parameters. Saved configs contain those resolved
-settings. Results use `evaluation.json`, the report and Parquet annotations;
+New tasks and configs use `runner: pairwise`, graph sampling, judge settings
+and metric parameters. Old saved runs with a `resolved_task` snapshot migrate
+on load; their recorded fitting mode is retained (historical runs without one
+use joint fitting). Old experiment configs and `--elo.*` flags must be updated. Results use `evaluation.json`, the report and Parquet annotations;
 `elo_ratings.json`, `bootstrap_ratings.csv` and the duplicate `battles.parquet`
 export are no longer produced. Ratings and bootstrap values remain in the report.
 
@@ -522,7 +523,7 @@ If a benchmark needs a genuinely different evaluation algorithm:
 1. Add its typed protocol under `schema/`.
 2. Add that protocol to `ProtocolSpec` in `schema/task.py`.
 3. Implement and register its benchmark runner.
-4. Keep algorithm-specific fields in that protocol, as Elo does in `EloProtocol`.
+4. Keep workflow-specific fields in that protocol; scoring algorithms belong in metrics.
 
 Protocol fields are available in task YAML and `RunConfig.protocol` through
 the same schema. Runners must consume their meaning; a second config field is

@@ -113,12 +113,27 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         model={"name": model},
         judge=judge,
         generation={"n_instructions": n_instructions},
-        elo={
-            "n_bootstraps": n_bootstraps,
-            "languages": languages,
-            "calibrate_temperature": calibrate_temperature,
+        protocol={
+            "judge": {"calibrate_temperature": calibrate_temperature},
+            "scoring": {
+                "metrics": [
+                    {"metric": "pairwise_win_rate"},
+                    {
+                        "metric": "bradley_terry",
+                        "parameters": {
+                            "fit_mode": "frozen",
+                            "soft": True,
+                            "n_bootstraps": n_bootstraps,
+                        },
+                    },
+                ]
+            },
         },
-        run={"result_folder": result_folder, "store_root": store_root},
+        run={
+            "result_folder": result_folder,
+            "store_root": store_root,
+            "filters": {"lang": languages} if languages else {},
+        },
     )
 
 
@@ -268,10 +283,9 @@ def test_arena_data_also_runs_in_pairwise(tmp_path, monkeypatch, synthetic_arena
 @pytest.mark.parametrize(
     ("runtime", "n_bootstraps", "method", "anchor"),
     [
-        (None, 2, "ELO", ARENA_MODELS[0]),
-        ({"calibrate_temperature": True}, 2, "ELO", ARENA_MODELS[0]),
+        ({}, 2, "ELO", ARENA_MODELS[0]),
         (
-            {"n_bootstraps": 0, "baseline_model": None, "soft_elo": True},
+            {"n_bootstraps": 0, "baseline_model": None, "soft": True},
             0,
             "Soft-ELO",
             None,
@@ -311,7 +325,19 @@ def test_run_elo_uses_actual_task_parameters_and_saves_resolved_settings(
         model={"name": "Dummy/my model"},
         judge={"model": "Dummy/score A: 6 score B: 8"},
         generation={"n_instructions": 10},
-        elo=runtime,
+        protocol={
+            "scoring": {
+                "metrics": [
+                    {
+                        "metric": "bradley_terry",
+                        "parameters": {
+                            **scoring.metrics[0].parameters,
+                            **runtime,
+                        },
+                    }
+                ]
+            }
+        },
         run={"result_folder": str(tmp_path)},
     )
     monkeypatch.setattr(
@@ -700,13 +726,13 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     legacy.update(
         protocol=old_protocol,
         graph=None,
-        elo={"n_bootstraps": 3, "calibrate_temperature": True},
+        elo={"fit_mode": "frozen", "n_bootstraps": 3, "calibrate_temperature": True},
     )
     old_path = replay_dir / "legacy-config.yaml"
     old_path.write_text(yaml.safe_dump(legacy))
     migrated = load_config(old_path)
     assert (
-        migrated.elo is None
+        "elo" not in migrated.model_dump()
         and migrated.resolved_task.spec.protocol.runner == "pairwise"
     )
     migrated.run.result_folder = str(tmp_path / "legacy-replay")
@@ -715,6 +741,25 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     pd.testing.assert_frame_equal(
         battles,
         pd.read_parquet(Path(old_replay["result_path"]).parent / "outcomes.parquet"),
+    )
+
+    # Historical snapshots without fit_mode retain joint fitting and the same cache.
+    legacy["elo"].pop("fit_mode")
+    for metric in old_protocol["scoring"]["metrics"]:
+        metric.get("parameters", {}).pop("fit_mode", None)
+    old_path.write_text(yaml.safe_dump(legacy))
+    historical = load_config(old_path)
+    rating = next(
+        m
+        for m in historical.resolved_task.spec.protocol.scoring.metrics
+        if m.metric == "bradley_terry"
+    )
+    assert rating.parameters["fit_mode"] == "joint"
+    historical.run.result_folder = str(tmp_path / "historical-replay")
+    replay = run_graph_evaluation(historical)
+    pd.testing.assert_frame_equal(
+        battles,
+        pd.read_parquet(Path(replay["result_path"]).parent / "outcomes.parquet"),
     )
 
 
@@ -964,9 +1009,7 @@ def test_elo_temperature_follows_category_parser(
         assert pref == pytest.approx(1 - preference if row.swapped else preference)
 
 
-@pytest.mark.parametrize(
-    "runner, temperature", [("elo", 0.7), ("pairwise", 0.7), ("pairwise", None)]
-)
+@pytest.mark.parametrize("runner, temperature", [("pairwise", 0.7), ("pairwise", None)])
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     tmp_path, monkeypatch, runner, temperature
 ):

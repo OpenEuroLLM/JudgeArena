@@ -64,7 +64,6 @@ def test_frozen_fit_rejects_invalid_inputs_and_counts_missing():
 
 def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed():
     from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
-    from judgearena.config import EloArgs
 
     references = pd.DataFrame(
         {
@@ -87,14 +86,7 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
     battles["pref_hard"] = (
         (battles.pref > 0.5).astype(float).where(battles.pref != 0.5, 0.5)
     )
-    from judgearena.tasks.schema.elo import EloScoringSpec
-
-    scoring = EloScoringSpec(
-        metrics=[{"metric": "bradley_terry", "parameters": {"fit_mode": "joint"}}]
-    )
-    assert EloArgs().resolve(scoring).fit_mode == "joint"
-    assert EloArgs(fit_mode="frozen").resolve(scoring).fit_mode == "frozen"
-    metric = BradleyTerryMetric(fit_mode=EloArgs().fit_mode, n_bootstraps=20)
+    metric = BradleyTerryMetric(fit_mode="frozen", n_bootstraps=20)
     result = metric.calculate(battles, seed=42)
     expected = fit_frozen_rating(
         candidate,
@@ -164,15 +156,21 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
         model={"name": "Dummy/answer"},
         judge={"model": "Dummy/[[A=B]]", "prompt": {"preset": "arena-hard"}},
         generation={"n_instructions": 4},
-        elo={"n_bootstraps": 5},
         protocol={
             "scoring": {
                 "metrics": [
-                    {"metric": "bradley_terry"},
+                    {
+                        "metric": "bradley_terry",
+                        "parameters": {"fit_mode": "frozen", "n_bootstraps": 5},
+                    },
                     {
                         "metric": "bradley_terry",
                         "name": "hard",
-                        "parameters": {"soft": False, "n_bootstraps": 0},
+                        "parameters": {
+                            "soft": False,
+                            "n_bootstraps": 0,
+                            "fit_mode": "frozen",
+                        },
                     },
                 ]
             }
