@@ -305,22 +305,14 @@ definition; `model.baseline` cannot override it.
 
 ## Independent evaluation
 
-Use `runner: single_answer` to judge canonical completions independently. For
-supplied text, omit `model.name`. Adapters return indexed rows in
-`CompletionData.instructions` with the text being judged in `completion` and
-optional context in `instruction`. The attribute name is retained for compatibility.
-The judge prompt reads `{completion}` regardless of the source column name.
-Missing completions or required prompt fields raise an error; supplied-data
-judging never generates answers.
+Use `runner: single_answer` to judge one `completion` per row. Adapters map
+source text to `completion` in `CompletionData.instructions`, with optional
+`instruction` context. Omit `model.name` to judge supplied text without generation.
+Missing required columns raise an error.
 
-Normalize columns once in the adapter, for example `passage` to `completion`, or
-`question` to `instruction` and `answer` to `completion`. Extra fields remain
-metadata. EU-Guard applies the existing `dataset.output_columns`
-source-to-canonical mapping; other adapters define their own supported mappings. This is not automatic renaming by the prompt.
-
-With `model.name`, the adapter must provide `instruction`. The runner selects
-saved model outputs or generates missing completions as before.
-`provided_messages` uses supplied conversation history.
+With `model.name`, provide `instruction`. The runner loads saved answers or
+generates missing completions. `provided_messages` uses supplied conversation
+history.
 
 ```yaml
 protocol:
