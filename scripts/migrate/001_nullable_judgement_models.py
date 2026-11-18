@@ -10,7 +10,7 @@ COLUMNS = (
     "model_a, model_b, judge, top_logprobs, orientation, pushed_by, pushed_at, run_id"
 )
 SCHEMA = """
-    CREATE TABLE judgements (
+    CREATE TABLE new_judgements (
         input_hash TEXT PRIMARY KEY, judge_input TEXT NOT NULL,
         judge_completion TEXT NOT NULL, benchmark TEXT NOT NULL,
         instruction_id TEXT NOT NULL, model_a TEXT, model_b TEXT,
@@ -30,6 +30,12 @@ def migrate(path: Path) -> bool:
             raise ValueError(f"Unrecognized judgment-cache schema: {path}")
         if not columns["model_a"][3]:
             return False
+        extra = conn.execute(
+            "SELECT name FROM sqlite_schema WHERE sql IS NOT NULL "
+            "AND name <> 'judgements' AND name NOT GLOB 'sqlite_*'"
+        ).fetchall()
+        if extra:
+            raise ValueError(f"Unexpected schema objects in {path}: {extra}")
         backup_path = Path(str(path) + ".bak")
         with backup_path.open("xb"):
             pass
@@ -37,13 +43,12 @@ def migrate(path: Path) -> bool:
             conn.backup(backup)
         with conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute("ALTER TABLE judgements RENAME TO judgements_with_models")
             conn.execute(SCHEMA)
             conn.execute(
-                f"INSERT INTO judgements ({COLUMNS}) "
-                f"SELECT {COLUMNS} FROM judgements_with_models"
+                f"INSERT INTO new_judgements ({COLUMNS}) SELECT {COLUMNS} FROM judgements"
             )
-            conn.execute("DROP TABLE judgements_with_models")
+            conn.execute("DROP TABLE judgements")
+            conn.execute("ALTER TABLE new_judgements RENAME TO judgements")
     return True
 
 

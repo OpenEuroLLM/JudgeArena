@@ -220,6 +220,13 @@ def test_explicit_judgement_cache_migration_preserves_existing_rows(tmp_path):
         assert constraints["model_a"] == 1
     migration_dir = Path(__file__).parents[1] / "scripts" / "migrate"
     migrate = run_path(migration_dir / "001_nullable_judgement_models.py")["migrate"]
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE VIEW cache_view AS SELECT * FROM judgements")
+    with pytest.raises(ValueError, match="Unexpected schema objects"):
+        migrate(db_path)
+    assert not Path(str(db_path) + ".bak").exists()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP VIEW cache_view")
     assert migrate(db_path)
     assert not migrate(db_path)
     with sqlite3.connect(str(db_path) + ".bak") as conn:
