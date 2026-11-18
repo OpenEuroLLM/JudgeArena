@@ -81,27 +81,27 @@ def run_evaluation(
             runtime_baseline=cfg.model.baseline,
             instructions=instructions_df,
         )
-    supplied = independent and cfg.model.name is None
-    if supplied:
-        _require_columns(instructions_df, {"completion"}, "Supplied judging")
-    else:
+    output_columns = set()
+    if cfg.model.name is not None:
         task_data = preload_model_outputs(
             task_data,
             [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
         )
+        output_columns = {"model", "completion"}
+        if task_data.model_outputs is not None:
+            output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
+        if resolved_task.spec.protocol.generation.mode in (
+            "multi_turn_chat",
+            "provided_messages",
+        ):
+            output_columns.add("messages")
+        if independent and "messages" in instructions_df:
+            output_columns.add("input_messages")
+    else:
+        _require_columns(instructions_df, {"completion"}, "Independent judging")
 
-    output_columns = set() if supplied else {"model", "completion"}
-    if not supplied and task_data.model_outputs is not None:
-        output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
-    if not supplied and resolved_task.spec.protocol.generation.mode in (
-        "multi_turn_chat",
-        "provided_messages",
-    ):
-        output_columns.add("messages")
     if independent:
         available_columns = set(instructions_df) | output_columns
-        if not supplied and "messages" in instructions_df:
-            available_columns.add("input_messages")
     else:
         available_columns = set(instructions_df) | {
             f"{column}_{slot}" for column in output_columns for slot in ("a", "b")
@@ -134,13 +134,13 @@ def run_evaluation(
     )
 
     logger.info("Evaluating %s.", name)
-    if supplied:
+    if independent:
         samples = instructions_df.copy()
-    elif independent:
-        answers = prepare_answers(
-            cfg, task_data, instructions_df, cfg.model.name, role="A"
-        )
-        samples = answer_samples(instructions_df, answers)
+        if cfg.model.name is not None:
+            answers = prepare_answers(
+                cfg, task_data, instructions_df, cfg.model.name, role="A"
+            )
+            samples = answer_samples(instructions_df, answers)
     else:
         samples, source_ids = prepare_comparisons(
             cfg, task_data, instructions_df, baseline_plan
