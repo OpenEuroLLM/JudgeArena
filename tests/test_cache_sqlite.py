@@ -184,7 +184,10 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
         assert cache.query()["completion"].tolist() == ["incoming", "new"]
 
 
-def test_judgement_cache_migrates_existing_rows_and_accepts_missing_candidate(tmp_path):
+def test_explicit_judgement_cache_migration_preserves_existing_rows(tmp_path):
+    from pathlib import Path
+    from runpy import run_path
+
     db_path = tmp_path / JUDGEMENT_DB_NAME
     with sqlite3.connect(db_path) as conn:
         conn.executescript("""
@@ -206,12 +209,31 @@ def test_judgement_cache_migrates_existing_rows_and_accepts_missing_candidate(tm
     with JudgementCache(db_path) as cache:
         pd.testing.assert_frame_equal(original, cache.query())
         cache.save(
+            original.assign(judge_input="Named prompt", instruction_id="named"),
+            pushed_by="bob",
+        )
+        before = cache.query()
+    with sqlite3.connect(db_path) as conn:
+        constraints = {
+            row[1]: row[3] for row in conn.execute("PRAGMA table_info(judgements)")
+        }
+        assert constraints["model_a"] == 1
+    migration_dir = Path(__file__).parents[1] / "scripts" / "migrate"
+    migrate = run_path(migration_dir / "001_nullable_judgement_models.py")["migrate"]
+    assert migrate(db_path)
+    assert not migrate(db_path)
+    with sqlite3.connect(str(db_path) + ".bak") as conn:
+        pd.testing.assert_frame_equal(
+            before,
+            pd.read_sql("SELECT * FROM judgements ORDER BY instruction_id", conn),
+        )
+    with JudgementCache(db_path) as cache:
+        pd.testing.assert_frame_equal(before, cache.query())
+        cache.save(
             original.assign(
                 judge_input="Supplied prompt", instruction_id="new", model_a=None
             ),
             pushed_by="bob",
         )
-        pd.testing.assert_frame_equal(original, cache.query(model="candidate"))
-    with JudgementCache(db_path) as cache:
-        assert len(cache.query()) == 2
+        assert len(cache.query()) == 3
         assert cache.query(instruction_id="new").iloc[0]["model_a"] is None

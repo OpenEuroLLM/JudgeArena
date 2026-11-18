@@ -146,6 +146,11 @@ contention. Operational cache open/read/write failures are logged and runtime
 inference continues without losing generated results. Descriptor validation
 errors still fail loudly.
 
+Existing caches remain readable. Before saving judgments without model attribution
+to an old cache, stop cache writers and run
+`python scripts/migrate/001_nullable_judgement_models.py /path/to/cache`.
+The script keeps a `.bak` copy; new caches need no migration.
+
 Sharing is explicit and separate from benchmark execution. Synchronization uses
 the public `judge-arena/judge-arena-cache` dataset by default; pass `--hf_repo`
 to use another dataset. `--kind`, `--task`, and `--model` are optional filters.
