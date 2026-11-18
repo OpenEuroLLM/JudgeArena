@@ -344,33 +344,32 @@ def render_comparison_requests(comparisons, prompt, truncate_input_chars):
 def render_single_requests(
     samples, *, prompt, truncate_input_chars, strip_thinking_before_judging
 ):
-    """Render one answer with its metadata; preserve parser-defined result types."""
-    validate_prompt_fields(
-        prompt, samples.columns, ("instruction", "completion", "completion_text")
-    )
+    """Render a completion with optional instruction context and metadata."""
+    supplied = ("completion", "completion_text")
+    if "instruction" in samples:
+        supplied += ("instruction",)
+    validate_prompt_fields(prompt, samples.columns, supplied)
     inputs = []
     for row in samples.to_dict("records"):
-        completion = answer_text(
-            row["completion"],
-            row.get("messages"),
-            strip_thinking=strip_thinking_before_judging,
-        )
-        inputs.append(
-            {
-                **row,
-                **_prompt_fields(
-                    instruction=row["instruction"],
-                    completion=truncate(completion, max_len=truncate_input_chars),
-                    completion_text=truncate(
-                        answer_text(
-                            row["completion"],
-                            strip_thinking=strip_thinking_before_judging,
-                        ),
-                        max_len=truncate_input_chars,
-                    ),
+        fields = dict(
+            completion=truncate(
+                answer_text(
+                    row["completion"],
+                    row.get("messages"),
+                    strip_thinking=strip_thinking_before_judging,
                 ),
-            }
+                max_len=truncate_input_chars,
+            ),
+            completion_text=truncate(
+                answer_text(
+                    row["completion"], strip_thinking=strip_thinking_before_judging
+                ),
+                max_len=truncate_input_chars,
+            ),
         )
+        if "instruction" in row:
+            fields["instruction"] = row["instruction"]
+        inputs.append({**row, **_prompt_fields(**fields)})
     rendered = render_inputs(prompt, inputs)
     requests = [
         JudgeRequest(str(identity), value, prompt.parser)
@@ -388,8 +387,10 @@ def prepare_single_answer_judging(
     use_tqdm: bool | None = None,
     available_columns=None,
 ):
-    """Validate prompts against known prepared fields before generating answers."""
+    """Validate prompts against fields supplied by the selected evaluation path."""
     use_tqdm = cfg.run.use_tqdm if use_tqdm is None else use_tqdm
+    if available_columns is not None and cfg.model.name is not None:
+        available_columns = set(available_columns) | {"model", "completion"}
     groups = group_judge_prompts(cfg, instructions, resolved_prompt)
     renderers = []
     for prompt, ids in groups:
@@ -409,13 +410,10 @@ def prepare_single_answer_judging(
                 raise ValueError(
                     "Independent judging requires a parser and a renderable prompt."
                 )
-            validate_prompt_fields(
-                prompt,
-                None
-                if available_columns is None
-                else set(available_columns) | {"instruction", "model", "completion"},
-                ("instruction", "completion", "completion_text"),
-            )
+            supplied = ("completion", "completion_text")
+            if available_columns is not None and "instruction" in available_columns:
+                supplied += ("instruction",)
+            validate_prompt_fields(prompt, available_columns, supplied)
             render = partial(render_single_requests, prompt=prompt, **kwargs)
         renderers.append((ids, render))
 

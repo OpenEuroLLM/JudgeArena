@@ -206,6 +206,7 @@ definition no longer matches its recorded hash.
 
 | Workflow | Adapter output |
 |---|---|
+| Independent supplied-data judging | `CompletionData`: indexed rows with `completion` (the text being judged), optional `instruction` context and metadata. No model attribution or generation is needed. |
 | Text pairwise | `CompletionData`: indexed `instruction` rows; optional outputs with `instruction_index`, `model`, and `completion`. Missing answers are generated. |
 | Multi-turn pairwise | `CompletionData` with `user_turns` (a list of user prompts) per instruction. Saved outputs also carry `messages`, a list of role/content dictionaries ending in an assistant answer. |
 | Supplied-history generation | `CompletionData` with input `messages` per row; optional `instruction_id` sets cache identity. Each row produces one answer. |
@@ -304,10 +305,22 @@ definition; `model.baseline` cannot override it.
 
 ## Independent evaluation
 
-Use `runner: single_answer` to annotate one answer per instruction. Dataset
-adapters return the same `CompletionData` contract: instructions plus optional
-saved model outputs. Select the saved model through `model.name`; missing
-answers are generated. `provided_messages` uses supplied conversation history.
+Use `runner: single_answer` to judge canonical completions independently. For
+supplied text, omit `model.name`. Adapters return indexed rows in
+`CompletionData.instructions` with the text being judged in `completion` and
+optional context in `instruction`. The attribute name is retained for compatibility.
+The judge prompt reads `{completion}` regardless of the source column name.
+Missing completions or required prompt fields raise an error; supplied-data
+judging never generates answers.
+
+Normalize columns once in the adapter, for example `passage` to `completion`, or
+`question` to `instruction` and `answer` to `completion`. Extra fields remain
+metadata. EU-Guard applies the existing `dataset.output_columns`
+source-to-canonical mapping; other adapters define their own supported mappings. This is not automatic renaming by the prompt.
+
+With `model.name`, the adapter must provide `instruction`. The runner selects
+saved model outputs or generates missing completions as before.
+`provided_messages` uses supplied conversation history.
 
 ```yaml
 protocol:
@@ -322,8 +335,8 @@ protocol:
         breakdown_by: [category]
 ```
 
-The standard renderer supplies `{instruction}`, `{completion}`, their `_json`
-forms, and dataset metadata such as `{checklist}` or `{history}`. Required
+The standard renderer supplies optional `{instruction}` context and `{completion}`,
+their `_json` forms, and dataset metadata such as `{checklist}` or `{history}`. Required
 metadata is checked after saved answers are loaded and before generation. Each preset pairs its template with an
 `OutputParser`: `parse_result()` returns a dataclass, a JSON-compatible value,
 or `None` for an unparseable response. Parsed evidence is retained in `parsed`;
@@ -387,8 +400,8 @@ The shared renderer supplies `{instruction}`, `{completion_a}`, `{completion_b}`
 and their `_json` variants; these fields take precedence over source metadata
 and follow the actual answer order.
 
-Independent templates receive `{instruction}`, `{completion}`, their `_json`
-variants, and adapter metadata. Within a `single_answer` protocol, use:
+Independent templates receive `{completion}`, optional `{instruction}` context,
+their `_json` variants, and adapter metadata. Within a `single_answer` protocol, use:
 
 ```yaml
 judge:

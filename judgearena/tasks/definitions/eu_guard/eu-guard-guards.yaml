@@ -1,9 +1,9 @@
 extends: _base.yaml
 task: eu-guard-guards
-description: Classify EU-Guard prompts as answer or refuse using saved dataset texts.
+description: Classify EU-Guard prompts as answer or refuse using dataset prompts as completions.
 dataset:
-  options:
-    prompts_as_outputs: true
+  output_columns:
+    prompt: completion
 protocol:
   judge:
     prompt:

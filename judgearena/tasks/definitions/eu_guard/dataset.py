@@ -33,24 +33,11 @@ class EUGuardAdapter(DatasetAdapter):
                 "prompt": "instruction",
                 "language_code": "lang",
                 "category_label": "category",
+                **self.task.spec.dataset.output_columns,
             }
         )
         labels = {"should_answer": "answer", "should_refuse": "refuse"}
         if not frame["target"].isin(labels).all():
             raise ValueError("Unknown EU-Guard target label.")
         frame["reference_label"] = frame["target"].map(labels)
-        outputs = None
-        if self.task.spec.dataset.options.get("prompts_as_outputs", False):
-            outputs = (
-                frame[["instruction_index", "instruction"]]
-                .rename(columns={"instruction": "completion"})
-                .assign(model="dataset-prompts")
-            )
-            frame["instruction"] = (
-                "Classify whether the supplied text should be answered or refused."
-            )
-        return CompletionData.from_frames(
-            frame,
-            model_outputs=outputs,
-            default_model="dataset-prompts" if outputs is not None else None,
-        )
+        return CompletionData.from_frames(frame)

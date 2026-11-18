@@ -3,6 +3,11 @@
 - `eu-guard`: generate responses, then judge whether each response refuses the request.
 - `eu-guard-guards`: classify the dataset prompts directly; no generation model is needed.
 
+For `eu-guard-guards`, configure only the judge. The adapter maps each dataset
+`prompt` to canonical `completion` using `dataset.output_columns`; the judge
+classifies that text without a candidate model or a placeholder instruction.
+For `eu-guard`, prompts become `instruction` and the model produces completions.
+
 Both use the independent pipeline and report F1, false compliance rate (FCR),
 false refusal rate (FRR), and coverage against the dataset labels.
 

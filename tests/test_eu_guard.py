@@ -40,7 +40,7 @@ def test_refusal_metrics_labels_probabilities_and_missing():
 @pytest.mark.parametrize(
     "config, response", [("jev", False), ("gemma", False), ("jev", True)]
 )
-def test_guard_runner_uses_saved_prompts_and_replays(
+def test_guard_runner_judges_normalized_completions_and_replays(
     tmp_path, monkeypatch, config, response
 ):
     from dataclasses import replace
@@ -91,7 +91,9 @@ def test_guard_runner_uses_saved_prompts_and_replays(
         )
         data = replace(data, model_outputs=outputs)
     else:
-        assert data.model_outputs["completion"].tolist() == ["Frage"]
+        assert data.model_outputs is None
+        assert data.instructions["completion"].tolist() == ["Frage"]
+        assert "instruction" not in data.instructions
     assert load_task_data("eu-guard").model_outputs is None
     monkeypatch.setattr(
         "judgearena.benchmarks.pairwise.comparisons.load_or_generate_completions",
@@ -125,6 +127,9 @@ def test_guard_runner_uses_saved_prompts_and_replays(
     saved = next((tmp_path / "results").rglob("config.yaml"))
     pd.testing.assert_frame_equal(first, run_benchmark(load_config(saved), data=data))
     assert first.iloc[0]["concept_id"] == "x"
+    if not response:
+        assert first.completion.tolist() == ["Frage"]
+        assert first.evaluated_model.isna().all()
     assert EUGuardMetric().calculate(first)["fcr"] == 0
 
 

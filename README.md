@@ -287,7 +287,14 @@ Pairwise annotations include candidate identities, `pref`, `orientation`,
 `swapped`, judge input/output and parsed values. `pref` uses the original pair
 order: `0` favors A, `1` favors B, and `0.5` is a tie. Parsed scores use the
 judge's input order; `swapped` records whether the candidates were reversed.
-Independent-score annotations contain `model`, `completion` and `score`;
+For independent judging without answer generation, omit `model.name`. Dataset
+adapters map the text being judged to `completion`, with optional `instruction`
+context and no candidate model attribution. Prompts use `{completion}` for
+passages, instructions being classified, or supplied answers. Generating model
+answers still requires `instruction` and `model.name`. Dataset adapters define
+source-to-canonical mappings; see the [task and adapter guide](judgearena/tasks/README.md).
+
+Independent-score annotations for model answers contain `model`, `completion` and `score`;
 derived preferences appear in the scoring rows. Nested or mixed-value columns
 are JSON-encoded in CSV and Parquet exports.
 

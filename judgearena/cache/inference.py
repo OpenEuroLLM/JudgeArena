@@ -144,7 +144,7 @@ class CompletionCacheRowMetadata(TypedDict):
 
 class JudgementCacheRowMetadata(TypedDict):
     instruction_id: str
-    model_a: str
+    model_a: str | None
     model_b: str | None
     orientation: NotRequired[str | None]
 

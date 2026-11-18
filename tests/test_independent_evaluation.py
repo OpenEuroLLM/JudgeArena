@@ -790,3 +790,48 @@ assert run_benchmark(load_config(sys.argv[1])).score.tolist() == [8]
     assert all(
         next(iter(report["metrics"].values()))["score"] == 8 for report in reports
     )
+
+
+def test_independent_judges_supplied_completion_without_instruction(tmp_path):
+    task = _independent_task()
+    data = CompletionData.from_frames(
+        pd.DataFrame(
+            [
+                {
+                    "instruction_index": "q",
+                    "completion": "Supplied answer",
+                    "messages": [{"role": "user", "content": "Earlier question"}],
+                }
+            ]
+        )
+    )
+    cfg = RunConfig(
+        task=task.task,
+        resolved_task=task,
+        judge={
+            "model": 'Dummy/{"score": 0.8}',
+            "prompt": {
+                "judging_mode": "single_answer",
+                "user": "Assess {completion_json}",
+                "parser": "json-score",
+            },
+        },
+        run={
+            "store_root": str(tmp_path / "cache"),
+            "result_folder": str(tmp_path / "results"),
+        },
+    )
+    annotations = run_benchmark(cfg, data=data)
+    assert annotations.judge_input.tolist() == ['Human: Assess "Supplied answer"']
+    assert annotations.score.tolist() == [0.8]
+    assert annotations.evaluated_model.isna().all()
+    with pytest.raises(ValueError, match="completion"):
+        run_benchmark(
+            cfg,
+            data=replace(
+                data, instructions=data.instructions.drop(columns="completion")
+            ),
+        )
+    cfg.model.name = "Dummy/generated"
+    with pytest.raises(ValueError, match="instruction"):
+        run_benchmark(cfg, data=data)

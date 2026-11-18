@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pandas as pd
 import pytest
@@ -181,3 +182,36 @@ def test_merge_from_updates_live_database_in_place(tmp_path):
         assert cache.merge_from(incoming_path) == 2
         assert local_path.stat().st_ino == inode
         assert cache.query()["completion"].tolist() == ["incoming", "new"]
+
+
+def test_judgement_cache_migrates_existing_rows_and_accepts_missing_candidate(tmp_path):
+    db_path = tmp_path / JUDGEMENT_DB_NAME
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript("""
+            CREATE TABLE judgements (
+                input_hash TEXT PRIMARY KEY, judge_input TEXT NOT NULL,
+                judge_completion TEXT NOT NULL, benchmark TEXT NOT NULL,
+                instruction_id TEXT NOT NULL, model_a TEXT NOT NULL,
+                model_b TEXT, judge TEXT NOT NULL, top_logprobs TEXT,
+                orientation TEXT, pushed_by TEXT NOT NULL,
+                pushed_at TEXT NOT NULL, run_id TEXT NOT NULL
+            );
+            INSERT INTO judgements VALUES (
+                'old-hash', 'Original prompt', 'Original judgment', 'task',
+                'old', 'candidate', NULL, 'Dummy/judge', NULL, 'direct',
+                'alice', '2026-11-17', 'original-run'
+            );
+        """)
+        original = pd.read_sql("SELECT * FROM judgements", conn)
+    with JudgementCache(db_path) as cache:
+        pd.testing.assert_frame_equal(original, cache.query())
+        cache.save(
+            original.assign(
+                judge_input="Supplied prompt", instruction_id="new", model_a=None
+            ),
+            pushed_by="bob",
+        )
+        pd.testing.assert_frame_equal(original, cache.query(model="candidate"))
+    with JudgementCache(db_path) as cache:
+        assert len(cache.query()) == 2
+        assert cache.query(instruction_id="new").iloc[0]["model_a"] is None

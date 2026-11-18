@@ -269,7 +269,7 @@ class JudgementCache(_SQLiteCache):
             judge_completion TEXT NOT NULL,
             benchmark        TEXT NOT NULL,
             instruction_id   TEXT NOT NULL,
-            model_a          TEXT NOT NULL,
+            model_a          TEXT,
             model_b          TEXT,
             judge            TEXT NOT NULL,
             top_logprobs      TEXT,
@@ -280,6 +280,25 @@ class JudgementCache(_SQLiteCache):
             run_id           TEXT NOT NULL
         )
     """
+
+    def _connect(self) -> sqlite3.Connection:
+        if self._conn is not None:
+            return self._conn
+        conn = super()._connect()
+        # Older caches required candidate attribution, even for supplied text.
+        if any(
+            column[1] == "model_a" and column[3]
+            for column in conn.execute("PRAGMA table_info(judgements)")
+        ):
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("ALTER TABLE judgements RENAME TO judgements_with_models")
+                conn.execute(self.schema)
+                conn.execute(
+                    "INSERT INTO judgements SELECT * FROM judgements_with_models"
+                )
+                conn.execute("DROP TABLE judgements_with_models")
+        return conn
 
     def save(
         self,
@@ -297,7 +316,7 @@ class JudgementCache(_SQLiteCache):
                 str(row["judge_completion"]),
                 str(row["benchmark"]),
                 str(row["instruction_id"]),
-                str(row["model_a"]),
+                None if pd.isna(row.get("model_a")) else str(row["model_a"]),
                 None if pd.isna(row.get("model_b")) else str(row["model_b"]),
                 str(row["judge"]),
                 (
