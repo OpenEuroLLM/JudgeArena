@@ -25,8 +25,10 @@ jobs:
         run: uv build
       # Check that basic features work and we didn't miss to include crucial files
       - name: Smoke test (wheel)
-        run: uv run --isolated --no-project --with dist/*.whl tests/test_smoke.py
+        working-directory: ${{ runner.temp }}
+        run: uv run --isolated --no-project --python 3.12 --with "${{ github.workspace }}"/dist/*.whl "${{ github.workspace }}/tests/test_smoke.py"
       - name: Smoke test (source distribution)
-        run: uv run --isolated --no-project --with dist/*.tar.gz tests/test_smoke.py
+        working-directory: ${{ runner.temp }}
+        run: uv run --isolated --no-project --python 3.12 --with "${{ github.workspace }}"/dist/*.tar.gz "${{ github.workspace }}/tests/test_smoke.py"
       - name: Publish
         run: uv publish

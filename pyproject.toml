@@ -8,7 +8,7 @@ judgearena-cache = "judgearena.cache.hf:cli"
 
 [project]
 name = "judgearena"
-version = "0.1.0"
+version = "0.2.0"
 description = "A toolkit for LLM-as-a-judge evaluation and arena benchmarks."
 readme = "README.md"
 requires-python = ">=3.12"
