@@ -1,16 +1,6 @@
 # Task definitions
 
-Task YAML describes **what benchmark is being run**. A run config describes
-**how one experiment runs it**.
-
-- Keep stable benchmark behavior in the task: pinned data, field mappings,
-  baseline policy, judge protocol, and scoring definition.
-- Keep experiment choices in `RunConfig`: candidate and judge models, sampling
-  parameters, instruction limits, caching, and supported overrides.
-- Publish a new task version when changing benchmark defaults. Experiments can
-  override `protocol` or `dataset` fields in `RunConfig` without editing the task.
-  Both use the task schemas. Matching runners/adapters inherit omitted fields;
-  changing either replaces that section before defaults resolve.
+Task YAML defines a benchmark: pinned data, field mappings, baseline policy, judging and metrics. A run config selects models and experiment settings. Publish a new task version when changing benchmark defaults; use [configuration overrides](../../docs/configuration.md) for individual experiments.
 
 ## Layout
 
@@ -22,12 +12,7 @@ tasks/
 └── cli.py             # `judgearena tasks ...` commands
 ```
 
-Executable behavior lives outside the definitions:
-
-- `judgearena/datasets/` downloads and normalizes upstream data.
-- `judgearena/benchmarks/` runs the selected evaluation workflow.
-- `judgearena/prompts/` owns reusable judge prompt presets. Benchmark templates
-  live beside their tasks in `prompts/`; see [prompt bundles](../prompts/README.md).
+Benchmark-specific adapters, metrics, parsers and rendering code live beside their task definitions. Shared dataset components stay in `judgearena/datasets/`, shared execution in `judgearena/benchmarks/`, and shared prompt components in `judgearena/prompts/`. See [prompt bundles](../prompts/README.md).
 
 ## Prepare an offline run
 
@@ -191,16 +176,7 @@ annotations = run_benchmark(cfg, data=data)
 print(annotations[["model", "score"]])
 ```
 
-The dummy response checks execution, not answer quality. `evaluation_name`
-names taskless artifacts and caches. Saved configs contain the effective task
-and resolved settings; reloading freezes those settings for replay. Supplied
-DataFrames and custom Python implementations must be supplied again. Custom
-user/system templates and criteria files are copied into each run directory;
-its saved config uses relative paths to those copies. YAML judge asset paths
-resolve beside the YAML file. Explicit CLI paths and direct Python paths resolve
-from the working directory. For `configs/run.yaml` to use a project-root
-`prompts/rubric.txt`, set `user_file: ../prompts/rubric.txt`. Effective task hashes are recomputed, with a warning if a saved
-definition no longer matches its recorded hash.
+The dummy response checks execution, not answer quality. `evaluation_name` names taskless artifacts and caches. Supply the data again when replaying a Python run; see [saved results and replay](../../docs/cache.md#replay-a-run) for config and component snapshots.
 
 ### Dataset contracts
 
@@ -238,9 +214,9 @@ metadata names must be renamed in the adapter. Exports JSON-encode nested and
 mixed-type columns, including mixed integer/string IDs; use `json.loads` on
 those columns to restore original values before joining.
 
-Standard prompt fields `completion` (or `completion_a`/`completion_b`) render
+Standard prompt fields `completion` (or `completion_A`/`completion_B`) render
 complete conversations when available. Use `completion_text` (or
-`completion_a_text`/`completion_b_text`) for the answer text alone, for example
+`completion_A_text`/`completion_B_text`) for the answer text alone, for example
 when your template already includes the history. Both respect thinking removal
 and truncation settings.
 
@@ -322,7 +298,7 @@ protocol:
         breakdown_by: [category]
 ```
 
-The standard renderer supplies `{instruction}`, `{completion}`, their `_json`
+The standard renderer supplies `{user_prompt}`, `{completion}`, their `_json`
 forms, and dataset metadata such as `{checklist}` or `{history}`. Required
 metadata is checked after saved answers are loaded and before generation. Each preset pairs its template with an
 `OutputParser`: `parse_result()` returns a dataclass, a JSON-compatible value,
@@ -383,11 +359,11 @@ custom metrics and breakdowns; metrics must account for its reference-pool rows.
 Standard pairwise prompt templates can reference adapter metadata columns such
 as `{history}` or `{checklist}`. Saved answers load before field validation,
 so their metadata is available before generation starts.
-The shared renderer supplies `{instruction}`, `{completion_a}`, `{completion_b}`
+The shared renderer supplies `{user_prompt}`, `{completion_A}`, `{completion_B}`
 and their `_json` variants; these fields take precedence over source metadata
 and follow the actual answer order.
 
-Independent templates receive `{instruction}`, `{completion}`, their `_json`
+Independent templates receive `{user_prompt}`, `{completion}`, their `_json`
 variants, and adapter metadata. Within a `single_answer` protocol, use:
 
 ```yaml
@@ -410,26 +386,7 @@ the `json-score` parser: it accepts a finite numeric `score` field and preserves
 the remaining JSON evidence. Benchmark tasks keep their configured defaults;
 these components can be selected in other task definitions.
 
-Omit `judge.prompt` to inherit the task's default, or select a bundle:
-
-```yaml
-judge:
-  prompt:
-    preset: criteria-score
-    options:
-      criteria_file: grammar.yaml  # Optional custom rubric
-```
-
-Use `judge.prompt.user_file` with `judge.prompt.parser` for a custom template,
-instead of `preset`. The parser defaults to `score` for custom files.
-`judge.prompt.system_file` is optional. Register an inline bundle with
-`register_prompt(JudgePromptPreset(name=..., inline_user=..., parser=...,
-judging_mode=...))`, and a metric class with `@register_metric("my_metric")`.
-Configurable presets can supply `configure(prompt, **options)`, which returns a
-resolved prompt with matching templates and parser. The function owns option
-validation; normal keyword arguments reject unknown options. Declare file option
-names with `option_files=("rubric",)` so config-relative paths and saved-run
-snapshots work for custom bundles too.
+For custom templates, parsers and configurable presets, see [prompt bundles](../prompts/README.md). Experiment-level prompt selection is covered in [configuration](../../docs/configuration.md#prompts).
 
 Metrics implement `calculate(rows)` and `render(result)`; optional
 `required_columns` are checked before calculation. Public entrypoints are available
@@ -473,11 +430,7 @@ Registered names remain available for shared components. Result dictionaries use
 the configured metric selector as their key, including file references. When a
 named external metric is copied for replay, its saved `name` preserves that result key.
 
-Saved runs copy referenced Python files and registered external adapter/metric
-classes alongside their config for replay. Packaged adapters and metrics retain
-their names. Imported
-packages and other files used by those implementations must still be available.
-Only load task definitions and Python files you trust.
+Only load task definitions and Python files you trust. See [replay](../../docs/cache.md#replay-a-run) for copied components and their dependencies.
 
 Metrics can request runtime inputs by declaring keyword parameters, for example
 `calculate(self, rows, *, seed, references)`. Shared execution supplies accepted
@@ -498,33 +451,4 @@ If a benchmark needs a genuinely different evaluation algorithm:
 3. Implement and register its benchmark runner.
 4. Keep algorithm-specific fields in that protocol, as Elo does in `EloProtocol`.
 
-Protocol fields are available in task YAML and `RunConfig.protocol` through
-the same schema. Runners must consume their meaning; a second config field is
-not needed. Effective settings follow this precedence:
-
-```text
-CLI > run config YAML > task YAML > code default
-```
-
-For example, change only a dataset revision and the metric list:
-
-```yaml
-task: arena-hard-v0.1
-dataset:
-  sources:
-    examples:
-      revision: "<new-commit-sha>"
-protocol:
-  scoring:
-    metrics: [{metric: pairwise_win_rate}]
-```
-
-Nested mappings merge; lists replace. An explicit `{}` clears a nested mapping,
-and `null` clears a nullable field. Changing generation mode, baseline strategy
-or source type also replaces that nested section. Saved configs retain resolved
-settings, including explicit clears, for replay.
-
-Previously, omitted fields in a supplied section used schema defaults. They now
-inherit task settings when the runner/adapter stays the same. Set those fields
-explicitly if you need the previous schema defaults. Prompt/parser/metric
-compatibility remains the user's responsibility.
+Protocol fields use the same schema in task YAML and `RunConfig.protocol`. Runners consume those fields directly; a second config field is not needed. See [configuration](../../docs/configuration.md#inheritance-and-replacement) for inheritance, replacement and experiment overrides.
