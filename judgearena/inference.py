@@ -14,3 +14,4 @@ class InferenceResult:
     text: str
     first_token_top_logprobs: dict[str, float] | None = None
     usage: RequestUsage | None = None
+    error: str | None = None
