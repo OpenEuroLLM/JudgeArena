@@ -23,7 +23,7 @@ from judgearena.cache.sqlite import (
     write_descriptor,
 )
 from judgearena.constants import VLLM_DEFAULT_TEMPERATURE, VLLM_DEFAULT_TOP_P
-from judgearena.inference import InferenceResult
+from judgearena.inference import InferenceResult, validate_decision_input
 
 _ROLE_MAP = {"human": "user", "ai": "assistant", "system": "system"}
 VLLM_EXECUTION_ONLY_KWARGS = {
@@ -32,7 +32,7 @@ VLLM_EXECUTION_ONLY_KWARGS = {
     "tensor_parallel_size",
 }
 
-InputMode = Literal["chat", "text"]
+InputMode = Literal["chat", "text", "decision"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "ChatOpenAI": "chat",
     "Dummy": "chat",
@@ -64,6 +64,14 @@ def _canonical_messages(input_item: Any) -> list[dict[str, Any]]:
 
 def canonicalize_model_input(input_item: Any, input_mode: InputMode) -> str:
     """Serialize the chat messages or flattened text sent to a provider."""
+    if input_mode == "decision":
+        validate_decision_input(input_item)
+        return json.dumps(
+            {"type": "decision", **input_item},
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
     if input_mode == "text":
         if isinstance(input_item, str):
             text = input_item
@@ -82,6 +90,8 @@ def build_model_descriptor(
     model_name: str,
     resolved_kwargs: dict[str, Any],
     endpoint: str | None = None,
+    *,
+    input_mode: InputMode | None = None,
 ) -> dict[str, Any] | None:
     """Describe output-affecting settings without constructing the backend.
 
@@ -89,7 +99,7 @@ def build_model_descriptor(
     part of the key. VLLM tokenizer-template changes require a distinct model
     revision or an explicit ``chat_template``.
     """
-    input_mode = provider_input_mode(provider)
+    input_mode = input_mode or provider_input_mode(provider)
     if input_mode is None:
         return None
 
@@ -150,6 +160,7 @@ class PreparedModel:
     descriptor: dict[str, Any] | None
     factory: Callable[[], Any]
     cache: InferenceCache[Any] | None = None
+    prepare_input: Callable[[InputMode], PreparedModel] | None = None
     _model: Any = field(default=None, init=False, repr=False)
 
     def materialize(self) -> Any:
