@@ -16,17 +16,33 @@ You can run a packaged benchmark or bring your own dataset, prompt, parser and m
 
 ## 🚀 Quick start
 
-Install from source with Python 3.12 or later and [uv](https://docs.astral.sh/uv/):
+Install with Python 3.12 or later:
+
+```bash
+pip install judgearena
+export OPENROUTER_API_KEY="your-api-key"
+
+judgearena \
+  --task arena-hard-v0.1 \
+  --model.name OpenRouter/google/gemma-4-31b-it \
+  --judge.model OpenRouter/google/gemma-4-31b-it \
+  --generation.n_instructions 10
+```
+
+The task data downloads automatically on the first run. This example uses paid OpenRouter inference.
+
+This generates ten candidate answers and compares them with the task's saved GPT-4 baseline answers. The judge evaluates both answer orders. The run saves its annotations, scores and resolved configuration under `results/`.
+
+The example uses the same model for generation and judging; choose a different `--judge.model` to evaluate with another judge. Ten questions are useful for checking your setup. Omit the limit to evaluate the full task.
+
+For local inference, install `pip install "judgearena[vllm]"` or `pip install "judgearena[llamacpp]"`. See [model setup](docs/models.md) for backend options and chat templates.
+
+To work from source with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/OpenEuroLLM/JudgeArena
 cd JudgeArena
 uv sync
-```
-
-For an API run, set your provider's credentials. This example uses OpenRouter:
-
-```bash
 export OPENROUTER_API_KEY="your-api-key"
 
 uv run judgearena \
@@ -35,12 +51,6 @@ uv run judgearena \
   --judge.model OpenRouter/google/gemma-4-31b-it \
   --generation.n_instructions 10
 ```
-
-This generates ten candidate answers and compares them with the task's saved GPT-4 baseline answers. The judge evaluates both answer orders. The run saves its annotations, scores and resolved configuration under `results/`.
-
-The example uses the same model for generation and judging; choose a different `--judge.model` to evaluate with another judge. Ten questions are useful for checking your setup. Omit the limit to evaluate the full task.
-
-For local inference, install `uv sync --extra vllm` or `uv sync --extra llamacpp`. See [model setup](docs/models.md) for backend options and chat templates.
 
 ## ⚙️ Configure an experiment
 
@@ -59,8 +69,8 @@ generation:
 Run the file, or override individual fields:
 
 ```bash
-uv run judgearena --config_path run.yaml
-uv run judgearena --config_path run.yaml --generation.n_instructions 100
+judgearena --config_path run.yaml
+judgearena --config_path run.yaml --generation.n_instructions 100
 ```
 
 Tasks define benchmark defaults. Experiment configs override selected settings, and CLI flags override the config. Omitted fields inherit task settings when the implementation stays the same; switching the runner or adapter replaces that section. See [configuration](docs/configuration.md) for prompt, metric and dataset overrides.
@@ -81,8 +91,8 @@ Tasks define benchmark defaults. Experiment configs override selected settings, 
 List the installed tasks and inspect their defaults:
 
 ```bash
-uv run judgearena tasks list
-uv run judgearena tasks show arena-hard-v0.1 --resolved
+judgearena tasks list
+judgearena tasks show arena-hard-v0.1 --resolved
 ```
 
 The [benchmark guide](docs/benchmarks.md) lists task names, language selection, baselines and examples. Changing a benchmark's judge or rubric changes the evaluation protocol; record those choices when comparing results.
