@@ -95,6 +95,7 @@ Prompt bundles keep the template, parser selection and judging mode together. Pa
 
 - [Create a task or use the Python API](judgearena/tasks/README.md)
 - [Write a prompt bundle](judgearena/prompts/README.md)
+- [Use decision judges: Choice, Noul and Score](judgearena/prompts/README.md#decision-judging)
 - [Reuse cached inference and replay a saved run](docs/cache.md)
 
 ## 🤝 Contributing
