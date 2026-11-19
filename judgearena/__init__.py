@@ -3,6 +3,7 @@
 from importlib import import_module
 
 _EXPORTS = {
+    "DecisionInput": "judgearena.inference",
     "RunConfig": "judgearena.config",
     "run_benchmark": "judgearena.benchmarks.runner",
     "CompletionData": "judgearena.datasets.data",
