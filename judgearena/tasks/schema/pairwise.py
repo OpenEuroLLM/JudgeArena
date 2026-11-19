@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
+from judgearena.prompts.spec import JudgePromptSpec
 from judgearena.tasks.schema.base import StrictFrozenModel
 from judgearena.tasks.schema.baselines import BaselineSpec, NoBaseline
 from judgearena.tasks.schema.metrics import ScoringSpec
@@ -55,13 +56,20 @@ class JudgeSpec(StrictFrozenModel):
 
     prompt_options: dict[str, Any] = Field(default_factory=dict)
     use_default_engine_kwargs: bool = True
-    default_prompt_preset: str = Field(min_length=1)
+    default_prompt_preset: str | None = Field(default=None, min_length=1)
+    prompt: JudgePromptSpec | None = None
     default_temperature: float | None = None
     default_max_out_tokens: int | None = Field(default=None, gt=0)
     default_top_logprobs: int | None = Field(default=None, gt=0)
-    category_prompts: dict[str, str] = Field(default_factory=dict)
+    category_prompts: dict[str, str | JudgePromptSpec] = Field(default_factory=dict)
     """Per-category prompt presets overriding ``default_prompt_preset`` (e.g. the
     Arena-Hard v2.0 creative-writing judge prompt)."""
+
+    @model_validator(mode="after")
+    def _require_prompt(self):
+        if self.prompt is None and self.default_prompt_preset is None:
+            raise ValueError("A judge requires prompt or default_prompt_preset.")
+        return self
 
 
 class PairwiseJudgeSpec(JudgeSpec):

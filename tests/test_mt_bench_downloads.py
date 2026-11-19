@@ -5,12 +5,11 @@ import pandas as pd
 import pytest
 
 import judgearena.benchmarks.evaluation as mt_bench_runner
-import judgearena.datasets.mt_bench as mt_bench
+import judgearena.tasks.definitions.mt_bench.dataset as mt_bench
 import judgearena.utils as judgearena_utils
 from judgearena.config import RunConfig
 from judgearena.datasets.data import CompletionData
 from judgearena.datasets.registry import DatasetAdapter
-from judgearena.prompts.registry import FASTCHAT_PAIRWISE_PROMPT_PRESET
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSelection
 
@@ -101,7 +100,7 @@ def test_run_mt_bench_rejects_random_before_preparation(
         model={"name": "Dummy/model"},
         judge={
             "model": "Dummy/judge",
-            "prompt": {"preset": FASTCHAT_PAIRWISE_PROMPT_PRESET},
+            "prompt": {"preset": "fastchat-pairwise"},
             "swap_mode": "random",
         },
     )

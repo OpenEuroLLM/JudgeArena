@@ -399,31 +399,39 @@ def test_registry_rejects_unknown_adapter_id(tmp_path):
         load_tasks(tmp_path)
 
 
-@pytest.mark.parametrize(
-    "first_import",
-    [
-        "judgearena.datasets.registry",
-        "judgearena.datasets.mt_bench",
-        "judgearena.tasks.registry",
-    ],
-)
-def test_dataset_registration_preserves_builtins_on_fresh_import(first_import):
-    code = (
-        f"import {first_import}\n"
-        + """
+def test_dataset_registration_preserves_builtins_on_fresh_import(tmp_path):
+    definition = _task_definition()
+    definition["protocol"]["judge"]["default_prompt_preset"] = "custom-arena"
+    task = _write_family(
+        tmp_path, family="custom", filename="task.yaml", definition=definition
+    )
+    (task.parent / "_prompt.yaml").write_text("preset: arena-hard\n")
+    (task.parent / "register.py").write_text(
+        "from pathlib import Path\n"
+        "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
+        "register_prompt(JudgePromptPreset.from_file(\n"
+        "    'custom-arena', Path(__file__).with_name('_prompt.yaml')))\n"
+    )
+    code = """
+import sys
+from pathlib import Path
+from judgearena.tasks import load_tasks
+from judgearena.prompts import resolve_judge_prompt
 from judgearena.datasets.registry import register_dataset, dataset_names
 from judgearena.datasets.judgearena_tables import TableAdapter
 import pytest
 
+assert "test-task" in load_tasks(Path(sys.argv[1]))
+custom = resolve_judge_prompt(preset="custom-arena")
+assert custom.user_prompt_template == resolve_judge_prompt(preset="arena-hard").user_prompt_template
 register_dataset("custom_tables")(TableAdapter)
 for name in ("mt_bench", "custom_tables"):
     with pytest.raises(ValueError, match="already registered"):
         register_dataset(name)(TableAdapter)
 assert {"custom_tables", "mt_bench", "arena_hard"} <= dataset_names()
 """
-    )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code, str(tmp_path)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
 
@@ -703,3 +711,303 @@ def test_script_components_registered_after_catalog_import_work_in_task(
     )
     with pytest.raises(ValueError, match="already registered"):
         scoring.register_metric("custom_mean")(CustomMean)
+
+
+def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
+    import shutil
+
+    import pandas as pd
+
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+    from judgearena.prompts.registry import (
+        group_judge_prompts,
+        resolve_run_judge_prompt,
+    )
+
+    definition = _task_definition()
+    judge = definition["protocol"]["judge"]
+    judge.pop("default_prompt_preset")
+    judge["prompt"] = {"file": "prompts/judge.yaml"}
+    judge["category_prompts"] = {"coding": {"file": "prompts/code.yaml"}}
+    definition["dataset"]["adapter"] = "./components.py:Adapter"
+    definition["protocol"]["scoring"]["metrics"] = [
+        {"metric": "./components.py:Metric"},
+        {"metric": "pairwise_win_rate"},
+    ]
+    definition.pop("task")
+    root = tmp_path / "definitions"
+    _write_family(root, family="base", filename="_base.yaml", definition=definition)
+    (root / "base/components.py").write_text(
+        "from judgearena.datasets.judgearena_tables import TableAdapter as Adapter\n"
+        "from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric\n"
+        "Metric = PairwiseWinRateMetric\n"
+    )
+    prompts = root / "base/prompts"
+    prompts.mkdir()
+    (prompts.parent / "parsers.py").write_text(
+        "from judgearena.prompts.parsing import PairScore\n"
+        "PARSER = PairScore(temperature=0.7)\n"
+    )
+    for name in ("judge", "code"):
+        (prompts / f"{name}.yaml").write_text(
+            f"parser: ../parsers.py:PARSER\nuser_file: {name}.txt\n"
+        )
+        (prompts / f"{name}.txt").write_text(name + " {completion_a} {completion_b}")
+    _write_family(
+        root,
+        family="child",
+        filename="test.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "test-task",
+            "protocol": {"judge": {"prompt": {"system": "Judge carefully."}}},
+        },
+    )
+    from judgearena.datasets.registry import source_cache_dir
+    from judgearena.tasks.registry import get_packaged_task
+
+    packaged = get_packaged_task("alpaca-eval")
+    packaged_cache = source_cache_dir(packaged, tmp_path)
+    task = load_tasks(root)["test-task"]
+    assert task.spec.protocol.judge.prompt.system == "Judge carefully."
+    cfg = RunConfig(
+        resolved_task=task, model={"name": "candidate"}, judge={"model": "Dummy/test"}
+    )
+    rows = pd.DataFrame({"category": ["general", "coding"]})
+
+    def templates(config):
+        prompt = resolve_run_judge_prompt(config.resolved_task, config.judge)
+        return [
+            p.user_prompt_template for p, _ in group_judge_prompts(config, rows, prompt)
+        ]
+
+    assert templates(cfg) == [
+        "judge {completion_a} {completion_b}",
+        "code {completion_a} {completion_b}",
+    ]
+    from judgearena.benchmarks.scoring import (
+        build_metrics,
+        calculate_metrics,
+        render_metrics,
+    )
+
+    category_override = {
+        "judge": {"category_prompts": {"coding": {"preset": "default"}}}
+    }
+    overridden = RunConfig(
+        resolved_task=task,
+        protocol=category_override,
+        model=cfg.model,
+        judge=cfg.judge,
+    )
+    assert (
+        overridden.resolved_task.spec.protocol.judge.category_prompts["coding"].preset
+        == "default"
+    )
+    _write_family(
+        root,
+        family="override",
+        filename="task.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "override-task",
+            "protocol": category_override,
+        },
+    )
+    assert (
+        load_tasks(root)["override-task"]
+        .spec.protocol.judge.category_prompts["coding"]
+        .preset
+        == "default"
+    )
+    source_cache = source_cache_dir(cfg.resolved_task, tmp_path)
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    shutil.rmtree(root)
+    shutil.move(run, tmp_path / "moved")
+    replay = load_config(tmp_path / "moved/config.yaml")
+    assert source_cache_dir(replay.resolved_task, tmp_path) == source_cache
+    assert source_cache_dir(packaged, tmp_path) == packaged_cache
+    requests = replay.resolved_task.spec.protocol.scoring.metrics
+    metrics = build_metrics(requests)
+    values = calculate_metrics(
+        pd.DataFrame({"model_a": ["candidate"], "model_b": ["other"], "pref": [0.0]}),
+        metrics,
+    )
+    assert len(values) == 2 and all("error" not in value for value in values.values())
+    assert render_metrics(values, metrics)
+    parsed = resolve_run_judge_prompt(replay.resolved_task, replay.judge).parser
+    from judgearena.prompts.parsing import PairScore
+
+    assert parsed.parse_result("score_A: 8\nscore_B: 4") == PairScore(
+        temperature=0.7
+    ).parse_result("score_A: 8\nscore_B: 4")
+    assert templates(replay) == [
+        "judge {completion_a} {completion_b}",
+        "code {completion_a} {completion_b}",
+    ]
+    from judgearena.config import JudgePromptSpec
+
+    replay.judge.prompt = JudgePromptSpec(
+        user="override {completion}", parser="json-score"
+    )
+    assert templates(replay) == ["override {completion}"]
+
+
+def test_inherited_rubric_paths_and_replay(tmp_path, monkeypatch):
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    root = tmp_path / "definitions"
+    definition = _task_definition()
+    definition.pop("task")
+    selection = {
+        "preset": "criteria-score",
+        "options": {"criteria_file": "_rubric.yaml"},
+    }
+    definition["protocol"]["judge"].update(
+        prompt=selection, category_prompts={"coding": selection}
+    )
+    _write_family(root, family="base", filename="_base.yaml", definition=definition)
+    override = {"options": {"criteria_file": "_rubric.yaml"}}
+    _write_family(
+        root,
+        family="child",
+        filename="task.yaml",
+        definition={
+            "extends": "../base/_base.yaml",
+            "task": "test-task",
+            "protocol": {"judge": {"prompt": override}},
+        },
+    )
+    for directory in (root / "base", root / "child", tmp_path):
+        (directory / "_rubric.yaml").write_text(
+            f"criteria: [{{name: grammar, description: {directory.name}}}]\n"
+        )
+    monkeypatch.chdir(tmp_path.parent)
+    task = load_tasks(root)["test-task"]
+    judge = task.spec.protocol.judge
+    assert Path(judge.prompt.options["criteria_file"]) == root / "child/_rubric.yaml"
+    assert (
+        Path(judge.category_prompts["coding"].options["criteria_file"])
+        == root / "base/_rubric.yaml"
+    )
+    values = RunConfig(
+        resolved_task=task,
+        model={"name": "Dummy/answer"},
+        judge={"model": "Dummy/judge"},
+    ).model_dump(mode="json")
+    values["protocol"] = {
+        "judge": {"prompt": override, "category_prompts": {"coding": override}}
+    }
+    config = tmp_path / "experiment.yaml"
+    config.write_text(yaml.safe_dump(values))
+    cfg = load_config(config)
+    for prompt in (
+        cfg.protocol.judge.prompt,
+        cfg.protocol.judge.category_prompts["coding"],
+    ):
+        assert Path(prompt.options["criteria_file"]) == tmp_path / "_rubric.yaml"
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    (tmp_path / "_rubric.yaml").unlink()
+    replay = load_config(run / "config.yaml")
+    for prompt in (
+        replay.protocol.judge.prompt,
+        replay.protocol.judge.category_prompts["coding"],
+    ):
+        assert (
+            "description: " + tmp_path.name
+            in Path(prompt.options["criteria_file"]).read_text()
+        )
+
+
+@pytest.mark.parametrize("template_key", ["system", "system_file", "user", "user_file"])
+@pytest.mark.parametrize("source", ["config", "task"])
+def test_partial_template_override(tmp_path, template_key, source):
+    from judgearena.artifacts import prepare_run_directory
+    from judgearena.config import RunConfig, load_config
+
+    field = template_key.removesuffix("_file")
+    template = tmp_path / "template.txt"
+    template.write_text("New template")
+    definition = _task_definition()
+    prompt = {
+        "user": "Compare {completion_a} {completion_b}",
+        "parser": "score",
+        "judging_mode": "single_answer",
+        "system": "Old system",
+    }
+    definition["protocol"]["judge"].update(
+        prompt=prompt, category_prompts={"coding": prompt}
+    )
+    root = tmp_path / "tasks"
+    _write_family(root, family="test", filename="test.yaml", definition=definition)
+    task = load_tasks(root)["test-task"]
+    override = {
+        template_key: str(template)
+        if template_key.endswith("_file")
+        else "New template"
+    }
+    cfg = RunConfig(
+        resolved_task=task,
+        model={"name": "Dummy/model"},
+        judge={"model": "Dummy/judge"},
+        protocol={
+            "judge": {
+                "prompt": {f"{field}_file": str(template)},
+                "category_prompts": {"coding": {f"{field}_file": str(template)}},
+            }
+        }
+        if not template_key.endswith("_file")
+        else None,
+    )
+    cfg = RunConfig(
+        **{
+            **cfg.model_dump(mode="json"),
+            "protocol": {
+                "judge": {"prompt": override, "category_prompts": {"coding": override}}
+            },
+        }
+    )
+    if source == "task":
+        _write_family(
+            root,
+            family="test",
+            filename="_base.yaml",
+            definition={k: v for k, v in definition.items() if k != "task"},
+        )
+        _write_family(
+            root,
+            family="test",
+            filename="child.yaml",
+            definition={
+                "extends": "_base.yaml",
+                "task": "child",
+                "protocol": {
+                    "judge": {
+                        "prompt": override,
+                        "category_prompts": {"coding": override},
+                    }
+                },
+            },
+        )
+        cfg = RunConfig(
+            resolved_task=load_tasks(root)["child"],
+            model={"name": "Dummy/model"},
+            judge={"model": "Dummy/judge"},
+        )
+    run = prepare_run_directory(cfg, tmp_path / "run", attach_log=False)
+    template.unlink()
+    replay = load_config(run / "config.yaml")
+    for selection in (
+        replay.resolved_task.spec.protocol.judge.prompt,
+        replay.resolved_task.spec.protocol.judge.category_prompts["coding"],
+    ):
+        assert selection.parser == "score"
+        assert selection.judging_mode == "single_answer"
+        unchanged = "user" if field == "system" else "system"
+        assert getattr(selection, unchanged) == prompt[unchanged]
+        assert (
+            getattr(selection, field) == "New template"
+            or getattr(selection, f"{field}_file").read_text() == "New template"
+        )

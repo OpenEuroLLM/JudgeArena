@@ -11,6 +11,8 @@ class MetricSpec(StrictFrozenModel):
     """One named calculation over evaluation rows."""
 
     metric: str = Field(min_length=1)
+    name: str | None = Field(default=None, min_length=1)
+    """Result key retained when a saved run pins a named metric to a Python file."""
     breakdown_by: tuple[str, ...] = ()
     """Each field produces a separate breakdown; fields are not combined."""
     parameters: dict[str, object] = Field(default_factory=dict)
@@ -31,7 +33,7 @@ class ScoringSpec(StrictFrozenModel):
 
     @model_validator(mode="after")
     def _validate_metrics(self) -> ScoringSpec:
-        names = [item.metric for item in self.metrics]
+        names = [item.name or item.metric for item in self.metrics]
         if len(set(names)) != len(names):
             raise ValueError("scoring metrics must not contain duplicate names")
         return self
