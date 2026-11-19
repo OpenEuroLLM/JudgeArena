@@ -59,3 +59,5 @@ uv run judgearena-cache --action push --store_root ./cache \
 `--kind`, `--task` and `--model` filter the transfer. Use `--all` explicitly to transfer without filters. Uploading shares the selected cached inputs and responses with the destination repository.
 
 For dataset downloads and offline execution, see [offline preparation](../judgearena/tasks/README.md#prepare-an-offline-run).
+
+Before writing judgments without model attribution to an older cache, stop cache writers and run `python scripts/migrate/001_nullable_judgement_models.py /path/to/cache` from the checkout. The script keeps a `.bak` copy; new caches need no migration.

@@ -167,6 +167,7 @@ def prepare_answers(
     role: Literal["A", "B"],
 ) -> pd.DataFrame:
     """Load saved answers and generate missing ones using the task's input format."""
+    _require_columns(selected, {"instruction"}, "Model evaluation")
     generation = cfg.resolved_task.spec.protocol.generation
     if generation.mode == "multi_turn_chat":
         return load_conversations(cfg, data, selected, model, role=role)

@@ -1,0 +1,10 @@
+extends: _base.yaml
+task: eu-guard-guards
+description: Classify EU-Guard prompts as answer or refuse using dataset prompts as completions.
+dataset:
+  output_columns:
+    prompt: completion
+protocol:
+  judge:
+    prompt:
+      file: prompts/guard-jev.yaml

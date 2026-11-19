@@ -32,14 +32,15 @@ def validate_instruction_ids(ids: pd.Series, known: pd.Index, context: str) -> N
 
 @dataclass(frozen=True)
 class CompletionData:
-    """Adapter output contract for instructions and optional model completions.
+    """Adapter output contract for indexed input rows and optional model completions.
 
     Attributes:
-        instructions: DataFrame with an ``instruction`` column containing prompt
-            text and a unique, nonmissing row index identifying each instruction.
-            Use stable IDs (e.g. strings or integers), with matching types in
-            output rows. Extra columns such as ``lang`` or ``category`` are
-            preserved and can be used by ``select()`` for metadata filtering.
+        instructions: Input rows with unique, nonmissing row IDs. For supplied
+            judging, adapters normalize the text being judged to ``completion``;
+            ``instruction`` provides optional context. Model evaluation requires
+            ``instruction`` text and loads or generates ``completion`` separately.
+            Other columns remain metadata and can be used by ``select()`` for
+            filtering. Use stable IDs with matching types in output rows.
         model_outputs: Optional DataFrame with ``instruction_index`` (an ID from
             the instructions index), ``model`` (a nonmissing model name), and
             ``completion`` (answer text). It may cover only some models or rows;
@@ -81,7 +82,7 @@ class CompletionData:
     )
 
     def __post_init__(self) -> None:
-        _require_columns(self.instructions, {"instruction"}, "Instructions")
+        _require_columns(self.instructions, set(), "Dataset rows")
         if (
             self.instructions.index.has_duplicates
             or self.instructions.index.isna().any()
@@ -292,6 +293,7 @@ class PreferenceData(CompletionData):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        _require_columns(self.instructions, {"instruction"}, "Instructions")
         _require_columns(
             self.battles,
             {

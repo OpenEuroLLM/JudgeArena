@@ -182,6 +182,7 @@ The dummy response checks execution, not answer quality. `evaluation_name` names
 
 | Workflow | Adapter output |
 |---|---|
+| Independent supplied-data judging | `CompletionData`: indexed rows with `completion` (the text being judged), optional `instruction` context and metadata. No model attribution or generation is needed. |
 | Text pairwise | `CompletionData`: indexed `instruction` rows; optional outputs with `instruction_index`, `model`, and `completion`. Missing answers are generated. |
 | Multi-turn pairwise | `CompletionData` with `user_turns` (a list of user prompts) per instruction. Saved outputs also carry `messages`, a list of role/content dictionaries ending in an assistant answer. |
 | Supplied-history generation | `CompletionData` with input `messages` per row; optional `instruction_id` sets cache identity. Each row produces one answer. |
@@ -214,9 +215,9 @@ metadata names must be renamed in the adapter. Exports JSON-encode nested and
 mixed-type columns, including mixed integer/string IDs; use `json.loads` on
 those columns to restore original values before joining.
 
-Standard prompt fields `completion` (or `completion_A`/`completion_B`) render
+Standard prompt fields `completion` (or `completion_a`/`completion_b`) render
 complete conversations when available. Use `completion_text` (or
-`completion_A_text`/`completion_B_text`) for the answer text alone, for example
+`completion_a_text`/`completion_b_text`) for the answer text alone, for example
 when your template already includes the history. Both respect thinking removal
 and truncation settings.
 
@@ -280,10 +281,14 @@ definition; `model.baseline` cannot override it.
 
 ## Independent evaluation
 
-Use `runner: single_answer` to annotate one answer per instruction. Dataset
-adapters return the same `CompletionData` contract: instructions plus optional
-saved model outputs. Select the saved model through `model.name`; missing
-answers are generated. `provided_messages` uses supplied conversation history.
+Use `runner: single_answer` to judge one `completion` per row. Adapters map
+source text to `completion` in `CompletionData.instructions`, with optional
+`instruction` context. Omit `model.name` to judge supplied text without generation.
+Missing required columns raise an error.
+
+With `model.name`, provide `instruction`. The runner loads saved answers or
+generates missing completions. `provided_messages` uses supplied conversation
+history.
 
 ```yaml
 protocol:
@@ -298,8 +303,8 @@ protocol:
         breakdown_by: [category]
 ```
 
-The standard renderer supplies `{user_prompt}`, `{completion}`, their `_json`
-forms, and dataset metadata such as `{checklist}` or `{history}`. Required
+The standard renderer supplies optional `{instruction}` context and `{completion}`,
+their `_json` forms, and dataset metadata such as `{checklist}` or `{history}`. Required
 metadata is checked after saved answers are loaded and before generation. Each preset pairs its template with an
 `OutputParser`: `parse_result()` returns a dataclass, a JSON-compatible value,
 or `None` for an unparseable response. Parsed evidence is retained in `parsed`;
@@ -359,12 +364,12 @@ custom metrics and breakdowns; metrics must account for its reference-pool rows.
 Standard pairwise prompt templates can reference adapter metadata columns such
 as `{history}` or `{checklist}`. Saved answers load before field validation,
 so their metadata is available before generation starts.
-The shared renderer supplies `{user_prompt}`, `{completion_A}`, `{completion_B}`
+The shared renderer supplies `{instruction}`, `{completion_a}`, `{completion_b}`
 and their `_json` variants; these fields take precedence over source metadata
 and follow the actual answer order.
 
-Independent templates receive `{user_prompt}`, `{completion}`, their `_json`
-variants, and adapter metadata. Within a `single_answer` protocol, use:
+Independent templates receive `{completion}`, optional `{instruction}` context,
+their `_json` variants, and adapter metadata. Within a `single_answer` protocol, use:
 
 ```yaml
 judge:

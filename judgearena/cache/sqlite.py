@@ -269,7 +269,7 @@ class JudgementCache(_SQLiteCache):
             judge_completion TEXT NOT NULL,
             benchmark        TEXT NOT NULL,
             instruction_id   TEXT NOT NULL,
-            model_a          TEXT NOT NULL,
+            model_a          TEXT,
             model_b          TEXT,
             judge            TEXT NOT NULL,
             top_logprobs      TEXT,
@@ -297,7 +297,7 @@ class JudgementCache(_SQLiteCache):
                 str(row["judge_completion"]),
                 str(row["benchmark"]),
                 str(row["instruction_id"]),
-                str(row["model_a"]),
+                None if pd.isna(row.get("model_a")) else str(row["model_a"]),
                 None if pd.isna(row.get("model_b")) else str(row["model_b"]),
                 str(row["judge"]),
                 (
