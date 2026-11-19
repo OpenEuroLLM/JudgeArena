@@ -9,6 +9,9 @@ from importlib.metadata import version
 from importlib.resources import files
 
 from judgearena.prompts.criteria import resolve_criteria
+from judgearena.prompts.registry import resolve_judge_prompt, resolve_prompt_spec
+from judgearena.prompts.spec import JudgePromptSpec
+from judgearena.tasks import load_tasks
 
 
 def _assert_non_empty_text_resource(package: str, relative_path: str) -> None:
@@ -31,7 +34,26 @@ def main() -> None:
         "judgearena.prompts", "templates/criteria-default.yaml"
     )
 
-    print("✅ All integrity checks passed: Imports, Criteria, and Resources are valid.")
+    tasks = load_tasks()
+    for name in ("arena-hard-v0.1", "alpaca-eval", "mt-bench", "wildbench-score"):
+        if name not in tasks:
+            raise AssertionError(f"Packaged task not discovered: {name}")
+
+    bundle = files("judgearena.tasks").joinpath(
+        "definitions/arena_hard/prompts/pairwise.yaml"
+    )
+    prompt = resolve_prompt_spec(JudgePromptSpec(file=str(bundle)))
+    registered = resolve_judge_prompt(preset="arena-hard")
+    if (
+        not prompt.system_prompt
+        or not prompt.user_prompt_template
+        or prompt.user_prompt_template != registered.user_prompt_template
+        or prompt.judging_mode != "pairwise"
+        or prompt.parser.parse_result("[[A>B]]").preference != 0.25
+    ):
+        raise AssertionError("Packaged prompt bundle or task-local parser is invalid.")
+
+    print(f"Passed: shared resources, {len(tasks)} tasks, prompt bundle and parser.")
 
 
 if __name__ == "__main__":
