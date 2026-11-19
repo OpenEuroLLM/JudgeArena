@@ -3,6 +3,7 @@
 import math
 from dataclasses import dataclass, replace
 from functools import partial
+from typing import Literal
 
 from judgearena.inference import validate_decision_input
 from judgearena.prompts.parsing import (
@@ -26,7 +27,7 @@ def _finite_number(value):
 @dataclass
 class DecisionResultParser(DecisionAnswersParser):
     question: str
-    kind: str
+    kind: Literal["choice", "noul", "score"]
     result_type: type
     invert: bool = False
     values: dict | None = None

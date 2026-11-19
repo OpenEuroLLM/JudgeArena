@@ -89,7 +89,7 @@ referenced source file for replay; its imported dependencies come from the Pytho
 environment. Discovery imports only `register.py`; other Python files load when
 explicitly referenced. Registered YAML bundles are expanded into saved configs.
 
-# Decision judging
+## Decision judging
 
 Use `OpenRouter/typesafe/jev-1.14` with the `decision` prompt preset. Export
 `OPENROUTER_API_KEY`, then run an example from the repository root:
@@ -112,7 +112,7 @@ Select the dataset with `--task`. Pairwise examples inherit its baseline; the
 independent example replaces the protocol to score answers without a baseline.
 Change the candidate, judge, questions or metrics in the config.
 
-## Inputs and results
+### Inputs and results
 
 | Judging mode | Default state | Result conversion |
 |---|---|---|
@@ -144,7 +144,7 @@ returned probabilities and confidence. Without a conversion, `parsed` contains
 the named answers directly. Raw responses are retained for cache replay;
 configured metrics consume the converted values or these details.
 
-## Endpoints
+### Endpoints
 
 The prompt renders decision requests; the model prefix selects the provider.
 `prepare_model()` routes these inputs automatically. Direct `make_model()`
@@ -161,3 +161,8 @@ judge:
     preset: decision
     options: # questions and result conversion as above
 ```
+## Configurable presets
+
+Register an inline preset with `register_prompt(JudgePromptPreset(name=..., inline_user=..., parser=..., judging_mode=...))`. A configurable preset supplies `configure(prompt, **options)`, returning a resolved prompt with matching templates and parser. The function validates its options; ordinary keyword arguments reject unknown options.
+
+Declare file options with `option_files=("rubric",)` so their paths resolve beside the config and their files are copied for replay.
