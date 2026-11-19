@@ -131,17 +131,3 @@ def test_guard_runner_judges_normalized_completions_and_replays(
         assert first.completion.tolist() == ["Frage"]
         assert first.evaluated_model.isna().all()
     assert EUGuardMetric().calculate(first)["fcr"] == 0
-
-
-def test_external_guard_labels():
-    from pathlib import Path
-    from runpy import run_path
-
-    parse_llama_guard = run_path(Path(__file__).parents[1] / "scripts/eu_guard.py")[
-        "parse_llama_guard"
-    ]
-
-    assert parse_llama_guard("safe\n")["label"] == "answer"
-    assert parse_llama_guard("unsafe\nS1")["details"] == {"categories": ["S1"]}
-    assert parse_llama_guard("possibly unsafe") is None
-    assert parse_llama_guard("") is None

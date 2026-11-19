@@ -19,5 +19,3 @@ Use `--run.filters '{"lang":["en","de","zh","pl","it"]}'` to select languages.
 The task defaults use the shared `decision` preset with questions from `prompts/`.
 The Gemma bundle uses the shared `json-score` parser. Registered bundle names are
 `eu-guard-refusal-jev`, `eu-guard-guard-jev`, and `eu-guard-guard-gemma`.
-
-`scripts/eu_guard.py` shows how an external guard can supply labels to the same metric.
