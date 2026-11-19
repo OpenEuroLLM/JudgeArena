@@ -88,3 +88,9 @@ The Python path is relative to the YAML that declares it. Saved runs copy the
 referenced source file for replay; its imported dependencies come from the Python
 environment. Discovery imports only `register.py`; other Python files load when
 explicitly referenced. Registered YAML bundles are expanded into saved configs.
+
+## Configurable presets
+
+Register an inline preset with `register_prompt(JudgePromptPreset(name=..., inline_user=..., parser=..., judging_mode=...))`. A configurable preset supplies `configure(prompt, **options)`, returning a resolved prompt with matching templates and parser. The function validates its options; ordinary keyword arguments reject unknown options.
+
+Declare file options with `option_files=("rubric",)` so their paths resolve beside the config and their files are copied for replay.
