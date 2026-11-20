@@ -1,5 +1,7 @@
 """Shared answer generation, judging, metrics, and artifacts for model evaluation."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,7 +44,11 @@ from judgearena.reports import AnnotationReport, BattleReport, ComparisonReport
 from judgearena.tasks.schema import ResolvedTaskSpec
 
 if TYPE_CHECKING:
+    from judgearena.benchmarks.pairwise.baselines import BaselinePlan
+    from judgearena.benchmarks.scoring import ConfiguredMetrics
     from judgearena.config import RunConfig
+    from judgearena.datasets.data import CompletionData
+    from judgearena.prompts.registry import ResolvedJudgePrompt
 
 logger = get_logger(__name__)
 
@@ -73,22 +79,23 @@ def prepare_independent_judge(cfg, data, instructions, prompt=None):
 
 @run_logging()
 def run_evaluation(
-    cfg: "RunConfig",
+    cfg: RunConfig,
     resolved_task: ResolvedTaskSpec | None = None,
     *,
-    data=None,
-    output_dir=None,
-    baseline_plan=None,
-    opponent_panel=None,
-    metrics=None,
-    sampling_metadata=None,
-    reference_battles=None,
-    comparison_rng=None,
-    prompt=None,
-    prepared_directory=None,
-    report_name=None,
-):
-    """Load or generate answers, judge them, and save annotations and metrics."""
+    data: CompletionData | None = None,
+    output_dir: str | Path | None = None,
+    baseline_plan: BaselinePlan | None = None,
+    opponent_panel: pd.DataFrame | None = None,
+    metrics: ConfiguredMetrics | None = None,
+    sampling_metadata: dict[str, object] | None = None,
+    reference_battles: pd.DataFrame | None = None,
+    prompt: ResolvedJudgePrompt | None = None,
+) -> Path | pd.Series | pd.DataFrame:
+    """Load or generate answers, judge them, and save annotations and metrics.
+
+    Each opponent_panel row identifies a prompt by instruction_index and supplies
+    one saved opponent answer in model_b and completion_b.
+    """
 
     run_started_at = datetime.now(UTC)
 
@@ -103,13 +110,12 @@ def run_evaluation(
     if metrics is None:
         metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = data if data is not None else load_task_data(resolved_task)
-    if opponent_panel is None and cfg.graph is not None:
+    comparison_rng = np.random.default_rng(cfg.run.seed)
+    sampled_graph = opponent_panel is None and cfg.graph is not None
+    if sampled_graph:
         opponent_panel, reference_battles, sampling_metadata = prepare_graph(
-            cfg, task_data
+            cfg, task_data, rng=comparison_rng
         )
-    sampled_graph = opponent_panel is not None
-    if sampled_graph and comparison_rng is None:
-        comparison_rng = np.random.default_rng(cfg.run.seed)
     if opponent_panel is None:
         task_data = task_data.select(
             resolve_dataset_filters(resolved_task, cfg.run.filters)
@@ -124,8 +130,23 @@ def run_evaluation(
             )
     else:
         validate_graph_task(resolved_task.spec.protocol)
+        if "model_a" in opponent_panel or not {
+            "model_b",
+            "completion_b",
+            "instruction_index",
+        } <= set(opponent_panel):
+            raise ValueError(
+                "Each panel row must supply instruction_index, model_b and completion_b for one opponent."
+            )
         instruction_ids = pd.Index(opponent_panel["instruction_index"])
         instructions_df = task_data.instructions.loc[instruction_ids.unique()]
+        if not sampled_graph:
+            fields = instructions_df.columns.difference(
+                opponent_panel.columns, sort=False
+            )
+            opponent_panel = opponent_panel.join(
+                instructions_df[fields], on="instruction_index", validate="many_to_one"
+            )
     task_data = preload_model_outputs(
         task_data,
         [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
@@ -137,7 +158,7 @@ def run_evaluation(
             cfg, task_data, instructions_df, resolved_prompt
         )
     else:
-        context = opponent_panel if sampled_graph else instructions_df
+        context = opponent_panel if opponent_panel is not None else instructions_df
         output_columns = {"model", "completion"}
         if task_data.model_outputs is not None:
             output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
@@ -149,7 +170,7 @@ def run_evaluation(
         available_columns = set(context) | {
             f"{column}_{slot}" for column in output_columns for slot in ("a", "b")
         }
-        if sampled_graph:
+        if opponent_panel is not None:
             available_columns.update(
                 ("instruction_id", "question_id", "cache_orientation", "source")
             )
@@ -163,7 +184,7 @@ def run_evaluation(
             context,
             available_columns=available_columns,
             reference_battles=reference_battles,
-            calibration_rng=comparison_rng,
+            calibration_rng=comparison_rng if sampled_graph else None,
             # Sampled graphs already randomize candidate orientation.
             swap_mode="fixed"
             if sampled_graph and cfg.judge.swap_mode != "both"
@@ -175,7 +196,7 @@ def run_evaluation(
 
     name = name.replace("/", "_")
     run_ts = run_started_at.strftime("%Y%m%d_%H%M%S")
-    res_folder = prepared_directory or prepare_run_directory(
+    res_folder = prepare_run_directory(
         cfg,
         output_dir
         if output_dir is not None
@@ -190,11 +211,11 @@ def run_evaluation(
         samples = answer_samples(instructions_df, answers)
         annotations, prompts = judge(build_judge(cfg), samples)
         judgment_metadata = {"judge_prompts": prompt_metadata(prompts)}
-    elif sampled_graph:
+    elif opponent_panel is not None:
         samples, source_ids = prepare_candidate_comparisons(
             opponent_panel,
             answers,
-            rng=comparison_rng,
+            rng=comparison_rng if sampled_graph else None,
             turns=resolved_task.spec.protocol.judge.turns,
         )
     else:
@@ -302,10 +323,7 @@ def run_evaluation(
     report.render(metrics)
     report_path = report.save(
         res_folder
-        / (
-            report_name
-            or ("results.json" if output_dir is not None else f"results-{name}.json")
-        )
+        / ("results.json" if output_dir is not None else f"results-{name}.json")
     )
 
     eval_instruction_index = annotations["instruction_index"].drop_duplicates().tolist()
@@ -363,6 +381,4 @@ def run_evaluation(
             "annotations": res_folder / "annotations.parquet",
         },
     )
-    return (
-        manifest if output_dir is not None or prepared_directory is not None else result
-    )
+    return manifest if output_dir is not None else result

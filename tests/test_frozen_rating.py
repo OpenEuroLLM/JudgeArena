@@ -21,6 +21,11 @@ def test_frozen_fit_orientation_soft_targets_and_group_bootstrap():
     assert result["ci_low"] == pytest.approx(1000 + 400 * np.log10(0.6 / 0.4))
     assert result["ci_high"] == pytest.approx(1000 + 400 * np.log10(0.8 / 0.2))
     assert result == fit_frozen_rating(battles, "new", references, n_bootstraps=100)
+    point = fit_frozen_rating(
+        battles.drop(columns="split_group"), "new", references, n_bootstraps=0
+    )
+    assert point["rating"] == result["rating"]
+    assert np.isnan(point["ci_low"]) and np.isnan(point["ci_high"])
     assert references == {"anchor": 1000.0}
     hard = fit_frozen_rating(battles, "new", references, hard=True)
     assert hard["rating"] == hard["ci_low"] == hard["ci_high"] == float("inf")

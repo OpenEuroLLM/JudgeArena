@@ -947,3 +947,37 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         json.loads(third.read_text())["metrics"]
         == json.loads(first.read_text())["metrics"]
     )
+
+
+def test_supplied_panel_reuses_one_answer_for_two_fixed_opponents(
+    tmp_path, monkeypatch, synthetic_arena_df
+):
+    data = normalize_battles(synthetic_arena_df, "ComparIA")
+    key = data.instructions.index[0]
+    panel = pd.DataFrame(
+        {
+            "instruction_index": [key, key],
+            "model_b": ["X", "Y"],
+            "completion_b": ["first", "second"],
+        }
+    )
+    cfg = _default_args(result_folder=str(tmp_path), store_root=str(tmp_path / "cache"))
+
+    def evaluate(folder):
+        pairwise_runner.run_evaluation(
+            cfg, data=data, opponent_panel=panel, output_dir=folder
+        )
+        return pd.read_parquet(folder / "outcomes.parquet")
+
+    live = tmp_path / "live"
+    outcomes = evaluate(live)
+    assert len(pd.read_parquet(live / "answers.parquet")) == 1
+    assert outcomes.model_a.tolist() == [cfg.model.name] * 2
+    assert outcomes.model_b.tolist() == ["X", "Y"]
+    assert (
+        outcomes.instruction.tolist() == [data.instructions.loc[key, "instruction"]] * 2
+    )
+    monkeypatch.setattr(
+        models, "make_model", lambda *a, **kw: pytest.fail("cache miss")
+    )
+    pd.testing.assert_frame_equal(outcomes, evaluate(tmp_path / "replay"))

@@ -100,13 +100,10 @@ def fit_frozen_rating(
         raise ValueError("Preferences must be between zero and one.")
     if not valid.any():
         raise ValueError("No valid candidate judgments remain.")
-    if battles.loc[valid, group_col].isna().any():
-        raise ValueError("Every valid judgment requires a bootstrap group.")
     if hard:
         preferences = hard_preferences(preferences)
     targets = preferences.where(is_b, 1 - preferences)[valid].to_numpy(dtype=float)
     opponents = opponent_ratings[valid.to_numpy()]
-    clusters = list(battles.loc[valid].groupby(group_col, sort=False).indices.values())
 
     def fit(positions):
         target = targets[positions].mean()
@@ -127,16 +124,20 @@ def fit_frozen_rating(
             )
         )
 
-    rng = np.random.default_rng(seed)
-    samples = [
-        fit(positions) for positions in resample_clusters(clusters, n_bootstraps, rng)
-    ]
-    # Order-statistic quantiles preserve infinite endpoints without inf-inf arithmetic.
-    low, high = (
-        np.quantile(samples, [0.025, 0.975], method="inverted_cdf")
-        if samples
-        else (float("nan"), float("nan"))
-    )
+    low = high = float("nan")
+    if n_bootstraps:
+        if group_col not in battles or battles.loc[valid, group_col].isna().any():
+            raise ValueError("Every valid judgment requires a bootstrap group.")
+        clusters = list(
+            battles.loc[valid].groupby(group_col, sort=False).indices.values()
+        )
+        rng = np.random.default_rng(seed)
+        samples = [
+            fit(positions)
+            for positions in resample_clusters(clusters, n_bootstraps, rng)
+        ]
+        # Order-statistic quantiles preserve infinite endpoints without inf-inf arithmetic.
+        low, high = np.quantile(samples, [0.025, 0.975], method="inverted_cdf")
     return {
         "rating": fit(np.arange(len(targets))),
         "ci_low": float(low),

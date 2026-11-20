@@ -53,31 +53,29 @@ def select_graph_battles(
     return df_battles, sampling_metadata
 
 
-def prepare_candidate_comparisons(battles, answers, *, rng, turns=None):
+def prepare_candidate_comparisons(panel, answers, *, rng, turns=None):
     """Return graph comparisons and routing IDs, matching baseline preparation."""
     from judgearena.benchmarks.pairwise.comparisons import (
         assemble_comparisons,
         conversation_comparisons,
     )
 
-    answers = answers.reindex(battles["instruction_index"]).set_axis(battles.index)
-
-    use_model_a = rng.choice([True, False], size=len(battles))
-    candidate_is_a = rng.choice([True, False], size=len(battles))
-    context = swap_comparison_slots(battles, use_model_a)
-    opponents = context.filter(regex="_b$").rename(columns=lambda c: c[:-2])
-    comparisons = assemble_comparisons(context, answers, opponents)
+    answers = answers.reindex(panel["instruction_index"]).set_axis(panel.index)
+    opponents = panel.filter(regex="_b$").rename(columns=lambda c: c[:-2])
+    comparisons = assemble_comparisons(panel, answers, opponents)
     comparisons = comparisons.assign(
-        instruction_id=battles.get(
-            "instruction_id", battles["instruction_index"].astype(str)
+        instruction_id=panel.get(
+            "instruction_id", panel["instruction_index"].astype(str)
         ),
-        cache_orientation=np.where(candidate_is_a, "direct", "reversed"),
-        question_id=battles.get("question_id", battles["instruction_index"]),
+        cache_orientation="direct",
+        question_id=panel.get("question_id", panel["instruction_index"]),
         source="llm-judge",
     )
-    comparisons = conversation_comparisons(
-        swap_comparison_slots(comparisons, ~candidate_is_a), turns
-    )
+    if rng is not None:
+        candidate_is_a = rng.choice([True, False], size=len(panel))
+        comparisons["cache_orientation"] = np.where(candidate_is_a, "direct", "reversed")
+        comparisons = swap_comparison_slots(comparisons, ~candidate_is_a)
+    comparisons = conversation_comparisons(comparisons, turns)
     source_ids = comparisons["source_instruction_index"] if turns is not None else None
     return comparisons, source_ids
 
@@ -125,7 +123,7 @@ def select_seeded_random_battles(
     return sampled.reset_index(drop=True), metadata
 
 
-def prepare_graph(cfg, data):
+def prepare_graph(cfg, data, *, rng):
     """Select candidate comparisons and retain available reference labels."""
     from judgearena.datasets.data import PreferenceData
 
@@ -152,4 +150,7 @@ def prepare_graph(cfg, data):
         references["reference_pref"] = float("nan")
     references = references.loc[references.reference_pref.notna()].copy()
     references["evaluation_model"] = None
-    return battles, references, metadata
+    # Keep the selected opponent in slot B until the candidate answer is available.
+    panel = swap_comparison_slots(battles, rng.choice([True, False], size=len(battles)))
+    panel = panel.drop(columns=panel.filter(regex="_a$").columns)
+    return panel, references, metadata
