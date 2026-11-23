@@ -39,6 +39,7 @@ _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "LlamaCpp": "text",
     "OpenAI": "text",
     "OpenRouter": "chat",
+    "SGLang": "chat",
     "Together": "text",
     "VLLM": "chat",
 }
@@ -104,7 +105,7 @@ def build_model_descriptor(
         return None
 
     descriptor_kwargs = resolved_kwargs.copy()
-    if provider == "VLLM":
+    if provider in {"VLLM", "SGLang"}:
         descriptor_kwargs["temperature"] = (
             VLLM_DEFAULT_TEMPERATURE
             if descriptor_kwargs.get("temperature") is None
@@ -131,6 +132,8 @@ def build_model_descriptor(
     }
     if provider == "VLLM":
         descriptor["backend_version"] = importlib_metadata.version("vllm")
+    elif provider == "SGLang":
+        descriptor["backend_version"] = importlib_metadata.version("sglang")
     elif provider == "LlamaCpp":
         descriptor["backend_version"] = importlib_metadata.version("llama-cpp-python")
     if endpoint is not None:

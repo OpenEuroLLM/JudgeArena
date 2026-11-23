@@ -8,6 +8,7 @@ Use `Backend/model` for a model that should generate answers or judgments. A sav
 | OpenAI chat | `ChatOpenAI/gpt-4o` | `OPENAI_API_KEY` |
 | Together | `Together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | `TOGETHER_API_KEY` |
 | vLLM | `VLLM/Qwen/Qwen2.5-0.5B-Instruct` | `uv sync --extra vllm` |
+| SGLang | `SGLang/Qwen/Qwen2.5-0.5B-Instruct` | `uv sync --extra sglang` |
 | LlamaCpp | `LlamaCpp/./models/model.gguf` | `uv sync --extra llamacpp` |
 
 Choose a model available to your provider account. Candidate and judge backends can differ. Tasks such as AlpacaEval require judge token logprobs, so check that the selected backend and model support the task's protocol.
@@ -41,6 +42,23 @@ judge:
 ```
 
 The CLI equivalent is `--model.engine_kwargs '{"tensor_parallel_size":2}'`. These are backend-specific options; vLLM engine settings do not apply to hosted APIs. Dedicated fields such as `model.max_model_len` take precedence over the same engine option. Use `model.temperature`, `model.top_p` and the corresponding judge fields for supported sampling settings.
+
+## Local SGLang
+
+[SGLang](https://github.com/sgl-project/sglang) is an alternative local GPU backend with the same workflow as vLLM:
+
+```bash
+uv sync --extra sglang
+uv run judgearena \
+  --task arena-hard-v0.1 \
+  --model.name SGLang/Qwen/Qwen2.5-0.5B-Instruct \
+  --model.max_out_tokens 4096 \
+  --model.engine_kwargs '{"tp_size":1,"mem_fraction_static":0.8}' \
+  --judge.model OpenRouter/google/gemma-4-31b-it \
+  --generation.n_instructions 10
+```
+
+Chat templates behave as for vLLM (`chat_template` override, otherwise the tokenizer's template, otherwise plain text). `max_model_len` maps to SGLang's `context_length`; other `engine_kwargs` are passed to `sglang.Engine`, so use SGLang option names (for example `tp_size` instead of `tensor_parallel_size`). `thinking_token_budget` and decision-mode inference are not supported with SGLang.
 
 ## Local GGUF models
 

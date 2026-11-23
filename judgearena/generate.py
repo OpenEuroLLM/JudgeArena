@@ -224,7 +224,7 @@ def generate_multiturn(
         validate_user_turns(row)
     provider = model.split("/")[0]
     use_category_temperatures = temperature_config is not None
-    local_provider = provider in {"VLLM", "LlamaCpp"}
+    local_provider = provider in {"VLLM", "SGLang", "LlamaCpp"}
 
     base_model = (
         prepare_model(
