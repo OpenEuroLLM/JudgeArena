@@ -97,7 +97,7 @@ def build_default_judge_model_kwargs(
 ) -> dict[str, object]:
     """Copy judge engine kwargs and add supported built-in defaults."""
     provider, model_name = _split_model_spec(judge_model)
-    judge_model_kwargs = dict(engine_kwargs) if provider == "VLLM" else {}
+    judge_model_kwargs = dict(engine_kwargs) if provider in {"VLLM", "SGLang"} else {}
     if judge_engine_kwargs_override:
         judge_model_kwargs.update(judge_engine_kwargs_override)
     if provider == "VLLM":
@@ -595,7 +595,8 @@ class ChatSGLang(ChatVLLM):
             )
         max_model_len = sglang_kwargs.pop("max_model_len", None)
         if max_model_len is not None:
-            sglang_kwargs.setdefault("context_length", int(max_model_len))
+            # Dedicated field wins over the engine option, as for vLLM.
+            sglang_kwargs["context_length"] = int(max_model_len)
         if seed is not None:
             sglang_kwargs.setdefault("random_seed", int(seed))
 

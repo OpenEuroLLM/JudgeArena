@@ -121,3 +121,33 @@ def test_sglang_cache_descriptor_records_backend_version(monkeypatch):
     assert descriptor["input_mode"] == "chat"
     assert descriptor["backend_version"] == "sglang-1.0"
     assert descriptor["model_kwargs"]["temperature"] == models.VLLM_DEFAULT_TEMPERATURE
+
+
+def test_max_model_len_overrides_context_length_engine_option(monkeypatch):
+    captured = _install_fake_sglang(monkeypatch)
+    models.ChatSGLang(model="m", max_model_len=2048, context_length=8192)
+
+    assert captured["engine_init"]["context_length"] == 2048
+
+
+def test_sglang_judge_inherits_model_engine_kwargs():
+    kwargs = models.build_default_judge_model_kwargs(
+        "SGLang/Qwen/Qwen2.5-7B-Instruct",
+        {"tp_size": 2, "mem_fraction_static": 0.7},
+        judge_engine_kwargs_override={"tp_size": 1},
+    )
+
+    assert kwargs == {"tp_size": 1, "mem_fraction_static": 0.7}
+
+
+def test_sglang_cache_descriptor_ignores_hardware_kwargs(monkeypatch):
+    monkeypatch.setattr(
+        "judgearena.cache.inference.importlib_metadata.version",
+        lambda name: "1.0",
+    )
+    small = build_model_descriptor("SGLang", "m", {"tp_size": 1})
+    large = build_model_descriptor(
+        "SGLang", "m", {"tp_size": 4, "dp_size": 2, "mem_fraction_static": 0.9}
+    )
+
+    assert small == large

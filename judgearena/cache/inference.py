@@ -31,6 +31,11 @@ VLLM_EXECUTION_ONLY_KWARGS = {
     "gpu_memory_utilization",
     "tensor_parallel_size",
 }
+SGLANG_EXECUTION_ONLY_KWARGS = {
+    "dp_size",
+    "mem_fraction_static",
+    "tp_size",
+}
 
 InputMode = Literal["chat", "text", "decision"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
@@ -121,6 +126,7 @@ def build_model_descriptor(
             key: value
             for key, value in descriptor_kwargs.items()
             if key not in VLLM_EXECUTION_ONLY_KWARGS
+            and not (provider == "SGLang" and key in SGLANG_EXECUTION_ONLY_KWARGS)
         }
 
     descriptor = {
