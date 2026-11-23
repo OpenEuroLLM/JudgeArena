@@ -217,5 +217,10 @@ def test_conflicting_or_non_sampling_options():
             sampling_kwargs={"temperature": 0},
             extra_body={"temperature": 0.9},
         )
-    with pytest.raises(ValueError, match="sampling option max_retries"):
-        make_model("ChatOpenAI/test", sampling_kwargs={"max_retries": 7})
+    for option in ("max_retries", "frequency_penalty"):
+        with pytest.raises(ValueError, match=f"extra sampling options: {option}"):
+            make_model("ChatOpenAI/test", sampling_kwargs={option: 1})
+    model = make_model(
+        "ChatOpenAI/test", api_key="test", sampling_kwargs={"temperature": 0.5}
+    )
+    assert model.temperature == 0.5

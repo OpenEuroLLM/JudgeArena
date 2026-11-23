@@ -1069,6 +1069,10 @@ def _resolve_model_config(
     resolved_kwargs["max_tokens"] = resolved_kwargs.get("max_tokens") or 8192
     sampling = {key: resolved_kwargs.pop(key, None) for key in shared}
     if extras:
+        if provider not in {"VLLM", "OpenRouter"}:
+            raise ValueError(
+                f"{provider} does not support extra sampling options: {', '.join(sorted(extras))}."
+            )
         resolved_kwargs["sampling_kwargs"] = extras
     if provider != "VLLM":
         for key in _VLLM_ONLY_KWARGS:
@@ -1193,7 +1197,7 @@ def make_model(
             raise ValueError("Dummy backend does not support top_logprobs.")
         dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         _route_sampling_params(dummy_kwargs, **sampling)
-        return DummyModel(model, **dummy_kwargs, **extras)
+        return DummyModel(model, **dummy_kwargs)
 
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
@@ -1292,20 +1296,4 @@ def make_model(
             ),
             provider=model_provider,
         )
-        for key, value in extras.items():
-            if model_provider == "LlamaCpp" and key == "repetition_penalty":
-                key = "repeat_penalty"
-            if key not in supported_fields or key not in {
-                "frequency_penalty",
-                "presence_penalty",
-                "repeat_penalty",
-                "repetition_penalty",
-                "stop",
-                "logit_bias",
-                "n",
-            }:
-                raise ValueError(
-                    f"{model_provider} backend does not support sampling option {key}."
-                )
-            engine_kwargs[key] = value
         return model_cls(**engine_kwargs)

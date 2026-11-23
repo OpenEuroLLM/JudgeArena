@@ -253,7 +253,7 @@ def test_penalties_preserve_unset_cache_and_separate_values(tmp_path, monkeypatc
     cache = CompletionInferenceCache(tmp_path, "arena-hard")
     backend = EchoModel()
     monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: backend)
-    original = prepare_model("Dummy/test", cache=cache)
+    original = prepare_model("OpenRouter/test", cache=cache)
     # This is the pre-penalty descriptor; adding null fields would break old caches.
     assert original.descriptor["model_kwargs"] == {
         "max_tokens": 8192,
@@ -273,7 +273,7 @@ def test_penalties_preserve_unset_cache_and_separate_values(tmp_path, monkeypatc
         {"sampling_kwargs": {"temperature": 0.5}},
     ):
         do_inference(
-            prepare_model("Dummy/test", cache=cache, **kwargs),
+            prepare_model("OpenRouter/test", cache=cache, **kwargs),
             ["prompt"],
             cache_row_metadata=[{"instruction_id": "1"}],
         )
