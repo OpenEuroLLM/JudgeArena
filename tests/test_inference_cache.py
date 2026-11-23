@@ -247,3 +247,34 @@ def test_cache_descriptor_validation_still_fails_loudly(tmp_path, monkeypatch):
             ["prompt"],
             cache_row_metadata=[{"instruction_id": "1"}],
         )
+
+
+def test_penalties_preserve_unset_cache_and_separate_values(tmp_path, monkeypatch):
+    cache = CompletionInferenceCache(tmp_path, "arena-hard")
+    backend = EchoModel()
+    monkeypatch.setattr(models, "make_model", lambda *_args, **_kwargs: backend)
+    original = prepare_model("Dummy/test", cache=cache)
+    # This is the pre-penalty descriptor; adding null fields would break old caches.
+    assert original.descriptor["model_kwargs"] == {
+        "max_tokens": 8192,
+        "temperature": None,
+        "top_p": None,
+        "top_k": None,
+        "seed": None,
+        "top_logprobs": None,
+    }
+    for kwargs in (
+        {},
+        {"sampling_kwargs": {}},
+        {"sampling_kwargs": {"min_p": 0.1}},
+        {"sampling_kwargs": {"min_p": 0.1}},
+        {"sampling_kwargs": {"min_p": 0.2}},
+        {"temperature": 0.5},
+        {"sampling_kwargs": {"temperature": 0.5}},
+    ):
+        do_inference(
+            prepare_model("Dummy/test", cache=cache, **kwargs),
+            ["prompt"],
+            cache_row_metadata=[{"instruction_id": "1"}],
+        )
+    assert len(backend.calls) == 4

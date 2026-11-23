@@ -107,6 +107,31 @@ def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     return merged
 
 
+def _sampling_shorthands(values, prefix="", *, judge=False):
+    """Resolve shared fields before applying task defaults or baseline inheritance."""
+    if not isinstance(values, dict):
+        return values
+    key = prefix + "sampling_kwargs"
+    if not isinstance(values.get(key), dict):
+        return values
+    if not values[key]:
+        return values
+    values = values.copy()
+    extra = values[key] = values[key].copy()
+    shared = ("temperature", "top_p", "top_k", "seed", "max_tokens")
+    if judge:
+        shared += ("top_logprobs",)
+    for name in shared:
+        if name in extra:
+            field = prefix + ("max_out_tokens" if name == "max_tokens" else name)
+            if values.get(field) is not None:
+                raise ValueError(f"Specify {field} or {key}.{name} only once.")
+            values[field] = extra.pop(name)
+    if not extra:
+        del values[key]
+    return values
+
+
 class ModelArgs(BaseModel):
     """The model(s) under evaluation and their generation/engine settings."""
 
@@ -148,6 +173,9 @@ class ModelArgs(BaseModel):
     """Jinja2 chat template to use instead of the tokenizer's template (vLLM
     only; ignored by remote providers which template server-side)."""
 
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
+
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine-specific kwargs forwarded to the backend, e.g. for
     vLLM ``{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}``."""
@@ -180,13 +208,23 @@ class ModelArgs(BaseModel):
     """Jinja2 chat template for the baseline/opponent model. Unset inherits
     ``model.chat_template``."""
 
+    baseline_sampling_kwargs: dict | None = None
+    """Baseline sampling options. Unset inherits model.sampling_kwargs."""
+
     baseline_engine_kwargs: dict | None = None
     """JSON dict of engine-specific kwargs for the baseline/opponent model.
     Unset inherits ``model.engine_kwargs``."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_sampling_shorthands(cls, values):
+        return _sampling_shorthands(_sampling_shorthands(values), "baseline_")
+
     def evaluated_generation_kwargs(self) -> dict[str, object]:
         """Kwargs for model A / the evaluated model."""
         kwargs: dict[str, object] = dict(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
@@ -210,6 +248,13 @@ class ModelArgs(BaseModel):
             else self.baseline_engine_kwargs
         )
         kwargs: dict[str, object] = dict(engine_kwargs)
+        sampling = (
+            self.baseline_sampling_kwargs
+            if self.baseline_sampling_kwargs is not None
+            else self.sampling_kwargs
+        )
+        if sampling:
+            kwargs["sampling_kwargs"] = sampling
         kwargs.update(
             _drop_none(
                 {
@@ -289,6 +334,9 @@ class JudgeArgs(BaseModel):
     """Jinja2 chat template for the judge vLLM instance. Unset falls back to
     ``model.chat_template`` for backward compatibility."""
 
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
+
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
@@ -325,7 +373,7 @@ class JudgeArgs(BaseModel):
         for key in ("system_prompt_file", "user_prompt_file"):
             if values.get(key) is None:
                 values.pop(key, None)
-        return values
+        return _sampling_shorthands(values, judge=True)
 
     def model_kwargs(
         self,
@@ -336,6 +384,8 @@ class JudgeArgs(BaseModel):
         """Kwargs for constructing the judge model."""
         kwargs: dict[str, object] = dict(base_engine_kwargs or {})
         kwargs.update(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
@@ -782,6 +832,13 @@ class RunConfig(BaseSettings):
         if _ACTIVE_CLI_ARGS is not None:
             cli = CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
             overrides = cli()
+            for layer in (values, overrides):
+                if "model" in layer:
+                    layer["model"] = ModelArgs.resolve_sampling_shorthands(
+                        layer["model"]
+                    )
+                if "judge" in layer:
+                    layer["judge"] = _sampling_shorthands(layer["judge"], judge=True)
             if "task" in overrides:
                 values = {**values, "task": overrides["task"]}
             values = _merge_overrides(cls._merge_task_overrides(values), overrides)

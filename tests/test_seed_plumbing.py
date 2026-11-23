@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from judgearena.config import RunConfig, build_run_config
+import pytest
+
+from judgearena.config import ModelArgs, RunConfig, build_run_config
 from judgearena.models import make_model
 
 
@@ -150,3 +152,70 @@ def test_nested_cli_sampling_flags_land_on_correct_roles():
     assert cfg.model.baseline_seed == 22
     assert cfg.judge.temperature == 0.0
     assert cfg.model.temperature is None
+
+
+def test_sampling_kwargs_cli_and_replay(tmp_path):
+    from judgearena.config import dump_config, load_config
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "task: alpaca-eval-ja\nmodel: {name: Dummy/a, baseline: Dummy/b, temperature: 0.9}\njudge: {model: Dummy/j, sampling_kwargs: {top_p: 0.8}}\n"
+    )
+    cfg = build_run_config(
+        [
+            "--config_path",
+            str(path),
+            "--model.sampling_kwargs",
+            '{"temperature":0,"repetition_penalty":1.1}',
+            "--judge.sampling_kwargs",
+            '{"min_p":0.05}',
+            "--judge.top_p",
+            "0.4",
+        ]
+    )
+    dump_config(cfg, path)
+    saved = load_config(path)
+    for settings in (
+        saved.model.evaluated_generation_kwargs(),
+        saved.model.baseline_generation_kwargs(),
+    ):
+        assert settings["temperature"] == 0
+        assert settings["sampling_kwargs"] == {"repetition_penalty": 1.1}
+    assert saved.judge.top_p == 0.4
+    assert saved.judge.model_kwargs()["sampling_kwargs"] == {"min_p": 0.05}
+
+    baseline = ModelArgs(
+        sampling_kwargs={"min_p": 0.1}, baseline_sampling_kwargs={"temperature": 0}
+    )
+    assert baseline.baseline_generation_kwargs()["sampling_kwargs"] == {"min_p": 0.1}
+    assert baseline.baseline_generation_kwargs()["temperature"] == 0
+    with pytest.raises(ValueError, match="only once"):
+        ModelArgs(temperature=0, sampling_kwargs={"temperature": 1})
+
+
+def test_openrouter_sampling_body(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    extras = {"repetition_penalty": 1.1, "min_p": 0.05, "frequency_penalty": 0}
+    model = make_model(
+        "OpenRouter/test",
+        sampling_kwargs=extras,
+        extra_body={"provider": {"order": ["test"]}},
+    )
+    assert model.extra_body == {
+        **extras,
+        "max_tokens": 8192,
+        "provider": {"order": ["test"], "require_parameters": True},
+    }
+
+
+def test_conflicting_or_non_sampling_options():
+    with pytest.raises(
+        ValueError, match="Conflicting OpenRouter request options: temperature"
+    ):
+        make_model(
+            "OpenRouter/test",
+            sampling_kwargs={"temperature": 0},
+            extra_body={"temperature": 0.9},
+        )
+    with pytest.raises(ValueError, match="sampling option max_retries"):
+        make_model("ChatOpenAI/test", sampling_kwargs={"max_retries": 7})

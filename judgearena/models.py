@@ -281,6 +281,7 @@ class ChatVLLM:
         top_k: int | None = None,
         seed: int | None = None,
         top_logprobs: int | None = None,
+        sampling_kwargs: dict | None = None,
         **vllm_kwargs,
     ):
         from vllm import LLM, SamplingParams
@@ -338,6 +339,7 @@ class ChatVLLM:
             self._sampling_params_kwargs["top_k"] = int(top_k)
         if seed is not None:
             self._sampling_params_kwargs["seed"] = int(seed)
+        self._sampling_params_kwargs.update(sampling_kwargs or {})
         self._top_logprobs = top_logprobs
         if top_logprobs is not None:
             self._sampling_params_kwargs["logprobs"] = int(top_logprobs)
@@ -1032,12 +1034,42 @@ def _resolve_model_config(
 ) -> tuple[str, str, dict, dict]:
     """Resolve shared provider and sampling inputs once."""
     resolved_kwargs = engine_kwargs.copy()
-    resolved_kwargs["max_tokens"] = max_tokens or 8192
-    sampling = {
-        key: resolved_kwargs.pop(key, None)
-        for key in ("temperature", "top_p", "top_k", "seed", "top_logprobs")
-    }
+    extras = dict(resolved_kwargs.pop("sampling_kwargs", {}) or {})
+    if extras.get("n", 1) != 1:
+        raise ValueError("JudgeArena expects one completion per input (n=1).")
+    shared = ("temperature", "top_p", "top_k", "seed", "top_logprobs")
+    if max_tokens is not None:
+        resolved_kwargs["max_tokens"] = max_tokens
+    duplicates = extras.keys() & resolved_kwargs.keys()
+    if duplicates:
+        raise ValueError(
+            f"Sampling option specified twice: {', '.join(sorted(duplicates))}"
+        )
+    for key in (*shared, "max_tokens"):
+        if key in extras:
+            resolved_kwargs[key] = extras.pop(key)
     provider, model_name = _split_model_spec(model)
+    if provider == "OpenRouter":
+        body = resolved_kwargs.get("extra_body") or {}
+        sampling_keys = {
+            key
+            for key in (*shared, "max_tokens")
+            if resolved_kwargs.get(key) is not None
+        }
+        if "top_logprobs" in sampling_keys:
+            sampling_keys.add("logprobs")
+        conflicts = (body.keys() & (sampling_keys | extras.keys())) | (
+            extras.keys()
+            & (sampling_keys | {"model", "messages", "stream", "provider"})
+        )
+        if conflicts:
+            raise ValueError(
+                f"Conflicting OpenRouter request options: {', '.join(sorted(conflicts))}"
+            )
+    resolved_kwargs["max_tokens"] = resolved_kwargs.get("max_tokens") or 8192
+    sampling = {key: resolved_kwargs.pop(key, None) for key in shared}
+    if extras:
+        resolved_kwargs["sampling_kwargs"] = extras
     if provider != "VLLM":
         for key in _VLLM_ONLY_KWARGS:
             resolved_kwargs.pop(key, None)
@@ -1061,7 +1093,7 @@ def _resolve_model_endpoint(provider: str, resolved_kwargs: dict) -> str | None:
 
 def prepare_model(
     model: str,
-    max_tokens: int | None = 8192,
+    max_tokens: int | None = None,
     *,
     cache: InferenceCache | None = None,
     input_mode: InputMode | None = None,
@@ -1115,6 +1147,7 @@ def _decision_options(provider: str, options: dict, sampling: dict) -> dict:
     if sampling["top_logprobs"] is not None:
         raise ValueError("Decision probabilities are not token logprobs.")
     options = options.copy()
+    options.pop("sampling_kwargs", None)
     options.pop("max_tokens", None)
     if provider == "OpenRouter":
         options.setdefault("endpoint", "https://openrouter.ai/api/alpha/decisions")
@@ -1128,7 +1161,7 @@ def _decision_options(provider: str, options: dict, sampling: dict) -> dict:
 
 def make_model(
     model: str,
-    max_tokens: int | None = 8192,
+    max_tokens: int | None = None,
     *,
     input_mode: InputMode | None = None,
     **engine_kwargs,
@@ -1147,29 +1180,20 @@ def make_model(
     model_provider, model_name, engine_kwargs, sampling = _resolve_model_config(
         model, max_tokens, engine_kwargs
     )
-    temperature = sampling["temperature"]
-    top_p = sampling["top_p"]
-    top_k = sampling["top_k"]
-    seed = sampling["seed"]
-    top_logprobs = sampling["top_logprobs"]
-
     if input_mode == "decision":
         return DecisionsModel(
             model_name, **_decision_options(model_provider, engine_kwargs, sampling)
         )
 
+    top_logprobs = sampling.pop("top_logprobs")
+    extras = engine_kwargs.pop("sampling_kwargs", {})
+
     if model_provider == "Dummy":
         if top_logprobs is not None:
             raise ValueError("Dummy backend does not support top_logprobs.")
         dummy_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
-        _route_sampling_params(
-            dummy_kwargs,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            seed=seed,
-        )
-        return DummyModel(model, **dummy_kwargs)
+        _route_sampling_params(dummy_kwargs, **sampling)
+        return DummyModel(model, **dummy_kwargs, **extras)
 
     logger.info("Loading %s(model=%s)", model_provider, model_name)
 
@@ -1177,16 +1201,11 @@ def make_model(
     if model_provider == "VLLM":
         engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
         engine_kwargs["chat_template"] = engine_kwargs.get("chat_template", None)
-        _route_sampling_params(
-            engine_kwargs,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            seed=seed,
-        )
+        _route_sampling_params(engine_kwargs, **sampling)
 
         return ChatVLLM(
             model=model_name,
+            sampling_kwargs=extras,
             top_logprobs=top_logprobs,
             **engine_kwargs,
         )
@@ -1199,9 +1218,8 @@ def make_model(
         # advertise the OpenRouter-native max_tokens parameter instead.
         extra_body = dict(openai_kwargs.pop("extra_body", {}) or {})
         extra_body["max_tokens"] = openai_kwargs.pop("max_tokens")
-        if top_logprobs is not None:
-            # OpenRouter may otherwise route individual requests through
-            # providers that silently omit requested logprobs.
+        extra_body.update(extras)
+        if top_logprobs is not None or extras:
             provider = dict(extra_body.get("provider", {}) or {})
             provider["require_parameters"] = True
             extra_body["provider"] = provider
@@ -1210,10 +1228,7 @@ def make_model(
         # but not top_k, which has to be tunneled through model_kwargs.
         _route_sampling_params(
             openai_kwargs,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            seed=seed,
+            **sampling,
             top_k_via_model_kwargs=True,
         )
         if top_logprobs is not None:
@@ -1270,14 +1285,27 @@ def make_model(
                 )
         _route_sampling_params(
             engine_kwargs,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            seed=seed,
+            **sampling,
             supported_fields=supported_fields,
             top_k_via_model_kwargs=(
                 "top_k" not in supported_fields and "model_kwargs" in supported_fields
             ),
             provider=model_provider,
         )
+        for key, value in extras.items():
+            if model_provider == "LlamaCpp" and key == "repetition_penalty":
+                key = "repeat_penalty"
+            if key not in supported_fields or key not in {
+                "frequency_penalty",
+                "presence_penalty",
+                "repeat_penalty",
+                "repetition_penalty",
+                "stop",
+                "logit_bias",
+                "n",
+            }:
+                raise ValueError(
+                    f"{model_provider} backend does not support sampling option {key}."
+                )
+            engine_kwargs[key] = value
         return model_cls(**engine_kwargs)
