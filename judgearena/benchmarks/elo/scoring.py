@@ -10,6 +10,7 @@ import pandas as pd
 
 from judgearena.battles import hard_preferences, has_support, summarize_bootstrap
 from judgearena.benchmarks.elo.rating import fit_bradley_terry, fit_frozen_rating
+from judgearena.benchmarks.meta_eval.sampling import require_connected_pool
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -42,8 +43,11 @@ class BradleyTerryMetric:
         battles: pd.DataFrame,
         *,
         seed: int = 0,
+        reference_battles: pd.DataFrame | None = None,
     ) -> dict[str, object]:
-        """Calculate Bradley-Terry ratings from battle rows."""
+        """Fit the candidate from judged battles and any supplied reference labels."""
+        if reference_battles is not None:
+            battles = pd.concat([battles, reference_battles], ignore_index=True)
         if self.reference_min_battles and "evaluation_model" in battles:
             is_reference = battles.evaluation_model.isna().to_numpy()
             keep = ~is_reference
@@ -178,7 +182,10 @@ class BradleyTerryMetric:
         if len(candidates) != 1:
             raise ValueError("Frozen Elo requires exactly one model under evaluation.")
         candidate = str(candidates[0])
-        reference_battles = battles.loc[battles.evaluation_model.isna()]
+        reference_battles = battles.loc[battles.evaluation_model.isna()].dropna(
+            subset=["rating_pref"]
+        )
+        require_connected_pool(reference_battles, (), context="Frozen Elo reference")
         references = fit_bradley_terry(
             reference_battles,
             pref_col="rating_pref",

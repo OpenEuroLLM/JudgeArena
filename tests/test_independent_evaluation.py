@@ -4,6 +4,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
+from judgearena.artifacts import read_metric_data
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.benchmarks.scoring import build_metric
 from judgearena.config import RunConfig
@@ -162,7 +163,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
         "Checkpoint: {checkpoint}\nQ: {user_prompt}\nA: {completion}\nRaw: {completion_text}"
     )
     judge = {
-        "model": 'Dummy/{"correct": true, "criteria": {"clarity": "pass"}, "score": 0.8}',
+        "model": 'Dummy/{"correct": true, "details": {"criteria": {"clarity": 0.6}}, "score": 0.8}',
         "prompt": {
             "system_file": str(system),
             "user_file": str(user),
@@ -202,7 +203,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
         )
         assert annotations.parsed.iloc[0] == {
             "correct": True,
-            "criteria": {"clarity": "pass"},
+            "details": {"criteria": {"clarity": 0.6}},
             "score": 0.8,
         }
         assert annotations.score.tolist() == [0.8, 0.8]
@@ -217,7 +218,13 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
             pd.testing.assert_frame_equal(first, annotations)
             assert metadata["usage"]["total"]["requests"] == 0
         report = json.loads(next((tmp_path / run).rglob("results-*.json")).read_text())
-        assert report["metrics"]["mean_score"]["score"] == 0.8
+        manifest = next((tmp_path / run).rglob("evaluation.json"))
+        artifact = json.loads(manifest.read_text())["artifacts"]["metric_data"]
+        rescored = build_metric("mean_score").calculate(
+            read_metric_data(manifest.parent / artifact)
+        )
+        assert rescored == report["metrics"]["mean_score"]
+        assert rescored["criteria"]["clarity"]["score"] == 0.6
         exported = pd.read_csv(next((tmp_path / run).rglob("*-annotations.csv")))
         assert json.loads(exported.parsed.iloc[0]) == annotations.parsed.iloc[0]
 

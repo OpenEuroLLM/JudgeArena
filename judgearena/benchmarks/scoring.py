@@ -243,15 +243,29 @@ def calculate_metrics(
             groups: dict[str, list[dict[str, object]]] = {}
             for field in request.breakdown_by:
                 try:
-                    groups[field] = [
-                        {
-                            "group": _group_value(key),
-                            "values": metric.calculate(group, **kwargs),
-                        }
-                        for key, group in battles.groupby(
-                            field, sort=False, dropna=False
+                    entries = []
+                    for key, group in battles.groupby(field, sort=False, dropna=False):
+                        group_kwargs = kwargs
+                        references = kwargs.get("reference_battles")
+                        if references is not None:
+                            # A breakdown fits its anchors from the same group.
+                            values_by_group = references.reindex(columns=[field])[field]
+                            mask = (
+                                values_by_group.isna()
+                                if pd.isna(key)
+                                else values_by_group.eq(key)
+                            )
+                            group_kwargs = {
+                                **kwargs,
+                                "reference_battles": references.loc[mask],
+                            }
+                        entries.append(
+                            {
+                                "group": _group_value(key),
+                                "values": metric.calculate(group, **group_kwargs),
+                            }
                         )
-                    ]
+                    groups[field] = entries
                 except Exception as exc:
                     values.setdefault("breakdown_errors", {})[field] = str(exc)
                     logger.warning(

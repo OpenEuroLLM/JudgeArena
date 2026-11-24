@@ -875,9 +875,19 @@ def test_elo_temperature_follows_category_parser(
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     tmp_path, monkeypatch, temperature
 ):
+    from judgearena.artifacts import read_metric_data
     from judgearena.benchmarks.pairwise.graph import select_graph_battles
     from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.benchmarks.scoring import _METRIC_TYPES
 
+    class CountRows:
+        def calculate(self, battles):
+            return {"count": len(battles)}
+
+        def render(self, values):
+            return str(values["count"])
+
+    monkeypatch.setitem(_METRIC_TYPES, "count_rows", CountRows)
     rows = pd.DataFrame({"topic": ["code"] * 3 + ["math"] * 3})
     selected, _ = select_graph_battles(rows, seed=42, group_by="topic", per_group=2)
     assert selected.topic.tolist() == ["code", "code", "math", "math"]
@@ -904,7 +914,9 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
                 ),
                 "calibrate_temperature": False,
             },
-            "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]},
+            "scoring": {
+                "metrics": [{"metric": "pairwise_win_rate"}, {"metric": "count_rows"}]
+            },
         },
         run={"store_root": str(tmp_path / "cache"), "no_log_file": True},
     )
@@ -916,19 +928,21 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         ).read_text()
     )
     assert report["report_type"] == "ComparisonReport"
-    metric_data = pd.read_parquet(first.parent / "metric-data.parquet")
-    assert (
-        metric_data.loc[metric_data.evaluation_model.isna(), "completion_a"]
-        .isna()
-        .all()
-    )
-    reference_rows = metric_data.evaluation_model.isna()
-    assert metric_data.loc[reference_rows, ["pref", "pref_hard"]].isna().all().all()
-    assert metric_data.loc[reference_rows, "reference_pref"].notna().all()
+    assert report["metrics"]["count_rows"] == {"count": 6}
+    artifacts = json.loads(first.read_text())["artifacts"]
+    judgments = read_metric_data(first.parent / artifacts["metric_data"])
+    references = read_metric_data(first.parent / artifacts["reference_battles"])
+    assert len(judgments) == 6 and len(references) == 30
+    assert {"pref", "pref_hard", "completion_a"}.isdisjoint(references)
+    assert references.reference_pref.notna().all()
     saved = load_config(first.parent / "config.yaml")
     spec = saved.resolved_task.spec.model_dump()
     spec["protocol"]["scoring"]["metrics"] = [
-        {"metric": "bradley_terry", "parameters": {"soft": False, "n_bootstraps": 0}}
+        {
+            "metric": "bradley_terry",
+            "parameters": {"soft": False, "fit_mode": "frozen"},
+            "breakdown_by": ["lang"],
+        }
     ]
     saved.resolved_task = replace(
         saved.resolved_task, spec=type(saved.resolved_task.spec).model_validate(spec)
@@ -941,6 +955,16 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         pd.read_parquet(first.parent / "outcomes.parquet"),
         pd.read_parquet(second.parent / "outcomes.parquet"),
     )
+    ratings = json.loads(second.read_text())["metrics"]["bradley_terry"]
+    metric = BradleyTerryMetric(soft=False, fit_mode="frozen")
+    for entry in ratings["groups"]["lang"]:
+        lang = entry["group"]
+        expected = metric.calculate(
+            judgments[judgments.lang == lang],
+            reference_battles=references[references.lang == lang],
+        )
+        assert entry["values"]["ratings"] == expected["ratings"]
+    assert len(ratings["groups"]["lang"]) == judgments.lang.nunique()
     unlabeled = replace(data, battles=data.battles.drop(columns="reference_pref"))
     third = run_benchmark(cfg, data=unlabeled, output_dir=tmp_path / "unlabeled")
     assert (
@@ -964,10 +988,19 @@ def test_supplied_panel_reuses_one_answer_for_two_fixed_opponents(
     cfg = _default_args(result_folder=str(tmp_path), store_root=str(tmp_path / "cache"))
 
     def evaluate(folder):
-        pairwise_runner.run_evaluation(
+        from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric
+
+        manifest = pairwise_runner.run_evaluation(
             cfg, data=data, opponent_panel=panel, output_dir=folder
         )
-        return pd.read_parquet(folder / "outcomes.parquet")
+        saved = json.loads(manifest.read_text())
+        rows = pd.read_parquet(folder / saved["artifacts"]["metric_data"])
+        assert rows.baseline.tolist() == panel.model_b.tolist()
+        assert (
+            PairwiseWinRateMetric().calculate(rows)
+            == saved["metrics"]["pairwise_win_rate"]
+        )
+        return rows
 
     live = tmp_path / "live"
     outcomes = evaluate(live)

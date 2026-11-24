@@ -3,6 +3,7 @@
 from judgearena.artifacts.metadata import to_jsonable, write_run_metadata
 from judgearena.artifacts.run import (
     prepare_run_directory,
+    read_metric_data,
     run_logging,
     safe_filename,
     write_annotations,
@@ -11,6 +12,7 @@ from judgearena.artifacts.run import (
 
 __all__ = [
     "prepare_run_directory",
+    "read_metric_data",
     "run_logging",
     "safe_filename",
     "to_jsonable",

@@ -121,6 +121,12 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
             else:
                 assert current["bootstrap_ratings"] == legacy["bootstrap_ratings"]
     pd.testing.assert_frame_equal(separated, original)
+    island = references.assign(model_a="c", model_b="d")
+    unlabeled_bridge = references.iloc[:1].assign(model_b="c", pref=np.nan)
+    with pytest.raises(ValueError, match="disconnected"):
+        metric.calculate(
+            pd.concat([battles, island, unlabeled_bridge], ignore_index=True)
+        )
     changed = battles.copy()
     changed.loc[changed.evaluation_model.notna(), "pref"] = 0.1
     assert metric.calculate(changed)["reference_ratings"] == result["reference_ratings"]

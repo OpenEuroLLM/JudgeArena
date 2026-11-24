@@ -189,7 +189,6 @@ def run_evaluation(
             swap_mode="fixed"
             if sampled_graph and cfg.judge.swap_mode != "both"
             else None,
-            use_tqdm=False if sampled_graph else None,
         )
         if baseline_plan is not None:
             name = f"{cfg.task}-{cfg.model.name}-{baseline_plan.display_name}-{cfg.judge.model}-{cfg.judge.swap_mode}"
@@ -242,6 +241,7 @@ def run_evaluation(
             judge_max_out_tokens=cfg.judge.max_out_tokens,
         )
     )
+    reference_scores = None
     if reference_battles is not None:
         # Calibration needs transcripts; reference scoring needs labels and metadata.
         reference_scores = reference_battles.drop(
@@ -258,12 +258,12 @@ def run_evaluation(
             ],
             errors="ignore",
         )
-        metric_data = pd.concat([metric_data, reference_scores], ignore_index=True)
     metric_results = calculate_metrics(
         metric_data,
         metrics,
         runtime={
             "seed": cfg.run.seed,
+            "reference_battles": reference_scores,
             "references": (
                 sorted(set(reference_battles.model_a) | set(reference_battles.model_b))
                 if reference_battles is not None
@@ -366,19 +366,20 @@ def run_evaluation(
     metric_path = res_folder / "annotations.parquet"
     if not independent:
         metric_path = res_folder / "outcomes.parquet"
-        write_annotations(outcomes, metric_path)
-        if reference_battles is not None:
-            metric_path = res_folder / "metric-data.parquet"
-            write_annotations(metric_data, metric_path)
+        write_annotations(metric_data, metric_path)
+    artifacts = {
+        "report": report_path,
+        "metric_data": metric_path,
+        "answers": res_folder / "answers.parquet",
+        "annotations": res_folder / "annotations.parquet",
+    }
+    if reference_scores is not None:
+        artifacts["reference_battles"] = res_folder / "reference-battles.parquet"
+        write_annotations(reference_scores, artifacts["reference_battles"])
     manifest = finish_evaluation(
         res_folder,
         report,
         model=cfg.model.name,
-        artifacts={
-            "report": report_path,
-            "metric_data": metric_path,
-            "answers": res_folder / "answers.parquet",
-            "annotations": res_folder / "annotations.parquet",
-        },
+        artifacts=artifacts,
     )
     return manifest if output_dir is not None else result
