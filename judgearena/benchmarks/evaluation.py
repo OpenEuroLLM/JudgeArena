@@ -21,6 +21,7 @@ from judgearena.benchmarks.pairwise.comparisons import (
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import _require_columns
 from judgearena.evaluate import (
     prepare_single_answer_judging,
     resolve_run_judge_prompt,
@@ -80,23 +81,27 @@ def run_evaluation(
             runtime_baseline=cfg.model.baseline,
             instructions=instructions_df,
         )
-    task_data = preload_model_outputs(
-        task_data,
-        [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
-    )
+    output_columns = set()
+    if cfg.model.name is not None:
+        task_data = preload_model_outputs(
+            task_data,
+            [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),
+        )
+        output_columns = {"model", "completion"}
+        if task_data.model_outputs is not None:
+            output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
+        if resolved_task.spec.protocol.generation.mode in (
+            "multi_turn_chat",
+            "provided_messages",
+        ):
+            output_columns.add("messages")
+        if independent and "messages" in instructions_df:
+            output_columns.add("input_messages")
+    else:
+        _require_columns(instructions_df, {"completion"}, "Independent judging")
 
-    output_columns = {"model", "completion"}
-    if task_data.model_outputs is not None:
-        output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
-    if resolved_task.spec.protocol.generation.mode in (
-        "multi_turn_chat",
-        "provided_messages",
-    ):
-        output_columns.add("messages")
     if independent:
         available_columns = set(instructions_df) | output_columns
-        if "messages" in instructions_df:
-            available_columns.add("input_messages")
     else:
         available_columns = set(instructions_df) | {
             f"{column}_{slot}" for column in output_columns for slot in ("a", "b")
@@ -111,7 +116,11 @@ def run_evaluation(
             cfg, resolved_prompt, instructions_df, available_columns=available_columns
         )
         default_temperature = None
-        name = f"{cfg.task}-{cfg.model.name}-{cfg.judge.model}"
+        name = "-".join(
+            part
+            for part in (cfg.task, cfg.model.name, cfg.judge.model)
+            if part is not None
+        )
     else:
         judge, default_temperature = prepare_pairwise_judging(
             cfg, resolved_prompt, instructions_df, available_columns=available_columns
@@ -124,14 +133,14 @@ def run_evaluation(
         cfg, Path(cfg.run.result_folder) / f"{name}-{run_ts}"
     )
 
-    logger.info(
-        "Evaluating %s on %s with judge %s.", cfg.model.name, cfg.task, cfg.judge.model
-    )
+    logger.info("Evaluating %s.", name)
     if independent:
-        answers = prepare_answers(
-            cfg, task_data, instructions_df, cfg.model.name, role="A"
-        )
-        samples = answer_samples(instructions_df, answers)
+        samples = instructions_df.copy()
+        if cfg.model.name is not None:
+            answers = prepare_answers(
+                cfg, task_data, instructions_df, cfg.model.name, role="A"
+            )
+            samples = answer_samples(instructions_df, answers)
     else:
         samples, source_ids = prepare_comparisons(
             cfg, task_data, instructions_df, baseline_plan
@@ -216,7 +225,11 @@ def run_evaluation(
         results=results,
         input_payloads={
             "instruction_index": eval_instruction_index,
-            "instructions": evaluated["instruction"].tolist(),
+            **(
+                {"instructions": evaluated["instruction"].tolist()}
+                if "instruction" in evaluated
+                else {}
+            ),
             **(
                 {"completions": evaluated["completion"].tolist()}
                 if independent

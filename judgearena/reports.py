@@ -120,10 +120,10 @@ class MetaEvalReport(Report):
 
 
 class AnnotationReport(Report):
-    """Metric results for independently annotated answers."""
+    """Metric results for independently annotated dataset rows or answers."""
 
     task: str
-    model: str
+    model: str | None = None
     judge_model: str
     metrics: dict[str, dict[str, object]]
     num_samples: int
@@ -133,8 +133,9 @@ class AnnotationReport(Report):
     def render(self, metrics: ConfiguredMetrics = ()) -> None:
         from judgearena.benchmarks.scoring import render_metrics
 
-        print(
-            f"\n{self.model} on {self.task}: {self.num_samples} answers judged by {self.judge_model}"
+        subject = (
+            f"{self.model} on {self.task}" if self.model is not None else self.task
         )
+        print(f"\n{subject}: {self.num_samples} samples judged by {self.judge_model}")
         print(render_metrics(self.metrics, metrics))
         print(f"Results: {self.result_folder}")

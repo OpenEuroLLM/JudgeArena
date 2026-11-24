@@ -1,0 +1,13 @@
+# judgearena --config_path configs/eu_guard_jev.yaml
+task: eu-guard
+model:
+  name: OpenRouter/google/gemma-4-31b-it
+judge:
+  model: OpenRouter/typesafe/jev-1.14
+generation:
+  n_instructions: 4
+run:
+  filters:
+    lang:
+    - en
+  store_root: ./cache/eu-guard

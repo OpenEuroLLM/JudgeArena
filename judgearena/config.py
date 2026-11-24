@@ -729,7 +729,9 @@ class RunConfig(BaseSettings):
                     "meta-evaluation tasks."
                 )
         else:
-            if self.model.name is None:
+            if self.model.name is None and not isinstance(
+                protocol, SingleAnswerProtocol
+            ):
                 raise ValueError("model.name is required.")
             if isinstance(protocol, SingleAnswerProtocol):
                 if self.model.baseline is not None or self.judge.swap_mode != "fixed":

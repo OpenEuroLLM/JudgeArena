@@ -1,0 +1,8 @@
+# judgearena --config_path configs/eu_guard_prompt_gemma.yaml
+task: eu-guard-guards
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  temperature: 0.0
+  max_out_tokens: 256
+  prompt:
+    file: ../judgearena/tasks/definitions/eu_guard/prompts/guard-gemma.yaml

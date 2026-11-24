@@ -1,0 +1,4 @@
+# judgearena --config_path configs/eu_guard_prompt_jev.yaml
+task: eu-guard-guards
+judge:
+  model: OpenRouter/typesafe/jev-1.14

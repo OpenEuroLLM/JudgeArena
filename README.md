@@ -87,6 +87,7 @@ Tasks define benchmark defaults. Experiment configs override selected settings, 
 | MT-Bench | Multi-turn conversations | Pairwise |
 | MT-Bench-101 | Answers with supplied conversation histories | Independent scoring, then score comparison |
 | WildBench | Conversations with question-specific checklists | Pairwise reward or independent score |
+| [EU-Guard](judgearena/tasks/definitions/eu_guard/README.md) | Prompt safety and response refusal across languages | Independent scoring |
 | Multilingual fluency | Sentence continuations across 43 languages | Pairwise |
 | LMArena and ComparIA | Arena battles with human preference labels | Model Elo estimation or judge meta-evaluation |
 

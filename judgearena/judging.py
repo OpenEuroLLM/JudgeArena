@@ -273,7 +273,7 @@ def answer_text(completion, messages=None, *, strip_thinking=False) -> str:
     """Render a complete conversation when present, otherwise its text answer."""
     from judgearena.utils import strip_thinking_tags
 
-    if isinstance(messages, list):
+    if isinstance(messages, list) and messages and messages[-1]["role"] == "assistant":
         return "\n".join(
             f"{message['role']}: "
             + (
@@ -294,7 +294,7 @@ def judge_single_answers(
     use_tqdm: bool = False,
     result_type: type | None = None,
 ) -> tuple[pd.DataFrame, list[ResolvedJudgePrompt]]:
-    """Grade indexed samples containing model/completion and renderer metadata.
+    """Grade indexed samples with optional candidate provenance and answer fields.
 
     The renderer returns rendering-specific fields, parsed-result requests, and
     resolved prompts, all in sample order. Dataclasses and JSON-compatible results
@@ -322,7 +322,7 @@ def judge_single_answers(
             request,
             cache_metadata={
                 "instruction_id": str(getattr(row, "instruction_id", row.Index)),
-                "model_a": row.model,
+                "model_a": getattr(row, "model", None),
                 "model_b": None,
             },
         )
@@ -335,7 +335,7 @@ def judge_single_answers(
         **{column: extras[column].to_numpy() for column in extras}
     )
     annotations = annotation_frame(rendered, results, prompts).assign(
-        evaluated_model=samples["model"].to_numpy(),
+        evaluated_model=samples["model"].to_numpy() if "model" in samples else None,
     )
     annotations["score"] = annotations["parsed"].map(
         lambda parsed: parsed.get("score") if isinstance(parsed, dict) else None
