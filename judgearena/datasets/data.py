@@ -61,7 +61,7 @@ class CompletionData:
 
     Adapters normalize source fields before construction. ``from_frames()``
     accepts canonical columns, sets ``instruction_index`` as the index, and sorts
-    instructions by ID. Other columns remain metadata.
+    instructions by ID when the IDs are comparable. Other columns remain metadata.
 
     Pipelines check the returned data for their additional requirements. For
     example, conversation generation needs ``user_turns``: a nonempty list of
@@ -116,8 +116,13 @@ class CompletionData:
             instructions = instructions.set_index("instruction_index")
         elif instructions.index.name != "instruction_index":
             raise ValueError("Instructions must provide 'instruction_index'.")
+        try:
+            instructions = instructions.sort_index()
+        except TypeError:
+            # Mixed ID types have no common ordering. Keep the supplied order.
+            pass
         return cls(
-            instructions.sort_index(),
+            instructions,
             None if model_outputs is None else model_outputs.copy(),
             model_output_loader=model_output_loader,
         )

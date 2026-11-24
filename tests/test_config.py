@@ -373,7 +373,7 @@ def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     assert cfg.graph is not None
 
 
-def test_graph_config_and_cli_overrides(tmp_path):
+def test_graph_config_and_cli_overrides(tmp_path, capsys):
     data = _base_elo()
     data.update(
         graph={"random_battles": 7},
@@ -414,6 +414,7 @@ def test_graph_config_and_cli_overrides(tmp_path):
         load_config(config)
     with pytest.raises(SystemExit):
         build_run_config(["--elo.n_bootstraps", "5"])
+    assert "--protocol.scoring.metrics" in capsys.readouterr().err
     with pytest.raises(ValidationError, match="set together"):
         RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
     saved = cfg.model_dump(mode="json")
@@ -423,6 +424,17 @@ def test_graph_config_and_cli_overrides(tmp_path):
     assert migrated.graph.group_by == "lang" and migrated.graph.per_group == 7
     saved["elo"] = {"soft_elo": True, "n_bootstraps": 200, "fit_mode": "joint"}
     metric = saved["resolved_task"]["spec"]["protocol"]["scoring"]["metrics"][0]
+    metric["parameters"]["baseline_model"] = "task-anchor"
+    saved["elo"]["baseline_model"] = "run-anchor"
+    config.write_text(yaml.safe_dump(saved))
+    params = (
+        load_config(config).resolved_task.spec.protocol.scoring.metrics[0].parameters
+    )
+    assert (params["soft"], params["n_bootstraps"], params["baseline_model"]) == (
+        True,
+        200,
+        "run-anchor",
+    )
     metric["name"] = "frozen"
     metric["parameters"]["fit_mode"] = "frozen"
     config.write_text(yaml.safe_dump(saved))

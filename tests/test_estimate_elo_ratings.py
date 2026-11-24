@@ -928,6 +928,7 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         ).read_text()
     )
     assert report["report_type"] == "ComparisonReport"
+    assert report["arena"] == "ComparIA"
     assert report["metrics"]["count_rows"] == {"count": 6}
     artifacts = json.loads(first.read_text())["artifacts"]
     judgments = read_metric_data(first.parent / artifacts["metric_data"])

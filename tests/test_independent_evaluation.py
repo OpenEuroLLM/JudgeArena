@@ -107,7 +107,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
     data = CompletionData.from_frames(
         pd.DataFrame(
             {
-                "instruction_index": ["saved", "missing"],
+                "instruction_index": ["saved", 1],
                 "instruction": ["Remember {42}", "Explain it"],
                 "source_instruction_index": ["foreign-saved", "foreign-missing"],
                 "messages": [
@@ -187,7 +187,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
         )
         annotations = run_benchmark(cfg)
         assert annotations.set_index("instruction_index").completion.to_dict() == {
-            "missing": "generated",
+            1: "generated",
             "saved": "stored answer",
         }
         saved = annotations.set_index("instruction_index").loc["saved"]
@@ -219,7 +219,10 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
             assert metadata["usage"]["total"]["requests"] == 0
         report = json.loads(next((tmp_path / run).rglob("results-*.json")).read_text())
         manifest = next((tmp_path / run).rglob("evaluation.json"))
-        artifact = json.loads(manifest.read_text())["artifacts"]["metric_data"]
+        artifacts = json.loads(manifest.read_text())["artifacts"]
+        answers = read_metric_data(manifest.parent / artifacts["answers"])
+        assert set(answers.instruction_index) == {"saved", 1}
+        artifact = artifacts["metric_data"]
         rescored = build_metric("mean_score").calculate(
             read_metric_data(manifest.parent / artifact)
         )

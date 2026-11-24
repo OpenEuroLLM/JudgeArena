@@ -782,6 +782,15 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     pre.add_argument("-q", "--quiet", action="store_true")
     pre_args, rest = pre.parse_known_args(argv)
 
+    for arg in rest:
+        flag = arg.partition("=")[0]
+        if flag == "--elo" or flag.startswith("--elo."):
+            pre.error(
+                f"{flag} was removed. Use --run.filters for languages, --graph.* for "
+                "sampling, --protocol.judge.* for calibration, or "
+                "--protocol.scoring.metrics for Elo settings."
+            )
+
     _ACTIVE_CONFIG_PATH = pre_args.config_path
     _ACTIVE_CLI_ARGS = rest
     try:
@@ -825,7 +834,8 @@ def _migrate_saved_run(data: dict) -> dict:
         (
             m.get("parameters", {})
             for m in metrics
-            if m["metric"] == "bradley_terry" and not m.get("name")
+            if m["metric"] == "bradley_terry"
+            and m.get("name") in (None, "bradley_terry")
         ),
         {},
     )
@@ -863,7 +873,7 @@ def _migrate_saved_run(data: dict) -> dict:
         if metric["metric"] != "bradley_terry":
             continue
         parameters = metric.setdefault("parameters", {})
-        for key, value in {
+        migrated = {
             "fit_mode": fit_mode,
             "soft": soft,
             "baseline_model": options.get(
@@ -872,8 +882,13 @@ def _migrate_saved_run(data: dict) -> dict:
             "n_bootstraps": options.get(
                 "n_bootstraps", defaults.get("n_bootstraps", 20)
             ),
-        }.items():
-            parameters.setdefault(key, value)
+        }
+        # The old runner applied its runtime overrides to the default metric only.
+        if metric.get("name") in (None, "bradley_terry"):
+            parameters.update(migrated)
+        else:
+            for key, value in migrated.items():
+                parameters.setdefault(key, value)
         parameters.setdefault(
             "reference_min_battles", 500 if parameters["fit_mode"] == "joint" else 0
         )

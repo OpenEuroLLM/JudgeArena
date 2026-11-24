@@ -296,7 +296,7 @@ def run_evaluation(
     elif opponent_panel is not None:
         result = outcomes["pref"].rename(None)
         report = ComparisonReport(
-            arena=getattr(resolved_task.spec.protocol, "arena", cfg.task),
+            arena=resolved_task.spec.dataset.format or cfg.task,
             judge_model=cfg.judge.model,
             metrics=metric_results,
             num_battles=len(opponent_panel),
@@ -359,8 +359,9 @@ def run_evaluation(
         started_at_utc=run_started_at,
     )
 
-    answers.rename_axis("instruction_index").reset_index().to_parquet(
-        res_folder / "answers.parquet", index=False
+    write_annotations(
+        answers.rename_axis("instruction_index").reset_index(),
+        res_folder / "answers.parquet",
     )
     write_annotations(annotations, res_folder / "annotations.parquet")
     metric_path = res_folder / "annotations.parquet"
