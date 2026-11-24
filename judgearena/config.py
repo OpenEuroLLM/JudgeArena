@@ -149,6 +149,9 @@ class ModelArgs(BaseModel):
     """Jinja2 chat template to use instead of the tokenizer's template (vLLM
     only; ignored by remote providers which template server-side)."""
 
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
+
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine-specific kwargs forwarded to the backend, e.g. for
     vLLM ``{"tensor_parallel_size": 2, "gpu_memory_utilization": 0.9}``."""
@@ -181,6 +184,9 @@ class ModelArgs(BaseModel):
     """Jinja2 chat template for the baseline/opponent model. Unset inherits
     ``model.chat_template``."""
 
+    baseline_sampling_kwargs: dict | None = None
+    """Baseline sampling options. Unset inherits model.sampling_kwargs."""
+
     baseline_engine_kwargs: dict | None = None
     """JSON dict of engine-specific kwargs for the baseline/opponent model.
     Unset inherits ``model.engine_kwargs``."""
@@ -188,6 +194,8 @@ class ModelArgs(BaseModel):
     def evaluated_generation_kwargs(self) -> dict[str, object]:
         """Kwargs for model A / the evaluated model."""
         kwargs: dict[str, object] = dict(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
@@ -211,6 +219,13 @@ class ModelArgs(BaseModel):
             else self.baseline_engine_kwargs
         )
         kwargs: dict[str, object] = dict(engine_kwargs)
+        sampling = (
+            self.baseline_sampling_kwargs
+            if self.baseline_sampling_kwargs is not None
+            else self.sampling_kwargs
+        )
+        if sampling:
+            kwargs["sampling_kwargs"] = sampling
         kwargs.update(
             _drop_none(
                 {
@@ -290,6 +305,9 @@ class JudgeArgs(BaseModel):
     """Jinja2 chat template for the judge vLLM instance. Unset falls back to
     ``model.chat_template`` for backward compatibility."""
 
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
+
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
@@ -337,6 +355,8 @@ class JudgeArgs(BaseModel):
         """Kwargs for constructing the judge model."""
         kwargs: dict[str, object] = dict(base_engine_kwargs or {})
         kwargs.update(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
