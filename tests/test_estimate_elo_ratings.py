@@ -18,7 +18,7 @@ from judgearena.benchmarks.elo.rating import (
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.cache.sqlite import JudgementCache
-from judgearena.config import JudgePromptSpec, RunConfig, load_config
+from judgearena.config import JudgePromptSpec, RunConfig, build_run_config, load_config
 from judgearena.datasets.arena_battles import normalize_battles
 from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
@@ -560,7 +560,16 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
         raise AssertionError("Cached judging and calibration must not load a model")
 
     monkeypatch.setattr(models, "make_model", unavailable)
-    cfg = load_config(Path(result["result_path"]).parent / "config.yaml")
+    cfg = build_run_config(
+        [
+            "--config",
+            str(Path(result["result_path"]).parent / "config.yaml"),
+            "--elo.n_bootstraps",
+            "3",
+            "--elo.calibrate_temperature",
+            "yes",
+        ]
+    )
     cfg.run.result_folder = str(tmp_path / "replay")
     replay = run_graph_evaluation(cfg)
     assert _pairwise_metric(replay) == _pairwise_metric(result)

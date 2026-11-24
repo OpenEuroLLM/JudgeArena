@@ -13,13 +13,13 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
-    CliSettingsSource,
     CliSuppress,
     InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
 
+from judgearena.deprecations import parse_cli_overrides, translate_deprecations
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.registry import prompt_option_files
@@ -493,11 +493,6 @@ class RunConfig(BaseSettings):
         if not isinstance(values, dict):
             return values
         values = values.copy()
-        if "elo" in values:
-            raise ValueError(
-                "elo options are no longer supported in new configs; use graph, "
-                "protocol.judge and protocol.scoring.metrics. Load old saved runs with load_config."
-            )
         task = values.get("resolved_task")
         if task is None and isinstance(values.get("task"), str):
             task = get_packaged_task(values["task"])
@@ -506,6 +501,7 @@ class RunConfig(BaseSettings):
         )
         if isinstance(definition, BaseModel):
             definition = definition.model_dump()
+        values = translate_deprecations(values, definition.get("protocol", {}))
         for section in ("protocol", "dataset"):
             overrides = values.get(section)
             if isinstance(overrides, dict) and isinstance(
@@ -753,21 +749,35 @@ def resolve_cli_config(
     argv, *, config_path=None, settings_cls=RunConfig, allowed_sections=None
 ):
     """Resolve task/config/CLI values before command-specific model validation."""
-    overrides = CliSettingsSource(settings_cls, cli_parse_args=argv)()
+    overrides = parse_cli_overrides(settings_cls, argv)
     values = (
-        _read_config(config_path, task_override=overrides.get("task"))
+        _read_config(
+            config_path,
+            task_override=overrides.get("task"),
+            cli_elo=overrides.get("elo"),
+        )
         if config_path
         else {}
     )
+    if "task" in overrides:
+        values = {**values, "task": overrides["task"]}
+    values = settings_cls._merge_task_overrides(values)
+    if "elo" in overrides:
+        if "languages" in (overrides["elo"] or {}) and values.get("run"):
+            overrides["run"] = _merge_overrides(values["run"], overrides.get("run", {}))
+        protocol = values.get("protocol")
+        if protocol is None:
+            protocol = settings_cls._merge_task_overrides({**values, "protocol": {}})[
+                "protocol"
+            ]
+        overrides = translate_deprecations(overrides, protocol, cli=True)
     if allowed_sections is not None and (set(values) | set(overrides)) - set(
         allowed_sections
     ):
         raise ValueError(
             f"Command accepts {', '.join(sorted(allowed_sections))} settings only."
         )
-    if "task" in overrides:
-        values = {**values, "task": overrides["task"]}
-    return _merge_overrides(settings_cls._merge_task_overrides(values), overrides)
+    return _merge_overrides(values, overrides)
 
 
 def build_run_config(argv: list[str] | None = None) -> RunConfig:
@@ -781,15 +791,6 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     pre.add_argument("-v", "--verbose", action="count", default=0)
     pre.add_argument("-q", "--quiet", action="store_true")
     pre_args, rest = pre.parse_known_args(argv)
-
-    for arg in rest:
-        flag = arg.partition("=")[0]
-        if flag == "--elo" or flag.startswith("--elo."):
-            pre.error(
-                f"{flag} was removed. Use --run.filters for languages, --graph.* for "
-                "sampling, --protocol.judge.* for calibration, or "
-                "--protocol.scoring.metrics for Elo settings."
-            )
 
     _ACTIVE_CONFIG_PATH = pre_args.config_path
     _ACTIVE_CLI_ARGS = rest
@@ -906,13 +907,29 @@ def _migrate_saved_run(data: dict) -> dict:
     return data
 
 
-def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
+def _read_config(
+    path: str | Path, *, task_override: str | None = None, cli_elo: dict | None = None
+) -> dict:
     """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
     data = _migrate_saved_run(data)
+    # Apply hard mode after both sources have supplied their legacy judge settings.
+    file_elo = data.get("elo")
+    if isinstance(file_elo, dict) and cli_elo and "languages" in cli_elo:
+        file_elo.pop("languages", None)
+    if (
+        isinstance(file_elo, dict)
+        and "soft_elo" in file_elo
+        and cli_elo
+        and (
+            cli_elo.keys()
+            & {"soft_elo", "soft_elo_temperature", "calibrate_temperature"}
+        )
+    ):
+        cli_elo.setdefault("soft_elo", file_elo.pop("soft_elo"))
     if task_override is not None and task_override != data.get("task"):
         data["task"] = task_override
         data.pop("resolved_task", None)

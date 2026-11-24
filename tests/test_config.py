@@ -373,7 +373,7 @@ def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     assert cfg.graph is not None
 
 
-def test_graph_config_and_cli_overrides(tmp_path, capsys):
+def test_graph_config_and_cli_overrides(tmp_path):
     data = _base_elo()
     data.update(
         graph={"random_battles": 7},
@@ -412,9 +412,6 @@ def test_graph_config_and_cli_overrides(tmp_path, capsys):
     config.write_text(yaml.safe_dump(data))
     with pytest.raises(ValueError, match="elo"):
         load_config(config)
-    with pytest.raises(SystemExit):
-        build_run_config(["--elo.n_bootstraps", "5"])
-    assert "--protocol.scoring.metrics" in capsys.readouterr().err
     with pytest.raises(ValidationError, match="set together"):
         RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
     saved = cfg.model_dump(mode="json")
@@ -443,6 +440,148 @@ def test_graph_config_and_cli_overrides(tmp_path, capsys):
     assert parameters["soft"] is False and parameters["n_bootstraps"] == 0
     assert (
         parameters["fit_mode"] == "frozen" and parameters["reference_min_battles"] == 0
+    )
+
+
+def test_deprecated_elo_options_resolve_before_replay(tmp_path, caplog):
+    data = _base_elo()
+    data.update(
+        run={"filters": {"category": ["math"]}},
+        elo={
+            "languages": ["de"],
+            "n_instructions_per_language": 8,
+            "n_bootstraps": 4,
+            "soft_elo_temperature": 0.4,
+            "soft_elo": False,
+        },
+    )
+    path = tmp_path / "run.yaml"
+    path.write_text(yaml.safe_dump(data))
+    cfg = build_run_config(["--config", str(path), "--elo.n_bootstraps=7"])
+    assert (
+        caplog.messages.count(
+            "--elo.n_bootstraps is deprecated. Use --protocol.scoring.metrics instead."
+        )
+        == 1
+    )
+    assert cfg.run.filters == {"category": ["math"], "lang": ["de"]}
+    assert (cfg.graph.group_by, cfg.graph.per_group) == ("lang", 8)
+    assert cfg.preference_settings.preference_temperature is None
+    winrate, rating = cfg.resolved_task.spec.protocol.scoring.metrics
+    assert winrate.metric == "pairwise_win_rate"
+    assert rating.parameters == {"soft": False, "fit_mode": "frozen", "n_bootstraps": 7}
+    saved = cfg.model_dump(mode="json")
+    assert "elo" not in saved
+    path.write_text(yaml.safe_dump(saved))
+    assert load_config(path).resolved_task.spec == cfg.resolved_task.spec
+
+    data["protocol"] = data["graph"] = None
+    data["elo"]["calibrate_temperature"] = True
+    path.write_text(yaml.safe_dump(data))
+    for soft in ("true", "false"):
+        cfg = build_run_config(["--config", str(path), "--elo.soft_elo", soft])
+        assert cfg.preference_settings.calibrate_temperature == (soft == "true")
+        assert cfg.preference_settings.preference_temperature == (
+            0.4 if soft == "true" else None
+        )
+
+    unfiltered = build_run_config(["--config", str(path), "--elo.languages=[]"])
+    assert unfiltered.run.filters == {"category": ["math"]}
+
+    metrics = [{"metric": "bradley_terry", "name": name} for name in ("hard", "soft")]
+    with pytest.raises(ValidationError, match="one target metric"):
+        RunConfig(
+            **{
+                **_base_elo(),
+                "protocol": {"scoring": {"metrics": metrics}},
+                "elo": {"n_bootstraps": 7},
+            }
+        )
+
+
+def test_legacy_elo_cli_value_formats():
+    base = [
+        "--task",
+        "elo-comparia",
+        "--model.name",
+        "Dummy/m",
+        "--judge.model",
+        "Dummy/j",
+    ]
+    for languages in (
+        ["en,de"],
+        ["[en,de]"],
+        ['["en","de"]'],
+        ["en", "--elo.languages", "de"],
+    ):
+        cfg = build_run_config(
+            [
+                *base,
+                "--elo.languages",
+                *languages,
+                "--elo.soft_elo",
+                "off",
+                "--elo.n_bootstraps=007",
+                "--elo.baseline_model",
+                "null",
+            ]
+        )
+        params = cfg.resolved_task.spec.protocol.scoring.metrics[-1].parameters
+        assert cfg.run.filters["lang"] == ["en", "de"]
+        assert (params["n_bootstraps"], params["baseline_model"]) == (7, None)
+        assert params["soft"] is False
+    cfg = build_run_config(
+        [
+            *base,
+            "--elo.elo_random_battles=3",
+            "--graph.random_battles",
+            "3",
+            "--protocol.judge.preference_temperature=.4",
+            "--elo.soft_elo_temperature",
+            "0.40",
+        ]
+    )
+    assert cfg.graph.random_battles == 3
+    with pytest.raises(ValueError, match="Conflicting"):
+        build_run_config(
+            [*base, "--elo.elo_random_battles=3", "--graph.random_battles=4"]
+        )
+    with pytest.raises(ValidationError, match="fit_mode"):
+        build_run_config([*base, "--elo.fit_mode=broken"])
+    for flag in (
+        "--protocol.judge.calibrate_temperature=true",
+        "--protocol.judge.preference_temperature=.9",
+    ):
+        with pytest.raises(ValueError, match="Conflicting"):
+            build_run_config([*base, "--elo.soft_elo=false", flag])
+    compatible = build_run_config(
+        [*base, "--elo.soft_elo=false", "--protocol.judge.calibrate_temperature=false"]
+    )
+    assert compatible.preference_settings.calibrate_temperature is False
+    cfg = build_run_config(
+        [
+            *base,
+            "--elo",
+            '{"soft_elo":"0","calibrate_temperature":true,"n_instructions_per_language":null}',
+        ]
+    )
+    assert not cfg.preference_settings.calibrate_temperature
+    assert cfg.graph.per_group is None and cfg.graph.group_by is None
+
+
+def test_config_rename_outside_elo(monkeypatch, tmp_path):
+    from judgearena.deprecations import RENAMES
+
+    monkeypatch.setitem(RENAMES, "run.old_progress", "run.use_tqdm")
+    config = tmp_path / "run.yaml"
+    config.write_text(yaml.safe_dump({**_base_elo(), "run": {"old_progress": True}}))
+    assert load_config(config).run.use_tqdm
+    result = build_run_config(["--config", str(config), "--run.old_progress=false"])
+    assert not result.run.use_tqdm
+    monkeypatch.setitem(RENAMES, "model.old_name", "model.name")
+    assert (
+        build_run_config(["--config", str(config), "--model.old_name=123"]).model.name
+        == "123"
     )
 
 
