@@ -1034,46 +1034,44 @@ def _resolve_model_config(
 ) -> tuple[str, str, dict, dict]:
     """Resolve shared provider and sampling inputs once."""
     resolved_kwargs = engine_kwargs.copy()
-    extras = dict(resolved_kwargs.pop("sampling_kwargs", {}) or {})
-    if extras.get("n", 1) != 1:
-        raise ValueError("JudgeArena expects one completion per input (n=1).")
-    shared = ("temperature", "top_p", "top_k", "seed", "top_logprobs")
-    if max_tokens is not None:
-        resolved_kwargs["max_tokens"] = max_tokens
-    duplicates = extras.keys() & resolved_kwargs.keys()
-    if duplicates:
-        raise ValueError(
-            f"Sampling option specified twice: {', '.join(sorted(duplicates))}"
-        )
-    for key in (*shared, "max_tokens"):
-        if key in extras:
-            resolved_kwargs[key] = extras.pop(key)
+    extras = resolved_kwargs.pop("sampling_kwargs", None) or {}
+    resolved_kwargs["max_tokens"] = 8192 if max_tokens is None else max_tokens
+    sampling = {
+        key: resolved_kwargs.pop(key, None)
+        for key in ("temperature", "top_p", "top_k", "seed", "top_logprobs")
+    }
+    misplaced = extras.keys() & (sampling.keys() | {"max_tokens"})
+    if misplaced:
+        raise ValueError(f"Set {', '.join(sorted(misplaced))} outside sampling_kwargs.")
     provider, model_name = _split_model_spec(model)
-    if provider == "OpenRouter":
-        body = resolved_kwargs.get("extra_body") or {}
-        sampling_keys = {
-            key
-            for key in (*shared, "max_tokens")
-            if resolved_kwargs.get(key) is not None
-        }
-        if "top_logprobs" in sampling_keys:
-            sampling_keys.add("logprobs")
-        conflicts = (body.keys() & (sampling_keys | extras.keys())) | (
-            extras.keys()
-            & (sampling_keys | {"model", "messages", "stream", "provider"})
-        )
-        if conflicts:
-            raise ValueError(
-                f"Conflicting OpenRouter request options: {', '.join(sorted(conflicts))}"
-            )
-    resolved_kwargs["max_tokens"] = resolved_kwargs.get("max_tokens") or 8192
-    sampling = {key: resolved_kwargs.pop(key, None) for key in shared}
     if extras:
         if provider not in {"VLLM", "OpenRouter"}:
             raise ValueError(
                 f"{provider} does not support extra sampling options: {', '.join(sorted(extras))}."
             )
+        duplicates = extras.keys() & resolved_kwargs.keys()
+        if duplicates:
+            raise ValueError(
+                f"Sampling option specified twice: {', '.join(sorted(duplicates))}"
+            )
+        if extras.get("n", 1) != 1:
+            raise ValueError("JudgeArena expects one completion per input (n=1).")
         resolved_kwargs["sampling_kwargs"] = extras
+    if provider == "OpenRouter":
+        body = resolved_kwargs.get("extra_body") or {}
+        if body.get("n", 1) != 1 or resolved_kwargs.get("n", 1) != 1:
+            raise ValueError("JudgeArena expects one completion per input (n=1).")
+        owned = {"model", "messages", "stream", "max_tokens"}
+        owned.update(k for k, v in sampling.items() if v is not None)
+        if sampling["top_logprobs"] is not None:
+            owned.add("logprobs")
+        conflicts = (body.keys() & owned) | (
+            extras.keys() & (owned | body.keys() | {"provider"})
+        )
+        if conflicts:
+            raise ValueError(
+                f"Conflicting OpenRouter request options: {', '.join(sorted(conflicts))}"
+            )
     if provider != "VLLM":
         for key in _VLLM_ONLY_KWARGS:
             resolved_kwargs.pop(key, None)

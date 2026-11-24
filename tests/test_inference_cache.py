@@ -270,7 +270,6 @@ def test_penalties_preserve_unset_cache_and_separate_values(tmp_path, monkeypatc
         {"sampling_kwargs": {"min_p": 0.1}},
         {"sampling_kwargs": {"min_p": 0.2}},
         {"temperature": 0.5},
-        {"sampling_kwargs": {"temperature": 0.5}},
     ):
         do_inference(
             prepare_model("OpenRouter/test", cache=cache, **kwargs),

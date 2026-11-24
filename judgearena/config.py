@@ -107,31 +107,6 @@ def _merge_overrides(defaults: dict, overrides: dict, path: tuple = ()) -> dict:
     return merged
 
 
-def _sampling_shorthands(values, prefix="", *, judge=False):
-    """Resolve shared fields before applying task defaults or baseline inheritance."""
-    if not isinstance(values, dict):
-        return values
-    key = prefix + "sampling_kwargs"
-    if not isinstance(values.get(key), dict):
-        return values
-    if not values[key]:
-        return values
-    values = values.copy()
-    extra = values[key] = values[key].copy()
-    shared = ("temperature", "top_p", "top_k", "seed", "max_tokens")
-    if judge:
-        shared += ("top_logprobs",)
-    for name in shared:
-        if name in extra:
-            field = prefix + ("max_out_tokens" if name == "max_tokens" else name)
-            if values.get(field) is not None:
-                raise ValueError(f"Specify {field} or {key}.{name} only once.")
-            values[field] = extra.pop(name)
-    if not extra:
-        del values[key]
-    return values
-
-
 class ModelArgs(BaseModel):
     """The model(s) under evaluation and their generation/engine settings."""
 
@@ -214,11 +189,6 @@ class ModelArgs(BaseModel):
     baseline_engine_kwargs: dict | None = None
     """JSON dict of engine-specific kwargs for the baseline/opponent model.
     Unset inherits ``model.engine_kwargs``."""
-
-    @model_validator(mode="before")
-    @classmethod
-    def resolve_sampling_shorthands(cls, values):
-        return _sampling_shorthands(_sampling_shorthands(values), "baseline_")
 
     def evaluated_generation_kwargs(self) -> dict[str, object]:
         """Kwargs for model A / the evaluated model."""
@@ -373,7 +343,7 @@ class JudgeArgs(BaseModel):
         for key in ("system_prompt_file", "user_prompt_file"):
             if values.get(key) is None:
                 values.pop(key, None)
-        return _sampling_shorthands(values, judge=True)
+        return values
 
     def model_kwargs(
         self,
@@ -832,13 +802,6 @@ class RunConfig(BaseSettings):
         if _ACTIVE_CLI_ARGS is not None:
             cli = CliSettingsSource(settings_cls, cli_parse_args=_ACTIVE_CLI_ARGS)
             overrides = cli()
-            for layer in (values, overrides):
-                if "model" in layer:
-                    layer["model"] = ModelArgs.resolve_sampling_shorthands(
-                        layer["model"]
-                    )
-                if "judge" in layer:
-                    layer["judge"] = _sampling_shorthands(layer["judge"], judge=True)
             if "task" in overrides:
                 values = {**values, "task": overrides["task"]}
             values = _merge_overrides(cls._merge_task_overrides(values), overrides)

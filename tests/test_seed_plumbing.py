@@ -159,14 +159,16 @@ def test_sampling_kwargs_cli_and_replay(tmp_path):
 
     path = tmp_path / "config.yaml"
     path.write_text(
-        "task: alpaca-eval-ja\nmodel: {name: Dummy/a, baseline: Dummy/b, temperature: 0.9}\njudge: {model: Dummy/j, sampling_kwargs: {top_p: 0.8}}\n"
+        "task: alpaca-eval-ja\nmodel: {name: Dummy/a, baseline: Dummy/b, temperature: 0.9}\njudge: {model: Dummy/j, top_p: 0.8}\n"
     )
     cfg = build_run_config(
         [
             "--config_path",
             str(path),
             "--model.sampling_kwargs",
-            '{"temperature":0,"repetition_penalty":1.1}',
+            '{"repetition_penalty":1.1}',
+            "--model.temperature",
+            "0",
             "--judge.sampling_kwargs",
             '{"min_p":0.05}',
             "--judge.top_p",
@@ -184,13 +186,9 @@ def test_sampling_kwargs_cli_and_replay(tmp_path):
     assert saved.judge.top_p == 0.4
     assert saved.judge.model_kwargs()["sampling_kwargs"] == {"min_p": 0.05}
 
-    baseline = ModelArgs(
-        sampling_kwargs={"min_p": 0.1}, baseline_sampling_kwargs={"temperature": 0}
-    )
+    baseline = ModelArgs(sampling_kwargs={"min_p": 0.1}, baseline_temperature=0)
     assert baseline.baseline_generation_kwargs()["sampling_kwargs"] == {"min_p": 0.1}
     assert baseline.baseline_generation_kwargs()["temperature"] == 0
-    with pytest.raises(ValueError, match="only once"):
-        ModelArgs(temperature=0, sampling_kwargs={"temperature": 1})
 
 
 def test_openrouter_sampling_body(monkeypatch):
@@ -214,13 +212,14 @@ def test_conflicting_or_non_sampling_options():
     ):
         make_model(
             "OpenRouter/test",
-            sampling_kwargs={"temperature": 0},
+            temperature=0,
             extra_body={"temperature": 0.9},
         )
     for option in ("max_retries", "frequency_penalty"):
         with pytest.raises(ValueError, match=f"extra sampling options: {option}"):
             make_model("ChatOpenAI/test", sampling_kwargs={option: 1})
-    model = make_model(
-        "ChatOpenAI/test", api_key="test", sampling_kwargs={"temperature": 0.5}
-    )
-    assert model.temperature == 0.5
+    with pytest.raises(ValueError, match="Set temperature outside sampling_kwargs"):
+        make_model("OpenRouter/test", sampling_kwargs={"temperature": 0.5})
+    with pytest.raises(ValueError, match="n=1"):
+        make_model("VLLM/test", sampling_kwargs={"n": 2})
+    assert make_model("Dummy/test", max_tokens=0).init_kwargs["max_tokens"] == 0

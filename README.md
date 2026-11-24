@@ -73,7 +73,7 @@ judgearena --config_path run.yaml
 judgearena --config_path run.yaml --generation.n_instructions 100
 ```
 
-Use `--model.sampling_kwargs '{"repetition_penalty":1.1}'` to apply a repetition penalty with vLLM or OpenRouter. Set judge options with `--judge.sampling_kwargs` and baseline options with `--model.baseline_sampling_kwargs`.
+Use `--model.sampling_kwargs '{"repetition_penalty":1.1}'` to apply a repetition penalty with vLLM or OpenRouter. Keep shared options such as temperature in their existing fields (e.g. `--model.temperature`). Set judge options with `--judge.sampling_kwargs` and baseline options with `--model.baseline_sampling_kwargs`.
 
 Tasks define benchmark defaults. Experiment configs override selected settings, and CLI flags override the config. Omitted fields inherit task settings when the implementation stays the same; switching the runner or adapter replaces that section. See [configuration](docs/configuration.md) for prompt, metric and dataset overrides.
 
