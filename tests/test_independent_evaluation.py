@@ -807,7 +807,8 @@ from judgearena.utils.extensions import load_python_object
 component = next(Path(sys.argv[1]).parent.rglob("components.py"))
 load_python_object(component, "Adapter")
 from judgearena.datasets.registry import dataset_names
-assert {"arena_battles", "judgearena_tables"} <= dataset_names()
+assert {"comparia", "lmarena", "judgearena_tables"} <= dataset_names()
+assert "arena_battles" not in dataset_names()
 from judgearena import run_benchmark
 from judgearena.config import load_config
 import judgearena.models as models

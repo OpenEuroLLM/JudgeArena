@@ -51,7 +51,6 @@ def finish_evaluation(output_dir, report, *, model, artifacts):
         "model": model,
         "metrics": report.metrics,
         "artifacts": paths,
-        "metric_data_sha256": metric_data_checksum(output / paths["metric_data"]),
         # Include replay dependencies too, but exclude manifests and changing logs.
         "files": {
             str(path.relative_to(output)): file_checksum(path)

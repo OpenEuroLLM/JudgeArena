@@ -99,7 +99,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     )
     assert elo_comparia.spec.protocol.runner == "pairwise"
     assert elo_comparia.spec.protocol.graph is not None
-    assert elo_comparia.spec.dataset.format == "ComparIA"
+    assert elo_comparia.spec.dataset.adapter == "comparia"
     assert [metric.metric for metric in elo_comparia.spec.protocol.scoring.metrics] == [
         "pairwise_win_rate",
         "bradley_terry",

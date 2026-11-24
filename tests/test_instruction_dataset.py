@@ -9,7 +9,7 @@ import judgearena.datasets.judgearena_tables as judgearena_tables
 import judgearena.tasks.definitions.arena_hard.dataset as arena_hard
 import judgearena.tasks.definitions.fluency.dataset as fluency
 import judgearena.tasks.definitions.m_arena_hard.dataset as m_arenahard
-from judgearena.datasets.arena_battles import normalize_battles
+from judgearena.datasets._arena import normalize_battles
 from judgearena.datasets.registry import source_cache_dir
 from judgearena.tasks.definitions.arena_hard.dataset import (
     _build_instructions,
@@ -537,7 +537,7 @@ def test_fixed_format_adapters_reject_unused_field_mappings(
 
 
 def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
-    import judgearena.arenas_utils as source
+    import judgearena.datasets._arena as source
 
     pair = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
     histories = [
@@ -555,12 +555,12 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
         chosen_model_name="a",
         both_equal=False,
     )
-    monkeypatch.setattr(source, "_download_arena_dataset", lambda **kwargs: "/unused")
+    monkeypatch.setattr(source, "snapshot_download", lambda **kwargs: "/unused")
     monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
     monkeypatch.setattr(source, "detect_language", lambda text: "en")
-    loaded = source._load_arena_dataframe("ComparIA", dataset_sources={})
-    assert loaded.question_id.tolist() == [0, 1, 3]
-    normalized = normalize_battles(loaded, "ComparIA")
+    from judgearena.datasets import load_task_data
+
+    normalized = load_task_data("elo-comparia")
     assert normalized.battles.question_id.tolist() == [0, 1]
 
 

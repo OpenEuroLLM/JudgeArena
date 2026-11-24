@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-import judgearena.datasets.arena_battles as arena_battles
+import judgearena.datasets._arena as arena_io
+from judgearena.datasets.registry import resolve_dataset_adapter
 from judgearena.tasks.registry import get_packaged_task
 
 
@@ -16,20 +17,30 @@ def test_elo_dataset_adapter_uses_task_owned_arena_and_sources(monkeypatch, tmp_
     task = _elo_task()
     captured = {}
 
-    def fake_load_arena_dataframe(arena, *, dataset_sources):
-        captured["arena"] = arena
-        captured["sources"] = dataset_sources
-        return pd.DataFrame([{"question_id": "q1"}])
+    def download(**kwargs):
+        captured.update(kwargs)
+        return str(tmp_path)
 
-    monkeypatch.setattr(
-        arena_battles, "load_arena_dataframe", fake_load_arena_dataframe
-    )
-
-    battles = arena_battles.ArenaBattlesAdapter(task, tmp_path).load_battles()
-
-    source = captured["sources"]["ministere-culture/comparia-votes"]
-    assert captured["arena"] == "ComparIA"
-    assert source.revision == "7a40bce496c1f2aa3be4001da85a49cb4743042b"
+    pair = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
+    pd.DataFrame(
+        [
+            dict(
+                id="q1",
+                timestamp=0,
+                conversation_a=pair,
+                conversation_b=pair,
+                model_a_name="a",
+                model_b_name="b",
+                chosen_model_name="a",
+                both_equal=False,
+            )
+        ]
+    ).to_parquet(tmp_path / "votes.parquet")
+    monkeypatch.setattr(arena_io, "snapshot_download", download)
+    monkeypatch.setattr(arena_io, "detect_language", lambda _: "en")
+    battles = resolve_dataset_adapter(task, tmp_path).load_data().battles
+    assert captured["repo_id"] == "ministere-culture/comparia-votes"
+    assert captured["revision"] == "7a40bce496c1f2aa3be4001da85a49cb4743042b"
     assert battles["question_id"].tolist() == ["q1"]
 
 
@@ -37,13 +48,57 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
     task = _elo_task("elo-lmarena-100k")
     captured = {}
     monkeypatch.setattr(
-        arena_battles,
+        arena_io,
         "snapshot_download",
         lambda **kwargs: captured.update(kwargs),
     )
 
-    arena_battles.ArenaBattlesAdapter(task, tmp_path).download()
+    resolve_dataset_adapter(task, tmp_path).download()
 
     assert captured["repo_id"] == "lmarena-ai/arena-human-preference-100k"
     assert captured["revision"] == "72e85b3ddc9c81bf7b659d6b03d4126dfd8fb34a"
     assert captured["allow_patterns"] == ("data/*.parquet",)
+
+
+def test_combined_lmarena_reads_all_releases_in_replay_order(monkeypatch, tmp_path):
+    turns = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
+    common = {"id": 1, "model_a": "a", "model_b": "b"}
+    for release in ("55k", "100k", "140k"):
+        folder = tmp_path / release
+        (folder / "data").mkdir(parents=True)
+        if release == "55k":
+            row = dict(
+                common,
+                prompt="Q",
+                response_a="A",
+                response_b="B",
+                winner_tie=1,
+                winner_model_a=0,
+                winner_model_b=0,
+            )
+            pd.DataFrame([row]).to_csv(folder / "train.csv", index=False)
+        else:
+            row = dict(
+                common, conversation_a=turns, conversation_b=turns, winner="model_a"
+            )
+            if release == "100k":
+                row["tstamp"] = 1
+            else:
+                row.update(timestamp=pd.Timestamp("2025-01-01"), winner="both_bad")
+            pd.DataFrame([row]).to_parquet(folder / "data" / "train.parquet")
+    monkeypatch.setattr(
+        arena_io,
+        "snapshot_download",
+        lambda repo_id, **_: tmp_path / repo_id.rsplit("-", 1)[1],
+    )
+    monkeypatch.setattr(arena_io, "detect_language", lambda _: "en")
+    data = resolve_dataset_adapter(_elo_task("elo-lmarena"), tmp_path).load_data()
+    assert data.battles["benchmark"].tolist() == [
+        "LMArena-100k",
+        "LMArena-55k",
+        "LMArena-140k",
+    ]
+    assert data.battles["reference_pref"].tolist() == [0.0, 0.5, 0.5]
+    assert data.battles["battle_id"].tolist() == [
+        f"LMArena:1:row-{i}" for i in range(3)
+    ]

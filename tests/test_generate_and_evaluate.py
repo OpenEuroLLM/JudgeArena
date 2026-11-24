@@ -17,7 +17,7 @@ from judgearena.benchmarks.pairwise.baselines import (
 )
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, load_config
 from judgearena.datasets.data import CompletionData
 from judgearena.models import InferenceResult, prepare_model
 from judgearena.tasks.registry import get_packaged_task
@@ -887,7 +887,6 @@ def test_conversation_workflows_share_score_prompts_and_replay(
 ):
     import judgearena.models as models
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.datasets.arena_battles import ArenaBattlesAdapter
     from judgearena.datasets.data import PreferenceData
     from judgearena.prompts.criteria import resolve_criteria
 
@@ -914,8 +913,6 @@ def test_conversation_workflows_share_score_prompts_and_replay(
             }
         )
     )
-    monkeypatch.setattr(ArenaBattlesAdapter, "load_data", lambda self: data)
-    monkeypatch.setattr(generate_and_evaluate, "load_task_data", lambda task: data)
     task = get_packaged_task("elo-comparia")
     spec = task.spec.model_dump()
     judge = {
@@ -943,8 +940,6 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     if runner != "single_answer":
         judge["turns"] = [1, 2]
     if runner == "meta_eval":
-        protocol["arena"] = "custom"
-    if runner == "meta_eval":
         metrics.append(
             {
                 "metric": "meta_eval_agreement",
@@ -957,8 +952,11 @@ def test_conversation_workflows_share_score_prompts_and_replay(
         {"score": 8, "criteria": {c.name: 8 for c in resolve_criteria()}}
     )
     cfg = RunConfig(
-        task=task.task,
-        resolved_task=task,
+        **(
+            {"evaluation_name": "custom-preferences", "protocol": protocol}
+            if runner == "meta_eval"
+            else {"task": task.task, "resolved_task": task}
+        ),
         model={"name": "Dummy/generated"} if runner != "meta_eval" else {},
         judge={
             "model": f"Dummy/{response}",
@@ -976,7 +974,7 @@ def test_conversation_workflows_share_score_prompts_and_replay(
             else {}
         ),
     )
-    run_benchmark(cfg)
+    run_benchmark(cfg, data=data)
     path = next((tmp_path / "first").rglob("*annotations.*"))
     annotations = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
     assert set(annotations.prompt_preset) == {"single-score", "criteria-score"}
@@ -987,6 +985,7 @@ def test_conversation_workflows_share_score_prompts_and_replay(
         result = json.loads(
             next((tmp_path / "first").rglob("results.json")).read_text()
         )
+        assert result["arena"] == result["task"] == "custom-preferences"
         assert result["metrics"]["meta_eval_agreement"]["all"]["n_attempted"] == 2
         assert len(result["metrics"]["pairwise_win_rate"]["groups"]["category"]) == 2
         outcomes = pd.read_parquet(next((tmp_path / "first").rglob("battles.parquet")))
@@ -1000,8 +999,14 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     monkeypatch.setattr(
         models, "make_model", lambda *a, **kw: pytest.fail("Replay must use cache")
     )
+    cfg = load_config(next((tmp_path / "first").rglob("config.yaml")))
     cfg.run.result_folder = str(tmp_path / "replay")
-    run_benchmark(cfg)
+    run_benchmark(cfg, data=data)
+    if runner == "meta_eval":
+        assert (
+            json.loads(next((tmp_path / "replay").rglob("results.json")).read_text())
+            == result
+        )
 
 
 def test_minimum_score_grouping_requires_scoring_prompt():

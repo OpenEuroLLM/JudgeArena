@@ -136,5 +136,4 @@ def dataset_adapter_type(name: str) -> type[DatasetAdapter]:
         raise ValueError(f"Unknown dataset adapter {name!r}.") from exc
 
 
-# Shared adapters are used by multiple task families.
-from judgearena.datasets import arena_battles, judgearena_tables  # noqa: E402, F401
+from judgearena.datasets import judgearena_tables  # noqa: E402, F401

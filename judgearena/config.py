@@ -810,8 +810,23 @@ def _migrate_saved_run(data: dict) -> dict:
     if not isinstance(resolved, dict):
         return data
     data = deepcopy(data)
-    spec = data["resolved_task"]["spec"]
+    resolved = data["resolved_task"]
+    spec = resolved["spec"]
     protocol = spec["protocol"]
+    for dataset in (spec["dataset"], data.get("dataset") or {}):
+        if dataset.get("adapter") == "arena_battles":
+            arena = (
+                dataset.get("format")
+                or spec["dataset"].get("format")
+                or protocol.get("arena")
+            )
+            if arena == "ComparIA":
+                dataset["adapter"] = "comparia"
+            elif arena in {"LMArena", "LMArena-55k", "LMArena-100k", "LMArena-140k"}:
+                dataset.update(adapter="lmarena", format=arena)
+            else:
+                raise ValueError(f"Unknown saved arena format {arena!r}")
+            resolved["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
     for graph in (
         data.get("graph"),
         (data.get("protocol") or {}).get("graph"),

@@ -9,6 +9,7 @@ variants:
   values: [fr, en]
 
 dataset:
+  adapter: comparia
   format: ComparIA
   sources:
     comparia:

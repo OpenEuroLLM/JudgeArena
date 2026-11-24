@@ -7,6 +7,7 @@ variants:
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
 
 dataset:
+  adapter: lmarena
   format: LMArena-140k
   sources:
     lmarena_140k:

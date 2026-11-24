@@ -84,7 +84,8 @@ def run_meta_eval(
     )
     metrics = build_metrics(protocol.scoring.metrics)
 
-    logger.info("Loading reference battles from %s", protocol.arena)
+    arena = protocol.arena or task.task
+    logger.info("Loading reference battles from %s", arena)
     data = (data if data is not None else load_task_data(task)).select(filters)
     arena_battles = _prepare_arena_battles(data, task=cfg.task)
     top_models, top_pool = select_top_models(
@@ -132,7 +133,7 @@ def run_meta_eval(
     )
     report = MetaEvalReport(
         task=cfg.task,
-        arena=protocol.arena,
+        arena=arena,
         judge_model=cfg.judge.model,
         prompt_preset=resolved_prompt.preset_name,
         languages=filters.get("lang", []),

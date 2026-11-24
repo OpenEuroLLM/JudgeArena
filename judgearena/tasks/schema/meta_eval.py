@@ -16,7 +16,11 @@ class MetaEvalProtocol(StrictFrozenModel):
     """Policy for scoring a judge against reference-labeled arena battles."""
 
     runner: Literal["meta_eval"]
-    arena: str = Field(min_length=1)
+    arena: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Display label; defaults to the task name.",
+    )
     baseline: NoBaseline
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec

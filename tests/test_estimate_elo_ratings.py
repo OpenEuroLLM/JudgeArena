@@ -19,7 +19,7 @@ from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.cache.sqlite import JudgementCache
 from judgearena.config import JudgePromptSpec, RunConfig, build_run_config, load_config
-from judgearena.datasets.arena_battles import normalize_battles
+from judgearena.datasets._arena import normalize_battles
 from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.registry import resolve_judge_prompt
@@ -37,7 +37,7 @@ def _make_conversation(content_user: str, content_assistant: str) -> list[dict]:
 
 
 def _arena_df(n_battles: int) -> pd.DataFrame:
-    """Synthetic arena DataFrame matching the schema produced by load_arena_dataframe."""
+    """Synthetic arena DataFrame matching the schema read by the arena adapter."""
     rng = np.random.default_rng(42)
     rows = []
     for i in range(n_battles):
@@ -502,16 +502,10 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
 
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])
 def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_mode):
-    from judgearena.artifacts import evaluation
+    from unittest.mock import Mock
 
-    finished = []
-    original_checksum = evaluation.metric_data_checksum
-
-    def checksum(path):
-        finished.append(path)
-        return original_checksum(path)
-
-    monkeypatch.setattr(evaluation, "metric_data_checksum", checksum)
+    finish = Mock(wraps=pairwise_runner.finish_evaluation)
+    monkeypatch.setattr(pairwise_runner, "finish_evaluation", finish)
     captured = {}
     loaded_models = []
 
@@ -573,7 +567,7 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     cfg.run.result_folder = str(tmp_path / "replay")
     replay = run_graph_evaluation(cfg)
     assert _pairwise_metric(replay) == _pairwise_metric(result)
-    assert len(finished) == 2  # One finalization per live/replay run.
+    assert finish.call_count == 2  # One finalization per live/replay run.
     replay_dir = Path(replay["result_path"]).parent
     pd.testing.assert_frame_equal(
         battles, pd.read_parquet(replay_dir / "outcomes.parquet")
@@ -587,6 +581,9 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
 
     legacy = yaml.safe_load((replay_dir / "config.yaml").read_text())
     old_protocol = legacy["resolved_task"]["spec"]["protocol"]
+    legacy["resolved_task"]["spec"]["dataset"]["adapter"] = "arena_battles"
+    if legacy.get("dataset"):
+        legacy["dataset"]["adapter"] = "arena_battles"
     old_protocol.update(runner="elo", arena="ComparIA")
     old_protocol.pop("graph")
     old_protocol.pop("limit_by", None)
@@ -606,6 +603,7 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
         "elo" not in migrated.model_dump()
         and migrated.resolved_task.spec.protocol.runner == "pairwise"
     )
+    assert migrated.resolved_task.spec.dataset.adapter == "comparia"
     migrated.run.result_folder = str(tmp_path / "legacy-replay")
     old_replay = run_graph_evaluation(migrated)
     assert _pairwise_metric(old_replay) == _pairwise_metric(result)
@@ -643,7 +641,7 @@ def test_empty_calibration_keeps_configured_temperature(tmp_path):
 
 
 def test_extract_turn_text_tolerates_moderated_turns():
-    from judgearena.arenas_utils import extract_turn_text
+    from judgearena.datasets._arena import extract_turn_text
 
     assert extract_turn_text({"content": None}) == ""
     assert extract_turn_text({"content": "plain"}) == "plain"
