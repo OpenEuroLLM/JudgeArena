@@ -1032,7 +1032,7 @@ def test_empty_dataset_overrides_stay_cleared_after_rebinding(tmp_path):
     [
         ("{}", {}),
         ('{"adapter":"custom"}', {}),
-        ('{"adapter":"judgearena_tables"}', {"path": "old"}),
+        ('{"adapter":"alpaca_eval"}', {"path": "old"}),
     ],
 )
 def test_cli_dataset_override_respects_inherited_adapter(tmp_path, override, expected):

@@ -296,7 +296,7 @@ def run_evaluation(
     elif opponent_panel is not None:
         result = outcomes["pref"].rename(None)
         report = ComparisonReport(
-            arena=resolved_task.spec.dataset.format or cfg.task,
+            arena=resolved_task.task,
             judge_model=cfg.judge.model,
             metrics=metric_results,
             num_battles=len(opponent_panel),

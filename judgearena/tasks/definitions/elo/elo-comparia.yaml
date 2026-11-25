@@ -10,7 +10,6 @@ variants:
 
 dataset:
   adapter: comparia
-  format: ComparIA
   sources:
     comparia:
       type: huggingface_dataset

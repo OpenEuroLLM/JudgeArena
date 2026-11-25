@@ -14,12 +14,16 @@ from judgearena.datasets._arena import (
 from judgearena.datasets.data import PreferenceData
 from judgearena.datasets.registry import DatasetAdapter
 
-_RELEASES = ("LMArena-100k", "LMArena-55k", "LMArena-140k")
+# Preserve the row order of combined releases for seeded sampling and replay.
+_RELEASES = {
+    f"lmarena-ai/arena-human-preference-{size}": f"LMArena-{size}"
+    for size in ("100k", "55k", "140k")
+}
 
 
-def _read_release(arena, dataset_sources):
+def _read_release(repo_id, dataset_sources):
+    arena = _RELEASES[repo_id]
     if arena == "LMArena-55k":
-        repo_id = "lmarena-ai/arena-human-preference-55k"
         path = _download_arena_dataset(
             repo_id=repo_id,
             default_allow_patterns="*.csv",
@@ -58,8 +62,6 @@ def _read_release(arena, dataset_sources):
         df["benchmark"] = "LMArena-55k"
 
     else:
-        size = arena.split("-")[1]  # "100k" or "140k"
-        repo_id = f"lmarena-ai/arena-human-preference-{size}"
         path = _download_arena_dataset(
             repo_id=repo_id,
             default_allow_patterns="*parquet",
@@ -88,20 +90,23 @@ def _read_release(arena, dataset_sources):
 
 
 class LMArenaAdapter(DatasetAdapter):
+    def _sources(self):
+        sources = arena_sources(self.task)
+        unknown = sources.keys() - _RELEASES.keys()
+        if unknown:
+            raise ValueError(f"Unsupported LMArena repositories: {sorted(unknown)}")
+        return sources
+
     def download(self) -> None:
-        download_arena_sources(self.task)
+        download_arena_sources(self._sources())
 
     def load_data(self) -> PreferenceData:
-        arena = self.task.spec.dataset.format or "LMArena"
-        sources = arena_sources(self.task)
-        if arena == "LMArena":
-            battles = pd.concat(
-                [_read_release(name, sources) for name in _RELEASES], ignore_index=True
-            )
-        elif arena in _RELEASES:
-            battles = _read_release(arena, sources)
-        else:
-            raise ValueError(f"Unsupported LMArena format {arena!r}.")
+        sources = self._sources()
+        releases = [repo for repo in _RELEASES if repo in sources]
+        battles = pd.concat(
+            [_read_release(repo, sources) for repo in releases], ignore_index=True
+        )
+        arena = _RELEASES[releases[0]] if len(releases) == 1 else "LMArena"
         return normalize_battles(
             battles,
             arena,

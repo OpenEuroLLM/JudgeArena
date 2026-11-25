@@ -18,7 +18,7 @@ from judgearena.datasets.registry import DatasetAdapter
 
 class ComparIAAdapter(DatasetAdapter):
     def download(self) -> None:
-        download_arena_sources(self.task)
+        download_arena_sources(arena_sources(self.task))
 
     def load_data(self) -> PreferenceData:
         path = _download_arena_dataset(

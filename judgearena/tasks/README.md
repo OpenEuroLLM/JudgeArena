@@ -43,39 +43,16 @@ Create a public YAML file under `definitions/<family>/`. Files beginning with
 `_` are private bases and are not runnable tasks.
 
 ```yaml
-schema_version: 1
+extends: ../alpaca_eval/_base.yaml
 task: example-pairwise
-task_version: 1
-description: Pairwise evaluation on the Example instruction set.
-tags: [pairwise, instruction-following]
-
-dataset:
-  adapter: judgearena_tables
-  sources:
-    examples:
-      type: huggingface_dataset
-      repo_id: organization/example
-      revision: "0123456789abcdef0123456789abcdef01234567"
-      allow_patterns:
-        - instructions/example-pairwise.csv
-        - model_outputs/example-pairwise.csv.zip
-  fields:
-    id: instruction_index
-    instruction: instruction
+description: Score AlpacaEval answers with pairwise win rate.
 
 protocol:
-  runner: pairwise
-  generation:
-    mode: single_turn_chat
-  baseline:
-    strategy: task_default
-    reference_id: example-baseline
   judge:
     default_prompt_preset: default
   scoring:
     metrics:
       - metric: pairwise_win_rate
-      - metric: length_controlled_winrate
 ```
 
 Reuse a private `_base.yaml` with `extends: _base.yaml` when several versions

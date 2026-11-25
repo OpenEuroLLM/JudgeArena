@@ -221,8 +221,7 @@ def arena_sources(task):
     return sources
 
 
-def download_arena_sources(task):
-    sources = arena_sources(task)
+def download_arena_sources(sources):
     for repo_id in sources:
         _download_arena_dataset(
             repo_id=repo_id, default_allow_patterns=None, dataset_sources=sources

@@ -37,6 +37,11 @@ def source_cache_dir(task: ResolvedTaskSpec, local_tables_path: Path) -> Path:
         declaration["adapter"] = (
             f"{hashlib.sha256(path.read_bytes()).hexdigest()}:{symbol}"
         )
+    elif adapter == "alpaca_eval":
+        # Keep the directory containing previously downloaded AlpacaEval tables.
+        declaration["adapter"] = "judgearena_tables"
+    # Existing source directories were keyed with these schema defaults.
+    declaration.update(format=None, battle_columns={})
     dataset = json.dumps(declaration, sort_keys=True)
     digest = hashlib.sha256(dataset.encode()).hexdigest()[:16]
     return local_tables_path / "_sources" / task.definition_task / digest
@@ -134,6 +139,3 @@ def dataset_adapter_type(name: str) -> type[DatasetAdapter]:
         return _DATASETS[name]
     except KeyError as exc:
         raise ValueError(f"Unknown dataset adapter {name!r}.") from exc
-
-
-from judgearena.datasets import judgearena_tables  # noqa: E402, F401

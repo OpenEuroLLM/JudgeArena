@@ -26,7 +26,7 @@ def _task_definition(task: str = "test-task") -> dict[str, object]:
         "description": "Test pairwise task.",
         "tags": ["pairwise", "test"],
         "dataset": {
-            "adapter": "judgearena_tables",
+            "adapter": "alpaca_eval",
             "sources": {
                 "examples": {
                     "type": "huggingface_dataset",
@@ -107,7 +107,6 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert elo_comparia.spec.dataset.sources["comparia"].revision == (
         "7a40bce496c1f2aa3be4001da85a49cb4743042b"
     )
-    assert elo_lmarena.spec.dataset.format == "LMArena"
     assert len(elo_lmarena.spec.dataset.sources) == 3
     fluency = resolve_task(tasks, "fluency-french")
     assert fluency is not None
@@ -419,16 +418,16 @@ from pathlib import Path
 from judgearena.tasks import load_tasks
 from judgearena.prompts import resolve_judge_prompt
 from judgearena.datasets.registry import register_dataset, dataset_names
-from judgearena.datasets.judgearena_tables import TableAdapter
+from judgearena.tasks.definitions.alpaca_eval.dataset import AlpacaEvalAdapter
 import pytest
 
 assert "test-task" in load_tasks(Path(sys.argv[1]))
 custom = resolve_judge_prompt(preset="custom-arena")
 assert custom.user_prompt_template == resolve_judge_prompt(preset="arena-hard").user_prompt_template
-register_dataset("custom_tables")(TableAdapter)
+register_dataset("custom_tables")(AlpacaEvalAdapter)
 for name in ("mt_bench", "custom_tables"):
     with pytest.raises(ValueError, match="already registered"):
-        register_dataset(name)(TableAdapter)
+        register_dataset(name)(AlpacaEvalAdapter)
 assert {"custom_tables", "mt_bench", "arena_hard"} <= dataset_names()
 """
     result = subprocess.run(
@@ -740,7 +739,7 @@ def test_inherited_prompt_bundles_and_categories_replay(tmp_path):
     root = tmp_path / "definitions"
     _write_family(root, family="base", filename="_base.yaml", definition=definition)
     (root / "base/components.py").write_text(
-        "from judgearena.datasets.judgearena_tables import TableAdapter as Adapter\n"
+        "from judgearena.tasks.definitions.alpaca_eval.dataset import AlpacaEvalAdapter as Adapter\n"
         "from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric\n"
         "Metric = PairwiseWinRateMetric\n"
     )

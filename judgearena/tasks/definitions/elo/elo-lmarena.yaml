@@ -8,7 +8,6 @@ variants:
 
 dataset:
   adapter: lmarena
-  format: LMArena
   sources:
     lmarena_55k:
       type: huggingface_dataset

@@ -813,20 +813,45 @@ def _migrate_saved_run(data: dict) -> dict:
     resolved = data["resolved_task"]
     spec = resolved["spec"]
     protocol = spec["protocol"]
+    saved_format = spec["dataset"].get("format")
     for dataset in (spec["dataset"], data.get("dataset") or {}):
-        if dataset.get("adapter") == "arena_battles":
-            arena = (
-                dataset.get("format")
-                or spec["dataset"].get("format")
-                or protocol.get("arena")
+        if not ({"format", "battle_columns"} & dataset.keys()) and dataset.get(
+            "adapter"
+        ) not in {"arena_battles", "judgearena_tables"}:
+            continue
+        release = dataset.pop("format", None)
+        if dataset.pop("battle_columns", {}) or release == "battles":
+            raise ValueError(
+                "Saved battle-table configs require a custom dataset adapter."
             )
-            if arena == "ComparIA":
+        if dataset.get("adapter") == "judgearena_tables" and spec["task"] in {
+            "alpaca-eval",
+            "alpaca-eval-ja",
+        }:
+            dataset["adapter"] = "alpaca_eval"
+        if dataset.get("adapter") == "arena_battles":
+            release = release or saved_format or protocol.get("arena")
+            if release == "ComparIA":
                 dataset["adapter"] = "comparia"
-            elif arena in {"LMArena", "LMArena-55k", "LMArena-100k", "LMArena-140k"}:
-                dataset.update(adapter="lmarena", format=arena)
+            elif release in {"LMArena", "LMArena-55k", "LMArena-100k", "LMArena-140k"}:
+                dataset["adapter"] = "lmarena"
             else:
-                raise ValueError(f"Unknown saved arena format {arena!r}")
-            resolved["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
+                raise ValueError(f"Unknown saved arena format {release!r}")
+        # A saved release selector could narrow a combined source list.
+        if dataset.get("adapter") == "lmarena" and release and release != "LMArena":
+            repo_id = (
+                f"lmarena-ai/arena-human-preference-{release.removeprefix('LMArena-')}"
+            )
+            dataset["sources"] = {
+                key: source
+                for key, source in dataset["sources"].items()
+                if source.get("repo_id") == repo_id
+            }
+            if not dataset["sources"]:
+                raise ValueError(
+                    f"No declared dataset source matches saved format {release!r}."
+                )
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
     for graph in (
         data.get("graph"),
         (data.get("protocol") or {}).get("graph"),
@@ -874,9 +899,7 @@ def _migrate_saved_run(data: dict) -> dict:
         graph.setdefault("group_by", "lang")
     protocol.update(runner="pairwise", graph=graph)
     data["graph"] = graph
-    arena = protocol.pop("arena", None)
-    if arena is not None and not spec["dataset"].get("format"):
-        spec["dataset"]["format"] = arena
+    protocol.pop("arena", None)
     judge = protocol["judge"]
     for key, value in {
         "preference_temperature": temperature if soft else None,

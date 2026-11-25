@@ -5,7 +5,7 @@ import pytest
 
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.data as pairwise_data
-import judgearena.datasets.judgearena_tables as judgearena_tables
+import judgearena.tasks.definitions.alpaca_eval.dataset as alpaca_eval
 import judgearena.tasks.definitions.arena_hard.dataset as arena_hard
 import judgearena.tasks.definitions.fluency.dataset as fluency
 import judgearena.tasks.definitions.m_arena_hard.dataset as m_arenahard
@@ -37,7 +37,7 @@ def battle_rows():
 def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
     downloads = []
     monkeypatch.setattr(
-        judgearena_tables,
+        alpaca_eval,
         "snapshot_download",
         lambda **kwargs: downloads.append(kwargs),
     )
@@ -80,58 +80,6 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
         {"instruction_index": 1, "model": "gpt4_1106_preview", "completion": "base-1"},
         {"instruction_index": 0, "model": "archived-model", "completion": "archived-0"},
     ]
-
-
-@pytest.mark.parametrize("observed", [False, True])
-def test_table_adapter_loads_mapped_battles_with_repeated_question_ids(
-    monkeypatch, tmp_path, observed, battle_rows
-):
-    monkeypatch.setattr(judgearena_tables, "snapshot_download", lambda **kwargs: None)
-    task = get_packaged_task("alpaca-eval")
-    mapping = {
-        "prompt": "instruction",
-        "ours": "model_a",
-        "theirs": "model_b",
-        "answer": "completion_a",
-        "reference": "completion_b",
-        "vote": "reference_pref",
-    }
-    spec = task.spec.model_dump()
-    spec["dataset"].update(
-        format="battles",
-        fields=None,
-        battle_columns=mapping,
-        outcome_preferences={"left": 0.0, "right": 1.0},
-    )
-    spec["dataset"]["sources"]["tables"]["allow_patterns"] = ["battles/custom.csv"]
-    task = replace(task, spec=type(task.spec).model_validate(spec))
-    root = source_cache_dir(task, tmp_path)
-    (root / "battles").mkdir(parents=True)
-    rows = battle_rows.iloc[:2].assign(
-        source=["human", "llm-judge"], reference_pref=None
-    )
-    if observed:
-        rows = rows.drop(columns="reference_pref").assign(winner=["left", "right"])
-    rows.rename(columns={v: k for k, v in mapping.items()}).to_csv(
-        root / "battles/custom.csv",
-        index=False,
-    )
-
-    data = instruction_dataset.load_task_data(task, local_tables_path=tmp_path)
-
-    assert data.instructions.index.tolist() == [0, 1]
-    assert data.battles["question_id"].tolist() == ["same", "same"]
-    assert data.model_completion("a").tolist() == ["a1", "a2"]
-    assert data.model_completion("b").tolist() == ["b1", "b2"]
-    if observed:
-        assert data.battles["reference_pref"].tolist() == [0.0, 1.0]
-    else:
-        assert data.battles["reference_pref"].isna().all()
-
-    selected = data.select({"source": ["human"]})
-    assert selected.instructions.index.tolist() == [0]
-    assert selected.model_completion("a").to_dict() == {0: "a1"}
-    assert selected.battles["source"].tolist() == ["human"]
 
 
 def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_path):
@@ -593,7 +541,7 @@ def test_download_config_reuses_selected_revision_offline(monkeypatch, tmp_path)
             raise FileNotFoundError("Revision not cached")
         return str(root)
 
-    monkeypatch.setattr(judgearena_tables, "snapshot_download", snapshot)
+    monkeypatch.setattr(alpaca_eval, "snapshot_download", snapshot)
     path = tmp_path / "run.yaml"
     for revision in ("a" * 40, "b" * 40):
         path.write_text(

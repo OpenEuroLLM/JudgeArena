@@ -644,8 +644,8 @@ def test_public_api_runs_file_components_and_replays(
         f"IMPORTED = register_metric('replay-imported-{source_kind}')(MeanScoreMetric)\n"
         f"@register_metric('replay-metric-{source_kind}')\n"
         "class Metric(MeanScoreMetric): pass\n"
-        "from judgearena.datasets.judgearena_tables import TableAdapter\n"
-        f"TABLE = register_dataset('replay-table-{source_kind}')(TableAdapter)\n"
+        "from judgearena.tasks.definitions.alpaca_eval.dataset import AlpacaEvalAdapter\n"
+        f"TABLE = register_dataset('replay-table-{source_kind}')(AlpacaEvalAdapter)\n"
         "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
         f"PROMPT = register_prompt(JudgePromptPreset(name='replay-prompt-{source_kind}'))\n"
         f"@register_dataset('replay-data-{source_kind}')\n"
@@ -807,7 +807,7 @@ from judgearena.utils.extensions import load_python_object
 component = next(Path(sys.argv[1]).parent.rglob("components.py"))
 load_python_object(component, "Adapter")
 from judgearena.datasets.registry import dataset_names
-assert {"comparia", "lmarena", "judgearena_tables"} <= dataset_names()
+assert {"comparia", "lmarena", "alpaca_eval"} <= dataset_names()
 assert "arena_battles" not in dataset_names()
 from judgearena import run_benchmark
 from judgearena.config import load_config

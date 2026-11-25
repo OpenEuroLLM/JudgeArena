@@ -135,7 +135,7 @@ def test_meta_eval_scores_renders_and_saves(tmp_path, monkeypatch, capsys):
     assert battles.loc[~battles["sampled"], "pref"].isna().all()
 
     saved = json.loads(result_path.read_text())
-    assert saved["arena"] == "ComparIA"
+    assert saved["arena"] == "meta-eval-comparia"
     agreement = saved["metrics"]["meta_eval_agreement"]["all"]
     correct = sample.iloc[1:]["reference_pref"].eq(0.0).sum()
     assert agreement["accuracy_attempted"] == pytest.approx(correct / len(sample))

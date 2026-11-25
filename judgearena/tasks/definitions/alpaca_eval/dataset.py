@@ -1,4 +1,4 @@
-"""Dataset adapter for JudgeArena's packaged instruction/output tables."""
+"""Load AlpacaEval instructions and archived model answers."""
 
 from __future__ import annotations
 
@@ -7,17 +7,12 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import snapshot_download
 
-from judgearena.datasets.data import (
-    CompletionData,
-    PreferenceData,
-    normalize_preferences,
-)
-from judgearena.datasets.registry import DatasetAdapter, register_dataset
+from judgearena.datasets.data import CompletionData
+from judgearena.datasets.registry import DatasetAdapter
 from judgearena.tasks.schema import HuggingFaceDatasetSource
 
 
-@register_dataset("judgearena_tables")
-class TableAdapter(DatasetAdapter):
+class AlpacaEvalAdapter(DatasetAdapter):
     def _table_path(self, directory: str, suffix: str) -> Path:
         """Return an exact task-declared table path, falling back to its task ID."""
         paths = {
@@ -43,13 +38,13 @@ class TableAdapter(DatasetAdapter):
     def download(self) -> None:
         """Download every Hugging Face source declared by a table-backed task."""
         if not self.task.spec.dataset.sources:
-            raise ValueError("Table adapter requires dataset.sources.")
+            raise ValueError("AlpacaEval requires dataset.sources.")
         self.source_dir.mkdir(exist_ok=True, parents=True)
         for name, source in self.task.spec.dataset.sources.items():
             if not isinstance(source, HuggingFaceDatasetSource):
                 raise ValueError(
                     f"Dataset source {name!r} for task {self.task.task!r} is not supported "
-                    "by the 'judgearena_tables' adapter."
+                    "by the 'alpaca_eval' adapter."
                 )
             snapshot_download(
                 repo_id=source.repo_id,
@@ -82,16 +77,6 @@ class TableAdapter(DatasetAdapter):
         return frame
 
     def load_data(self) -> CompletionData:
-        if self.task.spec.dataset.format == "battles":
-            self.download()
-            return PreferenceData.from_battles(
-                normalize_preferences(
-                    pd.read_csv(
-                        self.source_dir / self._table_path("battles", ".csv")
-                    ).rename(columns=self.task.spec.dataset.battle_columns),
-                    outcome_preferences=self.task.spec.dataset.outcome_preferences,
-                )
-            )
         instructions = self._load_instruction_table()
         return CompletionData.from_frames(
             self._normalize_instructions(instructions),

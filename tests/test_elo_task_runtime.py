@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
+import yaml
 
 import judgearena.datasets._arena as arena_io
+from judgearena.config import RunConfig, load_config
 from judgearena.datasets.registry import resolve_dataset_adapter
 from judgearena.tasks.registry import get_packaged_task
 
@@ -102,3 +105,38 @@ def test_combined_lmarena_reads_all_releases_in_replay_order(monkeypatch, tmp_pa
     assert data.battles["battle_id"].tolist() == [
         f"LMArena:1:row-{i}" for i in range(3)
     ]
+
+    cfg = RunConfig(
+        task="elo-lmarena",
+        model={"name": "Dummy/candidate"},
+        judge={"model": "Dummy/judge"},
+    )
+    saved = cfg.model_dump(mode="json")
+    dataset = saved["resolved_task"]["spec"]["dataset"]
+    dataset.update(adapter="arena_battles", format="LMArena-140k")
+    saved["dataset"] = dataset
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(saved))
+    replay = resolve_dataset_adapter(
+        load_config(path).resolved_task, tmp_path
+    ).load_data()
+    current = resolve_dataset_adapter(
+        _elo_task("elo-lmarena-140k"), tmp_path
+    ).load_data()
+    pd.testing.assert_frame_equal(replay.battles, current.battles)
+    assert current.battles["battle_id"].tolist() == ["LMArena-140k:1"]
+
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "task": "elo-lmarena",
+                "model": {"name": "Dummy/candidate"},
+                "judge": {"model": "Dummy/judge"},
+                "dataset": {"format": "LMArena-140k", "battle_columns": {}},
+            }
+        )
+    )
+    with pytest.raises(ValueError) as error:
+        load_config(path)
+    for key in ("format", "battle_columns"):
+        assert key in str(error.value)
