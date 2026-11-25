@@ -26,6 +26,7 @@ from judgearena.prompts.registry import prompt_option_files
 from judgearena.prompts.spec import (
     JudgePromptSpec,
     config_prompts,
+    migrate_saved_template_fields,
     resolve_prompt_paths,
 )
 from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
@@ -979,6 +980,8 @@ def _read_config(
     data = RunConfig._merge_task_overrides(data)
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
+        if isinstance(resolved, dict):
+            migrate_saved_template_fields(prompt)
     if hash_matches:
         # Path resolution changes the definition, not its source provenance.
         resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])

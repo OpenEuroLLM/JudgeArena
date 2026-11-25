@@ -20,7 +20,6 @@ from judgearena.prompts.registry import (
     DEFAULT_JUDGE_PROMPT_PRESET,
     ResolvedJudgePrompt,
     build_chat_prompt_template,
-    canonical_prompt_field,
     group_judge_prompts,
     render_inputs,
     resolve_judge_prompt,
@@ -109,10 +108,7 @@ def validate_prompt_fields(prompt: ResolvedJudgePrompt, columns, supplied) -> No
     required = (
         set(prompt.required_fields)
         if prompt.render_input is not None
-        else {
-            canonical_prompt_field(key)
-            for key in build_chat_prompt_template(prompt).input_variables
-        }
+        else set(build_chat_prompt_template(prompt).input_variables)
     )
     if columns is None:
         return  # Lazy output metadata is checked once its rows are loaded.

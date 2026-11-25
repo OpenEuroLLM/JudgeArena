@@ -651,7 +651,7 @@ def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
     user_file = tmp_path / "user.txt"
     system_file.write_text("Judge carefully.")
     user_file.write_text(
-        "Instruction: {user_prompt}\nA: {completion_A}\nB: {completion_B}"
+        "Instruction: {instruction}\nA: {completion_a}\nB: {completion_b}"
     )
     cfg = RunConfig(
         task="alpaca-eval",

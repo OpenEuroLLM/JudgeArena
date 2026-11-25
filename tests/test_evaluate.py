@@ -187,7 +187,7 @@ def test_pairwise_annotation_can_parse_without_changing_rendered_inputs(mode):
     parse = None if mode == "raw" else JUDGE_PARSERS["arena-hard-verdict"]
     prompt_args = {
         "system_prompt": "Compare",
-        "user_prompt_template": "{user_prompt}|{completion_A}|{completion_B}",
+        "user_prompt_template": "{instruction}|{completion_a}|{completion_b}",
     }
     if mode == "resolved":
         prompt_args = {
@@ -297,7 +297,7 @@ def test_comparison_preflight_checks_all_selected_batches(conversations):
     prompt = replace(
         prompt,
         user_prompt_template=prompt.user_prompt_template
-        + "\nRaw: {completion_A_text}|{completion_B_text}",
+        + "\nRaw: {completion_a_text}|{completion_b_text}",
     )
     options = dict(
         swap_mode="both",

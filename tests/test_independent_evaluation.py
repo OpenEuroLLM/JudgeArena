@@ -3,11 +3,12 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
+import yaml
 
 from judgearena.artifacts import read_metric_data
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.benchmarks.scoring import build_metric
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, load_config
 from judgearena.datasets.data import CompletionData
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import resolve_judge_prompt
@@ -158,14 +159,16 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
 
     monkeypatch.setitem(JUDGE_PARSERS, Parser.name, Parser())
     system, user = tmp_path / "system.txt", tmp_path / "user.txt"
-    system.write_text("Use {checklist}")
+    system.write_text(
+        "Use {checklist} for {instruction_json}. Keep {{user_prompt}} literal."
+    )
     user.write_text(
-        "Checkpoint: {checkpoint}\nQ: {user_prompt}\nA: {completion}\nRaw: {completion_text}"
+        "Checkpoint: {checkpoint}\nQ: {instruction}\nA: {completion}\nRaw: {completion_text}"
     )
     judge = {
         "model": 'Dummy/{"correct": true, "details": {"criteria": {"clarity": 0.6}}, "score": 0.8}',
         "prompt": {
-            "system_file": str(system),
+            "system": system.read_text(),
             "user_file": str(user),
             "parser": Parser.name,
         },
@@ -185,6 +188,22 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
                 "no_log_file": True,
             },
         )
+        if run == "replay":
+            snapshot = next((tmp_path / "live").rglob("config.yaml"))
+            legacy = yaml.safe_load(snapshot.read_text())
+            prompt = legacy["judge"]["prompt"]
+            archived = snapshot.parent / prompt["user_file"]
+            archived.write_text(
+                archived.read_text().replace("{instruction}", "{user_prompt}")
+            )
+            prompt["system"] = system.read_text().replace(
+                "{instruction_json}", "{user_prompt_json}"
+            )
+            legacy["run"]["result_folder"] = str(tmp_path / run)
+            snapshot.write_text(yaml.safe_dump(legacy))
+            cfg = load_config(snapshot)
+            assert cfg.judge.prompt.system == system.read_text()
+            assert "{user_prompt}" in archived.read_text()
         annotations = run_benchmark(cfg)
         assert annotations.set_index("instruction_index").completion.to_dict() == {
             1: "generated",

@@ -70,7 +70,7 @@ def test_fluency_task_resolves_inline_system_prompt():
     assert resolved.preset_name == "fluency"
     assert resolved.source == "preset"
     assert "completion of a sentence" in resolved.system_prompt
-    assert "{user_prompt}" in resolved.user_prompt_template
+    assert "{instruction}" in resolved.user_prompt_template
 
 
 def test_explicit_preset_wins_over_task_default():
@@ -143,7 +143,7 @@ def test_file_overrides_accept_named_parser(tmp_path):
     system_file = tmp_path / "system.txt"
     user_file = tmp_path / "user.txt"
     system_file.write_text("Judge with scores", encoding="utf-8")
-    user_file.write_text("Q: {user_prompt} A: {completion_A} B: {completion_B}")
+    user_file.write_text("Q: {instruction} A: {completion_a} B: {completion_b}")
 
     resolved = resolve_judge_prompt(
         system_file=system_file,
@@ -238,16 +238,11 @@ def test_every_preset_resolves_or_delegates():
             assert resolved.user_prompt_template or resolved.render_input
 
 
-@pytest.mark.parametrize("canonical", [False, True])
-def test_standard_prompt_uses_metadata_without_overriding_swapped_answers(canonical):
+def test_standard_prompt_uses_metadata_without_overriding_swapped_answers():
     prompt = replace(
         resolve_judge_prompt(preset="default"),
         system_prompt="Use {rubric}",
-        user_prompt_template=(
-            "{history}|{instruction}|{completion_a}|{completion_b_json}"
-            if canonical
-            else "{history}|{user_prompt}|{completion_A}|{completion_B_json}"
-        ),
+        user_prompt_template="{history}|{instruction}|{completion_a}|{completion_b_json}",
     )
     comparisons = pd.DataFrame(
         {
@@ -258,8 +253,7 @@ def test_standard_prompt_uses_metadata_without_overriding_swapped_answers(canoni
             "model_b": ["b"],
             "history": ['JSON {"x": 1}'],
             "rubric": ["Accuracy"],
-            "completion_A": ["stale"],
-            "completion_B_json": ["stale"],
+            "completion_b_json": ["stale"],
         },
         index=["q"],
     )
@@ -500,7 +494,7 @@ def test_prepared_field_validation_accepts_model_fields(preset):
         resolve_judge_prompt(preset=preset),
         user_prompt_template="{model}: {completion}"
         if preset == "single-score"
-        else "{model_a}: {completion_A} vs {model_b}: {completion_B}",
+        else "{model_a}: {completion_a} vs {model_b}: {completion_b}",
     )
     prepare = (
         prepare_single_answer_judging
