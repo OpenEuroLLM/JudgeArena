@@ -16,6 +16,7 @@ from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
 from judgearena.tasks.definitions.wildbench.dataset import WildBenchAdapter
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
+from scripts.migrate_saved_run import migrate_snapshot
 
 
 def _independent_task():
@@ -76,10 +77,12 @@ def test_mean_score_preserves_scale_and_counts_missing_results():
         "clarity": {"score": 6.5, "num_samples": 3, "num_missing": 1},
         "completeness": {"score": 6.0, "num_samples": 3, "num_missing": 2},
     }
-    for metadata in ("accuracy and clarity", {"accuracy": "high"}):
-        plain = pd.DataFrame(
-            {"score": [7], "parsed": [{"details": {"criteria": metadata}}]}
-        )
+    for details in (
+        None,
+        {"criteria": "accuracy and clarity"},
+        {"criteria": {"accuracy": "high"}},
+    ):
+        plain = pd.DataFrame({"score": [7], "parsed": [{"details": details}]})
         assert metric.calculate(plain) == {
             "score": 7,
             "num_samples": 1,
@@ -200,7 +203,9 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
                 "{instruction_json}", "{user_prompt_json}"
             )
             legacy["run"]["result_folder"] = str(tmp_path / run)
-            snapshot.write_text(yaml.safe_dump(legacy))
+            snapshot.write_text(
+                yaml.safe_dump(migrate_snapshot(legacy, snapshot.parent))
+            )
             cfg = load_config(snapshot)
             assert cfg.judge.prompt.system == system.read_text()
             assert "{user_prompt}" in archived.read_text()

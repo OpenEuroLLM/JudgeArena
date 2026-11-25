@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Literal
@@ -46,37 +45,6 @@ def resolve_prompt_paths(prompt, directory):
         value = owner[name]
         if isinstance(value, (str, Path)) and not Path(value).is_absolute():
             owner[name] = str(directory / value)
-
-
-def migrate_saved_template_fields(prompt):
-    """Rename placeholders in a loaded snapshot without rewriting its archived files."""
-    from judgearena.prompts.registry import file_prompt_name
-
-    original_user = prompt.get("user_file")
-    original_system = prompt.get("system_file")
-    for field in ("user", "system"):
-        file_field = f"{field}_file"
-        path = prompt.get(file_field)
-        text = Path(path).read_text(encoding="utf-8") if path else prompt.get(field)
-        if text is None:
-            continue
-
-        def rename(match):
-            key = match[1]
-            if key is None:  # Escaped opening braces introduce literal text.
-                return match[0]
-            return "{" + key.replace("user_prompt", "instruction").lower()
-
-        migrated = re.sub(
-            r"\{\{|\{((?:user_prompt|completion_[AB](?:_text)?)(?:_json)?)(?=[}:!])",
-            rename,
-            text,
-        )
-        if migrated != text:
-            if path and original_user and not prompt.get("name"):
-                prompt["name"] = file_prompt_name(original_system, original_user)
-            prompt.pop(file_field, None)
-            prompt[field] = migrated
 
 
 def config_prompts(data, *, expand_names=False):

@@ -62,6 +62,16 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
     ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
     task = get_packaged_task("alpaca-eval")
 
+    from scripts.migrate_saved_run import migrate_snapshot
+
+    legacy = task.spec.model_dump(mode="json")
+    legacy["task"] = "custom-instructions"
+    legacy["dataset"]["adapter"] = "judgearena_tables"
+    migrated = migrate_snapshot(
+        {"resolved_task": {"spec": legacy, "provenance": {}}}, tmp_path
+    )
+    assert migrated["resolved_task"]["spec"]["dataset"]["adapter"] == "alpaca_eval"
+
     data = instruction_dataset.load_task_data(task, local_tables_path=tmp_path)
     instructions = data.instructions.reset_index()
     outputs = data.model_outputs
@@ -348,6 +358,15 @@ def test_adapter_frames_preserve_metadata_and_alignment(battle_rows, labeled):
     assert "reference_pref" not in data.instructions
     if labeled:
         assert data.battles["reference_pref"].tolist() == [0.0, 1.0]
+    enriched = pairwise_data.PreferenceData(
+        data.instructions.assign(
+            reference_pref=0.5, battle_id="stale", rubric="grammar"
+        ),
+        battles=rows.drop(columns=["battle_id", "reference_pref"], errors="ignore"),
+    ).battles
+    assert "reference_pref" not in enriched
+    assert enriched.battle_id.tolist() == ["0", "1"]
+    assert enriched.rubric.tolist() == ["grammar", "grammar"]
     loaded = data.model_output_rows("a").iloc[0]
     assert "tstamp" not in data.instructions
     assert data.battles["tstamp"].tolist() == [1, 2]
@@ -461,6 +480,12 @@ def test_supplied_history_validation_and_system_override():
 def test_comparison_ids_survive_selection_with_shared_instructions(battle_rows):
     rows = battle_rows.iloc[:2].assign(instruction_index="q", instruction="same")
     data = pairwise_data.PreferenceData.from_battles(rows)
+    data = replace(
+        data,
+        instructions=data.instructions.assign(topic="writing"),
+        battles=data.battles.set_index("instruction_index", drop=False),
+    )
+    assert data.battles.topic.tolist() == ["writing", "writing"]
     assert data.battles.battle_id.tolist() == ["0", "1"]
     assert data.select({"reference_pref": [0.5]}).battles.battle_id.tolist() == ["1"]
 

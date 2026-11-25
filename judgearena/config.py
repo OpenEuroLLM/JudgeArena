@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
@@ -26,7 +25,6 @@ from judgearena.prompts.registry import prompt_option_files
 from judgearena.prompts.spec import (
     JudgePromptSpec,
     config_prompts,
-    migrate_saved_template_fields,
     resolve_prompt_paths,
 )
 from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
@@ -334,19 +332,6 @@ class JudgeArgs(BaseModel):
     """Strip ``<think>`` reasoning blocks from the battle completions before
     showing them to the judge."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def ignore_unused_legacy_fields(cls, values):
-        if not isinstance(values, dict):
-            return values
-        values = values.copy()
-        if values.get("provide_explanation") is False:
-            values.pop("provide_explanation")
-        for key in ("system_prompt_file", "user_prompt_file"):
-            if values.get(key) is None:
-                values.pop(key, None)
-        return values
-
     def model_kwargs(
         self,
         *,
@@ -648,6 +633,11 @@ class RunConfig(BaseSettings):
                 "meta_eval config is only valid for meta-evaluation tasks."
             )
         if is_meta_eval:
+            if self.graph is not None:
+                raise ValueError(
+                    "graph is for pairwise tasks. Use meta_eval.top_models and "
+                    "meta_eval.battles_per_model to sample meta-evaluation battles."
+                )
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
             if self.model.name is not None or self.model.baseline is not None:
@@ -805,147 +795,6 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def _migrate_saved_run(data: dict) -> dict:
-    """Read old run snapshots without exposing their options to new experiments."""
-    resolved = data.get("resolved_task")
-    if not isinstance(resolved, dict):
-        return data
-    data = deepcopy(data)
-    resolved = data["resolved_task"]
-    spec = resolved["spec"]
-    protocol = spec["protocol"]
-    saved_format = spec["dataset"].get("format")
-    for dataset in (spec["dataset"], data.get("dataset") or {}):
-        if not ({"format", "battle_columns"} & dataset.keys()) and dataset.get(
-            "adapter"
-        ) not in {"arena_battles", "judgearena_tables"}:
-            continue
-        release = dataset.pop("format", None)
-        if dataset.pop("battle_columns", {}) or release == "battles":
-            raise ValueError(
-                "Saved battle-table configs require a custom dataset adapter."
-            )
-        if dataset.get("adapter") == "judgearena_tables" and spec["task"] in {
-            "alpaca-eval",
-            "alpaca-eval-ja",
-        }:
-            dataset["adapter"] = "alpaca_eval"
-        if dataset.get("adapter") == "arena_battles":
-            release = release or saved_format or protocol.get("arena")
-            if release == "ComparIA":
-                dataset["adapter"] = "comparia"
-            elif release in {"LMArena", "LMArena-55k", "LMArena-100k", "LMArena-140k"}:
-                dataset["adapter"] = "lmarena"
-            else:
-                raise ValueError(f"Unknown saved arena format {release!r}")
-        # A saved release selector could narrow a combined source list.
-        if dataset.get("adapter") == "lmarena" and release and release != "LMArena":
-            repo_id = (
-                f"lmarena-ai/arena-human-preference-{release.removeprefix('LMArena-')}"
-            )
-            dataset["sources"] = {
-                key: source
-                for key, source in dataset["sources"].items()
-                if source.get("repo_id") == repo_id
-            }
-            if not dataset["sources"]:
-                raise ValueError(
-                    f"No declared dataset source matches saved format {release!r}."
-                )
-        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
-    for graph in (
-        data.get("graph"),
-        (data.get("protocol") or {}).get("graph"),
-        protocol.get("graph"),
-    ):
-        if isinstance(graph, dict) and "per_language" in graph:
-            quota = graph.pop("per_language")
-            if quota is not None:
-                graph.setdefault("group_by", "lang")
-                graph.setdefault("per_group", quota)
-    options = data.pop("elo", None) or {}
-    old_runner = protocol["runner"] == "elo"
-    if not old_runner and not options:
-        return data
-    if protocol["runner"] not in {"elo", "pairwise"}:
-        raise ValueError("Saved Elo settings require a pairwise task")
-
-    scoring = protocol["scoring"]
-    metrics = scoring["metrics"]
-    defaults = next(
-        (
-            m.get("parameters", {})
-            for m in metrics
-            if m["metric"] == "bradley_terry"
-            and m.get("name") in (None, "bradley_terry")
-        ),
-        {},
-    )
-    soft = options.get(
-        "soft_elo", defaults.get("soft", scoring.get("default_soft", True))
-    )
-    temperature = options.get(
-        "soft_elo_temperature", scoring.get("default_temperature", 0.3)
-    )
-    # Before frozen fitting existed, omitted fit_mode meant a joint fit.
-    fit_mode = options.get("fit_mode", defaults.get("fit_mode", "joint"))
-    graph = data.get("graph") or protocol.get("graph") or {}
-    for old, new in (
-        ("elo_random_battles", "random_battles"),
-        ("n_instructions_per_language", "per_group"),
-    ):
-        if options.get(old) is not None:
-            graph.setdefault(new, options[old])
-    if graph.get("per_group") is not None:
-        graph.setdefault("group_by", "lang")
-    protocol.update(runner="pairwise", graph=graph)
-    data["graph"] = graph
-    protocol.pop("arena", None)
-    judge = protocol["judge"]
-    for key, value in {
-        "preference_temperature": temperature if soft else None,
-        "calibrate_temperature": options.get("calibrate_temperature", False) and soft,
-        "calibration_size": options.get("calibration_size"),
-    }.items():
-        if judge.get(key) is None:
-            judge[key] = value
-    for metric in metrics:
-        if metric["metric"] != "bradley_terry":
-            continue
-        parameters = metric.setdefault("parameters", {})
-        migrated = {
-            "fit_mode": fit_mode,
-            "soft": soft,
-            "baseline_model": options.get(
-                "baseline_model", defaults.get("baseline_model")
-            ),
-            "n_bootstraps": options.get(
-                "n_bootstraps", defaults.get("n_bootstraps", 20)
-            ),
-        }
-        # The old runner applied its runtime overrides to the default metric only.
-        if metric.get("name") in (None, "bradley_terry"):
-            parameters.update(migrated)
-        else:
-            for key, value in migrated.items():
-                parameters.setdefault(key, value)
-        parameters.setdefault(
-            "reference_min_battles", 500 if parameters["fit_mode"] == "joint" else 0
-        )
-    scoring.pop("default_soft", None)
-    scoring.pop("default_temperature", None)
-    if options.get("languages"):
-        from judgearena.datasets import resolve_dataset_filters
-
-        run = data.setdefault("run", {})
-        run["filters"] = resolve_dataset_filters(
-            None, run.get("filters", {}), {"lang": options["languages"]}
-        )
-    data.update(protocol=protocol, dataset=spec["dataset"])
-    data["resolved_task"]["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
-    return data
-
-
 def _read_config(
     path: str | Path, *, task_override: str | None = None, cli_elo: dict | None = None
 ) -> dict:
@@ -954,7 +803,6 @@ def _read_config(
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    data = _migrate_saved_run(data)
     # Apply hard mode after both sources have supplied their legacy judge settings.
     file_elo = data.get("elo")
     if isinstance(file_elo, dict) and cli_elo and "languages" in cli_elo:
@@ -980,11 +828,12 @@ def _read_config(
     data = RunConfig._merge_task_overrides(data)
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
-        if isinstance(resolved, dict):
-            migrate_saved_template_fields(prompt)
     if hash_matches:
-        # Path resolution changes the definition, not its source provenance.
-        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(resolved["spec"])
+        # Hash the same defaults and resolved paths that RunConfig validates.
+        spec = TaskSpec.model_validate(resolved["spec"])
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(
+            spec.model_dump(mode="json")
+        )
     return data
 
 

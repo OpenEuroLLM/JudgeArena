@@ -370,12 +370,11 @@ def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
     result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    metric = result["metrics"]["pairwise_win_rate"]
     if failure == "calculate":
-        assert result["metrics"] == {
-            "pairwise_win_rate": {"error": "scorer unavailable"}
-        }
+        assert metric["error"] == "scorer unavailable"
+        assert metric["breakdown_errors"]["model_a='Dummy/no answer'"] == metric["error"]
     else:
-        metric = result["metrics"]["pairwise_win_rate"]
         assert metric["num_battles"] == 2
         assert metric["groups"]["model_a"][0]["group"] == "Dummy/no answer"
     if failure:

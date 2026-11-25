@@ -229,7 +229,7 @@ def assemble_comparisons(
     belong to the original answer pair and are not inherited by new pairs.
     """
     metadata = instructions.drop(
-        columns=["reference_pref", "pref", "pref_hard"]
+        columns=["reference_pref", "pref", "pref_hard", "winner"]
         + [column for column in instructions if column.endswith(("_a", "_b"))],
         errors="ignore",
     )

@@ -132,15 +132,6 @@ class CompletionData:
         if not filters:
             return self
         frame = self.battles if isinstance(self, PreferenceData) else self.instructions
-        if isinstance(self, PreferenceData):
-            instruction_columns = [
-                column
-                for column in filters
-                if column not in frame and column in self.instructions
-            ]
-            frame = frame.join(
-                self.instructions[instruction_columns], on="instruction_index"
-            )
         _require_columns(frame, set(filters), "Dataset selection")
         selected = pd.Series(True, index=frame.index)
         for column, values in filters.items():
@@ -268,6 +259,32 @@ def _validate_model_outputs(outputs: pd.DataFrame) -> None:
         raise ValueError("Model outputs require model identities.")
 
 
+def _instruction_fields(columns: pd.Index) -> pd.Index:
+    battle_fields = {
+        "instruction_index",
+        "battle_id",
+        "reference_pref",
+        "pref",
+        "pref_hard",
+        "source",
+        "winner",
+    }
+    return columns[
+        [c not in battle_fields and not c.endswith(("_a", "_b")) for c in columns]
+    ]
+
+
+def with_instruction_metadata(
+    rows: pd.DataFrame, instructions: pd.DataFrame
+) -> pd.DataFrame:
+    """Fill missing prompt columns by instruction ID, preserving comparison IDs and order."""
+    fields = _instruction_fields(
+        instructions.columns.difference(rows.columns, sort=False)
+    )
+    extra = instructions[fields].reindex(rows["instruction_index"]).set_axis(rows.index)
+    return pd.concat([rows, extra], axis=1)
+
+
 @dataclass(frozen=True)
 class PreferenceData(CompletionData):
     """Completion data with existing comparisons and optional reference preferences.
@@ -314,7 +331,7 @@ class PreferenceData(CompletionData):
         )
         if self.battles[["model_a", "model_b"]].isna().any().any():
             raise ValueError("Battles require model identities.")
-        battles = self.battles.copy()
+        battles = with_instruction_metadata(self.battles, self.instructions)
         if "battle_id" not in battles:
             battles["battle_id"] = pd.RangeIndex(len(battles)).astype(str)
         ids = battles["battle_id"]
@@ -351,18 +368,7 @@ class PreferenceData(CompletionData):
             battles["instruction_index"] = range(len(battles))
         indexed = battles.set_index("instruction_index", drop=False)
         slot_columns = [c for c in battles if c.endswith(("_a", "_b"))]
-        instructions = indexed.drop(
-            columns=[
-                "instruction_index",
-                "battle_id",
-                "reference_pref",
-                "pref",
-                "source",
-                "winner",
-                *slot_columns,
-            ],
-            errors="ignore",
-        )
+        instructions = indexed[_instruction_fields(indexed.columns)]
         unique_instructions = instructions.loc[~instructions.index.duplicated()]
         aligned = unique_instructions.reindex(instructions.index)
         varying = [c for c in instructions if not aligned[c].equals(instructions[c])]

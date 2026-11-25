@@ -16,6 +16,7 @@ from judgearena.config import (
 )
 from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
+from scripts.migrate_saved_run import migrate_snapshot
 
 
 @pytest.mark.parametrize("override", [None, 0.8])
@@ -112,32 +113,9 @@ def test_store_root_null_disables_cache_from_cli():
     assert execution_module.build_judgement_cache(cfg) is None
 
 
-def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
-    yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
-        "task: alpaca-eval\n"
-        "model: {name: Dummy/a, baseline: Dummy/b}\n"
-        "judge:\n"
-        "  model: Dummy/j\n"
-        "  provide_explanation: false\n"
-        "  system_prompt_file: null\n"
-        "  user_prompt_file: null\n"
-    )
-
-    assert load_config(yaml_path) == RunConfig(**_base_generate())
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("provide_explanation", True),
-        ("system_prompt_file", "system.txt"),
-        ("prompt_presett", "default"),
-    ],
-)
-def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
+def test_unknown_judge_field_is_rejected():
     data = _base_generate()
-    data["judge"][field] = value
+    data["judge"]["prompt_presett"] = "default"
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RunConfig(**data)
@@ -416,14 +394,14 @@ def test_graph_config_and_cli_overrides(tmp_path):
         RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
     saved = cfg.model_dump(mode="json")
     saved["graph"] = {"per_language": 7}
-    config.write_text(yaml.safe_dump(saved))
+    config.write_text(yaml.safe_dump(migrate_snapshot(saved, config.parent)))
     migrated = load_config(config)
     assert migrated.graph.group_by == "lang" and migrated.graph.per_group == 7
     saved["elo"] = {"soft_elo": True, "n_bootstraps": 200, "fit_mode": "joint"}
     metric = saved["resolved_task"]["spec"]["protocol"]["scoring"]["metrics"][0]
     metric["parameters"]["baseline_model"] = "task-anchor"
     saved["elo"]["baseline_model"] = "run-anchor"
-    config.write_text(yaml.safe_dump(saved))
+    config.write_text(yaml.safe_dump(migrate_snapshot(saved, config.parent)))
     params = (
         load_config(config).resolved_task.spec.protocol.scoring.metrics[0].parameters
     )
@@ -434,7 +412,7 @@ def test_graph_config_and_cli_overrides(tmp_path):
     )
     metric["name"] = "frozen"
     metric["parameters"]["fit_mode"] = "frozen"
-    config.write_text(yaml.safe_dump(saved))
+    config.write_text(yaml.safe_dump(migrate_snapshot(saved, config.parent)))
     migrated = load_config(config)
     parameters = migrated.resolved_task.spec.protocol.scoring.metrics[0].parameters
     assert parameters["soft"] is False and parameters["n_bootstraps"] == 0
@@ -818,6 +796,7 @@ def test_build_run_config_elo_defaults():
     [
         ({"model": {"name": "Dummy/m"}}, "model.name"),
         ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
+        ({"graph": {"random_battles": 2}}, "meta_eval.battles_per_model"),
     ],
 )
 def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):

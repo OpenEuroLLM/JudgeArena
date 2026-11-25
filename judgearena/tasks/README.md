@@ -231,8 +231,7 @@ group coverage. Omit that total limit to retain each group’s quota.
 Language filters select candidate battles. Overall reference ratings use the full task reference pool; a language breakdown uses references from that language.
 Metrics receive judged rows. A metric that also needs reference labels can declare a `reference_battles` keyword argument. Both tables are listed separately in `evaluation.json` for graph runs.
 
-Set preference conversion and calibration under `protocol.judge`. The deprecated `elo:` keys and `--elo.*` flags warn with their replacements. Old saved runs
-migrate on load, preserving their fitting mode (joint when historically omitted).
+Set preference conversion and calibration under `protocol.judge`.
 Results use `evaluation.json`, the report and annotations; ratings and bootstraps
 are in the report rather than separate Elo exports. To score saved rows again, pass
 the manifest’s `artifacts.metric_data` path to `judgearena.artifacts.read_metric_data`

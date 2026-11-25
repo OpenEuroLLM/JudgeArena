@@ -59,8 +59,8 @@ class MeanScoreMetric:
         result = self._summarize(annotations["score"])
         if "parsed" in annotations:
             values = [
-                parsed.get("details", {}).get("criteria", {})
-                if isinstance(parsed, dict)
+                parsed["details"].get("criteria", {})
+                if isinstance(parsed, dict) and isinstance(parsed.get("details"), dict)
                 else {}
                 for parsed in annotations.parsed
             ]
@@ -234,11 +234,15 @@ def calculate_metrics(
             )
             if missing:
                 raise ValueError(f"Missing metric columns: {sorted(missing)}")
-            values = dict(metric.calculate(battles, **kwargs))
         except Exception as exc:
             logger.warning("Skipping metric %r: %s", request.metric, exc)
             calculated[name] = {"error": str(exc)}
             continue
+        try:
+            values = dict(metric.calculate(battles, **kwargs))
+        except Exception as exc:
+            logger.warning("Overall metric %r failed: %s", name, exc)
+            values = {"error": str(exc)}
         if request.breakdown_by:
             groups: dict[str, list[dict[str, object]]] = {}
             for field in request.breakdown_by:
@@ -259,12 +263,14 @@ def calculate_metrics(
                                 **kwargs,
                                 "reference_battles": references.loc[mask],
                             }
-                        entries.append(
-                            {
-                                "group": _group_value(key),
-                                "values": metric.calculate(group, **group_kwargs),
-                            }
-                        )
+                        try:
+                            result = metric.calculate(group, **group_kwargs)
+                        except Exception as exc:
+                            label = f"{field}={key!r}"
+                            values.setdefault("breakdown_errors", {})[label] = str(exc)
+                            logger.warning("Skipping %r group %s: %s", name, label, exc)
+                            continue
+                        entries.append({"group": _group_value(key), "values": result})
                     groups[field] = entries
                 except Exception as exc:
                     values.setdefault("breakdown_errors", {})[field] = str(exc)
@@ -295,7 +301,8 @@ def render_metrics(
     for name, result in results.items():
         if "error" in result:
             sections.append(f"{name}: failed — {result['error']}")
-            continue
+            if "groups" not in result:
+                continue
         try:
             metric_type = configured.get(name)
             if metric_type is None:
@@ -305,11 +312,11 @@ def render_metrics(
             overall = {
                 key: value
                 for key, value in result.items()
-                if key not in ("groups", "breakdown_errors")
+                if key not in ("groups", "breakdown_errors", "error")
             }
             if overall:
                 sections.append(metric_type.render(overall))
-            elif not any(
+            elif "error" not in result and not any(
                 group["values"]
                 for groups in result.get("groups", {}).values()
                 for group in groups

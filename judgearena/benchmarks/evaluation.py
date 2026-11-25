@@ -33,6 +33,7 @@ from judgearena.benchmarks.pairwise.graph import (
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
+from judgearena.datasets.data import with_instruction_metadata
 from judgearena.evaluate import (
     prepare_single_answer_judging,
     resolve_run_judge_prompt,
@@ -48,7 +49,6 @@ if TYPE_CHECKING:
     from judgearena.benchmarks.scoring import ConfiguredMetrics
     from judgearena.config import RunConfig
     from judgearena.datasets.data import CompletionData
-    from judgearena.prompts.registry import ResolvedJudgePrompt
 
 logger = get_logger(__name__)
 
@@ -88,8 +88,6 @@ def run_evaluation(
     opponent_panel: pd.DataFrame | None = None,
     metrics: ConfiguredMetrics | None = None,
     sampling_metadata: dict[str, object] | None = None,
-    reference_battles: pd.DataFrame | None = None,
-    prompt: ResolvedJudgePrompt | None = None,
 ) -> Path | pd.Series | pd.DataFrame:
     """Load or generate answers, judge them, and save annotations and metrics.
 
@@ -102,7 +100,7 @@ def run_evaluation(
     cfg = cfg.for_task(resolved_task)
     resolved_task = cfg.resolved_task
     independent = resolved_task.spec.protocol.runner == "single_answer"
-    resolved_prompt = prompt or resolve_run_judge_prompt(
+    resolved_prompt = resolve_run_judge_prompt(
         resolved_task,
         cfg.judge,
         multi_turn=resolved_task.spec.protocol.generation.mode == "multi_turn_chat",
@@ -112,6 +110,7 @@ def run_evaluation(
     task_data = data if data is not None else load_task_data(resolved_task)
     comparison_rng = np.random.default_rng(cfg.run.seed)
     sampled_graph = opponent_panel is None and cfg.graph is not None
+    reference_battles = None
     if sampled_graph:
         opponent_panel, reference_battles, sampling_metadata = prepare_graph(
             cfg, task_data, rng=comparison_rng
@@ -141,12 +140,7 @@ def run_evaluation(
         instruction_ids = pd.Index(opponent_panel["instruction_index"])
         instructions_df = task_data.instructions.loc[instruction_ids.unique()]
         if not sampled_graph:
-            fields = instructions_df.columns.difference(
-                opponent_panel.columns, sort=False
-            )
-            opponent_panel = opponent_panel.join(
-                instructions_df[fields], on="instruction_index", validate="many_to_one"
-            )
+            opponent_panel = with_instruction_metadata(opponent_panel, instructions_df)
     task_data = preload_model_outputs(
         task_data,
         [cfg.model.name] + (baseline_plan.unique_models if baseline_plan else []),

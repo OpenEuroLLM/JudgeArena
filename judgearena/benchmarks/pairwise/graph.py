@@ -11,7 +11,7 @@ from judgearena.battles import swap_comparison_slots
 
 def validate_graph_task(protocol):
     """Graph preparation supplies opponents rather than a task baseline."""
-    if not hasattr(protocol, "generation") or not hasattr(protocol.judge, "turns"):
+    if protocol.runner != "pairwise":
         raise ValueError(
             "Graph releases require a task that can generate and compare answers"
         )
@@ -73,7 +73,9 @@ def prepare_candidate_comparisons(panel, answers, *, rng, turns=None):
     )
     if rng is not None:
         candidate_is_a = rng.choice([True, False], size=len(panel))
-        comparisons["cache_orientation"] = np.where(candidate_is_a, "direct", "reversed")
+        comparisons["cache_orientation"] = np.where(
+            candidate_is_a, "direct", "reversed"
+        )
         comparisons = swap_comparison_slots(comparisons, ~candidate_is_a)
     comparisons = conversation_comparisons(comparisons, turns)
     source_ids = comparisons["source_instruction_index"] if turns is not None else None

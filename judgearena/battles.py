@@ -164,6 +164,7 @@ def judged_battles(
     frame = judgments.reset_index(drop=True).copy()
     frame["pref"] = preference_values(judgments["pref"]).to_numpy()
     frame["pref_hard"] = hard_preferences(frame["pref"])
+    frame["winner"] = winner_labels(frame["pref"])
     frame["orientation"] = judgments["orientation"].to_numpy()
     frame["evaluation_model"] = evaluation_model
     frame["source"] = "llm-judge"

@@ -24,6 +24,7 @@ from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.registry import resolve_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
+from scripts.migrate_saved_run import migrate_snapshot
 
 N_BATTLES = 30
 ARENA_MODELS = ["arena_model_alpha", "arena_model_beta", "arena_model_gamma"]
@@ -414,10 +415,7 @@ def test_run_elo_aligns_shuffled_completions_with_judged_battles(
         == synthetic_arena_df["lang"].iloc[:3].tolist() * repeats
     )
     assert annotations["source"].eq("llm-judge").all()
-    assert (
-        annotations["winner"].tolist()
-        == synthetic_arena_df["winner"].iloc[:3].tolist() * repeats
-    )
+    assert "winner" not in annotations
     for row in annotations.itertuples():
         candidate = "a" if row.model_a == cfg.model.name else "b"
         opponent = "b" if candidate == "a" else "a"
@@ -597,7 +595,7 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     # An old per-language cap is replayed without changing the selected rows.
     legacy["graph"] = {"per_language": 10000}
     old_path = replay_dir / "legacy-config.yaml"
-    old_path.write_text(yaml.safe_dump(legacy))
+    old_path.write_text(yaml.safe_dump(migrate_snapshot(legacy, old_path.parent)))
     migrated = load_config(old_path)
     assert (
         "elo" not in migrated.model_dump()
@@ -616,7 +614,7 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     legacy["elo"].pop("fit_mode")
     for metric in old_protocol["scoring"]["metrics"]:
         metric.get("parameters", {}).pop("fit_mode", None)
-    old_path.write_text(yaml.safe_dump(legacy))
+    old_path.write_text(yaml.safe_dump(migrate_snapshot(legacy, old_path.parent)))
     historical = load_config(old_path)
     rating = next(
         m
@@ -906,8 +904,14 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     cfg = RunConfig(
         task="elo-comparia",
         model={"name": "Dummy/candidate"},
-        judge={"model": "Dummy/score A: 6 score B: 8"},
-        graph={"random_battles": 6},
+        judge={
+            "model": "Dummy/score A: 6 score B: 8",
+            "prompt": {
+                "user": "{rubric}: {completion_a} or {completion_b}?",
+                "parser": "score",
+            },
+        },
+        graph={"group_by": "rubric", "per_group": 6},
         protocol={
             "runner": "pairwise",
             "generation": {"mode": "single_turn_chat"},
@@ -928,6 +932,7 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         run={"store_root": str(tmp_path / "cache"), "no_log_file": True},
     )
     data = normalize_battles(_arena_df(30), "ComparIA")
+    data = replace(data, instructions=data.instructions.assign(rubric="clarity"))
     first = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
     report = json.loads(
         (
@@ -943,6 +948,13 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     assert len(judgments) == 6 and len(references) == 30
     assert {"pref", "pref_hard", "completion_a"}.isdisjoint(references)
     assert references.reference_pref.notna().all()
+    assert references.rubric.eq("clarity").all()
+    assert "winner" in references
+    assert (
+        judgments.winner.tolist()
+        == judgments.pref_hard.map({0: "model_a", 0.5: "tie", 1: "model_b"}).tolist()
+    )
+    assert "winner" not in pd.read_parquet(first.parent / "annotations.parquet")
     saved = load_config(first.parent / "config.yaml")
     spec = saved.resolved_task.spec.model_dump()
     spec["protocol"]["scoring"]["metrics"] = [
@@ -992,7 +1004,7 @@ def test_supplied_panel_reuses_one_answer_for_two_fixed_opponents(
             "model_b": ["X", "Y"],
             "completion_b": ["first", "second"],
         }
-    )
+    ).rename_axis("instruction_index")
     cfg = _default_args(result_folder=str(tmp_path), store_root=str(tmp_path / "cache"))
 
     def evaluate(folder):
