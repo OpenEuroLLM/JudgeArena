@@ -14,19 +14,30 @@ def _install_fake_sglang(monkeypatch, *, tokenizer_template="{{ messages }}"):
         def __init__(self, **kwargs):
             captured["engine_init"] = kwargs
 
-        def generate(self, **kwargs):
-            captured["generate_call"] = kwargs
+        def generate(
+            self, prompt, sampling_params, return_logprob=False, top_logprobs_num=0
+        ):
+            # Mirrors sglang.Engine.generate: unknown kwargs raise TypeError.
+            captured["generate_call"] = {
+                "prompt": prompt,
+                "sampling_params": sampling_params,
+                "return_logprob": return_logprob,
+                "top_logprobs_num": top_logprobs_num,
+            }
             return [
                 {
                     "text": "ok",
                     "meta_info": {
                         "prompt_tokens": 3,
                         "completion_tokens": 2,
-                        "output_top_logprobs": [[(-0.1, 7, "A"), (-2.3, 8, "B")]],
+                        "output_top_logprobs": [[(-0.1, 7, None), (-2.3, 8, None)]],
                     },
                 }
-                for _ in kwargs["prompt"]
+                for _ in prompt
             ]
+
+        def shutdown(self):
+            captured["shutdown"] = True
 
     class FakeTokenizer:
         chat_template = tokenizer_template
@@ -35,15 +46,18 @@ def _install_fake_sglang(monkeypatch, *, tokenizer_template="{{ messages }}"):
             captured["template_call"] = {"messages": messages, "kwargs": kwargs}
             return "PROMPT:" + messages[-1]["content"]
 
+        def decode(self, token_ids):
+            return {7: "A", 8: "B"}[token_ids[0]]
+
+    def from_pretrained(*args, **kwargs):
+        captured["tokenizer_load"] = {"args": args, "kwargs": kwargs}
+        return FakeTokenizer()
+
     monkeypatch.setitem(sys.modules, "sglang", SimpleNamespace(Engine=FakeEngine))
     monkeypatch.setitem(
         sys.modules,
         "transformers",
-        SimpleNamespace(
-            AutoTokenizer=SimpleNamespace(
-                from_pretrained=lambda *args, **kwargs: FakeTokenizer()
-            )
-        ),
+        SimpleNamespace(AutoTokenizer=SimpleNamespace(from_pretrained=from_pretrained)),
     )
     return captured
 
@@ -151,3 +165,47 @@ def test_sglang_cache_descriptor_ignores_hardware_kwargs(monkeypatch):
     )
 
     assert small == large
+
+
+def test_make_model_forwards_precision_kwargs_and_keys_cache(monkeypatch):
+    captured = _install_fake_sglang(monkeypatch)
+    monkeypatch.setattr(
+        "judgearena.cache.inference.importlib_metadata.version",
+        lambda name: "1.0",
+    )
+
+    models.make_model(
+        "SGLang/m", max_tokens=8, quantization="fp8", kv_cache_dtype="fp8_e5m2"
+    )
+    assert captured["engine_init"]["quantization"] == "fp8"
+    assert captured["engine_init"]["kv_cache_dtype"] == "fp8_e5m2"
+
+    def descriptor(**kwargs):
+        _, name, resolved, sampling = models._resolve_model_config(
+            "SGLang/m", 8, kwargs
+        )
+        return build_model_descriptor("SGLang", name, {**resolved, **sampling})
+
+    default = descriptor()
+    assert descriptor(quantization="fp8") != default
+    assert descriptor(kv_cache_dtype="fp8_e5m2") != default
+
+
+def test_chat_sglang_loads_tokenizer_with_engine_path_and_revision(monkeypatch):
+    captured = _install_fake_sglang(monkeypatch)
+    models.ChatSGLang(model="demo", tokenizer_path="custom", revision="pin")
+
+    assert captured["engine_init"]["tokenizer_path"] == "custom"
+    assert captured["tokenizer_load"]["args"] == ("custom",)
+    assert captured["tokenizer_load"]["kwargs"]["revision"] == "pin"
+
+
+def test_generation_shuts_down_sglang_engine_before_judge(monkeypatch):
+    import pandas as pd
+
+    from judgearena.generate import generate_instructions
+
+    captured = _install_fake_sglang(monkeypatch)
+    generate_instructions(pd.Series(["hi"]), model="SGLang/m", max_tokens=8)
+
+    assert captured["shutdown"] is True

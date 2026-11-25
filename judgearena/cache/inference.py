@@ -177,6 +177,13 @@ class PreparedModel:
             self._model = self.factory()
         return self._model
 
+    def release(self) -> None:
+        """Shut down a materialized local engine that frees memory only at exit."""
+        model, self._model = self._model, None
+        shutdown = getattr(model, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
 
 @dataclass(frozen=True)
 class InferenceCache[CacheRowMetadataT: CacheRowMetadata](ABC):

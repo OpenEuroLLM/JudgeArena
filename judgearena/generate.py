@@ -13,6 +13,12 @@ from judgearena.models import PreparedModel, do_inference, prepare_model
 from judgearena.utils import strip_thinking_tags, truncate
 
 
+def _release(model) -> None:
+    """Free a local GPU engine once its generation stage is done."""
+    if isinstance(model, PreparedModel):
+        model.release()
+
+
 def _with_system_prompt(messages, system_prompt):
     if system_prompt is None:
         return list(messages)
@@ -67,15 +73,18 @@ def generate_messages(
         )
         for messages in instructions
     ]
-    completions = do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        stage="generation",
-        cache_row_metadata=[
-            {"instruction_id": str(index)} for index in instructions.index
-        ],
-    )
+    try:
+        completions = do_inference(
+            chat_model=chat_model,
+            inputs=inputs,
+            use_tqdm=use_tqdm,
+            stage="generation",
+            cache_row_metadata=[
+                {"instruction_id": str(index)} for index in instructions.index
+            ],
+        )
+    finally:
+        _release(chat_model)
     return pd.DataFrame(
         {
             "instruction_index": instructions.index,
@@ -124,15 +133,18 @@ def generate_instructions(
         ]
     )
 
-    completions = do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        use_tqdm=use_tqdm,
-        stage="generation",
-        cache_row_metadata=[
-            {"instruction_id": str(index)} for index in instructions.index
-        ],
-    )
+    try:
+        completions = do_inference(
+            chat_model=chat_model,
+            inputs=inputs,
+            use_tqdm=use_tqdm,
+            stage="generation",
+            cache_row_metadata=[
+                {"instruction_id": str(index)} for index in instructions.index
+            ],
+        )
+    finally:
+        _release(chat_model)
     df_outputs = pd.DataFrame(
         data={
             "completion": completions,
@@ -254,42 +266,46 @@ def generate_multiturn(
         ]
 
     histories: list[list[dict[str, str]]] = [[] for _ in turns]
-    for turn in range(max(map(len, turns), default=0)):
-        active = [i for i, row in enumerate(turns) if turn < len(row)]
-        inputs = []
-        for i in active:
-            histories[i].append({"role": "user", "content": turns[i][turn]})
-            inputs.append(
-                _chat_input(
-                    histories[i],
-                    system_prompt=system_prompt,
-                    truncate_input_chars=truncate_input_chars,
-                    strip_thinking=strip_thinking_before_history,
+    try:
+        for turn in range(max(map(len, turns), default=0)):
+            active = [i for i, row in enumerate(turns) if turn < len(row)]
+            inputs = []
+            for i in active:
+                histories[i].append({"role": "user", "content": turns[i][turn]})
+                inputs.append(
+                    _chat_input(
+                        histories[i],
+                        system_prompt=system_prompt,
+                        truncate_input_chars=truncate_input_chars,
+                        strip_thinking=strip_thinking_before_history,
+                    )
                 )
-            )
-        ids = [f"{idxs[i]}:turn-{turn + 1}" for i in active]
-        if use_category_temperatures:
-            answers = _infer_grouped_by_temperature(
-                model_spec=model,
-                max_tokens=max_tokens,
-                model_kwargs=model_kwargs,
-                base_model=base_model,
-                inputs=inputs,
-                instruction_ids=ids,
-                temperatures=[temperatures[i] for i in active],
-                use_tqdm=use_tqdm,
-                inference_cache=inference_cache,
-            )
-        else:
-            answers = do_inference(
-                chat_model=chat_model,
-                inputs=inputs,
-                use_tqdm=use_tqdm,
-                stage="generation",
-                cache_row_metadata=[{"instruction_id": i} for i in ids],
-            )
-        for i, answer in zip(active, answers, strict=True):
-            histories[i].append({"role": "assistant", "content": str(answer)})
+            ids = [f"{idxs[i]}:turn-{turn + 1}" for i in active]
+            if use_category_temperatures:
+                answers = _infer_grouped_by_temperature(
+                    model_spec=model,
+                    max_tokens=max_tokens,
+                    model_kwargs=model_kwargs,
+                    base_model=base_model,
+                    inputs=inputs,
+                    instruction_ids=ids,
+                    temperatures=[temperatures[i] for i in active],
+                    use_tqdm=use_tqdm,
+                    inference_cache=inference_cache,
+                )
+            else:
+                answers = do_inference(
+                    chat_model=chat_model,
+                    inputs=inputs,
+                    use_tqdm=use_tqdm,
+                    stage="generation",
+                    cache_row_metadata=[{"instruction_id": i} for i in ids],
+                )
+            for i, answer in zip(active, answers, strict=True):
+                histories[i].append({"role": "assistant", "content": str(answer)})
+    finally:
+        _release(chat_model)
+        _release(base_model)
     return pd.DataFrame(
         {
             "instruction_index": idxs,
@@ -320,14 +336,17 @@ def generate_base(
         for instruction in instructions
     ]
 
-    completions = do_inference(
-        chat_model=chat_model,
-        inputs=inputs,
-        stage="generation",
-        cache_row_metadata=[
-            {"instruction_id": str(index)} for index in instructions.index
-        ],
-    )
+    try:
+        completions = do_inference(
+            chat_model=chat_model,
+            inputs=inputs,
+            stage="generation",
+            cache_row_metadata=[
+                {"instruction_id": str(index)} for index in instructions.index
+            ],
+        )
+    finally:
+        _release(chat_model)
 
     df_outputs = pd.DataFrame(
         data={

@@ -615,8 +615,11 @@ class ChatSGLang(ChatVLLM):
         self.llm = _init_llm_with_retry(
             sglang.Engine, model_path=model, **sglang_kwargs
         )
+        # Load the same tokenizer the engine uses so prompts match its template.
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model, trust_remote_code=sglang_kwargs["trust_remote_code"]
+            sglang_kwargs.get("tokenizer_path") or model,
+            revision=sglang_kwargs.get("revision"),
+            trust_remote_code=sglang_kwargs["trust_remote_code"],
         )
         self.chat_template = chat_template
         self._use_generate = not (
@@ -632,6 +635,10 @@ class ChatSGLang(ChatVLLM):
 
     def set_temperature(self, temperature: float) -> None:
         self.sampling_params["temperature"] = float(temperature)
+
+    def shutdown(self) -> None:
+        """Stop the engine and free its GPU memory (SGLang only does so at exit)."""
+        self.llm.shutdown()
 
     def _to_prompt(self, input_item) -> str:
         if self._use_generate:
@@ -651,7 +658,6 @@ class ChatSGLang(ChatVLLM):
             {
                 "return_logprob": True,
                 "top_logprobs_num": int(self._top_logprobs),
-                "return_text_in_logprobs": True,
             }
             if self._top_logprobs is not None
             else {}
@@ -667,12 +673,17 @@ class ChatSGLang(ChatVLLM):
         for out in outputs:
             meta = out.get("meta_info", {})
             top = None
-            # Each position is a list of (logprob, token_id, token_text).
+            # Each position is a list of (logprob, token_id, token_text); the
+            # offline engine leaves token_text empty, so decode the id.
             output_top_logprobs = meta.get("output_top_logprobs")
             if self._top_logprobs is not None and output_top_logprobs:
                 top = {
-                    token_text: float(logprob)
-                    for logprob, _token_id, token_text in output_top_logprobs[0]
+                    (
+                        token_text
+                        if token_text is not None
+                        else self.tokenizer.decode([token_id])
+                    ): float(logprob)
+                    for logprob, token_id, token_text in output_top_logprobs[0]
                 }
             usage = None
             if usage_stage is not None:
@@ -1171,7 +1182,13 @@ _REMOTE_ENDPOINTS = {
 
 
 # vLLM-only keys that the SGLang wrapper also understands.
-_SGLANG_SHARED_KWARGS = ("max_model_len", "chat_template", "trust_remote_code")
+_SGLANG_SHARED_KWARGS = (
+    "max_model_len",
+    "chat_template",
+    "trust_remote_code",
+    "quantization",
+    "kv_cache_dtype",
+)
 
 
 def _resolve_model_config(
