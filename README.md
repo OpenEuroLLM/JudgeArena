@@ -35,7 +35,7 @@ This generates ten candidate answers and compares them with the task's saved GPT
 
 The example uses the same model for generation and judging; choose a different `--judge.model` to evaluate with another judge. Ten questions are useful for checking your setup. Omit the limit to evaluate the full task.
 
-For local inference, install `pip install "judgearena[vllm]"` or `pip install "judgearena[llamacpp]"`. See [model setup](docs/models.md) for backend options and chat templates.
+For local inference, install `pip install "judgearena[vllm]"`, `pip install "judgearena[sglang]"` or `pip install "judgearena[llamacpp]"`. See [model setup](docs/models.md) for backend options and chat templates.
 
 To work from source with [uv](https://docs.astral.sh/uv/):
 

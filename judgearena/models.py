@@ -97,7 +97,7 @@ def build_default_judge_model_kwargs(
 ) -> dict[str, object]:
     """Copy judge engine kwargs and add supported built-in defaults."""
     provider, model_name = _split_model_spec(judge_model)
-    judge_model_kwargs = dict(engine_kwargs) if provider == "VLLM" else {}
+    judge_model_kwargs = dict(engine_kwargs) if provider in {"VLLM", "SGLang"} else {}
     if judge_engine_kwargs_override:
         judge_model_kwargs.update(judge_engine_kwargs_override)
     if provider == "VLLM":
@@ -552,6 +552,162 @@ class ChatVLLM:
         return await loop.run_in_executor(
             None, lambda: self.invoke(input_item, **invoke_kwargs)
         )
+
+
+class ChatSGLang(ChatVLLM):
+    """SGLang offline-engine wrapper with the same interface as ``ChatVLLM``.
+
+    SGLang has no langchain integration, so this wraps ``sglang.Engine``
+    directly. Chat templates are applied with the Hugging Face tokenizer
+    (explicit ``chat_template`` first, then the tokenizer's own); without one
+    the wrapper falls back to plain-text generation, as ``ChatVLLM`` does.
+    ``engine_kwargs`` are forwarded to ``sglang.Engine`` (e.g. ``tp_size``,
+    ``mem_fraction_static``); ``max_model_len`` maps to ``context_length``.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        max_tokens: int = 8192,
+        chat_template: str | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        seed: int | None = None,
+        top_logprobs: int | None = None,
+        **sglang_kwargs,
+    ):
+        import sglang
+        from transformers import AutoTokenizer
+
+        self.model_path = model
+        self.max_tokens = max_tokens
+        disable_thinking = bool(sglang_kwargs.pop("disable_thinking", False))
+        self._chat_template_kwargs = _resolve_chat_template_kwargs(
+            explicit_chat_template_kwargs=sglang_kwargs.pop(
+                "chat_template_kwargs", None
+            ),
+            disable_thinking=disable_thinking,
+        )
+        if sglang_kwargs.pop("thinking_token_budget", None) is not None:
+            warnings.warn(
+                "thinking_token_budget is not supported by the SGLang backend; "
+                "ignoring it.",
+                stacklevel=2,
+            )
+        max_model_len = sglang_kwargs.pop("max_model_len", None)
+        if max_model_len is not None:
+            # Dedicated field wins over the engine option, as for vLLM.
+            sglang_kwargs["context_length"] = int(max_model_len)
+        if seed is not None:
+            sglang_kwargs.setdefault("random_seed", int(seed))
+
+        self.sampling_params = {
+            "max_new_tokens": max_tokens,
+            "temperature": (
+                VLLM_DEFAULT_TEMPERATURE if temperature is None else float(temperature)
+            ),
+            "top_p": VLLM_DEFAULT_TOP_P if top_p is None else float(top_p),
+        }
+        if top_k is not None:
+            self.sampling_params["top_k"] = int(top_k)
+        self._top_logprobs = top_logprobs
+
+        sglang_kwargs.setdefault("trust_remote_code", True)
+        self.llm = _init_llm_with_retry(
+            sglang.Engine, model_path=model, **sglang_kwargs
+        )
+        # Load the same tokenizer the engine uses so prompts match its template.
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            sglang_kwargs.get("tokenizer_path") or model,
+            revision=sglang_kwargs.get("revision"),
+            trust_remote_code=sglang_kwargs["trust_remote_code"],
+        )
+        self.chat_template = chat_template
+        self._use_generate = not (
+            chat_template or getattr(self.tokenizer, "chat_template", None)
+        )
+        if self._use_generate:
+            warnings.warn(
+                f"Model '{model}' tokenizer does not define a chat template. "
+                "Falling back to plain-text generation (no chat formatting). "
+                "Override with --chat_template if this model needs one.",
+                stacklevel=2,
+            )
+
+    def set_temperature(self, temperature: float) -> None:
+        self.sampling_params["temperature"] = float(temperature)
+
+    def shutdown(self) -> None:
+        """Stop the engine and free its GPU memory (SGLang only does so at exit)."""
+        self.llm.shutdown()
+
+    def _to_prompt(self, input_item) -> str:
+        if self._use_generate:
+            return self._to_raw_text(input_item)
+        return self.tokenizer.apply_chat_template(
+            self._to_messages(input_item),
+            tokenize=False,
+            add_generation_prompt=True,
+            chat_template=self.chat_template,
+            **(self._chat_template_kwargs or {}),
+        )
+
+    def batch(self, inputs: list, **invoke_kwargs) -> list:
+        """Return text, or ``InferenceResult`` objects like ``ChatVLLM.batch``."""
+        usage_stage = invoke_kwargs.pop("usage_stage", None)
+        logprob_kwargs = (
+            {
+                "return_logprob": True,
+                "top_logprobs_num": int(self._top_logprobs),
+            }
+            if self._top_logprobs is not None
+            else {}
+        )
+        outputs = self.llm.generate(
+            prompt=[self._to_prompt(inp) for inp in inputs],
+            sampling_params=self.sampling_params,
+            **logprob_kwargs,
+        )
+        if self._top_logprobs is None and usage_stage is None:
+            return [out["text"] for out in outputs]
+        results = []
+        for out in outputs:
+            meta = out.get("meta_info", {})
+            top = None
+            # Each position is a list of (logprob, token_id, token_text); the
+            # offline engine leaves token_text empty, so decode the id.
+            output_top_logprobs = meta.get("output_top_logprobs")
+            if self._top_logprobs is not None and output_top_logprobs:
+                top = {
+                    (
+                        token_text
+                        if token_text is not None
+                        else self.tokenizer.decode([token_id])
+                    ): float(logprob)
+                    for logprob, token_id, token_text in output_top_logprobs[0]
+                }
+            usage = None
+            if usage_stage is not None:
+                input_tokens = meta.get("prompt_tokens")
+                output_tokens = meta.get("completion_tokens")
+                usage = RequestUsage(
+                    stage=usage_stage,
+                    model=self.model_path,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=(
+                        input_tokens + output_tokens
+                        if input_tokens is not None and output_tokens is not None
+                        else None
+                    ),
+                )
+            results.append(
+                InferenceResult(
+                    text=out["text"], first_token_top_logprobs=top, usage=usage
+                )
+            )
+        return results
 
 
 def _first_token_top_logprobs(response) -> dict[str, float] | None:
@@ -1027,6 +1183,16 @@ _REMOTE_ENDPOINTS = {
 }
 
 
+# vLLM-only keys that the SGLang wrapper also understands.
+_SGLANG_SHARED_KWARGS = (
+    "max_model_len",
+    "chat_template",
+    "trust_remote_code",
+    "quantization",
+    "kv_cache_dtype",
+)
+
+
 def _resolve_model_config(
     model: str,
     max_tokens: int | None,
@@ -1073,8 +1239,10 @@ def _resolve_model_config(
                 f"Conflicting OpenRouter request options: {', '.join(sorted(conflicts))}"
             )
     if provider != "VLLM":
+        kept = _SGLANG_SHARED_KWARGS if provider == "SGLang" else ()
         for key in _VLLM_ONLY_KWARGS:
-            resolved_kwargs.pop(key, None)
+            if key not in kept:
+                resolved_kwargs.pop(key, None)
     return provider, model_name, resolved_kwargs, sampling
 
 
@@ -1142,9 +1310,9 @@ def prepare_model(
 
 
 def _decision_options(provider: str, options: dict, sampling: dict) -> dict:
-    if provider == "VLLM":
+    if provider in {"VLLM", "SGLang"}:
         raise ValueError(
-            "VLLM in-process decision inference is not supported; use a compatible HTTP server."
+            f"{provider} in-process decision inference is not supported; use a compatible HTTP server."
         )
     if sampling["top_logprobs"] is not None:
         raise ValueError("Decision probabilities are not token logprobs.")
@@ -1212,6 +1380,15 @@ def make_model(
             **engine_kwargs,
         )
 
+    if model_provider == "SGLang":
+        engine_kwargs = {k: v for k, v in engine_kwargs.items() if v is not None}
+        return ChatSGLang(
+            model=model_name,
+            top_logprobs=top_logprobs,
+            **engine_kwargs,
+            **{k: v for k, v in sampling.items() if k != "top_logprobs"},
+        )
+
     if model_provider == "OpenRouter":
         # Special case we need to override API url and key
         openai_kwargs = dict(engine_kwargs)
@@ -1261,7 +1438,7 @@ def make_model(
             logger.debug("Optional provider not available: %s", e)
         model_cls_dict = {model_cls.__name__: model_cls for model_cls in model_classes}
         if model_provider not in model_cls_dict:
-            providers = ["Dummy", "VLLM", "OpenRouter", *model_cls_dict]
+            providers = ["Dummy", "VLLM", "SGLang", "OpenRouter", *model_cls_dict]
             raise ValueError(
                 f"Unknown or unavailable model provider {model_provider!r}; "
                 f"choose among {providers}."

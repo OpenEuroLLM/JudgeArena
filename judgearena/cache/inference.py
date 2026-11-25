@@ -31,6 +31,11 @@ VLLM_EXECUTION_ONLY_KWARGS = {
     "gpu_memory_utilization",
     "tensor_parallel_size",
 }
+SGLANG_EXECUTION_ONLY_KWARGS = {
+    "dp_size",
+    "mem_fraction_static",
+    "tp_size",
+}
 
 InputMode = Literal["chat", "text", "decision"]
 _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
@@ -39,6 +44,7 @@ _PROVIDER_INPUT_MODES: dict[str, InputMode] = {
     "LlamaCpp": "text",
     "OpenAI": "text",
     "OpenRouter": "chat",
+    "SGLang": "chat",
     "Together": "text",
     "VLLM": "chat",
 }
@@ -104,7 +110,7 @@ def build_model_descriptor(
         return None
 
     descriptor_kwargs = resolved_kwargs.copy()
-    if provider == "VLLM":
+    if provider in {"VLLM", "SGLang"}:
         descriptor_kwargs["temperature"] = (
             VLLM_DEFAULT_TEMPERATURE
             if descriptor_kwargs.get("temperature") is None
@@ -120,6 +126,7 @@ def build_model_descriptor(
             key: value
             for key, value in descriptor_kwargs.items()
             if key not in VLLM_EXECUTION_ONLY_KWARGS
+            and not (provider == "SGLang" and key in SGLANG_EXECUTION_ONLY_KWARGS)
         }
 
     descriptor = {
@@ -131,6 +138,8 @@ def build_model_descriptor(
     }
     if provider == "VLLM":
         descriptor["backend_version"] = importlib_metadata.version("vllm")
+    elif provider == "SGLang":
+        descriptor["backend_version"] = importlib_metadata.version("sglang")
     elif provider == "LlamaCpp":
         descriptor["backend_version"] = importlib_metadata.version("llama-cpp-python")
     if endpoint is not None:
@@ -167,6 +176,13 @@ class PreparedModel:
         if self._model is None:
             self._model = self.factory()
         return self._model
+
+    def release(self) -> None:
+        """Shut down a materialized local engine that frees memory only at exit."""
+        model, self._model = self._model, None
+        shutdown = getattr(model, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
 
 
 @dataclass(frozen=True)
