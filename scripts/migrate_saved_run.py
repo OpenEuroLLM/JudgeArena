@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from judgearena.deprecations import translate_deprecations
 from judgearena.prompts.spec import config_prompts
 from judgearena.tasks.registry import _canonical_sha256
 
@@ -44,6 +45,25 @@ def migrate_saved_template_fields(prompt, directory):
                 prompt["name"] = file_prompt_name(original_system, original_user)
             prompt.pop(file_field, None)
             prompt[field] = migrated
+
+
+def _finish_snapshot(data):
+    # Saved run options override protocol defaults; the resolved task also needs
+    # the new opponent policy for loading outside the original task registry.
+    resolved = data["resolved_task"]
+    protocol = resolved["spec"]["protocol"]
+    task_graph = protocol.pop("graph", None)
+    if task_graph is not None:
+        protocol["baseline"] = {"strategy": "recorded_opponents"}
+        if (
+            data.get("graph") is None
+            and (data.get("protocol") or {}).get("graph") is None
+        ):
+            data["graph"] = task_graph
+    data = translate_deprecations(data, protocol)
+    spec = data["resolved_task"]["spec"]
+    data["resolved_task"]["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
+    return data
 
 
 def migrate_snapshot(data: dict, directory: Path) -> dict:
@@ -104,8 +124,7 @@ def migrate_snapshot(data: dict, directory: Path) -> dict:
     options = data.pop("elo", None) or {}
     old_runner = protocol["runner"] == "elo"
     if not old_runner and not options:
-        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
-        return data
+        return _finish_snapshot(data)
     if protocol["runner"] not in {"elo", "pairwise"}:
         raise ValueError("Saved Elo settings require a pairwise task")
 
@@ -181,8 +200,7 @@ def migrate_snapshot(data: dict, directory: Path) -> dict:
             None, run.get("filters", {}), {"lang": options["languages"]}
         )
     data.update(protocol=protocol, dataset=spec["dataset"])
-    data["resolved_task"]["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
-    return data
+    return _finish_snapshot(data)
 
 
 if __name__ == "__main__":

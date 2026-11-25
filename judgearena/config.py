@@ -32,10 +32,10 @@ from judgearena.tasks.schema import (
     AllReferencesBaseline,
     CategoryDefaultsBaseline,
     DatasetSpec,
-    GraphArgs,
     MetaEvalProtocol,
     NoBaseline,
     ProtocolSpec,
+    RecordedOpponents,
     ResolvedTaskSpec,
     SingleAnswerProtocol,
     TaskDefaultBaseline,
@@ -365,12 +365,9 @@ class JudgeArgs(BaseModel):
 
 
 class GenerationArgs(BaseModel):
-    """How many instructions to use and input-length truncation."""
+    """Generation and judge input truncation."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
-
-    n_instructions: int | None = None
-    """Number of instructions/battles to evaluate. Defaults to the full task."""
 
     truncate_all_input_chars: int | None = 8192
     """Character cap before model generation. None preserves the full instruction."""
@@ -395,6 +392,30 @@ class MetaEvalArgs(BaseModel):
     """Restrict arena battles to these language codes. Defaults to all languages."""
 
 
+class SamplingArgs(BaseModel):
+    """Select instructions or recorded battle rows after filtering."""
+
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["first", "random"] = "first"
+    limit: int | None = Field(default=None, gt=0)
+    group_by: str | None = Field(default=None, min_length=1)
+    per_group: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_sampling(self):
+        if (self.group_by is None) != (self.per_group is None):
+            raise ValueError(
+                "run.sampling.group_by and per_group must be set together."
+            )
+        if self.method == "random" and (
+            self.limit is None or self.per_group is not None
+        ):
+            raise ValueError(
+                "Random sampling requires a limit and does not accept per_group."
+            )
+        return self
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -402,6 +423,8 @@ class RunArgs(BaseModel):
 
     seed: int = 0
     """Random seed for reproducibility."""
+
+    sampling: SamplingArgs = Field(default_factory=SamplingArgs)
 
     filters: dict[str, list[str | int | float | bool]] = Field(default_factory=dict)
     """Select dataset rows by metadata values, e.g. {\"domain\": [\"math\"]}."""
@@ -462,10 +485,7 @@ class RunConfig(BaseSettings):
     """The judge model and scoring behaviour."""
 
     generation: GenerationArgs = Field(default_factory=GenerationArgs)
-    """Instruction count and input truncation."""
-
-    graph: GraphArgs | None = None
-    """Sample saved comparisons instead of constructing baseline pairs."""
+    """Input truncation."""
 
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
@@ -555,9 +575,6 @@ class RunConfig(BaseSettings):
                 definition["dataset"] = self.dataset.model_dump()
             spec = TaskSpec.model_validate(definition)
             resolved_task = replace(resolved_task, spec=spec)
-        task_graph = getattr(resolved_task.spec.protocol, "graph", None)
-        if self.graph is None and task_graph is not None:
-            self.graph = task_graph.model_copy()
         resolved_task = replace(
             resolved_task,
             provenance=replace(
@@ -633,10 +650,10 @@ class RunConfig(BaseSettings):
                 "meta_eval config is only valid for meta-evaluation tasks."
             )
         if is_meta_eval:
-            if self.graph is not None:
+            if self.run.sampling != SamplingArgs():
                 raise ValueError(
-                    "graph is for pairwise tasks. Use meta_eval.top_models and "
-                    "meta_eval.battles_per_model to sample meta-evaluation battles."
+                    "Use meta_eval.top_models and "
+                    "meta_eval.battles_per_model to sample meta-evaluation battles instead of run.sampling."
                 )
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
@@ -653,12 +670,15 @@ class RunConfig(BaseSettings):
         else:
             if self.model.name is None:
                 raise ValueError("model.name is required.")
-            if self.graph is not None and self.model.baseline is not None:
-                raise ValueError("model.baseline is not supported with graph sampling.")
             if isinstance(protocol, SingleAnswerProtocol):
                 if self.model.baseline is not None or self.judge.swap_mode != "fixed":
                     raise ValueError(
                         "Independent single-answer evaluation does not use a baseline or swapped judging."
+                    )
+            elif isinstance(protocol.baseline, RecordedOpponents):
+                if self.model.baseline is not None:
+                    raise ValueError(
+                        "model.baseline cannot override recorded_opponents."
                     )
             elif isinstance(protocol.baseline, AllReferencesBaseline):
                 if self.model.name in protocol.baseline.references:
@@ -753,8 +773,8 @@ def resolve_cli_config(
     if "task" in overrides:
         values = {**values, "task": overrides["task"]}
     values = settings_cls._merge_task_overrides(values)
-    if "elo" in overrides:
-        if "languages" in (overrides["elo"] or {}) and values.get("run"):
+    if "elo" in overrides or "graph" in overrides:
+        if "languages" in (overrides.get("elo") or {}) and values.get("run"):
             overrides["run"] = _merge_overrides(values["run"], overrides.get("run", {}))
         protocol = values.get("protocol")
         if protocol is None:
@@ -830,6 +850,7 @@ def _read_config(
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
     if hash_matches:
         # Hash the same defaults and resolved paths that RunConfig validates.
+        resolved = data["resolved_task"]
         spec = TaskSpec.model_validate(resolved["spec"])
         resolved["provenance"]["resolved_sha256"] = _canonical_sha256(
             spec.model_dump(mode="json")

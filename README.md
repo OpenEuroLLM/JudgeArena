@@ -26,7 +26,7 @@ judgearena \
   --task arena-hard-v0.1 \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 The task data downloads automatically on the first run. This example uses paid OpenRouter inference.
@@ -49,7 +49,7 @@ uv run judgearena \
   --task arena-hard-v0.1 \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 ## ⚙️ Configure an experiment
@@ -62,15 +62,15 @@ model:
   name: OpenRouter/google/gemma-4-31b-it
 judge:
   model: OpenRouter/google/gemma-4-31b-it
-generation:
-  n_instructions: 10
+run:
+  sampling: {limit: 10}
 ```
 
 Run the file, or override individual fields:
 
 ```bash
 judgearena --config_path run.yaml
-judgearena --config_path run.yaml --generation.n_instructions 100
+judgearena --config_path run.yaml --run.sampling.limit 100
 ```
 
 Use `--model.sampling_kwargs '{"repetition_penalty":1.1}'` to apply a repetition penalty with vLLM or OpenRouter. Keep shared options such as temperature in their existing fields (e.g. `--model.temperature`). Set judge options with `--judge.sampling_kwargs` and baseline options with `--model.baseline_sampling_kwargs`.
@@ -99,7 +99,7 @@ judgearena tasks show arena-hard-v0.1 --resolved
 
 The [benchmark guide](docs/benchmarks.md) lists task names, language selection, baselines and examples. Changing a benchmark's judge or rubric changes the evaluation protocol; record those choices when comparing results.
 
-See [graph comparisons and Elo](judgearena/tasks/README.md#graph-comparisons-and-elo) for sampling saved arena opponents and selecting scoring metrics.
+See [recorded opponents and Elo](judgearena/tasks/README.md#recorded-opponents-and-elo) for sampling saved arena opponents and selecting scoring metrics.
 
 ## 🛠️ Use your own data and judgments
 

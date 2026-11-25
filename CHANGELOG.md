@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Elo CLI flags and YAML keys are deprecated. Use run filters, graph sampling, judge settings and scoring metrics instead. Existing saved runs still replay.
+- Elo CLI flags and YAML keys are deprecated. Use `run.filters`, `run.sampling`, judge settings and scoring metrics instead. Existing saved runs still replay.
 
 ## 0.2.0
 

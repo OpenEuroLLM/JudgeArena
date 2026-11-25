@@ -27,7 +27,7 @@ from judgearena.benchmarks.pairwise.comparisons import (
 )
 from judgearena.benchmarks.pairwise.graph import (
     prepare_candidate_comparisons,
-    prepare_graph,
+    prepare_recorded_opponents,
     validate_graph_task,
 )
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
@@ -109,11 +109,14 @@ def run_evaluation(
         metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = data if data is not None else load_task_data(resolved_task)
     comparison_rng = np.random.default_rng(cfg.run.seed)
-    sampled_graph = opponent_panel is None and cfg.graph is not None
+    sampled_opponents = (
+        opponent_panel is None
+        and resolved_task.spec.protocol.baseline.strategy == "recorded_opponents"
+    )
     reference_battles = None
-    if sampled_graph:
-        opponent_panel, reference_battles, sampling_metadata = prepare_graph(
-            cfg, task_data, rng=comparison_rng
+    if sampled_opponents:
+        opponent_panel, reference_battles, sampling_metadata = (
+            prepare_recorded_opponents(cfg, task_data, rng=comparison_rng)
         )
     if opponent_panel is None:
         task_data = task_data.select(
@@ -139,7 +142,7 @@ def run_evaluation(
             )
         instruction_ids = pd.Index(opponent_panel["instruction_index"])
         instructions_df = task_data.instructions.loc[instruction_ids.unique()]
-        if not sampled_graph:
+        if not sampled_opponents:
             opponent_panel = with_instruction_metadata(opponent_panel, instructions_df)
     task_data = preload_model_outputs(
         task_data,
@@ -178,10 +181,10 @@ def run_evaluation(
             context,
             available_columns=available_columns,
             reference_battles=reference_battles,
-            calibration_rng=comparison_rng if sampled_graph else None,
-            # Sampled graphs already randomize candidate orientation.
+            calibration_rng=comparison_rng if sampled_opponents else None,
+            # Sampled battles already randomize candidate orientation.
             swap_mode="fixed"
-            if sampled_graph and cfg.judge.swap_mode != "both"
+            if sampled_opponents and cfg.judge.swap_mode != "both"
             else None,
         )
         if baseline_plan is not None:
@@ -208,7 +211,7 @@ def run_evaluation(
         samples, source_ids = prepare_candidate_comparisons(
             opponent_panel,
             answers,
-            rng=comparison_rng if sampled_graph else None,
+            rng=comparison_rng if sampled_opponents else None,
             turns=resolved_task.spec.protocol.judge.turns,
         )
     else:

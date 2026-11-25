@@ -11,6 +11,12 @@ class NoBaseline(StrictFrozenModel):
     strategy: Literal["none"]
 
 
+class RecordedOpponents(StrictFrozenModel):
+    """Use one saved opponent answer from each selected battle."""
+
+    strategy: Literal["recorded_opponents"]
+
+
 class RuntimeRequiredBaseline(StrictFrozenModel):
     strategy: Literal["runtime_required"]
 
@@ -47,6 +53,7 @@ class OfficialOutputsBaseline(StrictFrozenModel):
 
 BaselineSpec = Annotated[
     NoBaseline
+    | RecordedOpponents
     | RuntimeRequiredBaseline
     | TaskDefaultBaseline
     | AllReferencesBaseline

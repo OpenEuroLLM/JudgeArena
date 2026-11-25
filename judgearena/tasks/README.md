@@ -204,17 +204,14 @@ Extra columns remain metadata. Use `--run.filters '{"category": ["coding"]}'`
 to select any available metadata field. Task variants and runtime filters are
 intersected; empty selections raise an error.
 
-## Graph comparisons and Elo
+## Recorded opponents and Elo
 
-Arena tasks use `runner: pairwise` with `graph: {}` in the protocol.
-Graph preparation selects saved opponents; judging and scoring are shared:
+Arena tasks use `runner: pairwise` and `protocol.baseline.strategy: recorded_opponents`. Each sampled battle supplies one opponent answer. With named baselines, sampling selects instructions before pairing each with the selected baselines.
 
 ```yaml
 task: elo-comparia
-graph:
-  group_by: lang
-  per_group: 100
 run:
+  sampling: {group_by: lang, per_group: 100}
   filters: {lang: [en, fr]}
 protocol:
   scoring:
@@ -225,8 +222,8 @@ protocol:
 ```
 
 `per_group` caps battle rows in their existing order; it does not randomly balance
-groups. A total `generation.n_instructions` limit applies afterward and can reduce
-group coverage. Omit that total limit to retain each group’s quota.
+groups. A total `run.sampling.limit` applies afterward and can reduce
+group coverage. Omit that total limit to retain each group’s quota. To draw a random sample instead, use `sampling: {method: random, limit: 100}` under `run`.
 
 Language filters select candidate battles. Overall reference ratings use the full task reference pool; a language breakdown uses references from that language.
 Metrics receive judged rows. A metric that also needs reference labels can declare a `reference_battles` keyword argument. Both tables are listed separately in `evaluation.json` for graph runs.
@@ -335,7 +332,7 @@ judge:
   minimum_score_by: [dialogue_uid, dialogue_id, task, ability, domain]
 ```
 
-`limit_by` makes `n_instructions` select complete groups. `minimum_score_by`
+`limit_by` makes `run.sampling.limit` count complete groups. `minimum_score_by`
 compares each model's minimum score per group; omit it to compare individual
 rows. The `absolute_score` metric accepts `macro_by` to weight groups equally.
 MT-Bench-101's adapter supplies the reference histories used by its prompt.

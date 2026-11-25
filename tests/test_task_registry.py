@@ -98,7 +98,7 @@ def test_packaged_registry_discovers_versioned_tasks():
         "o3-mini-2025-01-31"
     )
     assert elo_comparia.spec.protocol.runner == "pairwise"
-    assert elo_comparia.spec.protocol.graph is not None
+    assert elo_comparia.spec.protocol.baseline.strategy == "recorded_opponents"
     assert elo_comparia.spec.dataset.adapter == "comparia"
     assert [metric.metric for metric in elo_comparia.spec.protocol.scoring.metrics] == [
         "pairwise_win_rate",
@@ -662,16 +662,13 @@ def test_meta_eval_language_variant_preserves_the_dataset_and_protocol():
 
 
 def test_script_components_registered_after_catalog_import_work_in_task(
-    tmp_path, monkeypatch
+    tmp_path, isolated_task_registries
 ):
     import pandas as pd
 
     import judgearena.benchmarks.scoring as scoring
     import judgearena.prompts.registry as prompts
     from judgearena.prompts.parsing import ScoreParser
-
-    monkeypatch.setattr(scoring, "_METRIC_TYPES", dict(scoring._METRIC_TYPES))
-    monkeypatch.setattr(prompts, "PRESETS", dict(prompts.PRESETS))
 
     @scoring.register_metric("custom_mean")
     class CustomMean:

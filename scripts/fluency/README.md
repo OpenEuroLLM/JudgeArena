@@ -19,7 +19,7 @@ judgearena \
   --model.name "LlamaCpp/./models/gemma3-1b-pt.gguf" \
   --model.baseline "LlamaCpp/./models/smollm3-3b-base.gguf" \
   --judge.model "OpenRouter/google/gemma-4-31b-it" \
-  --generation.n_instructions 1 --model.max_out_tokens 512 --judge.max_out_tokens 512
+  --run.sampling.limit 1 --model.max_out_tokens 512 --judge.max_out_tokens 512
 ```
 
 Where `{lang}` can be any of:

@@ -30,7 +30,7 @@ def _cfg(
     model_A: str,
     model_B: str | None = None,
     judge_model: str,
-    n_instructions: int | None = None,
+    limit: int | None = None,
     swap_mode: str = "fixed",
     result_folder: str = "results",
     truncate_judge_input_chars: int | None = None,
@@ -51,11 +51,12 @@ def _cfg(
             "max_model_len": max_judge_model_len,
             "engine_kwargs": judge_engine_kwargs or {},
         },
-        generation={
-            "n_instructions": n_instructions,
-            "truncate_judge_input_chars": truncate_judge_input_chars,
+        generation={"truncate_judge_input_chars": truncate_judge_input_chars},
+        run={
+            "sampling": {"limit": limit},
+            "result_folder": result_folder,
+            "store_root": f"{result_folder}/cache",
         },
-        run={"result_folder": result_folder, "store_root": f"{result_folder}/cache"},
     )
 
 
@@ -222,7 +223,7 @@ def test_generate_and_evaluate_context_completion(task: str, tmp_path):
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
+            limit=5,
             result_folder=str(tmp_path),
             # default for swap_mode is "fixed"
         )
@@ -284,7 +285,7 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
+            limit=5,
             swap_mode="both",
             result_folder=str(tmp_path),
         )
@@ -308,7 +309,7 @@ def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path):
         model_A="Dummy/no answer",
         model_B="Dummy/x",
         judge_model="Dummy/score A: 0 score B: 10",
-        n_instructions=2,
+        limit=2,
         result_folder=str(tmp_path),
     )
     monkeypatch.setattr(
@@ -358,7 +359,7 @@ def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure
             model_A="Dummy/no answer",
             model_B="Dummy/x",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
+            limit=2,
             result_folder=str(tmp_path),
         ),
         _task_with_metric(
@@ -373,7 +374,9 @@ def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure
     metric = result["metrics"]["pairwise_win_rate"]
     if failure == "calculate":
         assert metric["error"] == "scorer unavailable"
-        assert metric["breakdown_errors"]["model_a='Dummy/no answer'"] == metric["error"]
+        assert (
+            metric["breakdown_errors"]["model_a='Dummy/no answer'"] == metric["error"]
+        )
     else:
         assert metric["num_battles"] == 2
         assert metric["groups"]["model_a"][0]["group"] == "Dummy/no answer"
@@ -445,15 +448,18 @@ def test_run_evaluation_routes_arena_v2_baselines_and_prompts(
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_task_data",
-        lambda task, n_instructions=None: CompletionData(instructions, outputs),
+        lambda task: CompletionData(instructions, outputs),
     )
     prefs = run_evaluation(
         RunConfig(
             task="arena-hard-v2.0",
             model={"name": "candidate"},
             judge={"model": "Dummy/judge", "swap_mode": swap_mode},
-            generation={"n_instructions": 3},
-            run={"result_folder": str(tmp_path), "store_root": str(tmp_path / "cache")},
+            run={
+                "sampling": {"limit": 3},
+                "result_folder": str(tmp_path),
+                "store_root": str(tmp_path / "cache"),
+            },
         )
     )
 
@@ -528,8 +534,7 @@ def test_run_evaluation_weights_and_preserves_incomplete_alpaca_annotations(
             task="alpaca-eval",
             model={"name": "Dummy/a", "baseline": "Dummy/b"},
             judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
-            generation={"n_instructions": 4},
-            run={"result_folder": str(tmp_path)},
+            run={"sampling": {"limit": 4}, "result_folder": str(tmp_path)},
         )
     )
 
@@ -557,8 +562,7 @@ def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, 
             task="alpaca-eval",
             model={"name": "Dummy/a", "baseline": "Dummy/b"},
             judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
-            generation={"n_instructions": 2},
-            run={"result_folder": str(tmp_path)},
+            run={"sampling": {"limit": 2}, "result_folder": str(tmp_path)},
         )
     )
 
@@ -935,7 +939,7 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     if runner != "meta_eval":
         protocol["generation"] = {"mode": "multi_turn_chat"}
     if runner == "pairwise":
-        protocol["graph"] = {}
+        protocol["baseline"] = {"strategy": "recorded_opponents"}
     if runner != "single_answer":
         judge["turns"] = [1, 2]
     if runner == "meta_eval":

@@ -333,7 +333,7 @@ def test_score_fallback_does_not_truncate_invalid_numbers(value):
 
 def test_independent_empty_selection_fails_before_model_work(monkeypatch, tmp_path):
     data = CompletionData.from_frames(
-        pd.DataFrame({"instruction_index": ["q"], "instruction": ["hi"]})
+        pd.DataFrame(columns=["instruction_index", "instruction"])
     )
     monkeypatch.setattr(ArenaHardAdapter, "load_data", lambda self: data)
     task = _independent_task()
@@ -342,7 +342,6 @@ def test_independent_empty_selection_fails_before_model_work(monkeypatch, tmp_pa
         resolved_task=task,
         model={"name": "Dummy/x"},
         judge={"model": "Dummy/x"},
-        generation={"n_instructions": 0},
         run={"result_folder": str(tmp_path)},
     )
     with pytest.raises(ValueError, match="No instructions"):
@@ -625,7 +624,7 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
 
 @pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
 def test_public_api_runs_file_components_and_replays(
-    tmp_path, monkeypatch, source_kind, capsys, caplog
+    tmp_path, monkeypatch, source_kind, capsys, caplog, isolated_task_registries
 ):
     import yaml
 
@@ -636,10 +635,8 @@ def test_public_api_runs_file_components_and_replays(
         run_benchmark,
     )
     from judgearena.config import load_config
-    from judgearena.prompts import registry as prompt_registry
     from judgearena.tasks import load_tasks
 
-    monkeypatch.setattr(prompt_registry, "PRESETS", prompt_registry.PRESETS.copy())
     source = tmp_path / "parser.py"
     source.write_text(
         "from judgearena.prompts.parsing import PairScore, ScoreParser, register_parser\n"
@@ -647,7 +644,6 @@ def test_public_api_runs_file_components_and_replays(
         "PAIR = register_parser('grammar-pair', PairScore(temperature=0.5))\n"
     )
     reference = f"{source}:PARSER"
-    monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
     parser = register_parser("grammar", parsing.resolve_judge_parser(reference))
     assert not {"grammar-file", "grammar-pair"} & parsing.JUDGE_PARSERS.keys()
     for name, value in [("", parser), ("grammar", parser), ("broken", object())]:

@@ -33,10 +33,10 @@ uv run judgearena \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --model.baseline Llama-2-7b-chat-hf \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
-A provider-prefixed baseline such as `VLLM/Qwen/Qwen2.5-0.5B-Instruct` can generate reference answers when the task supports a runtime baseline. Tasks with fixed multiple-reference or category-based baselines use their declared policy.
+A provider-prefixed baseline such as `VLLM/Qwen/Qwen2.5-0.5B-Instruct` can generate reference answers when the task supports a runtime baseline. Tasks with multiple-reference or category-based baselines use their declared policy. To compare against multiple named models, set `protocol.baseline: {strategy: all_references, references: [model-a, model-b]}` using your reference model IDs. Sample the prompts once with `run.sampling`; `pairwise_win_rate` with `breakdown_by: [baseline]` reports overall and per-reference win rates.
 
 ## Multilingual evaluation
 
@@ -48,7 +48,7 @@ uv run judgearena \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
   --run.filters '{"lang":["en","de"]}' \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 The instruction limit caps the selected run; it is not a per-language quota. Omit it for the full filtered set. Language-specific tasks such as `m-arena-hard-v2.0-de` are also available. Fluency uses named variants such as `fluency-french`; its prompts are sentence continuations, so check the generation format for the model you are evaluating.
@@ -63,8 +63,8 @@ uv run judgearena \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
   --run.filters '{"lang":["en","de"]}' \
-  --graph.group_by lang \
-  --graph.per_group 100 \
+  --run.sampling.group_by lang \
+  --run.sampling.per_group 100 \
   --protocol.scoring.metrics '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"fit_mode":"frozen","soft":true,"n_bootstraps":200}}]'
 ```
 

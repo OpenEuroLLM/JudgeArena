@@ -321,11 +321,9 @@ def test_failed_breakdown_preserves_overall_and_other_breakdowns(bad_column, cap
 
 
 def test_registered_metrics_receive_only_named_runtime_and_are_order_independent(
-    monkeypatch,
+    isolated_task_registries,
 ):
     import judgearena.benchmarks.scoring as scoring
-
-    monkeypatch.setattr(scoring, "_METRIC_TYPES", dict(scoring._METRIC_TYPES))
 
     @scoring.register_metric("custom")
     @scoring.register_metric("other")

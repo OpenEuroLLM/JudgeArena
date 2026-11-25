@@ -165,7 +165,6 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
         task="elo-comparia",
         model={"name": "Dummy/answer"},
         judge={"model": "Dummy/[[A=B]]", "prompt": {"preset": "arena-hard"}},
-        generation={"n_instructions": 4},
         protocol={
             "scoring": {
                 "metrics": [
@@ -184,6 +183,7 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
             }
         },
         run={
+            "sampling": {"limit": 4},
             "store_root": str(tmp_path / "cache"),
             "result_folder": str(tmp_path / "results"),
             "use_tqdm": False,

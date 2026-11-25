@@ -8,5 +8,5 @@ model:
   baseline: VLLM/utter-project/EuroLLM-9B
 judge:
   model: OpenRouter/google/gemma-4-31b-it
-generation:
-  n_instructions: 10
+run:
+  sampling: {limit: 10}

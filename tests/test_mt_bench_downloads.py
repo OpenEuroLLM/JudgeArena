@@ -161,7 +161,7 @@ def test_mt_renderer_rejects_logprob_parser_before_preparation(
     ],
 )
 def test_prompt_bundle_controls_custom_conversation_judging(
-    tmp_path, monkeypatch, preset, response, preference, turns
+    tmp_path, monkeypatch, preset, response, preference, turns, isolated_task_registries
 ):
     import judgearena.datasets.registry as registry
     from judgearena.benchmarks.runner import run_benchmark
@@ -214,7 +214,6 @@ def test_prompt_bundle_controls_custom_conversation_judging(
             for identity, model in [(3, "a"), (9, "b"), (9, "a"), (3, "b")]
         ]
     )
-    monkeypatch.setattr(registry, "_DATASETS", registry._DATASETS.copy())
 
     @registry.register_dataset("custom_conversations")
     class CustomConversationsAdapter(DatasetAdapter):

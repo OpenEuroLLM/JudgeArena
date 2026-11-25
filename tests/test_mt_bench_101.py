@@ -306,8 +306,8 @@ def test_run_mt_bench_101_dummy_reuses_cache(tmp_path, monkeypatch, with_preload
         task="mt-bench-101",
         model={"name": "Dummy/ok-a", "baseline": "Dummy/ok-b"},
         judge={"model": "Dummy/Rating: [[8]]"},
-        generation={"n_instructions": 1},
         run={
+            "sampling": {"limit": 1},
             "result_folder": str(tmp_path),
             "store_root": str(store_root),
             "use_tqdm": False,

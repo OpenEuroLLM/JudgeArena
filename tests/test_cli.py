@@ -123,7 +123,9 @@ def test_elo_requires_model_path(capture_mains):
 
 
 def test_elo_rejects_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is not supported with graph"):
+    with pytest.raises(
+        SystemExit, match="model.baseline cannot override recorded_opponents"
+    ):
         cli_module.cli(
             [
                 "--task",
@@ -182,9 +184,9 @@ def test_elo_forwards_optional_flags(capture_mains):
             "Dummy/J",
             "--run.filters",
             '{"lang": ["en", "fr"]}',
-            "--graph.group_by",
+            "--run.sampling.group_by",
             "lang",
-            "--graph.per_group",
+            "--run.sampling.per_group",
             "50",
             "--protocol.scoring.metrics",
             '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"n_bootstraps":5,"baseline_model":"gpt-4o"}}]',
@@ -192,7 +194,7 @@ def test_elo_forwards_optional_flags(capture_mains):
             "7",
             "--protocol.judge.preference_temperature",
             "0.5",
-            "--graph.random_battles",
+            "--run.sampling.limit",
             "100",
             "--judge.prompt.preset",
             "default_with_explanation",
@@ -202,7 +204,7 @@ def test_elo_forwards_optional_flags(capture_mains):
     assert "elo" not in cfg.model_dump()
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.run.filters["lang"] == ["en", "fr"]
-    assert cfg.graph.group_by == "lang" and cfg.graph.per_group == 50
+    assert cfg.run.sampling.group_by == "lang" and cfg.run.sampling.per_group == 50
     assert (
         cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["n_bootstraps"]
         == 5
@@ -213,7 +215,7 @@ def test_elo_forwards_optional_flags(capture_mains):
         == "gpt-4o"
     )
     assert cfg.preference_settings.preference_temperature == 0.5
-    assert cfg.graph.random_battles == 100
+    assert cfg.run.sampling.limit == 100
     assert cfg.judge.prompt.preset == "default_with_explanation"
 
 

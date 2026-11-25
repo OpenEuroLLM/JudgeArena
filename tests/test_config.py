@@ -348,7 +348,7 @@ def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is True
     assert cfg.preference_settings.preference_temperature == 0.3
-    assert cfg.graph is not None
+    assert cfg.resolved_task.spec.protocol.baseline.strategy == "recorded_opponents"
 
 
 def test_graph_config_and_cli_overrides(tmp_path):
@@ -379,7 +379,7 @@ def test_graph_config_and_cli_overrides(tmp_path):
             "0.8",
         ]
     )
-    assert cfg.graph.random_battles == 11
+    assert cfg.run.sampling.method == "random" and cfg.run.sampling.limit == 11
     assert cfg.preference_settings.preference_temperature == 0.8
     assert (
         cfg.resolved_task.spec.protocol.scoring.metrics[0].parameters["soft"] is False
@@ -393,10 +393,20 @@ def test_graph_config_and_cli_overrides(tmp_path):
     with pytest.raises(ValidationError, match="set together"):
         RunConfig(**{**_base_elo(), "graph": {"per_group": 3}})
     saved = cfg.model_dump(mode="json")
+    saved["run"].pop("sampling")
+    saved["resolved_task"]["spec"]["protocol"].update(
+        graph={}, baseline={"strategy": "none"}
+    )
     saved["graph"] = {"per_language": 7}
     config.write_text(yaml.safe_dump(migrate_snapshot(saved, config.parent)))
     migrated = load_config(config)
-    assert migrated.graph.group_by == "lang" and migrated.graph.per_group == 7
+    assert (
+        migrated.resolved_task.spec.protocol.baseline.strategy == "recorded_opponents"
+    )
+    assert (
+        migrated.run.sampling.group_by == "lang"
+        and migrated.run.sampling.per_group == 7
+    )
     saved["elo"] = {"soft_elo": True, "n_bootstraps": 200, "fit_mode": "joint"}
     metric = saved["resolved_task"]["spec"]["protocol"]["scoring"]["metrics"][0]
     metric["parameters"]["baseline_model"] = "task-anchor"
@@ -443,7 +453,7 @@ def test_deprecated_elo_options_resolve_before_replay(tmp_path, caplog):
         == 1
     )
     assert cfg.run.filters == {"category": ["math"], "lang": ["de"]}
-    assert (cfg.graph.group_by, cfg.graph.per_group) == ("lang", 8)
+    assert (cfg.run.sampling.group_by, cfg.run.sampling.per_group) == ("lang", 8)
     assert cfg.preference_settings.preference_temperature is None
     winrate, rating = cfg.resolved_task.spec.protocol.scoring.metrics
     assert winrate.metric == "pairwise_win_rate"
@@ -519,7 +529,12 @@ def test_legacy_elo_cli_value_formats():
             "0.40",
         ]
     )
-    assert cfg.graph.random_battles == 3
+    assert cfg.run.sampling.method == "random" and cfg.run.sampling.limit == 3
+    archived = build_run_config([*base, "--protocol.graph.random_battles=3"])
+    assert archived.run.sampling == cfg.run.sampling
+    baseline_task = [arg.replace("elo-comparia", "alpaca-eval") for arg in base]
+    with pytest.raises(ValueError, match="baseline.strategy"):
+        build_run_config([*baseline_task, "--elo.elo_random_battles=null"])
     with pytest.raises(ValueError, match="Conflicting"):
         build_run_config(
             [*base, "--elo.elo_random_battles=3", "--graph.random_battles=4"]
@@ -544,7 +559,7 @@ def test_legacy_elo_cli_value_formats():
         ]
     )
     assert not cfg.preference_settings.calibrate_temperature
-    assert cfg.graph.per_group is None and cfg.graph.group_by is None
+    assert cfg.run.sampling.per_group is None and cfg.run.sampling.group_by is None
 
 
 def test_config_rename_outside_elo(monkeypatch, tmp_path):
@@ -621,7 +636,7 @@ def test_load_config_from_yaml(tmp_path):
         resolve_run_judge_prompt(cfg.resolved_task, cfg.judge).preset_name
         == "default_with_explanation"
     )
-    assert cfg.generation.n_instructions == 10
+    assert cfg.run.sampling.limit == 10
 
 
 def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
@@ -711,7 +726,10 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     cli_module.cli(["--config_path", str(yaml_path)])
     assert isinstance(captured["benchmark"], RunConfig)
     assert "elo" not in captured["benchmark"].model_dump()
-    assert captured["benchmark"].graph is not None
+    assert (
+        captured["benchmark"].resolved_task.spec.protocol.baseline.strategy
+        == "recorded_opponents"
+    )
 
 
 def test_build_run_config_cli_only():

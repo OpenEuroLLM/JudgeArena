@@ -10,11 +10,10 @@ dataset:
 
 protocol:
   runner: pairwise
-  graph: {}
   generation:
     mode: single_turn_chat
   baseline:
-    strategy: none
+    strategy: recorded_opponents
   judge:
     default_prompt_preset: default
     default_swap_mode: fixed

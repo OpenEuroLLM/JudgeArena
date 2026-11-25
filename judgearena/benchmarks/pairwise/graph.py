@@ -7,6 +7,11 @@ import numpy as np
 import pandas as pd
 
 from judgearena.battles import swap_comparison_slots
+from judgearena.benchmarks.pairwise.comparisons import (
+    assemble_comparisons,
+    conversation_comparisons,
+    select_rows,
+)
 
 
 def validate_graph_task(protocol):
@@ -15,51 +20,14 @@ def validate_graph_task(protocol):
         raise ValueError(
             "Graph releases require a task that can generate and compare answers"
         )
-    if protocol.baseline.strategy != "none":
+    if protocol.baseline.strategy not in {"recorded_opponents", "none"}:
         raise ValueError(
-            "Graph preparation requires protocol.baseline.strategy: none; the panel supplies opponents"
+            "A supplied opponent panel requires baseline.strategy recorded_opponents or none"
         )
-
-
-def select_graph_battles(
-    df_battles, *, seed, random_battles=None, group_by=None, per_group=None, limit=None
-):
-    """Select comparison rows without choosing a metric or fitting ratings."""
-    random_sampling = random_battles is not None
-    sampling_metadata: dict[str, object] = {"sampling_mode": "head"}
-    if random_sampling:
-        if limit is not None or per_group is not None:
-            raise ValueError(
-                "generation.n_instructions and graph.per_group cannot be combined "
-                "with graph.random_battles."
-            )
-        df_battles, sampling_metadata = select_seeded_random_battles(
-            df_battles,
-            n_battles=random_battles,
-            seed=seed,
-        )
-    else:
-        if per_group is not None:
-            df_battles = (
-                df_battles.groupby(group_by).head(per_group).reset_index(drop=True)
-            )
-
-        # Keep at most n_instructions total (subset used for LLM-judge evaluation)
-        if limit is not None:
-            df_battles = df_battles.head(limit)
-
-    df_battles = df_battles.reset_index(drop=True)
-
-    return df_battles, sampling_metadata
 
 
 def prepare_candidate_comparisons(panel, answers, *, rng, turns=None):
     """Return graph comparisons and routing IDs, matching baseline preparation."""
-    from judgearena.benchmarks.pairwise.comparisons import (
-        assemble_comparisons,
-        conversation_comparisons,
-    )
-
     answers = answers.reindex(panel["instruction_index"]).set_axis(panel.index)
     opponents = panel.filter(regex="_b$").rename(columns=lambda c: c[:-2])
     comparisons = assemble_comparisons(panel, answers, opponents)
@@ -95,20 +63,13 @@ def _sample_fingerprint(sampled: pd.DataFrame) -> str:
     return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
 
 
-def select_seeded_random_battles(
-    df_battles: pd.DataFrame,
-    *,
-    n_battles: int,
-    seed: int,
-) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Select a reproducible comparison panel and record its sampling identities."""
-    sampled = df_battles.sample(
-        n=min(n_battles, len(df_battles)), random_state=seed, replace=False
-    )
-    metadata: dict[str, object] = {
+def _sampling_metadata(sampled, sampling, seed):
+    if sampling.method == "first":
+        return {"sampling_mode": "head"}
+    return {
         "sampling_mode": "seeded_random",
         "random_seed": seed,
-        "requested_rows": n_battles,
+        "requested_rows": sampling.limit,
         "sampled_rows": len(sampled),
         "sampled_original_indices": [
             int(index) if isinstance(index, int | np.integer) else str(index)
@@ -122,29 +83,19 @@ def select_seeded_random_battles(
         ],
         "sample_fingerprint": _sample_fingerprint(sampled),
     }
-    return sampled.reset_index(drop=True), metadata
 
 
-def prepare_graph(cfg, data, *, rng):
+def prepare_recorded_opponents(cfg, data, *, rng):
     """Select candidate comparisons and retain available reference labels."""
+    from judgearena.datasets import resolve_dataset_filters
     from judgearena.datasets.data import PreferenceData
 
-    validate_graph_task(cfg.resolved_task.spec.protocol)
     if not isinstance(data, PreferenceData):
-        raise ValueError("Graph preparation requires PreferenceData")
-    from judgearena.datasets import resolve_dataset_filters
-
-    sampling = cfg.graph
-    battles, metadata = select_graph_battles(
-        data.select(
-            resolve_dataset_filters(cfg.resolved_task, cfg.run.filters)
-        ).battles,
-        seed=cfg.run.seed,
-        random_battles=sampling.random_battles,
-        group_by=sampling.group_by,
-        per_group=sampling.per_group,
-        limit=cfg.generation.n_instructions,
-    )
+        raise ValueError("Recorded opponents require PreferenceData")
+    filtered = data.select(resolve_dataset_filters(cfg.resolved_task, cfg.run.filters))
+    battles = select_rows(filtered.battles, cfg.run.sampling, seed=cfg.run.seed)
+    metadata = _sampling_metadata(battles, cfg.run.sampling, cfg.run.seed)
+    battles = battles.reset_index(drop=True)
     references = data.battles.drop(
         columns=["pref", "pref_hard"], errors="ignore"
     ).copy()

@@ -112,7 +112,6 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         task=task,
         model={"name": model},
         judge=judge,
-        generation={"n_instructions": n_instructions},
         protocol={
             "judge": {"calibrate_temperature": calibrate_temperature},
             "scoring": {
@@ -130,6 +129,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
             },
         },
         run={
+            "sampling": {"limit": n_instructions},
             "result_folder": result_folder,
             "store_root": store_root,
             "filters": {"lang": languages} if languages else {},
@@ -260,19 +260,38 @@ def _num_pairwise_rows(run_result: dict) -> int:
     )
 
 
-def test_arena_data_also_runs_in_pairwise(tmp_path, monkeypatch, synthetic_arena_df):
+def test_random_instructions_compare_each_selected_prompt_to_all_baselines(
+    tmp_path, synthetic_arena_df, monkeypatch
+):
     data = normalize_battles(synthetic_arena_df, "ComparIA")
-    monkeypatch.setattr(pairwise_runner, "load_task_data", lambda _: data)
-    prefs = pairwise_runner.run_evaluation(
-        RunConfig(
-            task="alpaca-eval-ja",
-            model={"name": "Dummy/candidate", "baseline": ARENA_MODELS[0]},
-            judge={"model": "Dummy/score A: 0 score B: 10"},
-            generation={"n_instructions": 1},
-            run={"result_folder": str(tmp_path / "pairwise")},
-        )
+    cfg = RunConfig(
+        task="alpaca-eval-ja",
+        model={"name": "Dummy/candidate"},
+        judge={"model": "Dummy/score A: 0 score B: 10", "swap_mode": "fixed"},
+        protocol={
+            "baseline": {"strategy": "all_references", "references": ARENA_MODELS[:2]}
+        },
+        run={
+            "sampling": {"method": "random", "limit": 20},
+            "seed": 17,
+            "store_root": str(tmp_path / "cache"),
+        },
     )
-    assert len(prefs) == 1 and prefs.iloc[0] > 0.5
+    run_benchmark(cfg, data=data, output_dir=tmp_path / "evaluation")
+    rows = pd.read_parquet(tmp_path / "evaluation/outcomes.parquet")
+    expected = set(data.instructions.sample(20, random_state=17).instruction)
+    assert len(rows) == 40
+    assert {
+        opponent: set(part.instruction) for opponent, part in rows.groupby("model_b")
+    } == {opponent: expected for opponent in ARENA_MODELS[:2]}
+    monkeypatch.setattr(
+        models.PreparedModel, "materialize", lambda *_: pytest.fail("cache miss")
+    )
+    saved = load_config(tmp_path / "evaluation/config.yaml")
+    run_benchmark(saved, data=data, output_dir=tmp_path / "replay")
+    pd.testing.assert_frame_equal(
+        rows, pd.read_parquet(tmp_path / "replay/outcomes.parquet")
+    )
 
 
 def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
@@ -583,7 +602,8 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     if legacy.get("dataset"):
         legacy["dataset"]["adapter"] = "arena_battles"
     old_protocol.update(runner="elo", arena="ComparIA")
-    old_protocol.pop("graph")
+    legacy["generation"]["n_instructions"] = legacy["run"].pop("sampling")["limit"]
+    old_protocol["baseline"] = {"strategy": "none"}
     old_protocol.pop("limit_by", None)
     for key in ("preference_temperature", "calibrate_temperature", "calibration_size"):
         old_protocol["judge"][key] = None
@@ -876,12 +896,27 @@ def test_elo_temperature_follows_category_parser(
         assert pref == pytest.approx(1 - preference if row.swapped else preference)
 
 
+def test_sampling_quotas_and_limit_keep_complete_dialogues():
+    from judgearena.config import SamplingArgs
+
+    rows = pd.DataFrame(
+        {"dialogue": [1, 1, 2, 3, 3, 4], "lang": ["de"] * 3 + ["en"] * 3}
+    )
+    quota = SamplingArgs(group_by="lang", per_group=1)
+    assert preparation.select_rows(
+        rows, quota, seed=0, limit_by="dialogue"
+    ).dialogue.tolist() == [1, 1, 3, 3]
+    quota.limit = 1
+    assert preparation.select_rows(
+        rows, quota, seed=0, limit_by="dialogue"
+    ).dialogue.tolist() == [1, 1]
+
+
 @pytest.mark.parametrize("temperature", [0.7, None])
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     tmp_path, monkeypatch, temperature
 ):
     from judgearena.artifacts import read_metric_data
-    from judgearena.benchmarks.pairwise.graph import select_graph_battles
     from judgearena.benchmarks.runner import run_benchmark
     from judgearena.benchmarks.scoring import _METRIC_TYPES
 
@@ -893,14 +928,6 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
             return str(values["count"])
 
     monkeypatch.setitem(_METRIC_TYPES, "count_rows", CountRows)
-    rows = pd.DataFrame({"topic": ["code"] * 3 + ["math"] * 3})
-    selected, _ = select_graph_battles(rows, seed=42, group_by="topic", per_group=2)
-    assert selected.topic.tolist() == ["code", "code", "math", "math"]
-    limited, _ = select_graph_battles(
-        rows, seed=42, group_by="topic", per_group=2, limit=2
-    )
-    assert limited.topic.tolist() == ["code", "code"]
-
     cfg = RunConfig(
         task="elo-comparia",
         model={"name": "Dummy/candidate"},
@@ -911,11 +938,10 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
                 "parser": "score",
             },
         },
-        graph={"group_by": "rubric", "per_group": 6},
         protocol={
             "runner": "pairwise",
             "generation": {"mode": "single_turn_chat"},
-            "baseline": {"strategy": "none"},
+            "baseline": {"strategy": "recorded_opponents"},
             "judge": {
                 "default_prompt_preset": "default",
                 **(
@@ -929,7 +955,11 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
                 "metrics": [{"metric": "pairwise_win_rate"}, {"metric": "count_rows"}]
             },
         },
-        run={"store_root": str(tmp_path / "cache"), "no_log_file": True},
+        run={
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+            "sampling": {"group_by": "rubric", "per_group": 6},
+        },
     )
     data = normalize_battles(_arena_df(30), "ComparIA")
     data = replace(data, instructions=data.instructions.assign(rubric="clarity"))

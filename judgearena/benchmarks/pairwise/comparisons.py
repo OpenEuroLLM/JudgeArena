@@ -24,7 +24,7 @@ from judgearena.generate import (
 )
 
 if TYPE_CHECKING:
-    from judgearena.config import RunConfig
+    from judgearena.config import RunConfig, SamplingArgs
 
 
 def load_conversations(
@@ -158,19 +158,46 @@ def preload_model_outputs(data: CompletionData, models: list[str]) -> Completion
     )
 
 
+def select_rows(
+    frame: pd.DataFrame,
+    sampling: SamplingArgs,
+    *,
+    seed: int,
+    limit_by: str | None = None,
+) -> pd.DataFrame:
+    """Select rows, counting whole instruction groups when the task defines them."""
+    if sampling.limit is None and sampling.per_group is None:
+        return frame
+    units = frame
+    if limit_by is not None:
+        units = frame.drop_duplicates(limit_by)
+        if sampling.per_group is not None and (
+            len(frame.drop_duplicates([limit_by, sampling.group_by])) != len(units)
+        ):
+            raise ValueError(
+                f"Each {limit_by} must belong to one {sampling.group_by} for per-group sampling."
+            )
+    if sampling.per_group is not None:
+        units = units.groupby(units[sampling.group_by]).head(sampling.per_group)
+    if sampling.method == "random":
+        units = units.sample(n=min(sampling.limit, len(units)), random_state=seed)
+    elif sampling.limit is not None:
+        units = units.head(sampling.limit)
+    if limit_by is not None:
+        return frame.loc[frame[limit_by].isin(units[limit_by])]
+    return units
+
+
 def select_instructions(cfg, instructions):
-    """Apply the run limit, retaining whole task-defined instruction groups."""
-    n = cfg.generation.n_instructions
-    if n is not None:
-        limit_by = cfg.resolved_task.spec.protocol.limit_by
-        if limit_by is None:
-            instructions = instructions.head(n)
-        else:
-            selected = instructions[limit_by].drop_duplicates().head(n)
-            instructions = instructions.loc[instructions[limit_by].isin(selected)]
-    if instructions.empty:
+    selected = select_rows(
+        instructions,
+        cfg.run.sampling,
+        seed=cfg.run.seed,
+        limit_by=cfg.resolved_task.spec.protocol.limit_by,
+    )
+    if selected.empty:
         raise ValueError("No instructions selected for evaluation.")
-    return instructions
+    return selected
 
 
 def prepare_answers(
