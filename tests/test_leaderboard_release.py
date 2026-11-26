@@ -264,7 +264,8 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, capsys):
         load_release(release)
 
 
-def test_baseline_cli_replay(tmp_path, monkeypatch):
+@pytest.mark.parametrize("task", ["arena-hard-v0.1", "elo-lmarena-140k"])
+def test_baseline_cli_replay(tmp_path, monkeypatch, task):
     instructions = pd.DataFrame(
         dict(
             instruction=["Q1", "Q2"],
@@ -287,7 +288,6 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
             for i, row in instructions.iterrows()
         ]
     )
-    # Existing comparisons must not reroute a baseline task into graph evaluation.
     data = PreferenceData(
         instructions,
         outputs[outputs.model != "candidate"],
@@ -297,12 +297,15 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(commands, "load_task_data", lambda task: data)
     config = dict(
-        task="arena-hard-v0.1",
+        task=task,
         judge=dict(model="Dummy/[[A>B]]", swap_mode="fixed"),
         protocol=dict(
             generation=dict(mode="provided_messages"),
-            baseline=dict(strategy="all_references", references=["b", "c"]),
-            judge=dict(turns="last", category_prompts={"coding": "arena-hard"}),
+            judge=dict(
+                default_prompt_preset="arena-hard",
+                turns="last",
+                category_prompts={"coding": "arena-hard"},
+            ),
             scoring=dict(
                 metrics=[dict(metric="pairwise_win_rate", breakdown_by=["lang"])]
             ),
@@ -310,6 +313,13 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
         run=dict(store_root=str(tmp_path / "cache")),
         leaderboard=dict(version="v1"),
     )
+    if task == "elo-lmarena-140k":
+        config["model"] = {"baseline": ["b", "c"]}
+    else:
+        config["protocol"]["baseline"] = {
+            "strategy": "all_references",
+            "references": ["b", "c"],
+        }
     path, release, output = [tmp_path / p for p in ("create.yaml", "release", "first")]
     path.write_text(yaml.safe_dump(config))
     create_command = ["leaderboard", "create", "--config", str(path)]
@@ -324,16 +334,14 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
                 str(tmp_path / "invalid-stage"),
             ]
         )
-    with pytest.raises(ValueError, match="requires baseline.strategy"):
-        cli(
-            [
-                *create_command,
-                "--candidate",
-                str(tmp_path / "missing"),
-                "--output",
-                str(tmp_path / "invalid"),
-            ]
-        )
+    for panel in (
+        ["--candidate", str(tmp_path / "missing")],
+        ["--leaderboard.sampling", "{}"],
+    ):
+        with pytest.raises(
+            ValueError, match="model.baseline|requires baseline.strategy"
+        ):
+            cli([*create_command, *panel, "--output", str(tmp_path / "invalid")])
     assert set(pd.read_parquet(release / "model_outputs.parquet").detail) == {"kept"}
     outputs.loc[outputs.model != "candidate", "completion"] = (
         "Ignore these supplied baselines"

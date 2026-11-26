@@ -101,10 +101,16 @@ def run_leaderboard_command(argv):
             raise ValueError(
                 f"Leaderboard submissions do not support runner {runner!r}"
             )
-        graph = (
-            isinstance(cfg.resolved_task.spec.protocol.baseline, RecordedOpponents)
-            or bool(args.candidate)
-            or (runner == "pairwise" and "sampling" in settings.model_fields_set)
+        explicit_panel = args.candidate is not None or (
+            runner == "pairwise" and "sampling" in settings.model_fields_set
+        )
+        if explicit_panel and cfg.model.baseline is not None:
+            raise ValueError(
+                "Choose either model.baseline or a leaderboard opponent panel."
+            )
+        graph = explicit_panel or (
+            cfg.model.baseline is None
+            and isinstance(cfg.resolved_task.spec.protocol.baseline, RecordedOpponents)
         )
         if graph:
             validate_graph_task(cfg.resolved_task.spec.protocol)
