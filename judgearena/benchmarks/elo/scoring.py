@@ -22,6 +22,7 @@ class BradleyTerryMetric:
     soft: bool = True
     fit_mode: Literal["joint", "frozen"] = "joint"
     reference_min_battles: int = 0
+    bootstrap_group: str = "question_id"
 
     def __post_init__(self) -> None:
         if (
@@ -43,6 +44,7 @@ class BradleyTerryMetric:
         battles: pd.DataFrame,
         *,
         seed: int = 0,
+        reference_ratings: pd.DataFrame | None = None,
         reference_battles: pd.DataFrame | None = None,
     ) -> dict[str, object]:
         """Fit the candidate from judged battles and any supplied reference labels."""
@@ -72,7 +74,9 @@ class BradleyTerryMetric:
                 labels if self.soft else hard_preferences(labels)
             )
         if self.fit_mode == "frozen":
-            return self._calculate_frozen(scoring_battles, seed=seed)
+            return self._calculate_frozen(
+                scoring_battles, seed=seed, reference_ratings=reference_ratings
+            )
         point_ratings = fit_bradley_terry(
             scoring_battles, pref_col="rating_pref", baseline_model=self.baseline_model
         )
@@ -177,11 +181,45 @@ class BradleyTerryMetric:
             "reference_anchor_battles": len(reference_battles),
         }
 
-    def _calculate_frozen(self, battles: pd.DataFrame, *, seed: int) -> dict:
+    def _calculate_frozen(
+        self,
+        battles: pd.DataFrame,
+        *,
+        seed: int,
+        reference_ratings: pd.DataFrame | None = None,
+    ) -> dict:
+        """Fit the candidate against saved per-language ratings, or ones fitted here."""
         candidates = battles["evaluation_model"].dropna().unique()
         if len(candidates) != 1:
             raise ValueError("Frozen Elo requires exactly one model under evaluation.")
         candidate = str(candidates[0])
+        judgments = battles.loc[battles.evaluation_model.notna()]
+
+        def fit(frame, references):
+            return fit_frozen_rating(
+                frame,
+                candidate,
+                references,
+                pref_col="rating_pref",
+                group_col=self.bootstrap_group,
+                n_bootstraps=self.n_bootstraps,
+                seed=seed,
+            )
+
+        if reference_ratings is not None:
+            groups = [
+                {
+                    "group": language,
+                    "values": fit(
+                        frame,
+                        reference_ratings.loc[reference_ratings.lang.eq(language)]
+                        .set_index("model")
+                        .rating.to_dict(),
+                    ),
+                }
+                for language, frame in judgments.groupby("lang", sort=True)
+            ]
+            return {"groups": {"lang": groups}}
         reference_battles = battles.loc[battles.evaluation_model.isna()].dropna(
             subset=["rating_pref"]
         )
@@ -191,16 +229,7 @@ class BradleyTerryMetric:
             pref_col="rating_pref",
             baseline_model=self.baseline_model,
         )
-        judgments = battles.loc[battles.evaluation_model.notna()]
-        values = fit_frozen_rating(
-            judgments,
-            candidate,
-            references,
-            pref_col="rating_pref",
-            group_col="question_id",
-            n_bootstraps=self.n_bootstraps,
-            seed=seed,
-        )
+        values = fit(judgments, references)
         ratings = {**references, candidate: values["rating"]}
         counts = pd.concat([battles.model_a, battles.model_b]).value_counts()
         return {
@@ -287,3 +316,42 @@ class BradleyTerryMetric:
         else:
             lines.append("No overlapping arena models to compute MAE.")
         return "\n".join(lines)
+
+
+def configure_frozen_metrics(cfg, configured):
+    """Resolve rating defaults and require a fixed, language-specific reference scale."""
+    resolved = []
+    for request, metric in configured:
+        if isinstance(metric, BradleyTerryMetric):
+            if request.breakdown_by not in ((), ("lang",)):
+                raise ValueError("Frozen ratings are grouped by lang")
+            if not metric.baseline_model:
+                raise ValueError("Set the metric's baseline_model")
+        resolved.append((request, metric))
+    return tuple(resolved)
+
+
+def frozen_metric_inputs(requests, *, ratings, methods):
+    """Bind saved reference ratings to their metric without changing judging."""
+    from judgearena.benchmarks.scoring import build_metrics
+
+    overrides = {
+        method["name"]: {
+            "fit_mode": "frozen",
+            "bootstrap_group": "split_group",
+            "n_bootstraps": method["n_bootstraps"],
+        }
+        for method in methods
+    }
+    runtime = {
+        name: {"reference_ratings": ratings.loc[ratings.method.eq(name)]}
+        for name in overrides
+    }
+    # The frozen fitter already returns per-language groups.
+    requests = [
+        request.model_copy(update={"breakdown_by": ()})
+        if (request.name or request.metric) in overrides
+        else request
+        for request in requests
+    ]
+    return build_metrics(requests, parameter_overrides_by_metric=overrides), runtime

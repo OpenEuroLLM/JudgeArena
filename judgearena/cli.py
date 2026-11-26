@@ -32,7 +32,11 @@ def cli(argv: list[str] | None = None) -> None:
     # tasks/cli.py) and must be routed before build_run_config, which only parses
     # run/eval flags and would reject the subcommand form.
     is_task_cli = args[:1] == ["tasks"]
-    if is_task_cli:
+    if args[:1] == ["leaderboard"]:
+        from judgearena.leaderboard.cli import run_leaderboard_command
+
+        run_leaderboard_command(args[1:])
+    elif is_task_cli:
         from judgearena.tasks.cli import run_task_command
 
         run_task_command(args[1:])

@@ -517,6 +517,7 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
         model_b_name="b",
         chosen_model_name="a",
         both_equal=False,
+        evaluation_session_id=["s1", "s1", "s2", "s3"],
     )
     monkeypatch.setattr(source, "snapshot_download", lambda **kwargs: "/unused")
     monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
@@ -525,6 +526,7 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
 
     normalized = load_task_data("elo-comparia")
     assert normalized.battles.question_id.tolist() == [0, 1]
+    assert normalized.battles.session.tolist() == ["s1", "s1"]
 
 
 def test_download_config_reuses_selected_revision_offline(monkeypatch, tmp_path):

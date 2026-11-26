@@ -208,11 +208,13 @@ def calculate_metrics(
     metrics: ConfiguredMetrics,
     *,
     runtime: Mapping[str, object] | None = None,
+    runtime_by_metric: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, dict[str, object]]:
     """Supply accepted runtime keywords and record failures without losing annotations.
 
     Only explicitly named runtime parameters are forwarded. Metrics own their
-    randomness; seed and references pass through unchanged.
+    randomness; seed and references pass through unchanged. Per-metric inputs
+    override shared runtime values using the metric request name.
     """
     runtime = runtime or {}
     calculated: dict[str, dict[str, object]] = {}
@@ -224,7 +226,10 @@ def calculate_metrics(
             parameters = signature(metric.calculate).parameters
             kwargs = {
                 key: value
-                for key, value in runtime.items()
+                for key, value in {
+                    **runtime,
+                    **(runtime_by_metric or {}).get(name, {}),
+                }.items()
                 if key in parameters
                 and parameters[key].kind
                 in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)

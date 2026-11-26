@@ -1,0 +1,11 @@
+criteria:
+  - name: clarity
+    description: Explain the answer clearly and directly.
+    score_references:
+      1: Confusing or difficult to follow.
+      10: Clear, precise and easy to follow.
+  - name: completeness
+    description: Address every requested part of the instruction.
+    score_references:
+      1: Most requested parts are missing.
+      10: All requested parts are addressed.

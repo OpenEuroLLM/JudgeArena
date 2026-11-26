@@ -1,0 +1,47 @@
+task: elo-lmarena-140k
+judge:
+  model: OpenRouter/google/gemma-4-31b-it
+  prompt:
+    preset: arena-hard
+  swap_mode: both
+  temperature: 0.0
+  max_out_tokens: 2048
+generation:
+  truncate_judge_input_chars: null
+run:
+  seed: 42
+  use_tqdm: false
+  filters:
+    lang:
+    - en
+    - pl
+    - de
+    - fr
+    - es
+leaderboard:
+  version: lmarena-human-v1
+  # Human preferences set reference ratings; the judge evaluates submissions.
+  labels: human
+  sampling:
+    validation_fraction: 0.1
+    minimum_model_comparisons: 50
+    comparisons_per_opponent: 10
+
+protocol:
+  # Arena-Hard supplies preferences directly; Soft-Elo needs no calibration.
+  judge:
+    calibrate_temperature: false
+  scoring:
+    metrics:
+    - metric: bradley_terry
+      name: elo
+      parameters:
+        soft: false
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200
+    - metric: bradley_terry
+      name: soft_elo
+      parameters:
+        soft: true
+        baseline_model: gemma-3-27b-it
+        n_bootstraps: 200

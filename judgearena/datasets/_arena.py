@@ -102,6 +102,8 @@ def single_turn_battles(df: pd.DataFrame, arena: str) -> pd.DataFrame:
         "benchmark",
         "lang",
     ]
+    if "evaluation_session_id" in df:
+        cols.append("evaluation_session_id")
     df = df.loc[:, cols]
 
     # keep only one turn conversation for now as they are easier to evaluate
@@ -199,6 +201,8 @@ def normalize_battles(
             ~ids.duplicated(keep=False),
             ids + ":row-" + pd.RangeIndex(len(rows)).astype(str),
         )
+    if "evaluation_session_id" in rows:
+        rows["session"] = rows["evaluation_session_id"]
     rows["source"] = "human"
     return PreferenceData.from_battles(
         normalize_preferences(
