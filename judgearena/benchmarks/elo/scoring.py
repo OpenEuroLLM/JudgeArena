@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
-from judgearena.battles import hard_preferences, summarize_bootstrap
-from judgearena.benchmarks.elo.rating import fit_bradley_terry
+from judgearena.battles import hard_preferences, has_support, summarize_bootstrap
+from judgearena.benchmarks.elo.rating import fit_bradley_terry, fit_frozen_rating
+from judgearena.benchmarks.meta_eval.sampling import require_connected_pool
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -18,8 +20,17 @@ class BradleyTerryMetric:
     n_bootstraps: int = 0
     baseline_model: str | None = None
     soft: bool = True
+    fit_mode: Literal["joint", "frozen"] = "joint"
+    reference_min_battles: int = 0
 
     def __post_init__(self) -> None:
+        if (
+            type(self.reference_min_battles) is not int
+            or self.reference_min_battles < 0
+        ):
+            raise ValueError("reference_min_battles must be a non-negative integer")
+        if self.fit_mode not in {"joint", "frozen"}:
+            raise ValueError("fit_mode must be frozen or joint")
         if type(self.n_bootstraps) is not int or self.n_bootstraps < 0:
             raise ValueError("n_bootstraps must be a non-negative integer")
         if self.baseline_model is not None and not isinstance(self.baseline_model, str):
@@ -32,8 +43,18 @@ class BradleyTerryMetric:
         battles: pd.DataFrame,
         *,
         seed: int = 0,
+        reference_battles: pd.DataFrame | None = None,
     ) -> dict[str, object]:
-        """Calculate Bradley-Terry ratings from battle rows."""
+        """Fit the candidate from judged battles and any supplied reference labels."""
+        if reference_battles is not None:
+            battles = pd.concat([battles, reference_battles], ignore_index=True)
+        if self.reference_min_battles and "evaluation_model" in battles:
+            is_reference = battles.evaluation_model.isna().to_numpy()
+            keep = ~is_reference
+            keep[is_reference] = has_support(
+                battles.loc[is_reference], self.reference_min_battles
+            ).to_numpy()
+            battles = battles.loc[keep]
         required = {"model_a", "model_b", "pref"}
         if not self.soft:
             required.add("pref_hard")
@@ -41,10 +62,19 @@ class BradleyTerryMetric:
         if missing:
             raise ValueError(f"Bradley-Terry battles are missing columns: {missing}.")
         scoring_battles = battles.copy()
-        if not self.soft:
-            scoring_battles["pref"] = scoring_battles["pref_hard"]
+        scoring_battles["rating_pref"] = battles["pref" if self.soft else "pref_hard"]
+        if {"reference_pref", "evaluation_model"} <= set(battles.columns):
+            reference_rows = (
+                battles.evaluation_model.isna() & battles.reference_pref.notna()
+            )
+            labels = battles.loc[reference_rows, "reference_pref"]
+            scoring_battles.loc[reference_rows, "rating_pref"] = (
+                labels if self.soft else hard_preferences(labels)
+            )
+        if self.fit_mode == "frozen":
+            return self._calculate_frozen(scoring_battles, seed=seed)
         point_ratings = fit_bradley_terry(
-            scoring_battles, pref_col="pref", baseline_model=self.baseline_model
+            scoring_battles, pref_col="rating_pref", baseline_model=self.baseline_model
         )
         lifecycle_columns = {"pref_hard", "evaluation_model"}
         missing_lifecycle = sorted(lifecycle_columns - set(battles.columns))
@@ -67,11 +97,13 @@ class BradleyTerryMetric:
         reference_battles = scoring_battles.reindex(
             columns=["model_a", "model_b", "reference_pref"]
         ).dropna(subset=["reference_pref"])
-        reference_battles["pref"] = hard_preferences(
+        reference_battles["rating_pref"] = hard_preferences(
             reference_battles["reference_pref"]
         )
         reference_ratings = fit_bradley_terry(
-            reference_battles, pref_col="pref", baseline_model=self.baseline_model
+            reference_battles,
+            pref_col="rating_pref",
+            baseline_model=self.baseline_model,
         )
 
         battle_counts: dict[str, int] = {}
@@ -89,7 +121,7 @@ class BradleyTerryMetric:
             )
             bootstrap_ratings.append(
                 fit_bradley_terry(
-                    sample, pref_col="pref", baseline_model=self.baseline_model
+                    sample, pref_col="rating_pref", baseline_model=self.baseline_model
                 )
             )
 
@@ -145,9 +177,61 @@ class BradleyTerryMetric:
             "reference_anchor_battles": len(reference_battles),
         }
 
+    def _calculate_frozen(self, battles: pd.DataFrame, *, seed: int) -> dict:
+        candidates = battles["evaluation_model"].dropna().unique()
+        if len(candidates) != 1:
+            raise ValueError("Frozen Elo requires exactly one model under evaluation.")
+        candidate = str(candidates[0])
+        reference_battles = battles.loc[battles.evaluation_model.isna()].dropna(
+            subset=["rating_pref"]
+        )
+        require_connected_pool(reference_battles, (), context="Frozen Elo reference")
+        references = fit_bradley_terry(
+            reference_battles,
+            pref_col="rating_pref",
+            baseline_model=self.baseline_model,
+        )
+        judgments = battles.loc[battles.evaluation_model.notna()]
+        values = fit_frozen_rating(
+            judgments,
+            candidate,
+            references,
+            pref_col="rating_pref",
+            group_col="question_id",
+            n_bootstraps=self.n_bootstraps,
+            seed=seed,
+        )
+        ratings = {**references, candidate: values["rating"]}
+        counts = pd.concat([battles.model_a, battles.model_b]).value_counts()
+        return {
+            **values,
+            "ratings": ratings,
+            "rating_entries": [
+                {
+                    "model": model,
+                    "rating": rating,
+                    "ci_low": values["ci_low"] if model == candidate else rating,
+                    "ci_high": values["ci_high"] if model == candidate else rating,
+                    "n_battles": int(counts[model]),
+                    "source": "evaluated" if model == candidate else "reference",
+                }
+                for model, rating in ratings.items()
+            ],
+            "reference_ratings": references,
+            "evaluation_model": candidate,
+            "fit_mode": "frozen",
+            "intervals": "conditional on frozen references",
+        }
+
     @staticmethod
     def render(values: dict[str, object]) -> str:
         """Render point or arena-anchored Bradley-Terry values."""
+        if "rating" in values and "ratings" not in values:
+            return (
+                f"Rating: {values['rating']:.1f} "
+                f"[{values['ci_low']:.1f}, {values['ci_high']:.1f}] "
+                "(conditional on frozen references)"
+            )
         if "method" not in values:
             lines = ["bradley_terry ratings:"]
             ratings = values["ratings"]
@@ -159,6 +243,12 @@ class BradleyTerryMetric:
                     for model, rating in sorted(
                         ratings.items(), key=lambda item: -item[1]
                     )
+                )
+            if values.get("fit_mode") == "frozen":
+                lines.append(
+                    f"{values['evaluation_model']}: {values['rating']:.1f} "
+                    f"[{values['ci_low']:.1f}, {values['ci_high']:.1f}] "
+                    "(conditional on frozen references)"
                 )
             return "\n".join(lines)
         lines = [

@@ -145,8 +145,10 @@ def write_annotations(annotations: pd.DataFrame, path: str | Path) -> None:
     if path.suffix not in (".csv", ".parquet"):
         raise ValueError("Annotations require a .csv or .parquet path.")
     frame = annotations.copy()
+    json_columns = []
     for column in frame:
         if pd.api.types.infer_dtype(frame[column], skipna=True).startswith("mixed"):
+            json_columns.append(column)
             frame[column] = frame[column].map(
                 lambda value: (
                     None
@@ -159,4 +161,24 @@ def write_annotations(annotations: pd.DataFrame, path: str | Path) -> None:
     if path.suffix == ".csv":
         frame.to_csv(path, index=False)
     else:
+        frame.attrs["judgearena_json_columns"] = json_columns
         frame.to_parquet(path, index=False)
+
+
+def read_metric_data(path: str | Path) -> pd.DataFrame:
+    """Load scoring rows from the Parquet artifact named in evaluation.json."""
+    frame = pd.read_parquet(path)
+    columns = frame.attrs.pop("judgearena_json_columns", None)
+    if columns is None:
+        # Older artifacts encoded parser results without recording column names.
+        columns = frame.columns.intersection(["parsed", "parsed_a", "parsed_b"])
+    for column in columns:
+        frame[column] = pd.Series(
+            [
+                json.loads(value) if isinstance(value, str) else value
+                for value in frame[column]
+            ],
+            index=frame.index,
+            dtype=object,
+        )
+    return frame

@@ -1,15 +1,22 @@
-"""Pure sampling and Bradley-Terry rating logic for arena-anchored ELO."""
+"""Bradley-Terry rating fits and reference scoring rows."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import numpy as np
 import pandas as pd
+from scipy.optimize import brentq
+from scipy.special import expit
 from sklearn.linear_model import LogisticRegression
 
-from judgearena.battles import hard_preferences
+from judgearena.battles import hard_preferences, has_support
+
+
+def resample_clusters(clusters, n, rng):
+    """Yield row positions for ``n`` bootstrap draws of whole clusters."""
+    for _ in range(n):
+        yield np.concatenate(
+            [clusters[i] for i in rng.integers(len(clusters), size=len(clusters))]
+        )
 
 
 def fit_bradley_terry(
@@ -59,58 +66,91 @@ def fit_bradley_terry(
     return dict(pd.Series(ratings, index=models.index))
 
 
-def _sample_fingerprint(sampled: pd.DataFrame) -> str:
-    rows = [
-        {
-            "index": int(index) if isinstance(index, int | np.integer) else str(index),
-            "question_id": str(row.get("question_id", row.get("instruction_index"))),
-            "model_a": str(row["model_a"]),
-            "model_b": str(row["model_b"]),
-        }
-        for index, row in sampled.iterrows()
-    ]
-    return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()
-
-
-def select_seeded_random_arena_battles(
-    df_battles: pd.DataFrame,
+def fit_frozen_rating(
+    battles: pd.DataFrame,
+    candidate: str,
+    references: dict[str, float],
     *,
-    n_battles: int,
-    seed: int,
-) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Select a shared random battle panel for outside-model ELO estimation."""
-    sampled = df_battles.sample(
-        n=min(n_battles, len(df_battles)), random_state=seed, replace=False
-    )
-    metadata: dict[str, object] = {
-        "sampling_mode": "seeded_random",
-        "random_seed": seed,
-        "requested_rows": n_battles,
-        "sampled_rows": len(sampled),
-        "sampled_original_indices": [
-            int(index) if isinstance(index, int | np.integer) else str(index)
-            for index in sampled.index
-        ],
-        "sampled_question_ids": [
-            str(value)
-            for value in sampled[
-                "question_id" if "question_id" in sampled else "instruction_index"
-            ].tolist()
-        ],
-        "sample_fingerprint": _sample_fingerprint(sampled),
+    pref_col: str,
+    group_col: str,
+    n_bootstraps: int = 200,
+    seed: int = 42,
+) -> dict[str, float | int]:
+    """Fit only the candidate, with intervals conditional on frozen reference ratings.
+
+    Preferences use 0 for A wins and 1 for B wins. Resampling whole prompt groups
+    keeps repeated judgments and answer orders together. Perfect wins/losses have
+    unbounded maximum-likelihood ratings, reported as positive/negative infinity.
+    """
+    if n_bootstraps < 0:
+        raise ValueError("n_bootstraps must be non-negative.")
+    if candidate in references:
+        raise ValueError("The candidate must not already be a frozen reference model.")
+    is_a, is_b = battles.model_a.eq(candidate), battles.model_b.eq(candidate)
+    if not (is_a ^ is_b).all():
+        raise ValueError("Every comparison must contain the candidate exactly once.")
+    opponents = battles.model_b.where(is_a, battles.model_a)
+    opponent_ratings = opponents.map(references).to_numpy(dtype=float)
+    if not np.isfinite(opponent_ratings).all():
+        raise ValueError("Every opponent must have a finite frozen reference rating.")
+    preferences = pd.to_numeric(battles[pref_col], errors="raise")
+    valid = preferences.notna()
+    if not preferences[valid].between(0, 1).all():
+        raise ValueError("Preferences must be between zero and one.")
+    if not valid.any():
+        raise ValueError("No valid candidate judgments remain.")
+    targets = preferences.where(is_b, 1 - preferences)[valid].to_numpy(dtype=float)
+    opponents = opponent_ratings[valid.to_numpy()]
+
+    def fit(positions):
+        target = targets[positions].mean()
+        if target == 0 or target == 1:
+            return float("-inf") if target == 0 else float("inf")
+        ratings = opponents[positions]
+        shift = 400 * np.log10(target / (1 - target))
+        lower, upper = ratings.min() + shift, ratings.max() + shift
+        if lower == upper:
+            return float(lower)
+        return float(
+            brentq(
+                lambda rating: (
+                    expit((rating - ratings) * np.log(10) / 400).mean() - target
+                ),
+                lower - 1,
+                upper + 1,
+            )
+        )
+
+    low = high = float("nan")
+    if n_bootstraps:
+        if group_col not in battles or battles.loc[valid, group_col].isna().any():
+            raise ValueError("Every valid judgment requires a bootstrap group.")
+        clusters = list(
+            battles.loc[valid].groupby(group_col, sort=False).indices.values()
+        )
+        rng = np.random.default_rng(seed)
+        samples = [
+            fit(positions)
+            for positions in resample_clusters(clusters, n_bootstraps, rng)
+        ]
+        # Order-statistic quantiles preserve infinite endpoints without inf-inf arithmetic.
+        low, high = np.quantile(samples, [0.025, 0.975], method="inverted_cdf")
+    return {
+        "rating": fit(np.arange(len(targets))),
+        "ci_low": float(low),
+        "ci_high": float(high),
+        "num_comparisons": len(targets),
+        "num_missing": int((~valid).sum()),
+        "n_bootstraps": n_bootstraps,
     }
-    return sampled.reset_index(drop=True), metadata
 
 
-def arena_anchor_battles(df_arena_all: pd.DataFrame) -> pd.DataFrame:
+def arena_anchor_battles(
+    df_arena_all: pd.DataFrame, *, min_battles: int = 500
+) -> pd.DataFrame:
     """Build scoring anchors from selected reference comparisons."""
     frame = df_arena_all.loc[:, ["model_a", "model_b", "reference_pref"]].copy()
     frame["pref"] = frame["reference_pref"]
-    counts = pd.concat([frame["model_a"], frame["model_b"]]).value_counts()
-    well_represented = set(counts[counts >= 500].index)
-    frame = frame[
-        frame["model_a"].isin(well_represented)
-        & frame["model_b"].isin(well_represented)
-    ]
+    frame = frame[has_support(frame, min_battles)]
     frame["pref_hard"] = hard_preferences(frame["pref"])
     return frame

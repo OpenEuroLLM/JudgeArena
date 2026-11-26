@@ -15,8 +15,18 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def run_benchmark(cfg: RunConfig, *, data: CompletionData | None = None) -> object:
-    """Run a task through its registered benchmark adapter."""
+def run_benchmark(
+    cfg: RunConfig,
+    *,
+    data: CompletionData | None = None,
+    output_dir=None,
+    **runner_options,
+) -> object:
+    """Run a task; an explicit output directory returns its evaluation manifest.
+
+    Runner-specific preparation inputs (such as a fixed baseline plan) can be
+    supplied by Python callers without changing the task's judging/scoring settings.
+    """
     if data is not None and not isinstance(data, CompletionData):
         raise TypeError("Supplied data must be CompletionData or PreferenceData.")
     if (
@@ -32,7 +42,11 @@ def run_benchmark(cfg: RunConfig, *, data: CompletionData | None = None) -> obje
     with track_usage() as usage_tracker:
         try:
             return resolved.adapter.runner(
-                cfg, resolved.task, **({"data": data} if data is not None else {})
+                cfg,
+                resolved.task,
+                **({"data": data} if data is not None else {}),
+                **({"output_dir": output_dir} if output_dir is not None else {}),
+                **runner_options,
             )
         finally:
             usage_tracker.render_summary()

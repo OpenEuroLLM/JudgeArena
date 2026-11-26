@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Configure opponent selection with `protocol.baseline`, filtering and sampling with `run.filters` and `run.sampling`, and Elo with `protocol.scoring.metrics`. These replace the old `elo` and `graph` settings. Use `run.sampling.limit` for the former `generation.n_instructions`.
+
 ## 0.2.0
 
 - Define benchmarks in task YAML and customize runs with config files or CLI overrides.

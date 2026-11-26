@@ -144,7 +144,7 @@ def test_write_run_metadata_records_packaged_task_provenance(tmp_path, monkeypat
 
 @pytest.mark.parametrize("suffix", ["csv", "parquet"])
 def test_annotation_artifacts_preserve_nested_evidence(tmp_path, suffix):
-    from judgearena.artifacts import write_annotations
+    from judgearena.artifacts import read_metric_data, write_annotations
 
     frame = pd.DataFrame(
         {
@@ -168,3 +168,10 @@ def test_annotation_artifacts_preserve_nested_evidence(tmp_path, suffix):
     assert json.loads(loaded.tags.iloc[1]) == []
     assert [json.loads(value) for value in loaded.metadata] == [{"rating": 1}, 0]
     assert [json.loads(value) for value in loaded.mixed_label] == ["coding", 1]
+    if suffix == "parquet":
+        restored = read_metric_data(path)
+        assert restored.mixed_label.tolist() == ["coding", 1]
+        assert restored.metadata.tolist() == frame.metadata.tolist()
+        loaded.attrs.clear()
+        loaded.to_parquet(path, index=False)
+        assert read_metric_data(path).parsed.tolist() == restored.parsed.tolist()

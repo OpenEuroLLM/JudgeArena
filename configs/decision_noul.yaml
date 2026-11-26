@@ -25,5 +25,5 @@ protocol:
   scoring:
     metrics:
       - metric: pairwise_win_rate
-generation:
-  n_instructions: 4
+run:
+  sampling: {limit: 4}

@@ -29,6 +29,16 @@ Paths are relative to the containing YAML file. A bundle can also contain
 Saved run configs contain the expanded settings, so replay does not require
 the original bundle file.
 
+## Template fields
+
+| Field | Rendered value |
+| --- | --- |
+| `{instruction}` | User instruction |
+| `{completion}` or `{completion_a}`, `{completion_b}` | Answer for single-answer or pairwise judging. Includes the conversation when saved messages are available. |
+| `{completion_text}` or `{completion_a_text}`, `{completion_b_text}` | Answer text only. Use these when the template already includes the conversation history. |
+
+Templates can also use columns supplied by the task, such as WildBench’s `{history}`.
+
 ## Task-local bundles
 
 Keep benchmark-specific bundles beside the task, for example

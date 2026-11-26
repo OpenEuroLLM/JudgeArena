@@ -114,5 +114,5 @@ def test_grouped_judging_reuses_raw_cache_and_restores_item_order(
 @pytest.mark.parametrize("multi_turn", [False, True])
 def test_mt_builder_rejects_generic_template_fields_early(multi_turn):
     prompt = resolve_judge_prompt(preset="arena-hard")
-    with pytest.raises(ValueError, match="MT-Bench.*completion_A"):
+    with pytest.raises(ValueError, match="MT-Bench.*completion_a"):
         build_mt_bench_preset_prompts({multi_turn: prompt})

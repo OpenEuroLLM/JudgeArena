@@ -198,6 +198,76 @@ def test_shared_registry_calculates_and_renders_point_bradley_terry():
     assert "b:" in rendered
 
 
+def test_frozen_elo_keeps_connected_language_when_another_is_disconnected():
+    judgments = pd.DataFrame(
+        {
+            "model_a": ["candidate", "candidate"],
+            "model_b": ["a", "a"],
+            "lang": ["de", "en"],
+            "evaluation_model": ["candidate", "candidate"],
+            "pref": [0.5, 0.5],
+        }
+    )
+    references = pd.DataFrame(
+        {
+            "model_a": ["a", "c", "b", "a"],
+            "model_b": ["b", "d", "c", "b"],
+            "lang": ["de", "de", "en", "en"],
+            "reference_pref": [0.5] * 4,
+        }
+    )
+    request = MetricSpec(
+        metric="bradley_terry",
+        parameters={"fit_mode": "frozen"},
+        breakdown_by=("lang",),
+    )
+    results = calculate_metrics(
+        judgments, build_metrics([request]), runtime={"reference_battles": references}
+    )
+    metric = results["bradley_terry"]
+    [english] = metric["groups"]["lang"]
+    assert english["group"] == "en"
+    assert english["values"]["ratings"]["candidate"] == pytest.approx(1000)
+    assert "connected" in metric["breakdown_errors"]["lang='de'"]
+
+
+def test_disjoint_language_pools_keep_their_own_frozen_ratings():
+    references = pd.DataFrame(
+        {
+            "lang": ["en", "de"],
+            "model_a": ["a", "c"],
+            "model_b": ["b", "d"],
+            "reference_pref": [0.5, 0.5],
+        }
+    )
+    judgments = pd.DataFrame(
+        {
+            "lang": ["en", "de"],
+            "model_a": "candidate",
+            "model_b": ["a", "c"],
+            "evaluation_model": "candidate",
+            "pref": 0.5,
+        }
+    )
+    request = MetricSpec(
+        metric="bradley_terry",
+        parameters={"fit_mode": "frozen"},
+        breakdown_by=("lang",),
+    )
+    results = calculate_metrics(
+        judgments, build_metrics([request]), runtime={"reference_battles": references}
+    )
+    metric = results["bradley_terry"]
+    assert "disconnected" in metric["error"] and "ratings" not in metric
+    ratings = {
+        group["group"]: set(group["values"]["ratings"])
+        for group in metric["groups"]["lang"]
+    }
+    assert ratings == {"en": {"a", "b", "candidate"}, "de": {"c", "d", "candidate"}}
+    report = render_metrics(results)
+    assert all(label in report for label in ("disconnected", "lang=en:", "lang=de:"))
+
+
 def test_empty_metric_results_render_as_unavailable():
     results = {
         "alpaca_eval_length_controlled": {
@@ -251,11 +321,9 @@ def test_failed_breakdown_preserves_overall_and_other_breakdowns(bad_column, cap
 
 
 def test_registered_metrics_receive_only_named_runtime_and_are_order_independent(
-    monkeypatch,
+    isolated_task_registries,
 ):
     import judgearena.benchmarks.scoring as scoring
-
-    monkeypatch.setattr(scoring, "_METRIC_TYPES", dict(scoring._METRIC_TYPES))
 
     @scoring.register_metric("custom")
     @scoring.register_metric("other")

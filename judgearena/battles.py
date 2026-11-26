@@ -9,14 +9,11 @@ completions and judge transcripts stay in the cache for now.
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-from judgearena.artifacts import to_jsonable
 
 
 def preference_values(values: pd.Series) -> pd.Series:
@@ -71,6 +68,13 @@ def agreement_outcomes(annotations: pd.DataFrame) -> pd.DataFrame:
 def hard_preferences(values: pd.Series) -> pd.Series:
     prefs = preference_values(values)
     return pd.Series(np.sign(prefs - 0.5) / 2 + 0.5, index=prefs.index)
+
+
+def has_support(battles: pd.DataFrame, minimum: int) -> pd.Series:
+    """Mark rows whose two models each appear in at least ``minimum`` rows."""
+    counts = pd.concat([battles["model_a"], battles["model_b"]]).value_counts()
+    supported = counts[counts >= minimum].index
+    return battles["model_a"].isin(supported) & battles["model_b"].isin(supported)
 
 
 def swap_comparison_slots(
@@ -157,6 +161,7 @@ def judged_battles(
     frame = judgments.reset_index(drop=True).copy()
     frame["pref"] = preference_values(judgments["pref"]).to_numpy()
     frame["pref_hard"] = hard_preferences(frame["pref"])
+    frame["winner"] = winner_labels(frame["pref"])
     frame["orientation"] = judgments["orientation"].to_numpy()
     frame["evaluation_model"] = evaluation_model
     frame["source"] = "llm-judge"
@@ -228,27 +233,6 @@ class RatingEntry:
     ci_high: float
     n_battles: int
     source: str  # "evaluated" (model under test) | "human"
-
-
-@dataclass
-class Leaderboard:
-    """Per-model ratings (mean + bootstrap CI) plus the run metadata that produced them.
-
-    Named distinctly from :class:`judgearena.reports.EloReport`,
-    which is the console/``results-*.json`` run report; this is the narrower
-    ``elo_ratings.json`` leaderboard artifact with per-model CIs.
-    """
-
-    arena: str
-    model: str
-    judge_model: str
-    n_bootstraps: int
-    seed: int
-    ratings: list[RatingEntry]
-
-    def write(self, path: str | Path) -> None:
-        with Path(path).open("w") as f:
-            json.dump(to_jsonable(asdict(self)), f, indent=2, allow_nan=False)
 
 
 def summarize_bootstrap(

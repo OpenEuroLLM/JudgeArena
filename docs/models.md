@@ -21,7 +21,7 @@ uv run judgearena \
   --model.name VLLM/Qwen/Qwen2.5-0.5B-Instruct \
   --model.max_out_tokens 4096 \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 For chat models, vLLM applies the tokenizer's chat template. Without a template, the wrapper falls back to plain-text generation. Use the model's intended template when evaluating instruction-tuned checkpoints.
@@ -55,7 +55,7 @@ uv run judgearena \
   --model.engine_kwargs '{"chat_format":"chatml"}' \
   --model.max_out_tokens 1024 \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 The part after `LlamaCpp/` is a local file path. Absolute paths have two slashes, for example `LlamaCpp//home/user/models/model.gguf`. Set `chat_format` to match the checkpoint when its GGUF metadata does not supply the intended template. A different judge can use its own `judge.engine_kwargs`.

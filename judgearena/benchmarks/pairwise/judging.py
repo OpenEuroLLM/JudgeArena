@@ -7,9 +7,14 @@ from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Literal
 
+import numpy as np
 import pandas as pd
 
-from judgearena.battles import agreement_outcomes, swap_comparison_slots
+from judgearena.battles import (
+    agreement_outcomes,
+    has_support,
+    swap_comparison_slots,
+)
 from judgearena.benchmarks.pairwise.scoring.metrics import score_outcomes
 from judgearena.datasets.data import _require_columns, validate_messages
 from judgearena.evaluate import (
@@ -289,11 +294,14 @@ def prepare_pairwise_judging(
     swap_mode: str | None = None,
     use_tqdm: bool | None = None,
     available_columns=None,
+    preference_temperature=None,
+    reference_battles=None,
+    calibration_rng=None,
 ) -> tuple[Callable, float | None]:
     """Bind prompt preparation and outcome policy to the shared judging loop."""
     swap_mode = cfg.judge.swap_mode if swap_mode is None else swap_mode
     use_tqdm = cfg.run.use_tqdm if use_tqdm is None else use_tqdm
-    spec = cfg.resolved_task.spec.protocol.judge
+    spec = cfg.preference_settings
     if resolved_prompt.judging_mode == "single_answer":
         sample_columns = None
         if available_columns is not None:
@@ -319,6 +327,13 @@ def prepare_pairwise_judging(
             minimum_by=spec.minimum_score_by,
             temperature=spec.score_temperature,
         ), None
+    # Legacy calibration only ran on sampled reference graphs.
+    calibrate_temperature = spec.calibrate_temperature and (
+        reference_battles is not None
+        or cfg.resolved_task.spec.protocol.judge.calibrate_temperature is True
+    )
+    if calibrate_temperature and reference_battles is None:
+        raise ValueError("Preference calibration requires reference comparisons")
     if spec.minimum_score_by:
         raise ValueError("minimum_score_by requires a single-answer scoring prompt.")
     if resolved_prompt.prepare_prompts is None:
@@ -330,8 +345,11 @@ def prepare_pairwise_judging(
             cfg, resolved_prompt, instructions
         )
 
+    if preference_temperature is None:
+        preference_temperature = spec.preference_temperature
+
     def judge(model, comparisons, *, source_ids=None):
-        return judge_pairwise_batches(
+        annotations, outcomes, metadata = judge_pairwise_batches(
             model,
             comparisons,
             prepare(comparisons, source_ids=source_ids),
@@ -339,6 +357,40 @@ def prepare_pairwise_judging(
             use_tqdm=use_tqdm,
             aggregation=resolved_prompt.aggregation,
         )
+
+        temperature = preference_temperature
+        if calibrate_temperature:
+            from judgearena.benchmarks.pairwise.calibration import (
+                calibrate_pairscore_temperature,
+            )
+
+            fitted = calibrate_pairscore_temperature(
+                reference_battles.loc[
+                    has_support(reference_battles, spec.calibration_min_battles)
+                ],
+                sample_size=spec.calibration_size,
+                rng=calibration_rng
+                if calibration_rng is not None
+                else np.random.default_rng(cfg.run.seed),
+                judge_chat_model=model,
+                swap_mode=cfg.judge.swap_mode,
+                prompt=resolved_prompt,
+                truncate_input_chars=cfg.generation.truncate_judge_input_chars,
+                default_temperature=temperature,
+            )
+            if fitted is not None:
+                temperature = fitted
+        if temperature is not None:
+            from judgearena.benchmarks.pairwise.calibration import (
+                apply_prompt_temperatures,
+            )
+
+            outcomes = apply_prompt_temperatures(
+                outcomes,
+                [p for p, _ in group_judge_prompts(cfg, instructions, resolved_prompt)],
+                temperature=temperature,
+            )
+        return annotations, outcomes, metadata
 
     return judge, default_temperature
 

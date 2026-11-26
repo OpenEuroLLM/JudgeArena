@@ -15,6 +15,7 @@ from judgearena.artifacts import (
     write_annotations,
     write_run_metadata_safely,
 )
+from judgearena.artifacts.evaluation import finish_evaluation
 from judgearena.benchmarks.execution import build_judge
 from judgearena.benchmarks.meta_eval.annotate import (
     prepare_reference_comparisons,
@@ -58,7 +59,7 @@ def _prepare_arena_battles(data: PreferenceData, *, task: str) -> pd.DataFrame:
 
 @run_logging()
 def run_meta_eval(
-    cfg: RunConfig, task: ResolvedTaskSpec | None = None, *, data=None
+    cfg: RunConfig, task: ResolvedTaskSpec | None = None, *, data=None, output_dir=None
 ) -> dict[str, object]:
     """Sample arena battles, judge them, and run configured meta metrics."""
     cfg = cfg.for_task(task)
@@ -83,7 +84,8 @@ def run_meta_eval(
     )
     metrics = build_metrics(protocol.scoring.metrics)
 
-    logger.info("Loading reference battles from %s", protocol.arena)
+    arena = protocol.arena or task.task
+    logger.info("Loading reference battles from %s", arena)
     data = (data if data is not None else load_task_data(task)).select(filters)
     arena_battles = _prepare_arena_battles(data, task=cfg.task)
     top_models, top_pool = select_top_models(
@@ -104,7 +106,12 @@ def run_meta_eval(
         f"{safe_filename(cfg.task)}-{safe_filename(cfg.judge.model)}-"
         f"{cfg.judge.swap_mode}-{timestamp}"
     )
-    result_dir = prepare_run_directory(cfg, Path(cfg.run.result_folder) / result_name)
+    result_dir = prepare_run_directory(
+        cfg,
+        output_dir
+        if output_dir is not None
+        else Path(cfg.run.result_folder) / result_name,
+    )
     write_annotations(sample, result_dir / "sample.parquet")
 
     comparisons = prepare_reference_comparisons(sample, turns=protocol.judge.turns)
@@ -126,7 +133,7 @@ def run_meta_eval(
     )
     report = MetaEvalReport(
         task=cfg.task,
-        arena=protocol.arena,
+        arena=arena,
         judge_model=cfg.judge.model,
         prompt_preset=resolved_prompt.preset_name,
         languages=filters.get("lang", []),
@@ -151,4 +158,18 @@ def run_meta_eval(
         started_at_utc=run_started_at,
     )
     logger.info("Meta-eval results written to %s", result_dir)
-    return {**results, "result_path": str(result_path)}
+    manifest = finish_evaluation(
+        result_dir,
+        report,
+        model=cfg.judge.model,
+        artifacts={
+            "report": result_path,
+            "metric_data": result_dir / "battles.parquet",
+            "annotations": result_dir / "annotations.parquet",
+        },
+    )
+    return (
+        manifest
+        if output_dir is not None
+        else {**results, "result_path": str(result_path)}
+    )

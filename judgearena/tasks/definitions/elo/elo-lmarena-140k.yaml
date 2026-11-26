@@ -5,8 +5,12 @@ description: Arena-anchored ELO evaluation using LMSYS Chatbot Arena 140k battle
 variants:
   selector: lang
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
+  groups:
+    # Languages in the five-language European evaluation panel.
+    eu: [en, de, fr, es, pl]
 
 dataset:
+  adapter: lmarena
   sources:
     lmarena_140k:
       type: huggingface_dataset
@@ -14,8 +18,6 @@ dataset:
       revision: "6322995ab34d7c2693e3f47dd13fa5caa0789a74"
       allow_patterns: [data/*.parquet]
 
-protocol:
-  arena: LMArena-140k
 
 metadata:
   reference_implementation: https://huggingface.co/datasets/lmarena-ai/arena-human-preference-140k

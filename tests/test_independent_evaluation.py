@@ -3,10 +3,12 @@ from dataclasses import replace
 
 import pandas as pd
 import pytest
+import yaml
 
+from judgearena.artifacts import read_metric_data
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.benchmarks.scoring import build_metric
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, load_config
 from judgearena.datasets.data import CompletionData
 from judgearena.prompts.parsing import JUDGE_PARSERS
 from judgearena.prompts.registry import resolve_judge_prompt
@@ -58,6 +60,33 @@ def test_mean_score_preserves_scale_and_counts_missing_results():
         "num_samples": 3,
         "num_missing": 1,
     }
+    criteria = metric.calculate(
+        pd.DataFrame(
+            {
+                "score": [7, 5, None],
+                "parsed": [
+                    {"details": {"criteria": {"clarity": 8, "completeness": 6}}},
+                    {"details": {"criteria": {"clarity": 5}}},
+                    None,
+                ],
+            }
+        )
+    )["criteria"]
+    assert criteria == {
+        "clarity": {"score": 6.5, "num_samples": 3, "num_missing": 1},
+        "completeness": {"score": 6.0, "num_samples": 3, "num_missing": 2},
+    }
+    for details in (
+        None,
+        {"criteria": "accuracy and clarity"},
+        {"criteria": {"accuracy": "high"}},
+    ):
+        plain = pd.DataFrame({"score": [7], "parsed": [{"details": details}]})
+        assert metric.calculate(plain) == {
+            "score": 7,
+            "num_samples": 1,
+            "num_missing": 0,
+        }
     assert metric.calculate(pd.DataFrame({"score": [None]}))["score"] is None
     with pytest.raises(ValueError, match="finite"):
         metric.calculate(pd.DataFrame({"score": [float("inf")]}))
@@ -81,7 +110,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
     data = CompletionData.from_frames(
         pd.DataFrame(
             {
-                "instruction_index": ["saved", "missing"],
+                "instruction_index": ["saved", 1],
                 "instruction": ["Remember {42}", "Explain it"],
                 "source_instruction_index": ["foreign-saved", "foreign-missing"],
                 "messages": [
@@ -132,14 +161,16 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
 
     monkeypatch.setitem(JUDGE_PARSERS, Parser.name, Parser())
     system, user = tmp_path / "system.txt", tmp_path / "user.txt"
-    system.write_text("Use {checklist}")
+    system.write_text(
+        "Use {checklist} for {instruction_json}. Keep {{user_prompt}} literal."
+    )
     user.write_text(
-        "Checkpoint: {checkpoint}\nQ: {user_prompt}\nA: {completion}\nRaw: {completion_text}"
+        "Checkpoint: {checkpoint}\nQ: {instruction}\nA: {completion}\nRaw: {completion_text}"
     )
     judge = {
-        "model": 'Dummy/{"correct": true, "criteria": {"clarity": "pass"}, "score": 0.8}',
+        "model": 'Dummy/{"correct": true, "details": {"criteria": {"clarity": 0.6}}, "score": 0.8}',
         "prompt": {
-            "system_file": str(system),
+            "system": system.read_text(),
             "user_file": str(user),
             "parser": Parser.name,
         },
@@ -159,9 +190,13 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
                 "no_log_file": True,
             },
         )
+        if run == "replay":
+            snapshot = next((tmp_path / "live").rglob("config.yaml"))
+            cfg = load_config(snapshot)
+            cfg.run.result_folder = str(tmp_path / run)
         annotations = run_benchmark(cfg)
         assert annotations.set_index("instruction_index").completion.to_dict() == {
-            "missing": "generated",
+            1: "generated",
             "saved": "stored answer",
         }
         saved = annotations.set_index("instruction_index").loc["saved"]
@@ -177,7 +212,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
         )
         assert annotations.parsed.iloc[0] == {
             "correct": True,
-            "criteria": {"clarity": "pass"},
+            "details": {"criteria": {"clarity": 0.6}},
             "score": 0.8,
         }
         assert annotations.score.tolist() == [0.8, 0.8]
@@ -192,7 +227,16 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
             pd.testing.assert_frame_equal(first, annotations)
             assert metadata["usage"]["total"]["requests"] == 0
         report = json.loads(next((tmp_path / run).rglob("results-*.json")).read_text())
-        assert report["metrics"]["mean_score"]["score"] == 0.8
+        manifest = next((tmp_path / run).rglob("evaluation.json"))
+        artifacts = json.loads(manifest.read_text())["artifacts"]
+        answers = read_metric_data(manifest.parent / artifacts["answers"])
+        assert set(answers.instruction_index) == {"saved", 1}
+        artifact = artifacts["metric_data"]
+        rescored = build_metric("mean_score").calculate(
+            read_metric_data(manifest.parent / artifact)
+        )
+        assert rescored == report["metrics"]["mean_score"]
+        assert rescored["criteria"]["clarity"]["score"] == 0.6
         exported = pd.read_csv(next((tmp_path / run).rglob("*-annotations.csv")))
         assert json.loads(exported.parsed.iloc[0]) == annotations.parsed.iloc[0]
 
@@ -211,7 +255,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
     spec = task.model_dump()
     spec["protocol"].update(
         runner="pairwise",
-        baseline={"strategy": "runtime_required"},
+        baseline=None,
         judge={"default_prompt_preset": "single-score"},
         scoring={"metrics": [{"metric": "pairwise_win_rate"}]},
     )
@@ -274,7 +318,7 @@ def test_score_fallback_does_not_truncate_invalid_numbers(value):
 
 def test_independent_empty_selection_fails_before_model_work(monkeypatch, tmp_path):
     data = CompletionData.from_frames(
-        pd.DataFrame({"instruction_index": ["q"], "instruction": ["hi"]})
+        pd.DataFrame(columns=["instruction_index", "instruction"])
     )
     monkeypatch.setattr(ArenaHardAdapter, "load_data", lambda self: data)
     task = _independent_task()
@@ -283,7 +327,6 @@ def test_independent_empty_selection_fails_before_model_work(monkeypatch, tmp_pa
         resolved_task=task,
         model={"name": "Dummy/x"},
         judge={"model": "Dummy/x"},
-        generation={"n_instructions": 0},
         run={"result_folder": str(tmp_path)},
     )
     with pytest.raises(ValueError, match="No instructions"):
@@ -484,7 +527,7 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     )
     criteria_preset = "custom-rubric" if mode == "custom" else "criteria-score"
     option_key = "rubric" if mode == "custom" else "criteria_file"
-    user = tmp_path / "rubric.txt"
+    user = tmp_path / "release.json"
     system = tmp_path / "system.txt"
     user.write_text('Rate {completion}. Return {{"score": number}}')
     system.write_text("Judge grammar only.")
@@ -533,6 +576,12 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
     data = CompletionData(pd.DataFrame({"instruction": ["Q"]}))
     first = run_benchmark(cfg, data=data)
     saved = next((tmp_path / "results").rglob("config.yaml"))
+    manifest = json.loads((saved.parent / "evaluation.json").read_text())
+    assert all(
+        str(path.relative_to(saved.parent)) in manifest["files"]
+        for path in (saved.parent / "prompts").rglob("*")
+        if path.is_file()
+    )
     user.unlink()
     system.unlink()
     criteria.unlink()
@@ -560,9 +609,8 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
 
 @pytest.mark.parametrize("source_kind", ["config", "task", "registered"])
 def test_public_api_runs_file_components_and_replays(
-    tmp_path, monkeypatch, source_kind, capsys, caplog
+    tmp_path, monkeypatch, source_kind, capsys, caplog, isolated_task_registries
 ):
-    import yaml
 
     import judgearena.prompts.parsing as parsing
     from judgearena import (
@@ -571,10 +619,8 @@ def test_public_api_runs_file_components_and_replays(
         run_benchmark,
     )
     from judgearena.config import load_config
-    from judgearena.prompts import registry as prompt_registry
     from judgearena.tasks import load_tasks
 
-    monkeypatch.setattr(prompt_registry, "PRESETS", prompt_registry.PRESETS.copy())
     source = tmp_path / "parser.py"
     source.write_text(
         "from judgearena.prompts.parsing import PairScore, ScoreParser, register_parser\n"
@@ -582,7 +628,6 @@ def test_public_api_runs_file_components_and_replays(
         "PAIR = register_parser('grammar-pair', PairScore(temperature=0.5))\n"
     )
     reference = f"{source}:PARSER"
-    monkeypatch.setattr(parsing, "JUDGE_PARSERS", dict(parsing.JUDGE_PARSERS))
     parser = register_parser("grammar", parsing.resolve_judge_parser(reference))
     assert not {"grammar-file", "grammar-pair"} & parsing.JUDGE_PARSERS.keys()
     for name, value in [("", parser), ("grammar", parser), ("broken", object())]:
@@ -603,8 +648,8 @@ def test_public_api_runs_file_components_and_replays(
         f"IMPORTED = register_metric('replay-imported-{source_kind}')(MeanScoreMetric)\n"
         f"@register_metric('replay-metric-{source_kind}')\n"
         "class Metric(MeanScoreMetric): pass\n"
-        "from judgearena.datasets.judgearena_tables import TableAdapter\n"
-        f"TABLE = register_dataset('replay-table-{source_kind}')(TableAdapter)\n"
+        "from judgearena.tasks.definitions.alpaca_eval.dataset import AlpacaEvalAdapter\n"
+        f"TABLE = register_dataset('replay-table-{source_kind}')(AlpacaEvalAdapter)\n"
         "from judgearena.prompts import JudgePromptPreset, register_prompt\n"
         f"PROMPT = register_prompt(JudgePromptPreset(name='replay-prompt-{source_kind}'))\n"
         f"@register_dataset('replay-data-{source_kind}')\n"
@@ -766,7 +811,8 @@ from judgearena.utils.extensions import load_python_object
 component = next(Path(sys.argv[1]).parent.rglob("components.py"))
 load_python_object(component, "Adapter")
 from judgearena.datasets.registry import dataset_names
-assert {"arena_battles", "judgearena_tables"} <= dataset_names()
+assert {"comparia", "lmarena", "alpaca_eval"} <= dataset_names()
+assert "arena_battles" not in dataset_names()
 from judgearena import run_benchmark
 from judgearena.config import load_config
 import judgearena.models as models

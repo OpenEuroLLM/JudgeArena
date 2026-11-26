@@ -5,7 +5,7 @@ description: >-
   MT-Bench-101 golden-context single-answer grading (Bai et al., 2024). Each
   model is scored 1-10 per evaluated turn, dialogue scores use the minimum
   over turns, and pairwise win rate is derived from those scores. Swap mode
-  has no effect. n_instructions selects complete dialogues, not individual
+  has no effect. run.sampling.limit selects complete dialogues, not individual
   turns.
 tags: [pointwise, instruction-following, multi-turn, mt-bench-101]
 
@@ -25,8 +25,6 @@ protocol:
     mode: provided_messages
     default_temperature: 0.0
     default_max_out_tokens: 4096
-  baseline:
-    strategy: runtime_required
   judge:
     minimum_score_by: [dialogue_uid, dialogue_id, task, ability, domain]
     default_prompt_preset: mt-bench-101

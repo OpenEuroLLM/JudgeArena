@@ -3,7 +3,7 @@ I require a leaderboard for various large language models. I'll provide you with
 ## Instruction
 
 {{
-    "instruction": """{user_prompt}""",
+    "instruction": """{instruction}""",
 }}
 
 ## Model Outputs
@@ -13,11 +13,11 @@ Here are the unordered outputs from the models. Each output is associated with a
 {{
     {{
         "model_identifier": "m",
-        "output": """{completion_A}"""
+        "output": """{completion_a}"""
     }},
     {{
         "model_identifier": "M",
-        "output": """{completion_B}"""
+        "output": """{completion_b}"""
     }}
 }}
 

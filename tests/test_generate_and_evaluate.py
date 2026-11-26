@@ -17,7 +17,7 @@ from judgearena.benchmarks.pairwise.baselines import (
 )
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.sqlite import JUDGEMENT_DB_NAME, JudgementCache
-from judgearena.config import RunConfig
+from judgearena.config import RunConfig, load_config
 from judgearena.datasets.data import CompletionData
 from judgearena.models import InferenceResult, prepare_model
 from judgearena.tasks.registry import get_packaged_task
@@ -30,7 +30,7 @@ def _cfg(
     model_A: str,
     model_B: str | None = None,
     judge_model: str,
-    n_instructions: int | None = None,
+    limit: int | None = None,
     swap_mode: str = "fixed",
     result_folder: str = "results",
     truncate_judge_input_chars: int | None = None,
@@ -51,11 +51,12 @@ def _cfg(
             "max_model_len": max_judge_model_len,
             "engine_kwargs": judge_engine_kwargs or {},
         },
-        generation={
-            "n_instructions": n_instructions,
-            "truncate_judge_input_chars": truncate_judge_input_chars,
+        generation={"truncate_judge_input_chars": truncate_judge_input_chars},
+        run={
+            "sampling": {"limit": limit},
+            "result_folder": result_folder,
+            "store_root": f"{result_folder}/cache",
         },
-        run={"result_folder": result_folder, "store_root": f"{result_folder}/cache"},
     )
 
 
@@ -222,7 +223,7 @@ def test_generate_and_evaluate_context_completion(task: str, tmp_path):
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
+            limit=5,
             result_folder=str(tmp_path),
             # default for swap_mode is "fixed"
         )
@@ -284,7 +285,7 @@ def test_generate_and_evaluate_correct_order_bias(tmp_path):
             model_A="Dummy/no answer",
             model_B="Dummy/open is better than close isnt'it",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=5,
+            limit=5,
             swap_mode="both",
             result_folder=str(tmp_path),
         )
@@ -308,7 +309,7 @@ def test_pairwise_bootstraps_use_run_seed(monkeypatch, tmp_path):
         model_A="Dummy/no answer",
         model_B="Dummy/x",
         judge_model="Dummy/score A: 0 score B: 10",
-        n_instructions=2,
+        limit=2,
         result_folder=str(tmp_path),
     )
     monkeypatch.setattr(
@@ -358,7 +359,7 @@ def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure
             model_A="Dummy/no answer",
             model_B="Dummy/x",
             judge_model="Dummy/score A: 0 score B: 10",
-            n_instructions=2,
+            limit=2,
             result_folder=str(tmp_path),
         ),
         _task_with_metric(
@@ -370,12 +371,13 @@ def test_run_writes_roundtrippable_config(tmp_path, monkeypatch, caplog, failure
     written = list(tmp_path.glob("*/config.yaml"))
     assert written, "config.yaml not written"
     result = json.loads(next(tmp_path.glob("*/results-*.json")).read_text())
+    metric = result["metrics"]["pairwise_win_rate"]
     if failure == "calculate":
-        assert result["metrics"] == {
-            "pairwise_win_rate": {"error": "scorer unavailable"}
-        }
+        assert metric["error"] == "scorer unavailable"
+        assert (
+            metric["breakdown_errors"]["model_a='Dummy/no answer'"] == metric["error"]
+        )
     else:
-        metric = result["metrics"]["pairwise_win_rate"]
         assert metric["num_battles"] == 2
         assert metric["groups"]["model_a"][0]["group"] == "Dummy/no answer"
     if failure:
@@ -446,15 +448,18 @@ def test_run_evaluation_routes_arena_v2_baselines_and_prompts(
     monkeypatch.setattr(
         generate_and_evaluate,
         "load_task_data",
-        lambda task, n_instructions=None: CompletionData(instructions, outputs),
+        lambda task: CompletionData(instructions, outputs),
     )
     prefs = run_evaluation(
         RunConfig(
             task="arena-hard-v2.0",
             model={"name": "candidate"},
             judge={"model": "Dummy/judge", "swap_mode": swap_mode},
-            generation={"n_instructions": 3},
-            run={"result_folder": str(tmp_path), "store_root": str(tmp_path / "cache")},
+            run={
+                "sampling": {"limit": 3},
+                "result_folder": str(tmp_path),
+                "store_root": str(tmp_path / "cache"),
+            },
         )
     )
 
@@ -529,8 +534,7 @@ def test_run_evaluation_weights_and_preserves_incomplete_alpaca_annotations(
             task="alpaca-eval",
             model={"name": "Dummy/a", "baseline": "Dummy/b"},
             judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
-            generation={"n_instructions": 4},
-            run={"result_folder": str(tmp_path)},
+            run={"sampling": {"limit": 4}, "result_folder": str(tmp_path)},
         )
     )
 
@@ -558,8 +562,7 @@ def test_all_missing_alpaca_judgments_save_empty_results(monkeypatch, tmp_path, 
             task="alpaca-eval",
             model={"name": "Dummy/a", "baseline": "Dummy/b"},
             judge={"model": "OpenRouter/fake-judge", "swap_mode": "random"},
-            generation={"n_instructions": 2},
-            run={"result_folder": str(tmp_path)},
+            run={"sampling": {"limit": 2}, "result_folder": str(tmp_path)},
         )
     )
 
@@ -881,13 +884,12 @@ def test_assemble_comparisons_aligns_outputs_without_inheriting_old_labels():
     assert "reference_pref" not in pairs
 
 
-@pytest.mark.parametrize("runner", ["elo", "meta_eval", "single_answer"])
+@pytest.mark.parametrize("runner", ["pairwise", "meta_eval", "single_answer"])
 def test_conversation_workflows_share_score_prompts_and_replay(
     tmp_path, monkeypatch, runner
 ):
     import judgearena.models as models
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.datasets.arena_battles import ArenaBattlesAdapter
     from judgearena.datasets.data import PreferenceData
     from judgearena.prompts.criteria import resolve_criteria
 
@@ -914,8 +916,6 @@ def test_conversation_workflows_share_score_prompts_and_replay(
             }
         )
     )
-    monkeypatch.setattr(ArenaBattlesAdapter, "load_data", lambda self: data)
-    monkeypatch.setattr(generate_and_evaluate, "load_task_data", lambda task: data)
     task = get_packaged_task("elo-comparia")
     spec = task.spec.model_dump()
     judge = {
@@ -938,8 +938,9 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     }
     if runner != "meta_eval":
         protocol["generation"] = {"mode": "multi_turn_chat"}
+    if runner == "pairwise":
+        protocol["baseline"] = {"strategy": "recorded_opponents"}
     if runner != "single_answer":
-        protocol["arena"] = "custom"
         judge["turns"] = [1, 2]
     if runner == "meta_eval":
         metrics.append(
@@ -954,8 +955,11 @@ def test_conversation_workflows_share_score_prompts_and_replay(
         {"score": 8, "criteria": {c.name: 8 for c in resolve_criteria()}}
     )
     cfg = RunConfig(
-        task=task.task,
-        resolved_task=task,
+        **(
+            {"evaluation_name": "custom-preferences", "protocol": protocol}
+            if runner == "meta_eval"
+            else {"task": task.task, "resolved_task": task}
+        ),
         model={"name": "Dummy/generated"} if runner != "meta_eval" else {},
         judge={
             "model": f"Dummy/{response}",
@@ -973,7 +977,7 @@ def test_conversation_workflows_share_score_prompts_and_replay(
             else {}
         ),
     )
-    run_benchmark(cfg)
+    run_benchmark(cfg, data=data)
     path = next((tmp_path / "first").rglob("*annotations.*"))
     annotations = pd.read_csv(path) if path.suffix == ".csv" else pd.read_parquet(path)
     assert set(annotations.prompt_preset) == {"single-score", "criteria-score"}
@@ -984,6 +988,7 @@ def test_conversation_workflows_share_score_prompts_and_replay(
         result = json.loads(
             next((tmp_path / "first").rglob("results.json")).read_text()
         )
+        assert result["arena"] == result["task"] == "custom-preferences"
         assert result["metrics"]["meta_eval_agreement"]["all"]["n_attempted"] == 2
         assert len(result["metrics"]["pairwise_win_rate"]["groups"]["category"]) == 2
         outcomes = pd.read_parquet(next((tmp_path / "first").rglob("battles.parquet")))
@@ -997,8 +1002,14 @@ def test_conversation_workflows_share_score_prompts_and_replay(
     monkeypatch.setattr(
         models, "make_model", lambda *a, **kw: pytest.fail("Replay must use cache")
     )
+    cfg = load_config(next((tmp_path / "first").rglob("config.yaml")))
     cfg.run.result_folder = str(tmp_path / "replay")
-    run_benchmark(cfg)
+    run_benchmark(cfg, data=data)
+    if runner == "meta_eval":
+        assert (
+            json.loads(next((tmp_path / "replay").rglob("results.json")).read_text())
+            == result
+        )
 
 
 def test_minimum_score_grouping_requires_scoring_prompt():
@@ -1068,3 +1079,45 @@ def test_missing_answer_generation_reports_model_count_and_cause(mode, tmp_path)
     assert isinstance(error.value.__cause__, ValueError)
     assert "provider" in str(error.value)
     assert "Unavailable" in str(error.value.__cause__)
+
+
+def test_multiple_baselines_preserve_mixed_instruction_ids(tmp_path, monkeypatch):
+    from judgearena.artifacts.run import read_metric_data
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.models import PreparedModel
+
+    ids = [1, "1"]
+    data = CompletionData.from_frames(
+        pd.DataFrame({"instruction_index": ids, "instruction": ["First", "Second"]}),
+        pd.DataFrame(
+            [(i, model, model) for i in ids for model in ("a", "b", "c")],
+            columns=["instruction_index", "model", "completion"],
+        ),
+    )
+    cfg = RunConfig(
+        task="alpaca-eval-ja",
+        model={"name": "a", "baseline": ["b", "c"]},
+        judge={"model": "Dummy/score A: 7 score B: 5"},
+        protocol={"scoring": {"metrics": [{"metric": "pairwise_win_rate"}]}},
+        run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
+    )
+    run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
+    rows = read_metric_data(tmp_path / "first/outcomes.parquet")
+    assert rows.instruction_index.is_unique
+    assert list(zip(rows.source_instruction_index, rows.model_b, strict=True)) == [
+        (1, "b"),
+        ("1", "b"),
+        (1, "c"),
+        ("1", "c"),
+    ]
+    monkeypatch.setattr(
+        PreparedModel, "materialize", lambda *_: pytest.fail("cache miss")
+    )
+    run_benchmark(
+        load_config(tmp_path / "first/config.yaml"),
+        data=data,
+        output_dir=tmp_path / "replay",
+    )
+    pd.testing.assert_frame_equal(
+        rows, read_metric_data(tmp_path / "replay/outcomes.parquet")
+    )

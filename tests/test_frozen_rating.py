@@ -1,0 +1,205 @@
+from functools import partial
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from judgearena.benchmarks.elo.rating import fit_frozen_rating
+
+fit_fixture_battles = partial(
+    fit_frozen_rating, pref_col="pref", group_col="split_group"
+)
+
+
+def test_frozen_fit_orientation_soft_targets_and_group_bootstrap():
+    # Two judgments per prompt; reversed slots already use canonical preferences.
+    battles = pd.DataFrame(
+        {
+            "model_a": ["new", "anchor", "new", "anchor"],
+            "model_b": ["anchor", "new", "anchor", "new"],
+            "pref": [0.2, 0.8, 0.4, 0.6],
+            "split_group": ["first", "first", "second", "second"],
+        }
+    )
+    references = {"anchor": 1000.0}
+    result = fit_fixture_battles(battles, "new", references, n_bootstraps=100)
+    assert result["rating"] == pytest.approx(1000 + 400 * np.log10(0.7 / 0.3))
+    assert result["ci_low"] == pytest.approx(1000 + 400 * np.log10(0.6 / 0.4))
+    assert result["ci_high"] == pytest.approx(1000 + 400 * np.log10(0.8 / 0.2))
+    assert result == fit_fixture_battles(battles, "new", references, n_bootstraps=100)
+    point = fit_fixture_battles(
+        battles.drop(columns="split_group"), "new", references, n_bootstraps=0
+    )
+    assert point["rating"] == result["rating"]
+    assert np.isnan(point["ci_low"]) and np.isnan(point["ci_high"])
+    assert references == {"anchor": 1000.0}
+    battles["pref_hard"] = [0, 1, 0, 1]
+    hard = fit_fixture_battles(battles, "new", references, pref_col="pref_hard")
+    assert hard["rating"] == hard["ci_low"] == hard["ci_high"] == float("inf")
+    battles["pref_hard"] = 1 - battles.pref_hard
+    assert fit_fixture_battles(battles, "new", references, pref_col="pref_hard")[
+        "rating"
+    ] == -float("inf")
+
+    varied = battles.iloc[:2].copy()
+    varied["model_a"] = "new"
+    varied["model_b"] = ["weak", "strong"]
+    varied["pref"] = [1 / (1 + 10 ** ((1100 - r) / 400)) for r in [800, 1200]]
+    fitted = fit_fixture_battles(varied, "new", {"weak": 800, "strong": 1200})
+    assert fitted["rating"] == pytest.approx(1100)
+
+
+def test_frozen_fit_rejects_invalid_inputs_and_counts_missing():
+    battles = pd.DataFrame(
+        {
+            "model_a": ["new", "new", "new"],
+            "model_b": ["anchor"] * 3,
+            "pref": [0.5, 0.5, None],
+            "split_group": [1, 2, 3],
+        }
+    )
+    result = fit_fixture_battles(battles, "new", {"anchor": 1000}, n_bootstraps=5)
+    assert result["rating"] == result["ci_low"] == result["ci_high"] == 1000
+    assert result["num_comparisons"] == 2
+    assert result["num_missing"] == 1
+    for refs in ({}, {"anchor": float("nan")}):
+        with pytest.raises(ValueError):
+            fit_fixture_battles(battles, "new", refs)
+    for column, value in (("pref", 2), ("split_group", None), ("model_a", "other")):
+        invalid = battles.copy()
+        invalid.loc[0, column] = value
+        with pytest.raises(ValueError):
+            fit_fixture_battles(invalid, "new", {"anchor": 1000})
+    with pytest.raises(ValueError):
+        fit_fixture_battles(battles.assign(pref=np.nan), "new", {"anchor": 1000})
+
+
+def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed():
+    from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
+
+    references = pd.DataFrame(
+        {
+            "model_a": ["a"] * 3,
+            "model_b": ["b"] * 3,
+            "pref": [0.0, 0.5, 1.0],
+            "evaluation_model": None,
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "model_a": ["new"] * 4,
+            "model_b": ["a", "b"] * 2,
+            "pref": [0.2, 0.4, 0.6, 0.5],
+            "evaluation_model": "new",
+            "question_id": [1, 2, 3, 4],
+        }
+    )
+    battles = pd.concat([references, candidate], ignore_index=True)
+    battles["pref_hard"] = (
+        (battles.pref > 0.5).astype(float).where(battles.pref != 0.5, 0.5)
+    )
+    metric = BradleyTerryMetric(fit_mode="frozen", n_bootstraps=20)
+    result = metric.calculate(battles, seed=42)
+    expected = fit_frozen_rating(
+        candidate,
+        "new",
+        result["reference_ratings"],
+        pref_col="pref",
+        group_col="question_id",
+        n_bootstraps=20,
+        seed=42,
+    )
+    assert all(result[key] == value for key, value in expected.items())
+    # Separated reference labels give the same fits as older mixed artifacts.
+    separated = battles.copy()
+    reference_rows = separated.evaluation_model.isna()
+    separated["reference_pref"] = separated.pref.where(reference_rows)
+    separated.loc[reference_rows, ["pref", "pref_hard"]] = np.nan
+    original = separated.copy(deep=True)
+    for mode in ("frozen", "joint"):
+        for soft in (False, True):
+            configured = BradleyTerryMetric(fit_mode=mode, soft=soft, n_bootstraps=20)
+            legacy = configured.calculate(battles, seed=42)
+            current = configured.calculate(separated, seed=42)
+            assert current["ratings"] == legacy["ratings"]
+            assert current["rating"] == legacy["rating"]
+            if mode == "frozen":
+                assert current["ci_low"] == legacy["ci_low"]
+                assert current["ci_high"] == legacy["ci_high"]
+            else:
+                assert current["bootstrap_ratings"] == legacy["bootstrap_ratings"]
+    pd.testing.assert_frame_equal(separated, original)
+    island = references.assign(model_a="c", model_b="d")
+    unlabeled_bridge = references.iloc[:1].assign(model_b="c", pref=np.nan)
+    with pytest.raises(ValueError, match="disconnected"):
+        metric.calculate(
+            pd.concat([battles, island, unlabeled_bridge], ignore_index=True)
+        )
+    changed = battles.copy()
+    changed.loc[changed.evaluation_model.notna(), "pref"] = 0.1
+    assert metric.calculate(changed)["reference_ratings"] == result["reference_ratings"]
+    assert (
+        BradleyTerryMetric(fit_mode="joint").calculate(battles)["ratings"]
+        != result["ratings"]
+    )
+
+
+def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
+    import json
+
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.config import RunConfig, build_run_config, load_config
+    from judgearena.datasets.data import PreferenceData
+    from judgearena.models import PreparedModel
+
+    data = PreferenceData.from_battles(
+        pd.DataFrame(
+            {
+                "instruction_index": range(6),
+                "instruction": "Question",
+                "model_a": "a",
+                "model_b": "b",
+                "completion_a": "A",
+                "completion_b": "B",
+                "reference_pref": 0.5,
+                "lang": "en",
+            }
+        )
+    )
+    soft = {
+        "metric": "bradley_terry",
+        "parameters": {"fit_mode": "frozen", "n_bootstraps": 5},
+    }
+    hard = {
+        "metric": "bradley_terry",
+        "name": "hard",
+        "parameters": {"fit_mode": "frozen", "soft": False},
+    }
+    cfg = RunConfig(
+        task="elo-comparia",
+        model={"name": "Dummy/answer"},
+        judge={"model": "Dummy/[[A=B]]", "prompt": {"preset": "arena-hard"}},
+        protocol={"scoring": {"metrics": [soft, hard]}},
+        run={"sampling": {"limit": 4}, "store_root": str(tmp_path / "cache")},
+    )
+
+    def run(config, folder):
+        manifest = run_benchmark(config, data=data, output_dir=tmp_path / folder)
+        return json.loads(manifest.read_text())["metrics"]
+
+    results = run(cfg, "first")
+    frozen = results["bradley_terry"]
+    assert frozen["fit_mode"] == "frozen" and frozen["n_bootstraps"] == 5
+    assert results["hard"]["n_bootstraps"] == 0
+    monkeypatch.setattr(
+        PreparedModel, "materialize", lambda *a, **kw: pytest.fail("cache miss")
+    )
+    snapshot = tmp_path / "first/config.yaml"
+    assert run(load_config(snapshot), "replay") == results
+    joint = {"metric": "bradley_terry", "parameters": {"fit_mode": "joint"}}
+    rescored = build_run_config(
+        ["--config", str(snapshot), "--protocol.scoring.metrics", json.dumps([joint])]
+    )
+    joint_result = run(rescored, "joint")["bradley_terry"]
+    assert joint_result["reference_anchor_battles"] == len(data.battles)
+    assert joint_result["ratings"] == frozen["ratings"]

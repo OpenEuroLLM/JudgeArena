@@ -134,7 +134,3 @@ def dataset_adapter_type(name: str) -> type[DatasetAdapter]:
         return _DATASETS[name]
     except KeyError as exc:
         raise ValueError(f"Unknown dataset adapter {name!r}.") from exc
-
-
-# Shared adapters are used by multiple task families.
-from judgearena.datasets import arena_battles, judgearena_tables  # noqa: E402, F401

@@ -3,7 +3,6 @@ task_version: 1
 tags: [meta-eval, arena, judge]
 
 dataset:
-  adapter: arena_battles
   fields:
     id: question_id
     instruction: conversation_a

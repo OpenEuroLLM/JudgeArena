@@ -3,7 +3,7 @@ task_version: 1
 tags: [pairwise, instruction-following, alpaca-eval]
 
 dataset:
-  adapter: judgearena_tables
+  adapter: alpaca_eval
   sources:
     tables:
       type: huggingface_dataset

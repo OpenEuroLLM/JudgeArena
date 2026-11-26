@@ -76,8 +76,8 @@ class BattleReport(Report):
         print("=" * 60 + "\n")
 
 
-class EloReport(Report):
-    """Configured battle metrics for one model against an arena."""
+class ComparisonReport(Report):
+    """Configured metrics for one model evaluated against a comparison graph."""
 
     arena: str
     judge_model: str

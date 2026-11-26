@@ -10,16 +10,15 @@ model:
   max_out_tokens: 4096
 judge:
   model: OpenRouter/google/gemma-4-31b-it
-generation:
-  n_instructions: 10
 run:
+  sampling: {limit: 10}
   seed: 0
   result_folder: results
 ```
 
 ```bash
 uv run judgearena --config_path run.yaml
-uv run judgearena --config_path run.yaml --generation.n_instructions 100
+uv run judgearena --config_path run.yaml --run.sampling.limit 100
 uv run judgearena --help
 ```
 
@@ -91,7 +90,9 @@ This requires a task with a `lang` column. Task-level and runtime filters inters
 
 | Setting | Controls |
 |---|---|
-| `generation.n_instructions` | Number of selected examples; omitted means the full task, subject to filters |
+| `run.sampling.limit` | Maximum number of prompts, recorded battles, or task-defined instruction groups |
+| `run.sampling.method` | `first` (default) or `random` without replacement, using `run.seed` |
+| `run.sampling.group_by` and `per_group` | Keep the first rows from each group before applying the total limit |
 | `generation.truncate_all_input_chars` | Character cap before answer generation |
 | `generation.truncate_judge_input_chars` | Character cap on judge-side inputs |
 | `model.max_out_tokens` | Output-token budget for generated answers |

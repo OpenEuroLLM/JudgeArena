@@ -70,7 +70,8 @@ def test_elo_task_dispatches(capture_mains, task: str):
     assert capture_mains["module"] == "benchmark"
     cfg = capture_mains["cfg"]
     assert isinstance(cfg, RunConfig)
-    assert cfg.elo is not None
+    assert "elo" not in cfg.model_dump()
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
     assert cfg.model.name == "Dummy/X"
 
 
@@ -117,24 +118,28 @@ def test_missing_judge_errors(capture_mains):
 
 
 def test_elo_requires_model_path(capture_mains):
-    with pytest.raises(SystemExit, match="model.name is required for ELO"):
+    with pytest.raises(SystemExit, match="model.name is required"):
         cli_module.cli(["--task", "elo-comparia", "--judge.model", "Dummy/J"])
 
 
-def test_elo_rejects_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is not supported for ELO"):
-        cli_module.cli(
-            [
-                "--task",
-                "elo-comparia",
-                "--model.name",
-                "Dummy/X",
-                "--model.baseline",
-                "Dummy/B",
-                "--judge.model",
-                "Dummy/J",
-            ]
-        )
+@pytest.mark.parametrize(
+    "argument, expected",
+    [("Dummy/B", "Dummy/B"), ('["Dummy/B","Dummy/C"]', ["Dummy/B", "Dummy/C"])],
+)
+def test_elo_accepts_named_baselines(capture_mains, argument, expected):
+    cli_module.cli(
+        [
+            "--task",
+            "elo-comparia",
+            "--model.name",
+            "Dummy/X",
+            "--model.baseline",
+            argument,
+            "--judge.model",
+            "Dummy/J",
+        ]
+    )
+    assert capture_mains["cfg"].model.baseline == expected
 
 
 def test_unknown_elo_task_errors(capture_mains):
@@ -145,7 +150,7 @@ def test_unknown_elo_task_errors(capture_mains):
 
 
 def test_pairwise_without_native_baseline_requires_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is required"):
+    with pytest.raises(SystemExit, match="Set model.baseline to one model ID or a list of opponents"):
         cli_module.cli(
             [
                 "--task",
@@ -179,33 +184,40 @@ def test_elo_forwards_optional_flags(capture_mains):
             "Dummy/X",
             "--judge.model",
             "Dummy/J",
-            "--elo.languages",
-            '["en", "fr"]',
-            "--elo.n_instructions_per_language",
+            "--run.filters",
+            '{"lang": ["en", "fr"]}',
+            "--run.sampling.group_by",
+            "lang",
+            "--run.sampling.per_group",
             "50",
-            "--elo.n_bootstraps",
-            "5",
+            "--protocol.scoring.metrics",
+            '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"n_bootstraps":5,"baseline_model":"gpt-4o"}}]',
             "--run.seed",
             "7",
-            "--elo.baseline_model",
-            "gpt-4o",
-            "--elo.soft_elo_temperature",
+            "--protocol.judge.preference_temperature",
             "0.5",
-            "--elo.elo_random_battles",
+            "--run.sampling.limit",
             "100",
             "--judge.prompt.preset",
             "default_with_explanation",
         ]
     )
     cfg = capture_mains["cfg"]
-    assert cfg.elo is not None
-    assert cfg.elo.languages == ["en", "fr"]
-    assert cfg.elo.n_instructions_per_language == 50
-    assert cfg.elo.n_bootstraps == 5
+    assert "elo" not in cfg.model_dump()
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
+    assert cfg.run.filters["lang"] == ["en", "fr"]
+    assert cfg.run.sampling.group_by == "lang" and cfg.run.sampling.per_group == 50
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["n_bootstraps"]
+        == 5
+    )
     assert cfg.run.seed == 7
-    assert cfg.elo.baseline_model == "gpt-4o"
-    assert cfg.elo.soft_elo_temperature == 0.5
-    assert cfg.elo.elo_random_battles == 100
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["baseline_model"]
+        == "gpt-4o"
+    )
+    assert cfg.preference_settings.preference_temperature == 0.5
+    assert cfg.run.sampling.limit == 100
     assert cfg.judge.prompt.preset == "default_with_explanation"
 
 

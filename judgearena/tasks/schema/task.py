@@ -11,12 +11,11 @@ from judgearena.tasks.schema.baselines import (
     OfficialOutputsBaseline,
 )
 from judgearena.tasks.schema.dataset import DatasetSpec
-from judgearena.tasks.schema.elo import EloProtocol
 from judgearena.tasks.schema.meta_eval import MetaEvalProtocol
 from judgearena.tasks.schema.pairwise import PairwiseProtocol, SingleAnswerProtocol
 
 ProtocolSpec = Annotated[
-    PairwiseProtocol | SingleAnswerProtocol | EloProtocol | MetaEvalProtocol,
+    PairwiseProtocol | SingleAnswerProtocol | MetaEvalProtocol,
     Field(discriminator="runner"),
 ]
 

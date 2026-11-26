@@ -23,6 +23,8 @@ class BenchmarkRunner(Protocol):
         /,
         *,
         data: CompletionData | None = None,
+        output_dir: str | None = None,
+        **runner_options,
     ) -> object: ...
 
 
@@ -44,12 +46,10 @@ class ResolvedBenchmark:
 
 def benchmark_adapters() -> tuple[BenchmarkAdapter, ...]:
     """Return registered benchmark implementations."""
-    from judgearena.benchmarks.elo.runner import run_elo
     from judgearena.benchmarks.evaluation import run_evaluation
     from judgearena.benchmarks.meta_eval.runner import run_meta_eval
 
     return (
-        BenchmarkAdapter("elo", run_elo),
         BenchmarkAdapter("meta_eval", run_meta_eval),
         BenchmarkAdapter("pairwise", run_evaluation),
         BenchmarkAdapter("single_answer", run_evaluation),

@@ -3,24 +3,27 @@ task_version: 1
 tags: [elo, arena, rating]
 
 dataset:
-  adapter: arena_battles
   fields:
     id: question_id
     instruction: conversation_a
     category: lang
 
 protocol:
-  runner: elo
+  runner: pairwise
   generation:
     mode: single_turn_chat
   baseline:
-    strategy: none
+    strategy: recorded_opponents
   judge:
     default_prompt_preset: default
     default_swap_mode: fixed
+    preference_temperature: 0.3
+    calibrate_temperature: false
   scoring:
     metrics:
       - metric: pairwise_win_rate
       - metric: bradley_terry
-    default_soft: true
-    default_temperature: 0.3
+        parameters:
+          fit_mode: frozen
+          soft: true
+          n_bootstraps: 20

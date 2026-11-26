@@ -5,11 +5,11 @@ import pytest
 
 import judgearena.datasets as instruction_dataset
 import judgearena.datasets.data as pairwise_data
-import judgearena.datasets.judgearena_tables as judgearena_tables
+import judgearena.tasks.definitions.alpaca_eval.dataset as alpaca_eval
 import judgearena.tasks.definitions.arena_hard.dataset as arena_hard
 import judgearena.tasks.definitions.fluency.dataset as fluency
 import judgearena.tasks.definitions.m_arena_hard.dataset as m_arenahard
-from judgearena.datasets.arena_battles import normalize_battles
+from judgearena.datasets._arena import normalize_battles
 from judgearena.datasets.registry import source_cache_dir
 from judgearena.tasks.definitions.arena_hard.dataset import (
     _build_instructions,
@@ -37,7 +37,7 @@ def battle_rows():
 def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path):
     downloads = []
     monkeypatch.setattr(
-        judgearena_tables,
+        alpaca_eval,
         "snapshot_download",
         lambda **kwargs: downloads.append(kwargs),
     )
@@ -80,58 +80,6 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
         {"instruction_index": 1, "model": "gpt4_1106_preview", "completion": "base-1"},
         {"instruction_index": 0, "model": "archived-model", "completion": "archived-0"},
     ]
-
-
-@pytest.mark.parametrize("observed", [False, True])
-def test_table_adapter_loads_mapped_battles_with_repeated_question_ids(
-    monkeypatch, tmp_path, observed, battle_rows
-):
-    monkeypatch.setattr(judgearena_tables, "snapshot_download", lambda **kwargs: None)
-    task = get_packaged_task("alpaca-eval")
-    mapping = {
-        "prompt": "instruction",
-        "ours": "model_a",
-        "theirs": "model_b",
-        "answer": "completion_a",
-        "reference": "completion_b",
-        "vote": "reference_pref",
-    }
-    spec = task.spec.model_dump()
-    spec["dataset"].update(
-        format="battles",
-        fields=None,
-        battle_columns=mapping,
-        outcome_preferences={"left": 0.0, "right": 1.0},
-    )
-    spec["dataset"]["sources"]["tables"]["allow_patterns"] = ["battles/custom.csv"]
-    task = replace(task, spec=type(task.spec).model_validate(spec))
-    root = source_cache_dir(task, tmp_path)
-    (root / "battles").mkdir(parents=True)
-    rows = battle_rows.iloc[:2].assign(
-        source=["human", "llm-judge"], reference_pref=None
-    )
-    if observed:
-        rows = rows.drop(columns="reference_pref").assign(winner=["left", "right"])
-    rows.rename(columns={v: k for k, v in mapping.items()}).to_csv(
-        root / "battles/custom.csv",
-        index=False,
-    )
-
-    data = instruction_dataset.load_task_data(task, local_tables_path=tmp_path)
-
-    assert data.instructions.index.tolist() == [0, 1]
-    assert data.battles["question_id"].tolist() == ["same", "same"]
-    assert data.model_completion("a").tolist() == ["a1", "a2"]
-    assert data.model_completion("b").tolist() == ["b1", "b2"]
-    if observed:
-        assert data.battles["reference_pref"].tolist() == [0.0, 1.0]
-    else:
-        assert data.battles["reference_pref"].isna().all()
-
-    selected = data.select({"source": ["human"]})
-    assert selected.instructions.index.tolist() == [0]
-    assert selected.model_completion("a").to_dict() == {0: "a1"}
-    assert selected.battles["source"].tolist() == ["human"]
 
 
 def test_m_arena_hard_adapter_filters_selected_language_group(monkeypatch, tmp_path):
@@ -400,6 +348,15 @@ def test_adapter_frames_preserve_metadata_and_alignment(battle_rows, labeled):
     assert "reference_pref" not in data.instructions
     if labeled:
         assert data.battles["reference_pref"].tolist() == [0.0, 1.0]
+    enriched = pairwise_data.PreferenceData(
+        data.instructions.assign(
+            reference_pref=0.5, battle_id="stale", rubric="grammar"
+        ),
+        battles=rows.drop(columns=["battle_id", "reference_pref"], errors="ignore"),
+    ).battles
+    assert "reference_pref" not in enriched
+    assert enriched.battle_id.tolist() == ["0", "1"]
+    assert enriched.rubric.tolist() == ["grammar", "grammar"]
     loaded = data.model_output_rows("a").iloc[0]
     assert "tstamp" not in data.instructions
     assert data.battles["tstamp"].tolist() == [1, 2]
@@ -513,6 +470,12 @@ def test_supplied_history_validation_and_system_override():
 def test_comparison_ids_survive_selection_with_shared_instructions(battle_rows):
     rows = battle_rows.iloc[:2].assign(instruction_index="q", instruction="same")
     data = pairwise_data.PreferenceData.from_battles(rows)
+    data = replace(
+        data,
+        instructions=data.instructions.assign(topic="writing"),
+        battles=data.battles.set_index("instruction_index", drop=False),
+    )
+    assert data.battles.topic.tolist() == ["writing", "writing"]
     assert data.battles.battle_id.tolist() == ["0", "1"]
     assert data.select({"reference_pref": [0.5]}).battles.battle_id.tolist() == ["1"]
 
@@ -537,7 +500,7 @@ def test_fixed_format_adapters_reject_unused_field_mappings(
 
 
 def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
-    import judgearena.arenas_utils as source
+    import judgearena.datasets._arena as source
 
     pair = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
     histories = [
@@ -555,12 +518,12 @@ def test_arena_loading_keeps_only_complete_first_turns(monkeypatch):
         chosen_model_name="a",
         both_equal=False,
     )
-    monkeypatch.setattr(source, "_download_arena_dataset", lambda **kwargs: "/unused")
+    monkeypatch.setattr(source, "snapshot_download", lambda **kwargs: "/unused")
     monkeypatch.setattr(source.pd, "read_parquet", lambda path: rows)
     monkeypatch.setattr(source, "detect_language", lambda text: "en")
-    loaded = source._load_arena_dataframe("ComparIA", dataset_sources={})
-    assert loaded.question_id.tolist() == [0, 1, 3]
-    normalized = normalize_battles(loaded, "ComparIA")
+    from judgearena.datasets import load_task_data
+
+    normalized = load_task_data("elo-comparia")
     assert normalized.battles.question_id.tolist() == [0, 1]
 
 
@@ -593,7 +556,7 @@ def test_download_config_reuses_selected_revision_offline(monkeypatch, tmp_path)
             raise FileNotFoundError("Revision not cached")
         return str(root)
 
-    monkeypatch.setattr(judgearena_tables, "snapshot_download", snapshot)
+    monkeypatch.setattr(alpaca_eval, "snapshot_download", snapshot)
     path = tmp_path / "run.yaml"
     for revision in ("a" * 40, "b" * 40):
         path.write_text(

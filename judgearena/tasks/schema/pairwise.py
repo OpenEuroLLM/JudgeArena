@@ -8,7 +8,10 @@ from pydantic import Field, model_validator
 
 from judgearena.prompts.spec import JudgePromptSpec
 from judgearena.tasks.schema.base import StrictFrozenModel
-from judgearena.tasks.schema.baselines import BaselineSpec, NoBaseline
+from judgearena.tasks.schema.baselines import (
+    BaselineSpec,
+    NoBaseline,
+)
 from judgearena.tasks.schema.metrics import ScoringSpec
 
 
@@ -73,6 +76,15 @@ class JudgeSpec(StrictFrozenModel):
 
 
 class PairwiseJudgeSpec(JudgeSpec):
+    preference_temperature: float | None = Field(default=None, allow_inf_nan=False)
+    """Optional PairScore outcome conversion; unset retains the parser's temperature."""
+
+    calibrate_temperature: bool | None = None
+    """Fit PairScore conversion against reference preferences; None uses legacy defaults."""
+    calibration_size: int | None = Field(default=None, gt=0)
+    calibration_min_battles: int = Field(default=500, ge=0)
+    """Minimum appearances per reference model in the calibration pool."""
+
     score_temperature: float = Field(default=0.3, gt=0, allow_inf_nan=False)
     """Multiplier on independent score differences when converting them to preferences."""
     minimum_score_by: tuple[str, ...] = ()
@@ -89,9 +101,9 @@ class PairwiseProtocol(StrictFrozenModel):
 
     runner: Literal["pairwise"]
     limit_by: str | None = Field(default=None, min_length=1)
-    """Count complete groups in this column when applying n_instructions."""
+    """Count complete groups in this column when applying the run sampling limit."""
     generation: SingleTurnGeneration | MultiTurnGeneration
-    baseline: BaselineSpec
+    baseline: BaselineSpec | None = None
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec
 

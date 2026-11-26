@@ -16,21 +16,21 @@ You should first read the user query and the conversation history carefully for 
 ## Current User Query
 <|begin_of_query|>
 
-{user_prompt}
+{instruction}
 
 <|end_of_query|>
 
 ## Response A
 <|begin_of_response_A|>
 
-{completion_A_text}
+{completion_a_text}
 
 <|end_of_response_A|>
 
 ## Response B
 <|begin_of_response_B|>
 
-{completion_B_text}
+{completion_b_text}
 
 <|end_of_response_B|>
 

@@ -3,16 +3,20 @@
 from pathlib import Path
 
 from judgearena.benchmarks.scoring import register_metric
+from judgearena.datasets.registry import register_dataset
 from judgearena.prompts.parsing import register_parser, resolve_judge_parser
 from judgearena.prompts.registry import (
     JudgePromptPreset,
     register_prompt,
 )
+from judgearena.tasks.definitions.alpaca_eval.dataset import AlpacaEvalAdapter
 from judgearena.tasks.definitions.alpaca_eval.metrics import (
     AlpacaEvalLengthControlledMetric,
 )
 
 HERE = Path(__file__).resolve().parent
+
+register_dataset("alpaca_eval")(AlpacaEvalAdapter)
 
 register_parser(
     "alpaca-eval-token", resolve_judge_parser(f"{HERE}/parsers.py:ALPACA_EVAL_TOKEN")

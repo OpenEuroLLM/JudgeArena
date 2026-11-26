@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import math
 import os
@@ -10,7 +11,9 @@ import sqlite3
 import time
 import warnings
 from collections.abc import Mapping
+from contextvars import copy_context
 from dataclasses import replace
+from threading import local
 from urllib import request
 
 from langchain_community.llms import LlamaCpp
@@ -41,6 +44,9 @@ from judgearena.usage import RequestUsage, RunUsage, record_usage
 from judgearena.utils.io import safe_parse_int
 
 logger = get_logger(__name__)
+
+# HTTP clients keep connections tied to their event loop across inference batches.
+_inference_runtime = local()
 
 _CACHE_OPERATION_ERRORS = (OSError, sqlite3.Error, DatabaseError)
 
@@ -793,14 +799,24 @@ def _run_backend_inference(
                     return await process_single(inp)
 
             # asyncio.gather preserves order (unlike as_completed)
-            results = await asyncio.gather(*[gated(inp) for inp in inputs])
-            return results
+            tasks = [asyncio.create_task(gated(inp)) for inp in inputs]
+            try:
+                return await asyncio.gather(*tasks)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
 
+        if not hasattr(_inference_runtime, "runner"):
+            _inference_runtime.runner = asyncio.Runner()
+            atexit.register(_inference_runtime.runner.close)
         with logging_redirect_tqdm(), tqdm(total=len(inputs)) as pbar:
-            res = asyncio.run(
+            res = _inference_runtime.runner.run(
                 process_with_real_progress(
                     chat_model=chat_model, inputs=inputs, pbar=pbar
-                )
+                ),
+                context=copy_context(),
             )
     else:
 

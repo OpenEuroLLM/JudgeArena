@@ -1,10 +1,10 @@
 <|User Prompt|>
-{user_prompt}
+{instruction}
 
 <|The Start of Assistant A's {completion_label}|>
-{completion_A}
+{completion_a}
 <|The End of Assistant A's {completion_label}|>
 
 <|The Start of Assistant B's {completion_label}|>
-{completion_B}
+{completion_b}
 <|The End of Assistant B's {completion_label}|>

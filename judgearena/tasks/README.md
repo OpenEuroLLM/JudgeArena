@@ -43,39 +43,16 @@ Create a public YAML file under `definitions/<family>/`. Files beginning with
 `_` are private bases and are not runnable tasks.
 
 ```yaml
-schema_version: 1
+extends: ../alpaca_eval/_base.yaml
 task: example-pairwise
-task_version: 1
-description: Pairwise evaluation on the Example instruction set.
-tags: [pairwise, instruction-following]
-
-dataset:
-  adapter: judgearena_tables
-  sources:
-    examples:
-      type: huggingface_dataset
-      repo_id: organization/example
-      revision: "0123456789abcdef0123456789abcdef01234567"
-      allow_patterns:
-        - instructions/example-pairwise.csv
-        - model_outputs/example-pairwise.csv.zip
-  fields:
-    id: instruction_index
-    instruction: instruction
+description: Score AlpacaEval answers with pairwise win rate.
 
 protocol:
-  runner: pairwise
-  generation:
-    mode: single_turn_chat
-  baseline:
-    strategy: task_default
-    reference_id: example-baseline
   judge:
     default_prompt_preset: default
   scoring:
     metrics:
       - metric: pairwise_win_rate
-      - metric: length_controlled_winrate
 ```
 
 Reuse a private `_base.yaml` with `extends: _base.yaml` when several versions
@@ -214,9 +191,9 @@ metadata names must be renamed in the adapter. Exports JSON-encode nested and
 mixed-type columns, including mixed integer/string IDs; use `json.loads` on
 those columns to restore original values before joining.
 
-Standard prompt fields `completion` (or `completion_A`/`completion_B`) render
+Standard prompt fields `completion` (or `completion_a`/`completion_b`) render
 complete conversations when available. Use `completion_text` (or
-`completion_A_text`/`completion_B_text`) for the answer text alone, for example
+`completion_a_text`/`completion_b_text`) for the answer text alone, for example
 when your template already includes the history. Both respect thinking removal
 and truncation settings.
 
@@ -226,6 +203,36 @@ MT-Bench-101 and WildBench adapters handle fixed source formats and reject
 Extra columns remain metadata. Use `--run.filters '{"category": ["coding"]}'`
 to select any available metadata field. Task variants and runtime filters are
 intersected; empty selections raise an error.
+
+## Recorded opponents and Elo
+
+Arena tasks use `runner: pairwise` and `protocol.baseline.strategy: recorded_opponents`. Each sampled battle supplies one opponent answer. With named baselines, sampling selects instructions before pairing each with the selected baselines.
+
+```yaml
+task: elo-comparia
+run:
+  sampling: {group_by: lang, per_group: 100}
+  filters: {lang: [en, fr]}
+protocol:
+  scoring:
+    metrics:
+      - metric: pairwise_win_rate
+      - metric: bradley_terry
+        parameters: {fit_mode: frozen, soft: true, n_bootstraps: 20}
+```
+
+`per_group` caps battle rows in their existing order; it does not randomly balance
+groups. A total `run.sampling.limit` applies afterward and can reduce
+group coverage. Omit that total limit to retain each group’s quota. To draw a random sample instead, use `sampling: {method: random, limit: 100}` under `run`.
+
+Language filters select candidate battles. Overall reference ratings use the full task reference pool; a language breakdown uses references from that language.
+Metrics receive judged rows. A metric that also needs reference labels can declare a `reference_battles` keyword argument. Both tables are listed separately in `evaluation.json` for graph runs.
+
+Set preference conversion and calibration under `protocol.judge`.
+Results use `evaluation.json`, the report and annotations; ratings and bootstraps
+are in the report rather than separate Elo exports. To score saved rows again, pass
+the manifest’s `artifacts.metric_data` path to `judgearena.artifacts.read_metric_data`
+relative to the run directory.
 
 ## Multi-turn pairwise judging
 
@@ -264,7 +271,15 @@ support parsers requiring token logprobs.
 
 ## Multiple references
 
-A pairwise task can compare each candidate answer against every listed reference:
+In a run config, set `model.baseline` to one opponent or a list. Each opponent gets the same selected prompts:
+
+```yaml
+model:
+  name: Dummy/candidate
+  baseline: [reference-a, reference-b]
+```
+
+Omit `model.baseline` to use the task’s opponent selection. If a pairwise task omits its baseline, the run must supply an opponent. A task can declare default references under `protocol`:
 
 ```yaml
 baseline:
@@ -274,8 +289,7 @@ baseline:
 
 The runner prepares each candidate answer once, then loads or generates the
 references. Comparison rows keep `source_instruction_index` and have unique IDs.
-The candidate must differ from the reference models. Change the list in the task
-definition; `model.baseline` cannot override it.
+The candidate must differ from the reference models. A run can override the list with `model.baseline`.
 `wildbench-reward-mix` uses this policy and averages per-reference WB-Rewards equally.
 
 ## Independent evaluation
@@ -298,7 +312,7 @@ protocol:
         breakdown_by: [category]
 ```
 
-The standard renderer supplies `{user_prompt}`, `{completion}`, their `_json`
+The standard renderer supplies `{instruction}`, `{completion}`, their `_json`
 forms, and dataset metadata such as `{checklist}` or `{history}`. Required
 metadata is checked after saved answers are loaded and before generation. Each preset pairs its template with an
 `OutputParser`: `parse_result()` returns a dataclass, a JSON-compatible value,
@@ -325,7 +339,7 @@ judge:
   minimum_score_by: [dialogue_uid, dialogue_id, task, ability, domain]
 ```
 
-`limit_by` makes `n_instructions` select complete groups. `minimum_score_by`
+`limit_by` makes `run.sampling.limit` count complete groups. `minimum_score_by`
 compares each model's minimum score per group; omit it to compare individual
 rows. The `absolute_score` metric accepts `macro_by` to weight groups equally.
 MT-Bench-101's adapter supplies the reference histories used by its prompt.
@@ -359,11 +373,11 @@ custom metrics and breakdowns; metrics must account for its reference-pool rows.
 Standard pairwise prompt templates can reference adapter metadata columns such
 as `{history}` or `{checklist}`. Saved answers load before field validation,
 so their metadata is available before generation starts.
-The shared renderer supplies `{user_prompt}`, `{completion_A}`, `{completion_B}`
+The shared renderer supplies `{instruction}`, `{completion_a}`, `{completion_b}`
 and their `_json` variants; these fields take precedence over source metadata
 and follow the actual answer order.
 
-Independent templates receive `{user_prompt}`, `{completion}`, their `_json`
+Independent templates receive `{instruction}`, `{completion}`, their `_json`
 variants, and adapter metadata. Within a `single_answer` protocol, use:
 
 ```yaml
@@ -449,6 +463,6 @@ If a benchmark needs a genuinely different evaluation algorithm:
 1. Add its typed protocol under `schema/`.
 2. Add that protocol to `ProtocolSpec` in `schema/task.py`.
 3. Implement and register its benchmark runner.
-4. Keep algorithm-specific fields in that protocol, as Elo does in `EloProtocol`.
+4. Keep workflow-specific fields in that protocol; scoring algorithms belong in metrics.
 
 Protocol fields use the same schema in task YAML and `RunConfig.protocol`. Runners consume those fields directly; a second config field is not needed. See [configuration](../../docs/configuration.md#inheritance-and-replacement) for inheritance, replacement and experiment overrides.

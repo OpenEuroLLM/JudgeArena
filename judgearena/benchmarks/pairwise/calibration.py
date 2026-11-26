@@ -30,6 +30,20 @@ def apply_pairscore_temperature(
     )
 
 
+def apply_prompt_temperatures(annotations, prompts, *, temperature):
+    """Apply a score-to-preference temperature only to PairScore outcomes."""
+    presets = {
+        prompt.preset_name for prompt in prompts if isinstance(prompt.parser, PairScore)
+    }
+    selected = annotations["prompt_preset"].isin(presets)
+    result = annotations.copy()
+    if selected.any():
+        result.loc[selected, "pref"] = apply_pairscore_temperature(
+            result.loc[selected], temperature=temperature
+        )["pref"]
+    return result
+
+
 def fit_temperature(
     delta_s: np.ndarray,
     y: np.ndarray,

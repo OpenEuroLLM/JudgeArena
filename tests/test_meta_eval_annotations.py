@@ -14,7 +14,7 @@ from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.cache.inference import JudgementInferenceCache
 from judgearena.cache.sqlite import JudgementCache
 from judgearena.config import RunConfig
-from judgearena.datasets.arena_battles import normalize_battles
+from judgearena.datasets._arena import normalize_battles
 from judgearena.models import prepare_model
 from judgearena.prompts.registry import resolve_judge_prompt
 

@@ -2,13 +2,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 import judgearena.config as config_module
 from judgearena import cli as cli_module
 from judgearena.benchmarks import execution as execution_module
 from judgearena.config import (
-    EloArgs,
     RunConfig,
     build_run_config,
     dump_config,
@@ -16,7 +16,6 @@ from judgearena.config import (
 )
 from judgearena.prompts.registry import resolve_run_judge_prompt
 from judgearena.tasks.registry import get_packaged_task
-from judgearena.tasks.schema import EloScoringSpec, MetricSpec
 
 
 @pytest.mark.parametrize("override", [None, 0.8])
@@ -73,7 +72,7 @@ def test_generate_config_constructs():
     assert cfg.task == "alpaca-eval"
     assert cfg.model.name == "Dummy/a"
     assert cfg.judge.model == "Dummy/j"
-    assert cfg.elo is None
+    assert "elo" not in cfg.model_dump()
 
 
 def test_store_root_defaults_to_xdg_cache_home(monkeypatch, tmp_path):
@@ -113,32 +112,9 @@ def test_store_root_null_disables_cache_from_cli():
     assert execution_module.build_judgement_cache(cfg) is None
 
 
-def test_load_config_ignores_unused_legacy_judge_fields(tmp_path):
-    yaml_path = tmp_path / "run.yaml"
-    yaml_path.write_text(
-        "task: alpaca-eval\n"
-        "model: {name: Dummy/a, baseline: Dummy/b}\n"
-        "judge:\n"
-        "  model: Dummy/j\n"
-        "  provide_explanation: false\n"
-        "  system_prompt_file: null\n"
-        "  user_prompt_file: null\n"
-    )
-
-    assert load_config(yaml_path) == RunConfig(**_base_generate())
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("provide_explanation", True),
-        ("system_prompt_file", "system.txt"),
-        ("prompt_presett", "default"),
-    ],
-)
-def test_active_legacy_and_unknown_judge_fields_are_rejected(field, value):
+def test_unknown_judge_field_is_rejected():
     data = _base_generate()
-    data["judge"][field] = value
+    data["judge"]["prompt_presett"] = "default"
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         RunConfig(**data)
@@ -172,7 +148,7 @@ def _registered_task(
     spec = task.spec.model_dump()
     spec["task"] = task_id
     spec["protocol"].update(
-        baseline={"strategy": "runtime_required"},
+        baseline=None,
         generation={
             "mode": "multi_turn_chat",
             "default_max_out_tokens": 1024,
@@ -367,62 +343,52 @@ def test_generation_truncation_defaults_preserve_explicit_overrides(
 
 def test_elo_config_keeps_defaults_implicit_until_task_resolution():
     cfg = RunConfig(**_base_elo())
-    assert cfg.elo is not None
-    assert cfg.elo.soft_elo is True
-    assert cfg.elo.soft_elo_temperature == 0.3
-    assert cfg.elo.model_fields_set == set()
+    assert "elo" not in cfg.model_dump()
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
+    assert cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is True
+    assert cfg.preference_settings.preference_temperature == 0.3
+    assert cfg.resolved_task.spec.protocol.baseline.strategy == "recorded_opponents"
 
 
-@pytest.mark.parametrize(
-    ("runtime", "expected"),
-    [
-        ({}, (2, "anchor", True, 0.7)),
-        (
-            {
-                "n_bootstraps": 0,
-                "baseline_model": None,
-                "soft_elo": False,
-                "soft_elo_temperature": 0.2,
-            },
-            (0, None, False, 0.2),
-        ),
-    ],
-)
-def test_elo_resolution_prefers_runtime_then_metric_then_defaults(runtime, expected):
-    scoring = EloScoringSpec(
-        metrics=(
-            MetricSpec(
-                metric="bradley_terry",
-                parameters={
-                    "n_bootstraps": 2,
-                    "baseline_model": "anchor",
-                    "soft": True,
-                },
-            ),
-        ),
-        default_soft=False,
-        default_temperature=0.7,
-    )
-
-    resolved = EloArgs(**runtime).resolve(scoring)
-
-    assert (
-        resolved.n_bootstraps,
-        resolved.baseline_model,
-        resolved.soft_elo,
-        resolved.soft_elo_temperature,
-    ) == expected
-
-
-def test_elo_config_allows_runtime_scoring_overrides():
+def test_graph_config_and_cli_overrides(tmp_path):
     data = _base_elo()
-    data["elo"] = {"soft_elo": False, "soft_elo_temperature": 0.7}
-
-    cfg = RunConfig(**data)
-
-    assert cfg.elo is not None
-    assert cfg.elo.soft_elo is False
-    assert cfg.elo.soft_elo_temperature == 0.7
+    data.update(
+        run={"sampling": {"method": "random", "limit": 7}},
+        protocol={
+            "judge": {"preference_temperature": 0.7},
+            "scoring": {
+                "metrics": [
+                    {
+                        "metric": "bradley_terry",
+                        "parameters": {"soft": False, "n_bootstraps": 0},
+                    }
+                ]
+            },
+        },
+    )
+    config = tmp_path / "run.yaml"
+    config.write_text(yaml.safe_dump(data))
+    cfg = build_run_config(
+        [
+            "--config",
+            str(config),
+            "--run.sampling.limit",
+            "11",
+            "--protocol.judge.preference_temperature",
+            "0.8",
+        ]
+    )
+    assert cfg.run.sampling.method == "random" and cfg.run.sampling.limit == 11
+    assert cfg.preference_settings.preference_temperature == 0.8
+    assert (
+        cfg.resolved_task.spec.protocol.scoring.metrics[0].parameters["soft"] is False
+    )
+    data["elo"] = {"n_bootstraps": 5}
+    with pytest.raises(ValidationError, match="elo"):
+        RunConfig(**data)
+    config.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="elo"):
+        load_config(config)
 
 
 def test_elo_requires_model_path():
@@ -473,8 +439,8 @@ def test_load_config_from_yaml(tmp_path):
         "  model: Dummy/j\n"
         "  prompt:\n"
         "    preset: default_with_explanation\n"
-        "generation:\n"
-        "  n_instructions: 10\n"
+        "run:\n"
+        "  sampling: {limit: 10}\n"
     )
     cfg = load_config(yaml_path)
     assert cfg.model.name == "Dummy/a"
@@ -483,7 +449,7 @@ def test_load_config_from_yaml(tmp_path):
         resolve_run_judge_prompt(cfg.resolved_task, cfg.judge).preset_name
         == "default_with_explanation"
     )
-    assert cfg.generation.n_instructions == 10
+    assert cfg.run.sampling.limit == 10
 
 
 def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
@@ -491,7 +457,7 @@ def test_dump_config_round_trips_custom_prompt_paths(tmp_path):
     user_file = tmp_path / "user.txt"
     system_file.write_text("Judge carefully.")
     user_file.write_text(
-        "Instruction: {user_prompt}\nA: {completion_A}\nB: {completion_B}"
+        "Instruction: {instruction}\nA: {completion_a}\nB: {completion_b}"
     )
     cfg = RunConfig(
         task="alpaca-eval",
@@ -572,7 +538,11 @@ def test_config_path_dispatches_elo(tmp_path, monkeypatch):
     )
     cli_module.cli(["--config_path", str(yaml_path)])
     assert isinstance(captured["benchmark"], RunConfig)
-    assert captured["benchmark"].elo is not None
+    assert "elo" not in captured["benchmark"].model_dump()
+    assert (
+        captured["benchmark"].resolved_task.spec.protocol.baseline.strategy
+        == "recorded_opponents"
+    )
 
 
 def test_build_run_config_cli_only():
@@ -647,8 +617,9 @@ def test_build_run_config_elo_defaults():
             "Dummy/j",
         ]
     )
-    assert cfg.elo is not None
-    assert cfg.elo.soft_elo is True
+    assert "elo" not in cfg.model_dump()
+    assert cfg.resolved_task.spec.protocol.runner == "pairwise"
+    assert cfg.resolved_task.spec.protocol.scoring.metrics[1].parameters["soft"] is True
 
 
 @pytest.mark.parametrize(
@@ -656,6 +627,7 @@ def test_build_run_config_elo_defaults():
     [
         ({"model": {"name": "Dummy/m"}}, "model.name"),
         ({"judge": {"model": "Dummy/j", "swap_mode": "random"}}, "random"),
+        ({"run": {"sampling": {"limit": 2}}}, "meta_eval.battles_per_model"),
     ],
 )
 def test_meta_eval_config_rejects_invalid_runtime_settings(update, message):
@@ -870,7 +842,7 @@ def test_empty_dataset_overrides_stay_cleared_after_rebinding(tmp_path):
     [
         ("{}", {}),
         ('{"adapter":"custom"}', {}),
-        ('{"adapter":"judgearena_tables"}', {"path": "old"}),
+        ('{"adapter":"alpaca_eval"}', {"path": "old"}),
     ],
 )
 def test_cli_dataset_override_respects_inherited_adapter(tmp_path, override, expected):
@@ -882,3 +854,17 @@ def test_cli_dataset_override_respects_inherited_adapter(tmp_path, override, exp
     flag = "--dataset.options" if override == "{}" else "--dataset"
     cfg = build_run_config(["--config_path", str(path), flag, override])
     assert cfg.dataset.options == expected
+
+
+def test_cli_task_override_keeps_explicit_protocol(tmp_path):
+    from judgearena.config import resolve_cli_config
+
+    path = tmp_path / "run.yaml"
+    path.write_text(
+        "task: arena-hard-v0.1\nmodel: {name: Dummy/candidate}\njudge: {model: Dummy/judge}\nprotocol: {judge: {default_max_out_tokens: 17}}\n"
+    )
+    cfg = RunConfig(**resolve_cli_config(["--task", "mt-bench"], config_path=path))
+    protocol = cfg.resolved_task.spec.protocol
+    assert protocol.generation.mode == "multi_turn_chat"
+    assert protocol.baseline.reference_id == "gpt-3.5-turbo"
+    assert protocol.judge.default_max_out_tokens == 17

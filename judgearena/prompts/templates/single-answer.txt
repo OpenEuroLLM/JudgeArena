@@ -1,4 +1,4 @@
 Evaluate the answer to the user's question independently.
 
-Question: {user_prompt}
+Question: {instruction}
 Answer: {completion}
