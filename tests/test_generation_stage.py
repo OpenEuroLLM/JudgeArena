@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from judgearena.benchmarks.runner import run_benchmark
-from judgearena.cli import cli
 from judgearena.config import RunConfig, load_config
 from judgearena.datasets.data import CompletionData
 from judgearena.models import PreparedModel
@@ -16,31 +15,21 @@ from judgearena.models import PreparedModel
 
 @pytest.mark.parametrize("runner", ["pairwise", "single_answer"])
 def test_generate_replay_then_judge_saved_answers(tmp_path, monkeypatch, runner):
-    protocol = dict(
-        runner=runner,
-        generation={"mode": "provided_messages"},
-        judge={
-            "prompt": {
-                "preset": "single-score" if runner == "single_answer" else "default"
-            }
-        },
-        scoring={
-            "metrics": [
-                {
-                    "metric": "mean_score"
-                    if runner == "single_answer"
-                    else "pairwise_win_rate"
-                }
-            ]
-        },
-    )
-    if runner == "pairwise":
-        protocol["baseline"] = {"strategy": "none"}
+    independent = runner == "single_answer"
     cfg = RunConfig(
         stage="generate",
         model={"name": "Dummy/answer"},
-        protocol=protocol,
         dataset={"adapter": "arena_hard"},
+        protocol=dict(
+            runner=runner,
+            generation={"mode": "provided_messages"},
+            judge={"prompt": {"preset": "single-score" if independent else "default"}},
+            scoring={
+                "metrics": [
+                    {"metric": "mean_score" if independent else "pairwise_win_rate"}
+                ]
+            },
+        ),
         run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
     )
     instructions = pd.DataFrame(
@@ -62,53 +51,30 @@ def test_generate_replay_then_judge_saved_answers(tmp_path, monkeypatch, runner)
     answers = pd.read_parquet(generated.parent / "answers.parquet")
     assert answers.completion.tolist() == ["answer"]
     assert len(answers.messages.iloc[0]) == 2
-    with monkeypatch.context() as block:
-        block.setattr(
-            PreparedModel, "materialize", lambda *a: pytest.fail("cache miss")
-        )
-        run_benchmark(
-            load_config(generated.parent / "config.yaml"),
-            data=data,
-            output_dir=tmp_path / "replay",
-        )
-        block.setattr(
-            "judgearena.benchmarks.evaluation.load_task_data", lambda task: data
-        )
-        cli(
-            [
-                "--config",
-                str(generated.parent / "config.yaml"),
-                "--stage",
-                "generate",
-                "--run.result_folder",
-                str(tmp_path / "cli-replay"),
-            ]
-        )
-    if runner == "single_answer":
-        subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                """
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            """
 import sys
 import pandas as pd
-from judgearena.config import load_config
 from judgearena.datasets.data import CompletionData, restore_nested_columns
-from judgearena.benchmarks.runner import run_benchmark
+from judgearena.cli import cli
+from judgearena.benchmarks import evaluation
 from judgearena.models import PreparedModel
 
 def blocked(*args, **kwargs):
     raise AssertionError('fresh-process generation cache miss')
 PreparedModel.materialize = blocked
-cfg = load_config(sys.argv[1] + '/config.yaml')
-data = CompletionData(restore_nested_columns(pd.read_parquet(sys.argv[1] + '/instructions.parquet')))
-run_benchmark(cfg, data=data, output_dir=sys.argv[2])
+instructions = pd.read_parquet(sys.argv[1] + '/instructions.parquet')
+evaluation.load_task_data = lambda task: CompletionData(restore_nested_columns(instructions))
+cli(['--config', sys.argv[1] + '/config.yaml', '--run.result_folder', sys.argv[2]])
 """,
-                str(generated.parent),
-                str(tmp_path / "fresh"),
-            ],
-            check=True,
-        )
+            str(generated.parent),
+            str(tmp_path / "fresh"),
+        ],
+        check=True,
+    )
     monkeypatch.undo()
     values = cfg.model_dump()
     values.update(
@@ -124,18 +90,13 @@ run_benchmark(cfg, data=data, output_dir=sys.argv[2])
         values["model"]["baseline"] = "baseline"
         data = replace(
             data,
-            model_outputs=pd.DataFrame(
-                [
-                    {
-                        "instruction_index": "q",
-                        "model": "baseline",
-                        "completion": "reference",
-                        "messages": [
-                            {"role": "user", "content": "Q"},
-                            {"role": "assistant", "content": "reference"},
-                        ],
-                    }
-                ]
+            model_outputs=instructions.reset_index().assign(
+                model="baseline",
+                completion="reference",
+                messages=[
+                    instructions.messages.iloc[0]
+                    + [{"role": "assistant", "content": "reference"}]
+                ],
             ),
         )
     judged = RunConfig(**values)

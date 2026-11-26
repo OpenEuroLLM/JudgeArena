@@ -28,6 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "datasets>=4.0.0",
+    "filelock>=3",
     "fast-langdetect>=1.0.0",
     "huggingface-hub>=0.34.4",
     "langchain-core>=0.3.27",

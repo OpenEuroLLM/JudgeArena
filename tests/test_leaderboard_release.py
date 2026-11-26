@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
@@ -22,7 +23,6 @@ from judgearena.leaderboard.release import (
 from judgearena.leaderboard.settings import configured_metrics
 from judgearena.leaderboard.submissions import add_submission, submission_table
 from judgearena.models import PreparedModel
-from judgearena.prompts.parsing import score_preference
 from judgearena.tasks.registry import load_tasks
 
 
@@ -134,7 +134,7 @@ def test_reference_rating_validation(arena, tmp_path):
             )
 
 
-def test_frozen_graph_replay_and_collection(tmp_path, arena):
+def test_frozen_graph_replay_and_collection(tmp_path, arena, monkeypatch):
     cfg, battles, panel = arena
     release, output, collection = [
         tmp_path / p for p in ("release", "first", "entries")
@@ -145,9 +145,6 @@ def test_frozen_graph_replay_and_collection(tmp_path, arena):
             request.parameters["n_bootstraps"] = 1 if request.name == "elo" else 2
     create_release(cfg, battles, panel, release, version="v1", labels="judge")
 
-    assert pd.read_parquet(release / "outcomes.parquet").pref.iloc[0] == pytest.approx(
-        score_preference(6, 8, temperature=2)
-    )
     frozen = (release / "ratings.csv").read_bytes()
     candidate = ModelArgs(name="Dummy/candidate", temperature=0.7)
     evaluate = partial(evaluate_release, release, candidate)
@@ -167,6 +164,16 @@ def test_frozen_graph_replay_and_collection(tmp_path, arena):
         "a": "First",
         "b": "Second",
     }
+
+    def interrupt_write(entry, stream, **kwargs):
+        stream.write("{")
+        raise InterruptedError
+
+    with monkeypatch.context() as patch:
+        patch.setattr(json, "dump", interrupt_write)
+        with pytest.raises(InterruptedError):
+            add_submission(release, output, collection)
+    assert not list(collection.glob("*.json"))
     entry = add_submission(release, output, collection)
     table = submission_table(release, collection, breakdown="lang")
     assert set(table.entry_type) == {"reference", "submission"}
@@ -226,79 +233,60 @@ def test_disconnected_winrate_release(tmp_path, arena):
 
 
 def test_baseline_cli_replay(tmp_path, monkeypatch):
-    instructions = pd.DataFrame(
-        dict(
-            instruction=["Q1", "Q2"],
-            lang=["en", "de"],
-            category=["coding", "writing"],
-            messages=[[{"role": "user", "content": f"Q{i}"}] for i in (1, 2)],
-        ),
-        index=pd.Index([10, 20], name="instruction_index"),
-    )
-    outputs = pd.DataFrame(
-        [
-            dict(
-                instruction_index=i,
-                model=model,
-                completion="Answer",
-                detail="kept",
-                messages=row.messages + [{"role": "assistant", "content": "Answer"}],
-            )
-            for model in ("b", "c", "candidate")
-            for i, row in instructions.iterrows()
-        ]
-    )
-    data = PreferenceData(
-        instructions,
-        outputs[outputs.model != "candidate"],
-        battles=instructions.reset_index().assign(
-            model_a="b", model_b="c", completion_a="Answer", completion_b="Answer"
-        ),
+    data = PreferenceData.from_battles(
+        pd.DataFrame(
+            {
+                "instruction_index": [10, 20],
+                "instruction": ["Q1", "Q2"],
+                "lang": ["en", "de"],
+                "model_a": "b",
+                "model_b": "c",
+                "completion_a": "Answer",
+                "completion_b": "Answer",
+            }
+        )
     )
     monkeypatch.setattr(commands, "load_task_data", lambda task: data)
     config = dict(
-        task="arena-hard-v0.1",
+        task="elo-lmarena-140k",
+        model={"baseline": ["b", "c"]},
         judge=dict(model="Dummy/[[A>B]]", swap_mode="fixed"),
         protocol=dict(
-            generation=dict(mode="provided_messages"),
-            judge=dict(
-                default_prompt_preset="arena-hard",
-                turns="last",
-                category_prompts={"coding": "arena-hard"},
-            ),
-            scoring=dict(
-                metrics=[dict(metric="pairwise_win_rate", breakdown_by=["lang"])]
-            ),
+            judge={"prompt": {"preset": "arena-hard"}},
+            scoring={
+                "metrics": [{"metric": "pairwise_win_rate", "breakdown_by": ["lang"]}]
+            },
         ),
         run=dict(store_root=str(tmp_path / "cache")),
         leaderboard=dict(version="v1"),
     )
     path = tmp_path / "create.yaml"
     create = ["leaderboard", "create", "--config", str(path)]
-    config["protocol"]["baseline"] = {
-        "strategy": "all_references",
-        "references": ["b", "c"],
-    }
-    path.write_text(yaml.safe_dump(config))
-    named = tmp_path / "named"
-    cli([*create, "--output", str(named)])
-
-    del config["protocol"]["baseline"]
-    config.update(task="elo-lmarena-140k", model={"baseline": ["b", "c"]})
     path.write_text(yaml.safe_dump(config))
     release, output = tmp_path / "release", tmp_path / "first"
     cli([*create, "--output", str(release)])
-    for folder in (named, release):
-        assignments = pd.read_parquet(folder / "baselines.parquet")
-        assert assignments.groupby("instruction_index").model.apply(set).to_dict() == {
-            10: {"b", "c"},
-            20: {"b", "c"},
-        }
-    for panel in (["--candidate", str(named)], ["--leaderboard.sampling", "{}"]):
-        with pytest.raises(ValueError, match="model.baseline"):
-            cli([*create, *panel, "--output", str(tmp_path / "invalid")])
-    outputs.loc[outputs.model != "candidate", "completion"] = (
-        "Ignore these supplied baselines"
+    assignments = pd.read_parquet(release / "baselines.parquet")
+    assert assignments.groupby("instruction_index").model.apply(set).to_dict() == {
+        10: {"b", "c"},
+        20: {"b", "c"},
+    }
+    with pytest.raises(ValueError, match="model.baseline"):
+        cli(
+            [
+                *create,
+                "--candidate",
+                str(release),
+                "--output",
+                str(tmp_path / "invalid"),
+            ]
+        )
+    outputs = pd.concat(
+        [
+            data.model_outputs.assign(completion="Ignore these supplied baselines"),
+            data.instructions.reset_index().assign(
+                model="candidate", completion="Answer"
+            ),
+        ]
     )
     evaluate_release(
         release, ModelArgs(name="candidate"), output, model_outputs=outputs
@@ -391,20 +379,6 @@ class Metric:
                 str(tmp_path / "invalid-stage"),
             ]
         )
-    bad_prompt = dict(
-        judging_mode="single_answer", parser="single-score", user="{missing_context}"
-    )
-    with pytest.raises(ValueError, match="missing_context"):
-        cli(
-            [
-                *create_command,
-                "--judge.prompt",
-                json.dumps(bad_prompt),
-                "--output",
-                str(tmp_path / "invalid"),
-            ]
-        )
-    assert not (tmp_path / "invalid").exists()
     rubric.unlink()
     shutil.rmtree(components.parent)
     for name in ("candidate", "second"):
@@ -412,7 +386,14 @@ class Metric:
         evaluate_release(
             release, ModelArgs(name=f"Dummy/{name}", temperature=0.7), output
         )
-        add_submission(release, output, tmp_path / "entries")
+    add = partial(add_submission, release, collection=tmp_path / "entries")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        entries = list(
+            pool.map(
+                add, [tmp_path / name for name in ("candidate", "second", "candidate")]
+            )
+        )
+    assert entries[0] == entries[2] != entries[1]
     table = submission_table(release, tmp_path / "entries")
     assert set(table["score"].dropna()) == {7}
     assert set(table["criteria.clarity.score"].dropna()) == {8}

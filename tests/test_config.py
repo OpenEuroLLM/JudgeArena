@@ -680,13 +680,7 @@ def test_saved_configuration_keeps_supplied_task_definition(
     saved = yaml.safe_load(path.read_text())
     # Older snapshots omit defaults introduced by newer schemas.
     definition = saved["resolved_task"]["spec"]
-    for key in (
-        "preference_temperature",
-        "calibrate_temperature",
-        "calibration_size",
-        "calibration_min_battles",
-    ):
-        definition["protocol"]["judge"].pop(key)
+    definition["protocol"]["judge"].pop("calibration_size")
     saved["resolved_task"]["provenance"]["resolved_sha256"] = (
         config_module._canonical_sha256(definition)
     )

@@ -4,9 +4,11 @@ import hashlib
 import json
 from copy import deepcopy
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 import yaml
+from filelock import FileLock
 
 from judgearena.artifacts.evaluation import (
     load_evaluation,
@@ -84,27 +86,28 @@ def add_submission(release, submission, collection):
         "submission_files": files,
         "outcomes_sha256": outcomes_hash,
     }
-    _entries(collection, manifest)
     collection.mkdir(parents=True, exist_ok=True)
-    target = collection / (
-        hashlib.sha256(result["model"].encode()).hexdigest() + ".json"
-    )
-    if target.exists():
-        previous = json.loads(target.read_text())
-        # Replays can have different config paths while retaining identical outcomes.
-        if (
-            all(previous[key] == entry[key] for key in ("version", "files"))
-            and previous["result"]["model"] == result["model"]
-            and _result_metrics(previous["result"]) == _result_metrics(result)
-        ):
-            if previous["outcomes_sha256"] == entry["outcomes_sha256"]:
+    target = collection / (hashlib.sha256(model.encode()).hexdigest() + ".json")
+    # Check release membership and model identity together, even on the first add.
+    with FileLock(collection / ".collection.lock"):
+        _entries(collection, manifest)
+        if target.exists():
+            previous = json.loads(target.read_text())
+            if (
+                previous["result"]["model"] == model
+                and previous["outcomes_sha256"] == outcomes_hash
+                and _result_metrics(previous["result"]) == _result_metrics(result)
+            ):
                 return target
-        raise ValueError(
-            "Conflicting submission for this model: outcomes, scores or bootstrap settings differ; use matching settings or a separate collection"
-        )
-    with target.open("x") as stream:
-        json.dump(entry, stream, indent=2)
-        stream.write("\n")
+            raise ValueError(
+                "Conflicting submission for this model: outcomes or scores differ"
+            )
+        with TemporaryDirectory(dir=collection) as staging:
+            staged = Path(staging) / target.name
+            with staged.open("w") as stream:
+                json.dump(entry, stream, indent=2)
+                stream.write("\n")
+            staged.replace(target)
     return target
 
 
