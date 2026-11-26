@@ -517,11 +517,14 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
         _default_args(
             result_folder=str(tmp_path),
             task="elo-lmarena-140k",
-            n_instructions=None,
+            n_instructions=2,
             languages=["en"],
         )
     )
-    assert _num_pairwise_rows(filtered) == total_en
+    assert _num_pairwise_rows(filtered) == 2 < total_en
+    references = pd.read_parquet(tmp_path / "evaluation/reference-battles.parquet")
+    assert len(references) == total_en
+    assert set(references.lang) == {"en"}
 
 
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])

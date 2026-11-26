@@ -126,6 +126,10 @@ def run_evaluation(
         and baseline_plan is None
         and cfg.model.baseline is None
     )
+    if opponent_panel is None or isinstance(task_data, PreferenceData):
+        task_data = task_data.select(
+            resolve_dataset_filters(resolved_task, cfg.run.filters)
+        )
     reference_battles = (
         recorded_references(task_data)
         if isinstance(task_data, PreferenceData)
@@ -137,9 +141,6 @@ def run_evaluation(
             cfg, task_data, rng=comparison_rng
         )
     if opponent_panel is None:
-        task_data = task_data.select(
-            resolve_dataset_filters(resolved_task, cfg.run.filters)
-        )
         instructions_df = select_instructions(cfg, task_data.instructions)
         if not independent and baseline_plan is None:
             baseline_plan = resolve_baseline_plan(

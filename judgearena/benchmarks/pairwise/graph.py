@@ -90,14 +90,12 @@ def _sampling_metadata(sampled, sampling, seed):
 
 def prepare_recorded_opponents(cfg, data, *, rng):
     """Select one recorded opponent for each sampled battle."""
-    from judgearena.datasets import resolve_dataset_filters
     from judgearena.datasets.data import PreferenceData
 
     if not isinstance(data, PreferenceData):
         raise ValueError("Recorded opponents require PreferenceData")
-    filtered = data.select(resolve_dataset_filters(cfg.resolved_task, cfg.run.filters))
     battles = select_rows(
-        filtered.battles,
+        data.battles,
         cfg.run.sampling,
         seed=cfg.run.seed,
         limit_by=cfg.resolved_task.spec.protocol.limit_by,
