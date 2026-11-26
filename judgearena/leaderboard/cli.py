@@ -14,6 +14,7 @@ from judgearena.leaderboard.prepare import sample_battles
 from judgearena.leaderboard.release import create_completion_release, create_release
 from judgearena.leaderboard.settings import LeaderboardSettings, rating_metrics
 from judgearena.leaderboard.submissions import add_submission, submission_table
+from judgearena.tasks.schema import RecordedOpponents
 
 
 class LeaderboardCreateConfig(RunConfig):
@@ -101,7 +102,7 @@ def run_leaderboard_command(argv):
                 f"Leaderboard submissions do not support runner {runner!r}"
             )
         graph = (
-            cfg.graph is not None
+            isinstance(cfg.resolved_task.spec.protocol.baseline, RecordedOpponents)
             or bool(args.candidate)
             or (runner == "pairwise" and "sampling" in settings.model_fields_set)
         )
@@ -123,7 +124,7 @@ def run_leaderboard_command(argv):
             if not graph:
                 if "sampling" in settings.model_fields_set:
                     raise ValueError(
-                        "Completion releases use generation.n_instructions and run.filters, not graph sampling"
+                        "Completion releases use run.sampling.limit and run.filters, not graph sampling"
                     )
                 if "labels" in settings.model_fields_set and settings.labels != "judge":
                     raise ValueError(

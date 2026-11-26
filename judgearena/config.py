@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 import os
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     CliSettingsSource,
@@ -31,15 +30,12 @@ from judgearena.prompts.spec import (
 from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
 from judgearena.tasks.schema import (
     AllReferencesBaseline,
-    CategoryDefaultsBaseline,
     DatasetSpec,
-    GraphArgs,
     MetaEvalProtocol,
-    NoBaseline,
+    OfficialOutputsBaseline,
     ProtocolSpec,
     ResolvedTaskSpec,
     SingleAnswerProtocol,
-    TaskDefaultBaseline,
     TaskProvenance,
     TaskSpec,
 )
@@ -118,10 +114,21 @@ class ModelArgs(BaseModel):
     ``VLLM/Qwen/Qwen2.5-0.5B-Instruct``). For elo tasks this is the single
     model rated against arena opponents."""
 
-    baseline: str | None = None
-    """Opponent model for pairwise tasks (the "Model B" reference). Omit for
-    elo tasks; for pairwise tasks it defaults to the dataset-native baseline
-    when left unset."""
+    baseline: str | list[str] | None = None
+    """Compare each selected prompt against these model IDs. Omit to use the task default."""
+
+    @field_validator("baseline")
+    @classmethod
+    def _validate_baseline(cls, value):
+        if value is not None:
+            opponents = [value] if isinstance(value, str) else value
+            if not opponents or any(not name.strip() for name in opponents):
+                raise ValueError("model.baseline requires non-empty model IDs.")
+            if len(opponents) == 1:
+                return opponents[0]
+            if len(set(opponents)) != len(opponents):
+                raise ValueError("model.baseline contains duplicate opponents.")
+        return value
 
     max_out_tokens: int = 32768
     """Generation token budget for each evaluated-model answer (for vLLM, keep
@@ -148,6 +155,9 @@ class ModelArgs(BaseModel):
     chat_template: str | None = None
     """Jinja2 chat template to use instead of the tokenizer's template (vLLM
     only; ignored by remote providers which template server-side)."""
+
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
 
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine-specific kwargs forwarded to the backend, e.g. for
@@ -181,6 +191,9 @@ class ModelArgs(BaseModel):
     """Jinja2 chat template for the baseline/opponent model. Unset inherits
     ``model.chat_template``."""
 
+    baseline_sampling_kwargs: dict | None = None
+    """Baseline sampling options. Unset inherits model.sampling_kwargs."""
+
     baseline_engine_kwargs: dict | None = None
     """JSON dict of engine-specific kwargs for the baseline/opponent model.
     Unset inherits ``model.engine_kwargs``."""
@@ -188,6 +201,8 @@ class ModelArgs(BaseModel):
     def evaluated_generation_kwargs(self) -> dict[str, object]:
         """Kwargs for model A / the evaluated model."""
         kwargs: dict[str, object] = dict(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
@@ -211,6 +226,13 @@ class ModelArgs(BaseModel):
             else self.baseline_engine_kwargs
         )
         kwargs: dict[str, object] = dict(engine_kwargs)
+        sampling = (
+            self.baseline_sampling_kwargs
+            if self.baseline_sampling_kwargs is not None
+            else self.sampling_kwargs
+        )
+        if sampling:
+            kwargs["sampling_kwargs"] = sampling
         kwargs.update(
             _drop_none(
                 {
@@ -290,6 +312,9 @@ class JudgeArgs(BaseModel):
     """Jinja2 chat template for the judge vLLM instance. Unset falls back to
     ``model.chat_template`` for backward compatibility."""
 
+    sampling_kwargs: dict = Field(default_factory=dict)
+    """Additional backend sampling options for each inference request."""
+
     engine_kwargs: dict = Field(default_factory=dict)
     """JSON dict of engine kwargs applied to the judge model only (overrides
     ``model.engine_kwargs`` for the judge)."""
@@ -315,19 +340,6 @@ class JudgeArgs(BaseModel):
     """Strip ``<think>`` reasoning blocks from the battle completions before
     showing them to the judge."""
 
-    @model_validator(mode="before")
-    @classmethod
-    def ignore_unused_legacy_fields(cls, values):
-        if not isinstance(values, dict):
-            return values
-        values = values.copy()
-        if values.get("provide_explanation") is False:
-            values.pop("provide_explanation")
-        for key in ("system_prompt_file", "user_prompt_file"):
-            if values.get(key) is None:
-                values.pop(key, None)
-        return values
-
     def model_kwargs(
         self,
         *,
@@ -337,6 +349,8 @@ class JudgeArgs(BaseModel):
         """Kwargs for constructing the judge model."""
         kwargs: dict[str, object] = dict(base_engine_kwargs or {})
         kwargs.update(self.engine_kwargs)
+        if self.sampling_kwargs:
+            kwargs["sampling_kwargs"] = self.sampling_kwargs
         kwargs.update(
             _drop_none(
                 {
@@ -359,12 +373,9 @@ class JudgeArgs(BaseModel):
 
 
 class GenerationArgs(BaseModel):
-    """How many instructions to use and input-length truncation."""
+    """Generation and judge input truncation."""
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
-
-    n_instructions: int | None = None
-    """Number of instructions/battles to evaluate. Defaults to the full task."""
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     truncate_all_input_chars: int | None = 8192
     """Character cap before model generation. None preserves the full instruction."""
@@ -389,6 +400,30 @@ class MetaEvalArgs(BaseModel):
     """Restrict arena battles to these language codes. Defaults to all languages."""
 
 
+class SamplingArgs(BaseModel):
+    """Select instructions or recorded battle rows after filtering."""
+
+    model_config = ConfigDict(extra="forbid")
+    method: Literal["first", "random"] = "first"
+    limit: int | None = Field(default=None, gt=0)
+    group_by: str | None = Field(default=None, min_length=1)
+    per_group: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_sampling(self):
+        if (self.group_by is None) != (self.per_group is None):
+            raise ValueError(
+                "run.sampling.group_by and per_group must be set together."
+            )
+        if self.method == "random" and (
+            self.limit is None or self.per_group is not None
+        ):
+            raise ValueError(
+                "Random sampling requires a limit and does not accept per_group."
+            )
+        return self
+
+
 class RunArgs(BaseModel):
     """Run-level settings: seed, output location, caching, and logging."""
 
@@ -396,6 +431,8 @@ class RunArgs(BaseModel):
 
     seed: int = 0
     """Random seed for reproducibility."""
+
+    sampling: SamplingArgs = Field(default_factory=SamplingArgs)
 
     filters: dict[str, list[str | int | float | bool]] = Field(default_factory=dict)
     """Select dataset rows by metadata values, e.g. {\"domain\": [\"math\"]}."""
@@ -462,10 +499,7 @@ class RunConfig(BaseSettings):
     """The judge model and scoring behaviour."""
 
     generation: GenerationArgs = Field(default_factory=GenerationArgs)
-    """Instruction count and input truncation."""
-
-    graph: GraphArgs | None = None
-    """Sample saved comparisons instead of constructing baseline pairs."""
+    """Input truncation."""
 
     meta_eval: MetaEvalArgs | None = None
     """Runtime settings used only by tasks with a meta-evaluation protocol."""
@@ -479,11 +513,6 @@ class RunConfig(BaseSettings):
         if not isinstance(values, dict):
             return values
         values = values.copy()
-        if "elo" in values:
-            raise ValueError(
-                "elo options are no longer supported in new configs; use graph, "
-                "protocol.judge and protocol.scoring.metrics. Load old saved runs with load_config."
-            )
         task = values.get("resolved_task")
         if task is None and isinstance(values.get("task"), str):
             task = get_packaged_task(values["task"])
@@ -561,9 +590,6 @@ class RunConfig(BaseSettings):
                 definition["dataset"] = self.dataset.model_dump()
             spec = TaskSpec.model_validate(definition)
             resolved_task = replace(resolved_task, spec=spec)
-        task_graph = getattr(resolved_task.spec.protocol, "graph", None)
-        if self.graph is None and task_graph is not None:
-            self.graph = task_graph.model_copy()
         resolved_task = replace(
             resolved_task,
             provenance=replace(
@@ -647,6 +673,11 @@ class RunConfig(BaseSettings):
                 raise ValueError("model.name is required.")
             return self
         if is_meta_eval:
+            if self.run.sampling != SamplingArgs():
+                raise ValueError(
+                    "Use meta_eval.top_models and "
+                    "meta_eval.battles_per_model to sample meta-evaluation battles instead of run.sampling."
+                )
             if self.meta_eval is None:
                 self.meta_eval = MetaEvalArgs()
             if self.model.name is not None or self.model.baseline is not None:
@@ -662,27 +693,26 @@ class RunConfig(BaseSettings):
         else:
             if self.model.name is None:
                 raise ValueError("model.name is required.")
-            if self.graph is not None and self.model.baseline is not None:
-                raise ValueError("model.baseline is not supported with graph sampling.")
             if isinstance(protocol, SingleAnswerProtocol):
                 if self.model.baseline is not None or self.judge.swap_mode != "fixed":
                     raise ValueError(
                         "Independent single-answer evaluation does not use a baseline or swapped judging."
                     )
+            elif self.model.baseline is not None:
+                opponents = self.model.baseline
+                if isinstance(opponents, list) and self.model.name in opponents:
+                    raise ValueError("model.baseline must differ from model.name.")
             elif isinstance(protocol.baseline, AllReferencesBaseline):
                 if self.model.name in protocol.baseline.references:
                     raise ValueError(
                         "model.name must differ from the all_references models."
                     )
-                if self.model.baseline is not None:
-                    raise ValueError(
-                        "model.baseline cannot override an all_references policy."
-                    )
-            elif self.model.baseline is None and not isinstance(
-                protocol.baseline,
-                (TaskDefaultBaseline, CategoryDefaultsBaseline, NoBaseline),
+            elif protocol.baseline is None or isinstance(
+                protocol.baseline, OfficialOutputsBaseline
             ):
-                raise ValueError(f"model.baseline is required for task {self.task!r}.")
+                raise ValueError(
+                    f"Set model.baseline to one model ID or a list of opponents for task {self.task!r}."
+                )
         return self
 
     def judge_engine_kwargs(self) -> dict[str, object]:
@@ -759,15 +789,16 @@ def resolve_cli_config(
         if config_path
         else {}
     )
+    if "task" in overrides:
+        values = {**values, "task": overrides["task"]}
+    values = settings_cls._merge_task_overrides(values)
     if allowed_sections is not None and (set(values) | set(overrides)) - set(
         allowed_sections
     ):
         raise ValueError(
             f"Command accepts {', '.join(sorted(allowed_sections))} settings only."
         )
-    if "task" in overrides:
-        values = {**values, "task": overrides["task"]}
-    return _merge_overrides(settings_cls._merge_task_overrides(values), overrides)
+    return _merge_overrides(values, overrides)
 
 
 def build_run_config(argv: list[str] | None = None) -> RunConfig:
@@ -794,110 +825,12 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def _migrate_saved_run(data: dict) -> dict:
-    """Read old run snapshots without exposing their options to new experiments."""
-    resolved = data.get("resolved_task")
-    if not isinstance(resolved, dict):
-        return data
-    data = deepcopy(data)
-    spec = data["resolved_task"]["spec"]
-    protocol = spec["protocol"]
-    for graph in (
-        data.get("graph"),
-        (data.get("protocol") or {}).get("graph"),
-        protocol.get("graph"),
-    ):
-        if isinstance(graph, dict) and "per_language" in graph:
-            quota = graph.pop("per_language")
-            if quota is not None:
-                graph.setdefault("group_by", "lang")
-                graph.setdefault("per_group", quota)
-    options = data.pop("elo", None) or {}
-    old_runner = protocol["runner"] == "elo"
-    if not old_runner and not options:
-        return data
-    if protocol["runner"] not in {"elo", "pairwise"}:
-        raise ValueError("Saved Elo settings require a pairwise task")
-
-    scoring = protocol["scoring"]
-    metrics = scoring["metrics"]
-    defaults = next(
-        (
-            m.get("parameters", {})
-            for m in metrics
-            if m["metric"] == "bradley_terry" and not m.get("name")
-        ),
-        {},
-    )
-    soft = options.get(
-        "soft_elo", defaults.get("soft", scoring.get("default_soft", True))
-    )
-    temperature = options.get(
-        "soft_elo_temperature", scoring.get("default_temperature", 0.3)
-    )
-    # Before frozen fitting existed, omitted fit_mode meant a joint fit.
-    fit_mode = options.get("fit_mode", defaults.get("fit_mode", "joint"))
-    graph = data.get("graph") or protocol.get("graph") or {}
-    for old, new in (
-        ("elo_random_battles", "random_battles"),
-        ("n_instructions_per_language", "per_group"),
-    ):
-        if options.get(old) is not None:
-            graph.setdefault(new, options[old])
-    if graph.get("per_group") is not None:
-        graph.setdefault("group_by", "lang")
-    protocol.update(runner="pairwise", graph=graph)
-    data["graph"] = graph
-    arena = protocol.pop("arena", None)
-    if arena is not None and not spec["dataset"].get("format"):
-        spec["dataset"]["format"] = arena
-    judge = protocol["judge"]
-    for key, value in {
-        "preference_temperature": temperature if soft else None,
-        "calibrate_temperature": options.get("calibrate_temperature", False) and soft,
-        "calibration_size": options.get("calibration_size"),
-    }.items():
-        if judge.get(key) is None:
-            judge[key] = value
-    for metric in metrics:
-        if metric["metric"] != "bradley_terry":
-            continue
-        parameters = metric.setdefault("parameters", {})
-        for key, value in {
-            "fit_mode": fit_mode,
-            "soft": soft,
-            "baseline_model": options.get(
-                "baseline_model", defaults.get("baseline_model")
-            ),
-            "n_bootstraps": options.get(
-                "n_bootstraps", defaults.get("n_bootstraps", 20)
-            ),
-        }.items():
-            parameters.setdefault(key, value)
-        parameters.setdefault(
-            "reference_min_battles", 500 if parameters["fit_mode"] == "joint" else 0
-        )
-    scoring.pop("default_soft", None)
-    scoring.pop("default_temperature", None)
-    if options.get("languages"):
-        from judgearena.datasets import resolve_dataset_filters
-
-        run = data.setdefault("run", {})
-        run["filters"] = resolve_dataset_filters(
-            None, run.get("filters", {}), {"lang": options["languages"]}
-        )
-    data.update(protocol=protocol, dataset=spec["dataset"])
-    data["resolved_task"]["provenance"]["resolved_sha256"] = _canonical_sha256(spec)
-    return data
-
-
 def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    data = _migrate_saved_run(data)
     if task_override is not None and task_override != data.get("task"):
         data["task"] = task_override
         data.pop("resolved_task", None)
@@ -912,9 +845,12 @@ def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     for prompt in config_prompts(data):
         resolve_prompt_paths(prompt, Path(path).resolve().parent)
     if hash_matches:
-        # Resolve paths and newly introduced schema defaults without changing provenance.
-        normalized = TaskSpec.model_validate(resolved["spec"]).model_dump(mode="json")
-        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(normalized)
+        # Hash the same defaults and resolved paths that RunConfig validates.
+        resolved = data["resolved_task"]
+        spec = TaskSpec.model_validate(resolved["spec"])
+        resolved["provenance"]["resolved_sha256"] = _canonical_sha256(
+            spec.model_dump(mode="json")
+        )
     return data
 
 

@@ -9,7 +9,7 @@ variants:
   values: [fr, en]
 
 dataset:
-  format: ComparIA
+  adapter: comparia
   sources:
     comparia:
       type: huggingface_dataset

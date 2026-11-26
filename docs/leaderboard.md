@@ -16,8 +16,8 @@ and its bootstrap intervals are calculated by the rating metric.
 task: arena-hard-v0.1
 judge:
   model: OpenRouter/google/gemma-4-31b-it
-generation:
-  n_instructions: 100
+run:
+  sampling: {limit: 100}
 protocol:
   scoring:
     metrics:
@@ -39,7 +39,7 @@ judgearena leaderboard evaluate \
 
 Creation uses the task's baseline assignment and saves its answers, loading
 available answers and generating missing ones. Instructions follow the usual
-`generation.n_instructions`, task `limit_by` and `run.filters` settings. Category
+`run.sampling.limit`, task `limit_by` and `run.filters` settings. Category
 baselines and all-reference assignments use the ordinary pairwise preparation.
 No candidate answers are generated during creation. Submit each initial model
 and each later model with the same evaluate command. `results.json` contains the
@@ -96,7 +96,7 @@ Values resolve as task defaults → config → CLI. Both `--config` and
 judgearena leaderboard create \
   --task arena-hard-v0.1 \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 100 \
+  --run.sampling.limit 100 \
   --protocol.scoring.metrics '[{"metric":"pairwise_win_rate"}]' \
   --leaderboard.version arena-hard-winrate-v1 \
   --output releases/arena-hard-winrate-v1
@@ -329,22 +329,20 @@ preferences directly. The Arena-Hard examples above work without calibration.
 
 ### Graph preparation without Elo settings
 
-Use `graph` to sample saved comparisons and `run.filters` to select languages.
+Use `run.sampling` to sample saved comparisons and `run.filters` to select languages.
 Preference conversion belongs to the judge; changing metrics does not change it.
 For example, a config can inherit the LMArena dataset and use ordinary pairwise execution:
 
 ```yaml
 task: elo-lmarena-140k
-graph:
-  group_by: lang
-  per_group: 100
 run:
+  sampling: {group_by: lang, per_group: 100}
   seed: 42
   filters: {lang: [en, de]}
 protocol:
   runner: pairwise
   generation: {mode: single_turn_chat}
-  baseline: {strategy: none}
+  baseline: {strategy: recorded_opponents}
   judge:
     default_prompt_preset: default
     preference_temperature: 0.3

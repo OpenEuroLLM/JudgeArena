@@ -290,7 +290,6 @@ def create_release(
             annotations, outcomes, _ = judge_comparisons(
                 cfg,
                 prepare_reference_comparisons(battles),
-                preference_temperature=cfg.preference_temperature,
             )
             write_annotations(annotations, output / "annotations.parquet")
         counts = outcomes.groupby("lang").pref.agg(total="size", valid="count")
@@ -401,6 +400,17 @@ def release_inputs(release, manifest, ratings, model_outputs=None):
             errors="ignore",
         )
         instructions["instruction_id"] = instructions.index
+        opponents = pd.concat(
+            [
+                rows.filter(regex=f"_{slot}$").rename(
+                    columns=lambda key: key[:-2] + "_b"
+                )
+                for slot, rows in panel.groupby("opponent_slot")
+            ]
+        ).reindex(panel.index)
+        panel = instructions.assign(instruction_index=instructions.index).join(
+            opponents
+        )
         options = {
             "frozen": {
                 "panel": panel,

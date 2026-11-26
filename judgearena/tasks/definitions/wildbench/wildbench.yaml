@@ -5,8 +5,6 @@ tags: [pairwise, instruction-following, multi-turn, wildbench]
 
 protocol:
   runner: pairwise
-  baseline:
-    strategy: runtime_required
   judge:
     prompt:
       preset: wildbench-reward

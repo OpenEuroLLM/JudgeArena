@@ -35,7 +35,7 @@ def test_generate_replay_then_judge_saved_answers(tmp_path, monkeypatch, runner)
         },
     )
     if runner == "pairwise":
-        protocol["baseline"] = {"strategy": "runtime_required"}
+        protocol["baseline"] = {"strategy": "none"}
     cfg = RunConfig(
         stage="generate",
         model={"name": "Dummy/answer"},

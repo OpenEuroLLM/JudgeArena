@@ -18,8 +18,8 @@ from judgearena.benchmarks.elo.rating import (
 from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.cache.sqlite import JudgementCache
-from judgearena.config import JudgePromptSpec, RunConfig, load_config
-from judgearena.datasets.arena_battles import normalize_battles
+from judgearena.config import JudgePromptSpec, RunConfig, build_run_config, load_config
+from judgearena.datasets._arena import normalize_battles
 from judgearena.datasets.data import PreferenceData
 from judgearena.models import DummyModel, make_model
 from judgearena.prompts.registry import resolve_judge_prompt
@@ -37,7 +37,7 @@ def _make_conversation(content_user: str, content_assistant: str) -> list[dict]:
 
 
 def _arena_df(n_battles: int) -> pd.DataFrame:
-    """Synthetic arena DataFrame matching the schema produced by load_arena_dataframe."""
+    """Synthetic arena DataFrame matching the schema read by the arena adapter."""
     rng = np.random.default_rng(42)
     rows = []
     for i in range(n_battles):
@@ -111,7 +111,6 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
         task=task,
         model={"name": model},
         judge=judge,
-        generation={"n_instructions": n_instructions},
         protocol={
             "judge": {"calibrate_temperature": calibrate_temperature},
             "scoring": {
@@ -129,6 +128,7 @@ def _default_args(*, result_folder: str, **kwargs) -> RunConfig:
             },
         },
         run={
+            "sampling": {"limit": n_instructions},
             "result_folder": result_folder,
             "store_root": store_root,
             "filters": {"lang": languages} if languages else {},
@@ -259,19 +259,46 @@ def _num_pairwise_rows(run_result: dict) -> int:
     )
 
 
-def test_arena_data_also_runs_in_pairwise(tmp_path, monkeypatch, synthetic_arena_df):
+@pytest.mark.parametrize("task", ["alpaca-eval-ja", "elo-comparia"])
+def test_random_instructions_compare_each_selected_prompt_to_all_baselines(
+    tmp_path, synthetic_arena_df, monkeypatch, task
+):
     data = normalize_battles(synthetic_arena_df, "ComparIA")
-    monkeypatch.setattr(pairwise_runner, "load_task_data", lambda _: data)
-    prefs = pairwise_runner.run_evaluation(
-        RunConfig(
-            task="alpaca-eval-ja",
-            model={"name": "Dummy/candidate", "baseline": ARENA_MODELS[0]},
-            judge={"model": "Dummy/score A: 0 score B: 10"},
-            generation={"n_instructions": 1},
-            run={"result_folder": str(tmp_path / "pairwise")},
+    metrics = [{"metric": "pairwise_win_rate", "breakdown_by": ["baseline"]}]
+    if task == "elo-comparia":
+        metrics.append(
+            {"metric": "bradley_terry", "parameters": {"fit_mode": "frozen"}}
         )
+    cfg = RunConfig(
+        task=task,
+        model={"name": "Dummy/candidate", "baseline": ARENA_MODELS[:2]},
+        judge={"model": "Dummy/score A: 0 score B: 10", "swap_mode": "fixed"},
+        protocol={"scoring": {"metrics": metrics}},
+        run={
+            "sampling": {"method": "random", "limit": 20},
+            "seed": 17,
+            "store_root": str(tmp_path / "cache"),
+        },
     )
-    assert len(prefs) == 1 and prefs.iloc[0] > 0.5
+    run_benchmark(cfg, data=data, output_dir=tmp_path / "evaluation")
+    if task == "elo-comparia":
+        report = json.loads((tmp_path / "evaluation/results.json").read_text())
+        rating = report["metrics"]["bradley_terry"]
+        assert set(rating["reference_ratings"]) == set(ARENA_MODELS), rating
+    rows = pd.read_parquet(tmp_path / "evaluation/outcomes.parquet")
+    expected = set(data.instructions.sample(20, random_state=17).instruction)
+    assert len(rows) == 40
+    assert {
+        opponent: set(part.instruction) for opponent, part in rows.groupby("model_b")
+    } == {opponent: expected for opponent in ARENA_MODELS[:2]}
+    monkeypatch.setattr(
+        models.PreparedModel, "materialize", lambda *_: pytest.fail("cache miss")
+    )
+    saved = load_config(tmp_path / "evaluation/config.yaml")
+    run_benchmark(saved, data=data, output_dir=tmp_path / "replay")
+    pd.testing.assert_frame_equal(
+        rows, pd.read_parquet(tmp_path / "replay/outcomes.parquet")
+    )
 
 
 def test_run_elo_without_bradley_terry_skips_rating_artifacts(tmp_path):
@@ -414,10 +441,7 @@ def test_run_elo_aligns_shuffled_completions_with_judged_battles(
         == synthetic_arena_df["lang"].iloc[:3].tolist() * repeats
     )
     assert annotations["source"].eq("llm-judge").all()
-    assert (
-        annotations["winner"].tolist()
-        == synthetic_arena_df["winner"].iloc[:3].tolist() * repeats
-    )
+    assert "winner" not in annotations
     for row in annotations.itertuples():
         candidate = "a" if row.model_a == cfg.model.name else "b"
         opponent = "b" if candidate == "a" else "a"
@@ -502,16 +526,10 @@ def test_elo_language_variant_resolves_and_filters(tmp_path):
 
 @pytest.mark.parametrize("swap_mode", ["fixed", "both"])
 def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_mode):
-    from judgearena.artifacts import evaluation
+    from unittest.mock import Mock
 
-    finished = []
-    original_checksum = evaluation.metric_data_checksum
-
-    def checksum(path):
-        finished.append(path)
-        return original_checksum(path)
-
-    monkeypatch.setattr(evaluation, "metric_data_checksum", checksum)
+    finish = Mock(wraps=pairwise_runner.finish_evaluation)
+    monkeypatch.setattr(pairwise_runner, "finish_evaluation", finish)
     captured = {}
     loaded_models = []
 
@@ -560,11 +578,18 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
         raise AssertionError("Cached judging and calibration must not load a model")
 
     monkeypatch.setattr(models, "make_model", unavailable)
-    cfg = load_config(Path(result["result_path"]).parent / "config.yaml")
+    cfg = build_run_config(
+        [
+            "--config",
+            str(Path(result["result_path"]).parent / "config.yaml"),
+            "--protocol.judge.calibrate_temperature",
+            "yes",
+        ]
+    )
     cfg.run.result_folder = str(tmp_path / "replay")
     replay = run_graph_evaluation(cfg)
     assert _pairwise_metric(replay) == _pairwise_metric(result)
-    assert len(finished) == 2  # One finalization per live/replay run.
+    assert finish.call_count == 2  # One finalization per live/replay run.
     replay_dir = Path(replay["result_path"]).parent
     pd.testing.assert_frame_equal(
         battles, pd.read_parquet(replay_dir / "outcomes.parquet")
@@ -572,57 +597,6 @@ def test_run_elo_calibration_reuses_judge_and_cache(monkeypatch, tmp_path, swap_
     manifest = json.loads((replay_dir / "evaluation.json").read_text())
     assert "outcomes.parquet" in manifest["files"]
     assert not (replay_dir / "battles.parquet").exists()
-
-    # Old saved Elo configs translate to the same requests and reuse their cache.
-    import yaml
-
-    legacy = yaml.safe_load((replay_dir / "config.yaml").read_text())
-    old_protocol = legacy["resolved_task"]["spec"]["protocol"]
-    old_protocol.update(runner="elo", arena="ComparIA")
-    old_protocol.pop("graph")
-    old_protocol.pop("limit_by", None)
-    for key in ("preference_temperature", "calibrate_temperature", "calibration_size"):
-        old_protocol["judge"][key] = None
-    legacy.update(
-        protocol=old_protocol,
-        graph=None,
-        elo={"fit_mode": "frozen", "n_bootstraps": 3, "calibrate_temperature": True},
-    )
-    # An old per-language cap is replayed without changing the selected rows.
-    legacy["graph"] = {"per_language": 10000}
-    old_path = replay_dir / "legacy-config.yaml"
-    old_path.write_text(yaml.safe_dump(legacy))
-    migrated = load_config(old_path)
-    assert (
-        "elo" not in migrated.model_dump()
-        and migrated.resolved_task.spec.protocol.runner == "pairwise"
-    )
-    migrated.run.result_folder = str(tmp_path / "legacy-replay")
-    old_replay = run_graph_evaluation(migrated)
-    assert _pairwise_metric(old_replay) == _pairwise_metric(result)
-    pd.testing.assert_frame_equal(
-        battles,
-        pd.read_parquet(Path(old_replay["result_path"]).parent / "outcomes.parquet"),
-    )
-
-    # Historical snapshots without fit_mode retain joint fitting and the same cache.
-    legacy["elo"].pop("fit_mode")
-    for metric in old_protocol["scoring"]["metrics"]:
-        metric.get("parameters", {}).pop("fit_mode", None)
-    old_path.write_text(yaml.safe_dump(legacy))
-    historical = load_config(old_path)
-    rating = next(
-        m
-        for m in historical.resolved_task.spec.protocol.scoring.metrics
-        if m.metric == "bradley_terry"
-    )
-    assert rating.parameters["fit_mode"] == "joint"
-    historical.run.result_folder = str(tmp_path / "historical-replay")
-    replay = run_graph_evaluation(historical)
-    pd.testing.assert_frame_equal(
-        battles,
-        pd.read_parquet(Path(replay["result_path"]).parent / "outcomes.parquet"),
-    )
 
 
 def test_empty_calibration_keeps_configured_temperature(tmp_path):
@@ -634,7 +608,7 @@ def test_empty_calibration_keeps_configured_temperature(tmp_path):
 
 
 def test_extract_turn_text_tolerates_moderated_turns():
-    from judgearena.arenas_utils import extract_turn_text
+    from judgearena.datasets._arena import extract_turn_text
 
     assert extract_turn_text({"content": None}) == ""
     assert extract_turn_text({"content": "plain"}) == "plain"
@@ -871,30 +845,53 @@ def test_elo_temperature_follows_category_parser(
         assert pref == pytest.approx(1 - preference if row.swapped else preference)
 
 
+def test_sampling_quotas_and_limit_keep_complete_dialogues():
+    from judgearena.config import SamplingArgs
+
+    rows = pd.DataFrame(
+        {"dialogue": [1, 1, 2, 3, 3, 4], "lang": ["de"] * 3 + ["en"] * 3}
+    )
+    quota = SamplingArgs(group_by="lang", per_group=1)
+    assert preparation.select_rows(
+        rows, quota, seed=0, limit_by="dialogue"
+    ).dialogue.tolist() == [1, 1, 3, 3]
+    quota.limit = 1
+    assert preparation.select_rows(
+        rows, quota, seed=0, limit_by="dialogue"
+    ).dialogue.tolist() == [1, 1]
+
+
 @pytest.mark.parametrize("temperature", [0.7, None])
 def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
     tmp_path, monkeypatch, temperature
 ):
-    from judgearena.benchmarks.pairwise.graph import select_graph_battles
+    from judgearena.artifacts import read_metric_data
     from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.benchmarks.scoring import _METRIC_TYPES
 
-    rows = pd.DataFrame({"topic": ["code"] * 3 + ["math"] * 3})
-    selected, _ = select_graph_battles(rows, seed=42, group_by="topic", per_group=2)
-    assert selected.topic.tolist() == ["code", "code", "math", "math"]
-    limited, _ = select_graph_battles(
-        rows, seed=42, group_by="topic", per_group=2, limit=2
-    )
-    assert limited.topic.tolist() == ["code", "code"]
+    class CountRows:
+        def calculate(self, battles):
+            return {"count": len(battles)}
 
+        def render(self, values):
+            return str(values["count"])
+
+    monkeypatch.setitem(_METRIC_TYPES, "count_rows", CountRows)
     cfg = RunConfig(
         task="elo-comparia",
         model={"name": "Dummy/candidate"},
-        judge={"model": "Dummy/score A: 6 score B: 8"},
-        graph={"random_battles": 6},
+        judge={
+            "model": "Dummy/score A: 6 score B: 8",
+            "prompt": {
+                "user": "{rubric}: {completion_a} or {completion_b}?",
+                "parser": "score",
+            },
+        },
         protocol={
             "runner": "pairwise",
+            "limit_by": "dialogue",
             "generation": {"mode": "single_turn_chat"},
-            "baseline": {"strategy": "none"},
+            "baseline": {"strategy": "recorded_opponents"},
             "judge": {
                 "default_prompt_preset": "default",
                 **(
@@ -904,11 +901,23 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
                 ),
                 "calibrate_temperature": False,
             },
-            "scoring": {"metrics": [{"metric": "pairwise_win_rate"}]},
+            "scoring": {
+                "metrics": [{"metric": "pairwise_win_rate"}, {"metric": "count_rows"}]
+            },
         },
-        run={"store_root": str(tmp_path / "cache"), "no_log_file": True},
+        run={
+            "store_root": str(tmp_path / "cache"),
+            "no_log_file": True,
+            "sampling": {"group_by": "rubric", "per_group": 3},
+        },
     )
     data = normalize_battles(_arena_df(30), "ComparIA")
+    data = replace(
+        data,
+        instructions=data.instructions.assign(
+            rubric="clarity", dialogue=np.arange(30) // 2
+        ),
+    )
     first = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
     report = json.loads(
         (
@@ -916,19 +925,29 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         ).read_text()
     )
     assert report["report_type"] == "ComparisonReport"
-    metric_data = pd.read_parquet(first.parent / "metric-data.parquet")
+    assert report["arena"] == "elo-comparia"
+    assert report["metrics"]["count_rows"] == {"count": 6}
+    artifacts = json.loads(first.read_text())["artifacts"]
+    judgments = read_metric_data(first.parent / artifacts["metric_data"])
+    references = read_metric_data(first.parent / artifacts["reference_battles"])
+    assert len(judgments) == 6 and len(references) == 30
+    assert {"pref", "pref_hard", "completion_a"}.isdisjoint(references)
+    assert references.reference_pref.notna().all()
+    assert references.rubric.eq("clarity").all()
+    assert "winner" in references
     assert (
-        metric_data.loc[metric_data.evaluation_model.isna(), "completion_a"]
-        .isna()
-        .all()
+        judgments.winner.tolist()
+        == judgments.pref_hard.map({0: "model_a", 0.5: "tie", 1: "model_b"}).tolist()
     )
-    reference_rows = metric_data.evaluation_model.isna()
-    assert metric_data.loc[reference_rows, ["pref", "pref_hard"]].isna().all().all()
-    assert metric_data.loc[reference_rows, "reference_pref"].notna().all()
+    assert "winner" not in pd.read_parquet(first.parent / "annotations.parquet")
     saved = load_config(first.parent / "config.yaml")
     spec = saved.resolved_task.spec.model_dump()
     spec["protocol"]["scoring"]["metrics"] = [
-        {"metric": "bradley_terry", "parameters": {"soft": False, "n_bootstraps": 0}}
+        {
+            "metric": "bradley_terry",
+            "parameters": {"soft": False, "fit_mode": "frozen"},
+            "breakdown_by": ["lang", "judge"],
+        }
     ]
     saved.resolved_task = replace(
         saved.resolved_task, spec=type(saved.resolved_task.spec).model_validate(spec)
@@ -941,9 +960,67 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         pd.read_parquet(first.parent / "outcomes.parquet"),
         pd.read_parquet(second.parent / "outcomes.parquet"),
     )
+    ratings = json.loads(second.read_text())["metrics"]["bradley_terry"]
+    metric = BradleyTerryMetric(soft=False, fit_mode="frozen")
+    for entry in ratings["groups"]["lang"]:
+        lang = entry["group"]
+        expected = metric.calculate(
+            judgments[judgments.lang == lang],
+            reference_battles=references[references.lang == lang],
+        )
+        assert entry["values"]["ratings"] == expected["ratings"]
+    assert len(ratings["groups"]["lang"]) == judgments.lang.nunique()
+    (judge_group,) = ratings["groups"]["judge"]
+    assert judge_group["values"]["ratings"] == ratings["ratings"]
     unlabeled = replace(data, battles=data.battles.drop(columns="reference_pref"))
     third = run_benchmark(cfg, data=unlabeled, output_dir=tmp_path / "unlabeled")
     assert (
         json.loads(third.read_text())["metrics"]
         == json.loads(first.read_text())["metrics"]
     )
+
+
+def test_supplied_panel_reuses_one_answer_for_two_fixed_opponents(
+    tmp_path, monkeypatch, synthetic_arena_df
+):
+    data = normalize_battles(synthetic_arena_df, "ComparIA")
+    key = data.instructions.index[0]
+    panel = pd.DataFrame(
+        {
+            "instruction_index": [key, key],
+            "model_b": ARENA_MODELS[:2],
+            "completion_b": ["first", "second"],
+        }
+    ).rename_axis("instruction_index")
+    cfg = _default_args(result_folder=str(tmp_path), store_root=str(tmp_path / "cache"))
+
+    def evaluate(folder):
+        from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric
+
+        manifest = pairwise_runner.run_evaluation(
+            cfg, data=data, opponent_panel=panel, output_dir=folder
+        )
+        saved = json.loads(manifest.read_text())
+        assert set(saved["metrics"]["bradley_terry"]["reference_ratings"]) == set(
+            ARENA_MODELS
+        )
+        rows = pd.read_parquet(folder / saved["artifacts"]["metric_data"])
+        assert rows.baseline.tolist() == panel.model_b.tolist()
+        assert (
+            PairwiseWinRateMetric().calculate(rows)
+            == saved["metrics"]["pairwise_win_rate"]
+        )
+        return rows
+
+    live = tmp_path / "live"
+    outcomes = evaluate(live)
+    assert len(pd.read_parquet(live / "answers.parquet")) == 1
+    assert outcomes.model_a.tolist() == [cfg.model.name] * 2
+    assert outcomes.model_b.tolist() == ARENA_MODELS[:2]
+    assert (
+        outcomes.instruction.tolist() == [data.instructions.loc[key, "instruction"]] * 2
+    )
+    monkeypatch.setattr(
+        models, "make_model", lambda *a, **kw: pytest.fail("cache miss")
+    )
+    pd.testing.assert_frame_equal(outcomes, evaluate(tmp_path / "replay"))

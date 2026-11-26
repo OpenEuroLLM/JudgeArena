@@ -66,8 +66,6 @@ protocol:
   runner: pairwise
   generation:
     mode: base_completion
-  baseline:
-    strategy: runtime_required
   judge:
     default_prompt_preset: fluency
     default_swap_mode: fixed

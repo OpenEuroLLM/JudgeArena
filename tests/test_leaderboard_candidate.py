@@ -27,9 +27,9 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
     import yaml
 
     from judgearena.cli import cli
-    from judgearena.datasets.arena_battles import ArenaBattlesAdapter
     from judgearena.leaderboard.release import load_release
     from judgearena.models import PreparedModel
+    from judgearena.tasks.definitions.lmarena import dataset
 
     rows = pd.DataFrame(
         {
@@ -52,7 +52,7 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
         }
     )
 
-    monkeypatch.setattr(ArenaBattlesAdapter, "load_battles", lambda adapter: rows)
+    monkeypatch.setattr(dataset, "_read_release", lambda *_: rows)
     config = yaml.safe_load(
         Path("configs/leaderboard/lmarena-140k-v1.yaml").read_text()
     )
@@ -102,8 +102,8 @@ def test_create_from_one_config_and_replay(tmp_path, monkeypatch):
             )
             curated = tmp_path / f"{labels}-curated"
             patch.setattr(
-                ArenaBattlesAdapter,
-                "load_battles",
+                dataset,
+                "_read_release",
                 lambda *a: pytest.fail("candidate must bypass adapter"),
             )
             cli([*command, "--candidate", str(output), "--output", str(curated)])

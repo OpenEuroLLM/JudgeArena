@@ -1,9 +1,8 @@
 task: arena-hard-v0.1
 judge:
   model: OpenRouter/google/gemma-4-31b-it
-generation:
-  n_instructions: 100
 run:
+  sampling: {limit: 100}
   seed: 42
   store_root: ./cache/leaderboard
 protocol:

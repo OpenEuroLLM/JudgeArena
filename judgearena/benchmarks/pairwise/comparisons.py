@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
@@ -24,7 +23,7 @@ from judgearena.generate import (
 )
 
 if TYPE_CHECKING:
-    from judgearena.config import RunConfig
+    from judgearena.config import RunConfig, SamplingArgs
 
 
 def load_conversations(
@@ -158,19 +157,46 @@ def preload_model_outputs(data: CompletionData, models: list[str]) -> Completion
     )
 
 
+def select_rows(
+    frame: pd.DataFrame,
+    sampling: SamplingArgs,
+    *,
+    seed: int,
+    limit_by: str | None = None,
+) -> pd.DataFrame:
+    """Select rows, counting whole instruction groups when the task defines them."""
+    if sampling.limit is None and sampling.per_group is None:
+        return frame
+    units = frame
+    if limit_by is not None:
+        units = frame.drop_duplicates(limit_by)
+        if sampling.per_group is not None and (
+            len(frame.drop_duplicates([limit_by, sampling.group_by])) != len(units)
+        ):
+            raise ValueError(
+                f"Each {limit_by} must belong to one {sampling.group_by} for per-group sampling."
+            )
+    if sampling.per_group is not None:
+        units = units.groupby(units[sampling.group_by]).head(sampling.per_group)
+    if sampling.method == "random":
+        units = units.sample(n=min(sampling.limit, len(units)), random_state=seed)
+    elif sampling.limit is not None:
+        units = units.head(sampling.limit)
+    if limit_by is not None:
+        return frame.loc[frame[limit_by].isin(units[limit_by])]
+    return units
+
+
 def select_instructions(cfg, instructions):
-    """Apply the run limit, retaining whole task-defined instruction groups."""
-    n = cfg.generation.n_instructions
-    if n is not None:
-        limit_by = cfg.resolved_task.spec.protocol.limit_by
-        if limit_by is None:
-            instructions = instructions.head(n)
-        else:
-            selected = instructions[limit_by].drop_duplicates().head(n)
-            instructions = instructions.loc[instructions[limit_by].isin(selected)]
-    if instructions.empty:
+    selected = select_rows(
+        instructions,
+        cfg.run.sampling,
+        seed=cfg.run.seed,
+        limit_by=cfg.resolved_task.spec.protocol.limit_by,
+    )
+    if selected.empty:
         raise ValueError("No instructions selected for evaluation.")
-    return instructions
+    return selected
 
 
 def prepare_answers(
@@ -229,7 +255,7 @@ def assemble_comparisons(
     belong to the original answer pair and are not inherited by new pairs.
     """
     metadata = instructions.drop(
-        columns=["reference_pref", "pref", "pref_hard"]
+        columns=["reference_pref", "pref", "pref_hard", "winner"]
         + [column for column in instructions if column.endswith(("_a", "_b"))],
         errors="ignore",
     )
@@ -267,13 +293,7 @@ def prepare_comparisons(
         source_ids = pd.Series(frame.index, index=frame.index)
     else:
         frame["source_instruction_index"] = frame.index
-        frame.index = pd.Index(
-            [
-                json.dumps([str(identity), model])
-                for identity, model in zip(frame.index, frame["model_b"], strict=True)
-            ],
-            name="comparison_id",
-        )
+        frame.index = pd.RangeIndex(len(frame), name="comparison_id")
         source_ids = frame["source_instruction_index"].copy()
     # Supplied histories may carry stable turn IDs for generation and judging.
     internal = (

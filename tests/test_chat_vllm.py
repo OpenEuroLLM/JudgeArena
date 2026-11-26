@@ -321,3 +321,18 @@ def test_do_inference_keeps_chat_vllm_on_native_batch_path(monkeypatch):
     monkeypatch.setattr(chat_model, "ainvoke", fail_if_called)
 
     assert models.do_inference(chat_model, ["hello"], use_tqdm=True) == ["ok"]
+
+
+def test_make_model_routes_penalties_to_sampling_not_engine(monkeypatch):
+    captured, _ = _install_fake_vllm(monkeypatch)
+    penalties = {
+        "repetition_penalty": 1.2,
+        "presence_penalty": 0.4,
+        "min_p": 0.05,
+    }
+    models.make_model("VLLM/test", sampling_kwargs=penalties)
+    for key, value in penalties.items():
+        assert captured["sampling_kwargs"][key] == value
+        assert key not in captured["llm_init"]["kwargs"]
+    models.make_model("VLLM/test")
+    assert not penalties.keys() & captured["sampling_kwargs"].keys()

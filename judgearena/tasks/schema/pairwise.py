@@ -8,7 +8,10 @@ from pydantic import Field, model_validator
 
 from judgearena.prompts.spec import JudgePromptSpec
 from judgearena.tasks.schema.base import StrictFrozenModel
-from judgearena.tasks.schema.baselines import BaselineSpec, NoBaseline
+from judgearena.tasks.schema.baselines import (
+    BaselineSpec,
+    NoBaseline,
+)
 from judgearena.tasks.schema.metrics import ScoringSpec
 
 
@@ -93,30 +96,14 @@ class PairwiseJudgeSpec(JudgeSpec):
     default_swap_mode: SwapMode = "fixed"
 
 
-class GraphArgs(StrictFrozenModel):
-    """Sampling of saved comparison rows, independent of scoring metrics."""
-
-    random_battles: int | None = Field(default=None, gt=0)
-    group_by: str | None = Field(default=None, min_length=1)
-    per_group: int | None = Field(default=None, gt=0)
-    """Keep the first N battle rows per group, before applying the total limit."""
-
-    @model_validator(mode="after")
-    def _group_quota(self):
-        if (self.group_by is None) != (self.per_group is None):
-            raise ValueError("graph.group_by and graph.per_group must be set together")
-        return self
-
-
 class PairwiseProtocol(StrictFrozenModel):
     """Task-owned generation, baseline, judging, and scoring behavior."""
 
     runner: Literal["pairwise"]
-    graph: GraphArgs | None = None
     limit_by: str | None = Field(default=None, min_length=1)
-    """Count complete groups in this column when applying n_instructions."""
+    """Count complete groups in this column when applying the run sampling limit."""
     generation: SingleTurnGeneration | MultiTurnGeneration
-    baseline: BaselineSpec
+    baseline: BaselineSpec | None = None
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec
 

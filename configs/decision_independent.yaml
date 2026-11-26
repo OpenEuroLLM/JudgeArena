@@ -28,5 +28,5 @@ protocol:
   scoring:
     metrics:
       - metric: mean_score
-generation:
-  n_instructions: 4
+run:
+  sampling: {limit: 4}

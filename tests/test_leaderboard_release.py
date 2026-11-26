@@ -155,14 +155,19 @@ def test_frozen_graph_replay_and_collection(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(PreparedModel, "materialize", no_inference)
     from judgearena.benchmarks import evaluation as execution
 
-    panel_judge = execution.judge_configured_comparisons
+    prepare = execution.prepare_pairwise_judging
 
     def missing_preferences(*args, **kwargs):
-        annotations, outcomes, metadata = panel_judge(*args, **kwargs)
-        return annotations, outcomes.assign(pref=float("nan")), metadata
+        judge, temperature = prepare(*args, **kwargs)
+
+        def run(*args, **kwargs):
+            annotations, outcomes, metadata = judge(*args, **kwargs)
+            return annotations, outcomes.assign(pref=float("nan")), metadata
+
+        return run, temperature
 
     with monkeypatch.context() as patch:
-        patch.setattr(execution, "judge_configured_comparisons", missing_preferences)
+        patch.setattr(execution, "prepare_pairwise_judging", missing_preferences)
         with pytest.raises(ValueError, match="Cannot submit elo"):
             evaluate(tmp_path / "missing-judgments")
     assert not (tmp_path / "missing-judgments/release.json").exists()
@@ -319,7 +324,7 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
                 str(tmp_path / "invalid-stage"),
             ]
         )
-    with pytest.raises(ValueError, match="baseline.strategy: none"):
+    with pytest.raises(ValueError, match="requires baseline.strategy"):
         cli(
             [
                 *create_command,

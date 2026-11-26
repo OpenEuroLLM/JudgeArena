@@ -7,7 +7,7 @@ variants:
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
 
 dataset:
-  format: LMArena-100k
+  adapter: lmarena
   sources:
     lmarena_100k:
       type: huggingface_dataset

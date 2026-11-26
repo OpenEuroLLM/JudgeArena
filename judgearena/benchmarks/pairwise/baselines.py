@@ -60,33 +60,27 @@ def resolve_baseline_plan(
     *,
     task_id: str,
     task: ResolvedTaskSpec | None,
-    runtime_baseline: str | None,
+    runtime_baseline: str | list[str] | None,
     instructions: pd.DataFrame,
 ) -> BaselinePlan:
     """Resolve a runtime override or the baseline declared by a task."""
-    if task is not None and isinstance(
-        task.spec.protocol.baseline, AllReferencesBaseline
+    if isinstance(runtime_baseline, str):
+        return BaselinePlan.flat(runtime_baseline, index=instructions.index)
+    references = runtime_baseline
+    if (
+        references is None
+        and task is not None
+        and isinstance(task.spec.protocol.baseline, AllReferencesBaseline)
     ):
-        if runtime_baseline is not None:
-            raise ValueError("model.baseline cannot override an all_references policy.")
+        references = task.spec.protocol.baseline.references
+    if references is not None:
         return BaselinePlan.per_row(
             pd.concat(
-                [
-                    pd.Series(model, index=instructions.index)
-                    for model in task.spec.protocol.baseline.references
-                ]
+                [pd.Series(model, index=instructions.index) for model in references]
             )
         )
-    if runtime_baseline is not None:
-        return BaselinePlan.flat(runtime_baseline, index=instructions.index)
 
-    if task is None:
-        raise ValueError(
-            f"model.baseline is required for task {task_id!r}; no task baseline "
-            "is registered."
-        )
-
-    baseline = task.spec.protocol.baseline
+    baseline = task.spec.protocol.baseline if task else None
     if isinstance(baseline, TaskDefaultBaseline):
         return BaselinePlan.flat(baseline.reference_id, index=instructions.index)
 
@@ -108,6 +102,5 @@ def resolve_baseline_plan(
         return BaselinePlan.per_row(per_row)
 
     raise ValueError(
-        f"model.baseline is required for task {task_id!r}; its "
-        f"{baseline.strategy!r} baseline policy does not provide a model."
+        f"Set model.baseline to one model ID or a list of opponents for task {task_id!r}."
     )

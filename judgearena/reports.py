@@ -94,10 +94,6 @@ class ComparisonReport(Report):
         print(render_metrics(self.metrics, metrics))
 
 
-class EloReport(ComparisonReport):
-    """Compatibility report for previously saved Elo results."""
-
-
 class MetaEvalReport(Report):
     """Configured metrics and run context for judge meta-evaluation."""
 

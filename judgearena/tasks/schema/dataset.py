@@ -14,7 +14,7 @@ class DatasetFields(StrictFrozenModel):
     ``id`` and ``instruction`` name the upstream ID and prompt fields;
     ``category`` optionally names a source grouping field. These values are
     source names, unlike the source-to-canonical dictionaries on ``DatasetSpec``.
-    The table adapter's ``id_strategy="position"`` replaces source IDs with row
+    The AlpacaEval adapter's ``id_strategy="position"`` replaces source IDs with row
     positions and remaps output IDs; ``"source"`` preserves the source IDs.
     Other adapters interpret the fields according to their source format.
     """
@@ -28,14 +28,13 @@ class DatasetFields(StrictFrozenModel):
 class DatasetSpec(StrictFrozenModel):
     """Declare how an adapter obtains and normalizes a dataset.
 
-    ``adapter`` selects a registered dataset adapter; ``format`` is an optional
-    adapter-specific source format. ``sources`` maps adapter-defined names such
+    ``adapter`` selects a registered dataset adapter. ``sources`` maps names such
     as ``"examples"`` to source declarations. Optional ``fields`` names instruction
     fields; ``options`` holds adapter-specific settings such as a local file path.
     Each adapter validates the settings it needs.
 
-    ``output_columns`` and ``battle_columns`` map source column names to canonical
-    names, e.g. ``{"answer": "completion"}`` or ``{"left_model": "model_a"}``.
+    ``output_columns`` maps saved answer columns to canonical names,
+    e.g. ``{"answer": "completion"}``.
     ``outcome_preferences`` maps source outcome labels to numbers in [0, 1],
     e.g. ``{"left": 0, "draw": 0.5, "right": 1}``, using the A/B slot convention
     documented by ``PreferenceData``.
@@ -46,13 +45,10 @@ class DatasetSpec(StrictFrozenModel):
     """
 
     adapter: str = Field(min_length=1)
-    # Adapter-specific source format, independent of the runner.
-    format: str | None = None
     sources: dict[str, SourceSpec] = Field(default_factory=dict)
     fields: DatasetFields | None = None
     options: dict[str, Any] = Field(default_factory=dict)
     output_columns: dict[str, str] = Field(default_factory=dict)
-    battle_columns: dict[str, str] = Field(default_factory=dict)
     outcome_preferences: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(
         default_factory=dict
     )

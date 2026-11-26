@@ -33,10 +33,10 @@ uv run judgearena \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --model.baseline Llama-2-7b-chat-hf \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
-A provider-prefixed baseline such as `VLLM/Qwen/Qwen2.5-0.5B-Instruct` can generate reference answers when the task supports a runtime baseline. Tasks with fixed multiple-reference or category-based baselines use their declared policy.
+A provider-prefixed baseline such as `VLLM/Qwen/Qwen2.5-0.5B-Instruct` can generate reference answers when the task supports a runtime baseline. Tasks with multiple-reference or category-based baselines use their declared policy. To compare against multiple named models, set `protocol.baseline: {strategy: all_references, references: [model-a, model-b]}` using your reference model IDs. Sample the prompts once with `run.sampling`; `pairwise_win_rate` with `breakdown_by: [baseline]` reports overall and per-reference win rates.
 
 ## Multilingual evaluation
 
@@ -48,7 +48,7 @@ uv run judgearena \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
   --run.filters '{"lang":["en","de"]}' \
-  --generation.n_instructions 10
+  --run.sampling.limit 10
 ```
 
 The instruction limit caps the selected run; it is not a per-language quota. Omit it for the full filtered set. Language-specific tasks such as `m-arena-hard-v2.0-de` are also available. Fluency uses named variants such as `fluency-french`; its prompts are sentence continuations, so check the generation format for the model you are evaluating.
@@ -62,14 +62,15 @@ uv run judgearena \
   --task elo-lmarena-140k \
   --model.name OpenRouter/google/gemma-4-31b-it \
   --judge.model OpenRouter/google/gemma-4-31b-it \
-  --elo.languages '["en","de"]' \
-  --elo.n_instructions_per_language 100 \
-  --elo.n_bootstraps 200
+  --run.filters '{"lang":["en","de"]}' \
+  --run.sampling.group_by lang \
+  --run.sampling.per_group 100 \
+  --protocol.scoring.metrics '[{"metric":"pairwise_win_rate"},{"metric":"bradley_terry","parameters":{"fit_mode":"frozen","soft":true,"n_bootstraps":200}}]'
 ```
 
-The judge compares candidate answers with sampled arena opponents. Bradley-Terry scoring combines those judgments with the dataset's reference preferences. These reference labels are supplied by the arena; they are not new judgments from the selected judge.
+The judge compares candidate answers with sampled opponents. Frozen Elo fits reference ratings from the arena’s supplied preferences, then rates the candidate against those fixed opponents. The example requests both win rate and Elo because the metrics list replaces the task’s defaults.
 
-`elo.soft_elo` selects continuous preferences and defaults to `true`. Set it to `false` for hard win/loss/tie labels. With a score-pair parser, `elo.soft_elo_temperature` controls score-to-preference conversion. Optional `elo.calibrate_temperature: true` fits that temperature against human-labeled battles; `elo.calibration_size` limits the calibration sample. Calibration adds judging requests.
+Set the Bradley–Terry metric parameter `soft` to `false` for hard win/loss/tie labels. For score-pair judges, `protocol.judge.preference_temperature` controls how score differences become preferences. To fit the temperature against reference labels, set `protocol.judge.calibrate_temperature` to `true` and use `protocol.judge.calibration_size` to limit the extra judging requests.
 
 Ratings depend on the reference pool and evaluation settings. Compare runs using the same data revision, judge, prompt and sampling settings.
 

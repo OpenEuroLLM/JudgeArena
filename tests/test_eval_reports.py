@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 
 import pandas as pd
 
-from judgearena.reports import BattleReport, EloReport
+from judgearena.reports import BattleReport, ComparisonReport
 from judgearena.utils.eval import PrefSummary, compute_pref_summary
 
 
@@ -260,8 +260,8 @@ def test_battle_report_save_round_trip(tmp_path):
     assert loaded["report_type"] == "BattleReport"
 
 
-def test_eloreport_to_dict_envelope():
-    report = EloReport(
+def test_comparison_report_to_dict_envelope():
+    report = ComparisonReport(
         arena="chatbot-arena",
         judge_model="judge",
         metrics={"bradley_terry": {"ratings": {"my-model": 1000.0}}},
@@ -279,5 +279,5 @@ def test_eloreport_to_dict_envelope():
         "model_name": "my-model",
         "sampling_metadata": {"sampling_mode": "head"},
         "schema_version": "2",
-        "report_type": "EloReport",
+        "report_type": "ComparisonReport",
     }

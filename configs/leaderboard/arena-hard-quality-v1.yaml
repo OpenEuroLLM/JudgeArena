@@ -3,9 +3,8 @@ judge:
   model: OpenRouter/google/gemma-4-31b-it
   temperature: 0
   max_out_tokens: 2048
-generation:
-  n_instructions: 10
 run:
+  sampling: {limit: 10}
   seed: 42
   use_tqdm: true
   store_root: ./cache/leaderboard

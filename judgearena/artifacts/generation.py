@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from judgearena.artifacts.evaluation import file_checksum, verify_files
+from judgearena.artifacts.run import read_metric_data
 from judgearena.datasets.data import restore_nested_columns
 
 
@@ -51,7 +52,9 @@ def read_answers(path, cfg, instructions):
         original = pd.read_parquet(path.parent / "instructions.parquet")
         if original.to_json(orient="split") != instructions.to_json(orient="split"):
             raise ValueError("Saved answers belong to different instructions")
-    answers = restore_nested_columns(pd.read_parquet(path))
+    answers = read_metric_data(path)
+    if "messages" in answers:
+        answers["messages"] = restore_nested_columns(answers[["messages"]])["messages"]
     if not {"instruction_index", "model", "completion"} <= set(answers):
         raise ValueError(
             "Saved answers require instruction_index, model and completion"

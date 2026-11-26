@@ -16,7 +16,7 @@ You should first read the user query and the conversation history carefully for 
 ## Current User Query
 <|begin_of_query|>
 
-{user_prompt}
+{instruction}
 
 <|end_of_query|>
 
