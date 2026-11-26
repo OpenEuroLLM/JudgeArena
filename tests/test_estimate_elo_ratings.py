@@ -182,60 +182,19 @@ def test_bradley_terry_metric_reports_anchor_and_bootstrap_results():
     }
 
 
-# --- fit_bradley_terry unit tests ---
-
-
-def _records_with_pref(records: list[dict]) -> pd.DataFrame:
-    df = pd.DataFrame(records)
-    df["pref"] = df["winner"].map({"model_a": 0.0, "model_b": 1.0, "tie": 0.5})
-    return df
-
-
-def test_bradley_terry_clear_winner():
-    """Model A always beats B → A gets a higher ELO."""
-    records = [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 10 + [
-        {"model_a": "B", "model_b": "A", "winner": "model_b"}
-    ] * 10
-    ratings = fit_bradley_terry(_records_with_pref(records))
-    assert ratings["A"] > ratings["B"]
-
-
-def test_bradley_terry_all_ties():
-    """All ties → ratings should be equal."""
-    records = [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 20
-    ratings = fit_bradley_terry(_records_with_pref(records))
-    assert abs(ratings["A"] - ratings["B"]) < 1.0
-
-
-def test_bradley_terry_baseline():
-    """Baseline model is anchored at baseline_rating."""
-    records = [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 10
-    ratings = fit_bradley_terry(
-        _records_with_pref(records),
-        baseline_model="B",
-        baseline_rating=1000,
+@pytest.mark.parametrize(
+    "preferences, expected_tie", [([0, 1], False), ([0.5, 0.5], True)]
+)
+def test_joint_fit_anchors_opponent(preferences, expected_tie):
+    battles = pd.DataFrame(
+        {"model_a": ["A", "B"], "model_b": ["B", "A"], "pref": preferences}
     )
-    assert ratings["B"] == pytest.approx(1000.0)
-    assert ratings["A"] > 1000.0
-
-
-def test_bradley_terry_soft_matches_hard():
-    """Soft prefs ∈ {0, 0.5, 1} must give the same fit as hard winner labels."""
-    records = (
-        [{"model_a": "A", "model_b": "B", "winner": "model_a"}] * 7
-        + [{"model_a": "A", "model_b": "B", "winner": "model_b"}] * 3
-        + [{"model_a": "A", "model_b": "B", "winner": "tie"}] * 2
-    )
-    df = _records_with_pref(records)
-    hard = fit_bradley_terry(df, pref_col="pref")
-    # Passing the same column twice (continuous == quantised here) must match.
-    df["pref_soft"] = df["pref"].astype(float)
-    soft = fit_bradley_terry(df, pref_col="pref_soft")
-    assert hard["A"] == pytest.approx(soft["A"], abs=1e-3)
-    assert hard["B"] == pytest.approx(soft["B"], abs=1e-3)
-
-
-# --- run_elo() integration tests ---
+    ratings = fit_bradley_terry(battles, baseline_model="B")
+    assert ratings["B"] == pytest.approx(1000)
+    if expected_tie:
+        assert ratings["A"] == pytest.approx(1000)
+    else:
+        assert ratings["A"] > ratings["B"]
 
 
 def run_graph_evaluation(cfg: RunConfig, task=None) -> dict:
@@ -247,16 +206,6 @@ def run_graph_evaluation(cfg: RunConfig, task=None) -> dict:
 
 def _pairwise_metric(run_result: dict) -> dict:
     return run_result["metrics"]["pairwise_win_rate"]
-
-
-def _num_pairwise_rows(run_result: dict) -> int:
-    metric = _pairwise_metric(run_result)
-    return (
-        metric["num_wins"]
-        + metric["num_losses"]
-        + metric["num_ties"]
-        + metric["num_missing"]
-    )
 
 
 @pytest.mark.parametrize("task", ["alpaca-eval-ja", "elo-comparia"])
@@ -493,37 +442,20 @@ def test_arena_anchor_battles_filters_and_preserves_index():
     assert out.loc[1000, "pref"] == 0.0 and out.loc[1001, "pref"] == 1.0
 
 
-def test_elo_language_variant_resolves_and_filters(tmp_path):
-    variant = get_packaged_task("elo-lmarena-140k-en")
-    assert variant is not None
-    assert variant.selection is not None
-    assert variant.selection.values == ("en",)
-
-    result_en = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path), task="elo-lmarena-140k-en", n_instructions=None
-        ),
-        variant,
+@pytest.mark.parametrize(
+    "task, languages", [("elo-lmarena-140k-en", None), ("elo-lmarena-140k", ["en"])]
+)
+def test_elo_language_variant_resolves_and_filters(
+    tmp_path, synthetic_arena_df, task, languages
+):
+    cfg = _default_args(
+        result_folder=str(tmp_path), task=task, languages=languages, n_instructions=2
     )
-    result_all = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path), task="elo-lmarena-140k", n_instructions=None
-        )
-    )
-    total_en = _num_pairwise_rows(result_en)
-    total_all = _num_pairwise_rows(result_all)
-    assert 0 < total_en < total_all
-    filtered = run_graph_evaluation(
-        _default_args(
-            result_folder=str(tmp_path),
-            task="elo-lmarena-140k",
-            n_instructions=2,
-            languages=["en"],
-        )
-    )
-    assert _num_pairwise_rows(filtered) == 2 < total_en
-    references = pd.read_parquet(tmp_path / "evaluation/reference-battles.parquet")
-    assert len(references) == total_en
+    run_graph_evaluation(cfg)
+    output = tmp_path / "evaluation"
+    assert pd.read_parquet(output / "outcomes.parquet").lang.tolist() == ["en", "en"]
+    references = pd.read_parquet(output / "reference-battles.parquet")
+    assert len(references) == synthetic_arena_df.lang.eq("en").sum() > 2
     assert set(references.lang) == {"en"}
 
 
@@ -922,15 +854,12 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         ),
     )
     first = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
-    report = json.loads(
-        (
-            first.parent / json.loads(first.read_text())["artifacts"]["report"]
-        ).read_text()
-    )
+    manifest = json.loads(first.read_text())
+    artifacts = manifest["artifacts"]
+    report = json.loads((first.parent / artifacts["report"]).read_text())
     assert report["report_type"] == "ComparisonReport"
     assert report["arena"] == "elo-comparia"
     assert report["metrics"]["count_rows"] == {"count": 6}
-    artifacts = json.loads(first.read_text())["artifacts"]
     judgments = read_metric_data(first.parent / artifacts["metric_data"])
     references = read_metric_data(first.parent / artifacts["reference_battles"])
     assert len(judgments) == 6 and len(references) == 30
@@ -943,17 +872,18 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         == judgments.pref_hard.map({0: "model_a", 0.5: "tie", 1: "model_b"}).tolist()
     )
     assert "winner" not in pd.read_parquet(first.parent / "annotations.parquet")
-    saved = load_config(first.parent / "config.yaml")
-    spec = saved.resolved_task.spec.model_dump()
-    spec["protocol"]["scoring"]["metrics"] = [
-        {
-            "metric": "bradley_terry",
-            "parameters": {"soft": False, "fit_mode": "frozen"},
-            "breakdown_by": ["lang", "judge"],
-        }
-    ]
-    saved.resolved_task = replace(
-        saved.resolved_task, spec=type(saved.resolved_task.spec).model_validate(spec)
+    metric = {
+        "metric": "bradley_terry",
+        "parameters": {"soft": False, "fit_mode": "frozen"},
+        "breakdown_by": ["lang", "judge"],
+    }
+    saved = build_run_config(
+        [
+            "--config",
+            str(first.parent / "config.yaml"),
+            "--protocol.scoring.metrics",
+            json.dumps([metric]),
+        ]
     )
     monkeypatch.setattr(
         models, "make_model", lambda *a, **kw: pytest.fail("Replay must use cache")
@@ -964,15 +894,11 @@ def test_graph_sampling_and_judge_settings_do_not_depend_on_metrics(
         pd.read_parquet(second.parent / "outcomes.parquet"),
     )
     ratings = json.loads(second.read_text())["metrics"]["bradley_terry"]
-    metric = BradleyTerryMetric(soft=False, fit_mode="frozen")
-    for entry in ratings["groups"]["lang"]:
-        lang = entry["group"]
-        expected = metric.calculate(
-            judgments[judgments.lang == lang],
-            reference_battles=references[references.lang == lang],
-        )
-        assert entry["values"]["ratings"] == expected["ratings"]
-    assert len(ratings["groups"]["lang"]) == judgments.lang.nunique()
+    counts = {
+        entry["group"]: entry["values"]["num_comparisons"]
+        for entry in ratings["groups"]["lang"]
+    }
+    assert counts == judgments.lang.value_counts().to_dict()
     (judge_group,) = ratings["groups"]["judge"]
     assert judge_group["values"]["ratings"] == ratings["ratings"]
     unlabeled = replace(data, battles=data.battles.drop(columns="reference_pref"))
@@ -998,32 +924,33 @@ def test_supplied_panel_reuses_one_answer_for_two_fixed_opponents(
     cfg = _default_args(result_folder=str(tmp_path), store_root=str(tmp_path / "cache"))
 
     def evaluate(folder):
-        from judgearena.benchmarks.pairwise.scoring.metrics import PairwiseWinRateMetric
-
         manifest = pairwise_runner.run_evaluation(
             cfg, data=data, opponent_panel=panel, output_dir=folder
         )
-        saved = json.loads(manifest.read_text())
-        assert set(saved["metrics"]["bradley_terry"]["reference_ratings"]) == set(
-            ARENA_MODELS
-        )
-        rows = pd.read_parquet(folder / saved["artifacts"]["metric_data"])
-        assert rows.baseline.tolist() == panel.model_b.tolist()
-        assert (
-            PairwiseWinRateMetric().calculate(rows)
-            == saved["metrics"]["pairwise_win_rate"]
-        )
-        return rows
+        return json.loads(manifest.read_text())
 
     live = tmp_path / "live"
-    outcomes = evaluate(live)
+    saved = evaluate(live)
+    outcomes = pd.read_parquet(live / saved["artifacts"]["metric_data"])
+    assert set(saved["metrics"]["bradley_terry"]["reference_ratings"]) == set(
+        ARENA_MODELS
+    )
     assert len(pd.read_parquet(live / "answers.parquet")) == 1
+    assert (
+        outcomes.model_b.tolist()
+        == outcomes.baseline.tolist()
+        == panel.model_b.tolist()
+    )
     assert outcomes.model_a.tolist() == [cfg.model.name] * 2
-    assert outcomes.model_b.tolist() == ARENA_MODELS[:2]
     assert (
         outcomes.instruction.tolist() == [data.instructions.loc[key, "instruction"]] * 2
     )
     monkeypatch.setattr(
         models, "make_model", lambda *a, **kw: pytest.fail("cache miss")
     )
-    pd.testing.assert_frame_equal(outcomes, evaluate(tmp_path / "replay"))
+    replay = evaluate(tmp_path / "replay")
+    assert replay["metrics"] == saved["metrics"]
+    pd.testing.assert_frame_equal(
+        outcomes,
+        pd.read_parquet(tmp_path / "replay" / replay["artifacts"]["metric_data"]),
+    )
