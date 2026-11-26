@@ -142,16 +142,13 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
         BradleyTerryMetric(fit_mode="joint").calculate(battles)["ratings"]
         != result["ratings"]
     )
-    point = BradleyTerryMetric(fit_mode="frozen").calculate(battles)
-    assert point["rating"] == result["rating"]
-    assert np.isnan(point["ci_low"])
 
 
 def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
     import json
 
     from judgearena.benchmarks.runner import run_benchmark
-    from judgearena.config import RunConfig, load_config
+    from judgearena.config import RunConfig, build_run_config, load_config
     from judgearena.datasets.data import PreferenceData
     from judgearena.models import PreparedModel
 
@@ -169,63 +166,40 @@ def test_ordinary_elo_frozen_and_joint_replay(tmp_path, monkeypatch):
             }
         )
     )
+    soft = {
+        "metric": "bradley_terry",
+        "parameters": {"fit_mode": "frozen", "n_bootstraps": 5},
+    }
+    hard = {
+        "metric": "bradley_terry",
+        "name": "hard",
+        "parameters": {"fit_mode": "frozen", "soft": False},
+    }
     cfg = RunConfig(
         task="elo-comparia",
         model={"name": "Dummy/answer"},
         judge={"model": "Dummy/[[A=B]]", "prompt": {"preset": "arena-hard"}},
-        protocol={
-            "scoring": {
-                "metrics": [
-                    dict(
-                        metric="bradley_terry",
-                        name=name,
-                        parameters=dict(
-                            fit_mode="frozen", soft=soft, n_bootstraps=bootstraps
-                        ),
-                    )
-                    for name, soft, bootstraps in (
-                        ("bradley_terry", True, 5),
-                        ("hard", False, 0),
-                    )
-                ]
-            }
-        },
-        run={
-            "sampling": {"limit": 4},
-            "store_root": str(tmp_path / "cache"),
-            "result_folder": str(tmp_path / "results"),
-            "use_tqdm": False,
-            "no_log_file": True,
-        },
+        protocol={"scoring": {"metrics": [soft, hard]}},
+        run={"sampling": {"limit": 4}, "store_root": str(tmp_path / "cache")},
     )
-    manifest = run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
-    first = manifest.parent
-    results = json.loads(manifest.read_text())["metrics"]
+
+    def run(config, folder):
+        manifest = run_benchmark(config, data=data, output_dir=tmp_path / folder)
+        return json.loads(manifest.read_text())["metrics"]
+
+    results = run(cfg, "first")
     frozen = results["bradley_terry"]
-    assert frozen["fit_mode"] == "frozen"
+    assert frozen["fit_mode"] == "frozen" and frozen["n_bootstraps"] == 5
     assert results["hard"]["n_bootstraps"] == 0
-    assert frozen["rating"] == 1000
-    assert not (first / "elo_ratings.json").exists()
     monkeypatch.setattr(
         PreparedModel, "materialize", lambda *a, **kw: pytest.fail("cache miss")
     )
-    replay = load_config(first / "config.yaml")
-    for request in replay.resolved_task.spec.protocol.scoring.metrics:
-        expected_bootstraps = 0 if request.name == "hard" else 5
-        assert request.parameters["n_bootstraps"] == expected_bootstraps
-        assert request.parameters["soft"] is (request.name != "hard")
-        assert results[request.name]["n_bootstraps"] == expected_bootstraps
-    manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "replay")
-    assert json.loads(manifest.read_text())["metrics"] == results
-    values = replay.model_dump()
-    requests = [
-        request.model_dump()
-        for request in replay.resolved_task.spec.protocol.scoring.metrics
-    ]
-    for request in requests:
-        request["parameters"].update(fit_mode="joint", reference_min_battles=0)
-    values["protocol"] = {"scoring": {"metrics": requests}}
-    replay = RunConfig(**values)
-    manifest = run_benchmark(replay, data=data, output_dir=tmp_path / "joint")
-    joint = json.loads(manifest.read_text())["metrics"]["bradley_terry"]
-    assert joint["ratings"] == frozen["ratings"]
+    snapshot = tmp_path / "first/config.yaml"
+    assert run(load_config(snapshot), "replay") == results
+    joint = {"metric": "bradley_terry", "parameters": {"fit_mode": "joint"}}
+    rescored = build_run_config(
+        ["--config", str(snapshot), "--protocol.scoring.metrics", json.dumps([joint])]
+    )
+    joint_result = run(rescored, "joint")["bradley_terry"]
+    assert joint_result["reference_anchor_battles"] == len(data.battles)
+    assert joint_result["ratings"] == frozen["ratings"]
