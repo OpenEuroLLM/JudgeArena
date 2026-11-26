@@ -62,16 +62,6 @@ def test_table_adapter_reuses_and_normalizes_alpaca_tables(monkeypatch, tmp_path
     ).to_csv(outputs_dir / "alpaca-eval.csv.zip", index=False)
     task = get_packaged_task("alpaca-eval")
 
-    from scripts.migrate_saved_run import migrate_snapshot
-
-    legacy = task.spec.model_dump(mode="json")
-    legacy["task"] = "custom-instructions"
-    legacy["dataset"]["adapter"] = "judgearena_tables"
-    migrated = migrate_snapshot(
-        {"resolved_task": {"spec": legacy, "provenance": {}}}, tmp_path
-    )
-    assert migrated["resolved_task"]["spec"]["dataset"]["adapter"] == "alpaca_eval"
-
     data = instruction_dataset.load_task_data(task, local_tables_path=tmp_path)
     instructions = data.instructions.reset_index()
     outputs = data.model_outputs

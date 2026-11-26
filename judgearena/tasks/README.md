@@ -271,7 +271,15 @@ support parsers requiring token logprobs.
 
 ## Multiple references
 
-A pairwise task can compare each candidate answer against every listed reference:
+In a run config, set `model.baseline` to one opponent or a list. Each opponent gets the same selected prompts:
+
+```yaml
+model:
+  name: Dummy/candidate
+  baseline: [reference-a, reference-b]
+```
+
+Omit `model.baseline` to use the task’s opponent selection. If a pairwise task omits its baseline, the run must supply an opponent. A task can declare default references under `protocol`:
 
 ```yaml
 baseline:
@@ -281,8 +289,7 @@ baseline:
 
 The runner prepares each candidate answer once, then loads or generates the
 references. Comparison rows keep `source_instruction_index` and have unique IDs.
-The candidate must differ from the reference models. Change the list in the task
-definition; `model.baseline` cannot override it.
+The candidate must differ from the reference models. A run can override the list with `model.baseline`.
 `wildbench-reward-mix` uses this policy and averages per-reference WB-Rewards equally.
 
 ## Independent evaluation

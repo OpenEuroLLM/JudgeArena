@@ -251,9 +251,8 @@ def calculate_metrics(
                     for key, group in battles.groupby(field, sort=False, dropna=False):
                         group_kwargs = kwargs
                         references = kwargs.get("reference_battles")
-                        if references is not None:
-                            # A breakdown fits its anchors from the same group.
-                            values_by_group = references.reindex(columns=[field])[field]
+                        if references is not None and field in references:
+                            values_by_group = references[field]
                             mask = (
                                 values_by_group.isna()
                                 if pd.isna(key)

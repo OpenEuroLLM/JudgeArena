@@ -12,7 +12,6 @@ from judgearena.tasks.schema.baselines import (
     NoBaseline,
     OfficialOutputsBaseline,
     RecordedOpponents,
-    RuntimeRequiredBaseline,
     TaskDefaultBaseline,
 )
 from judgearena.tasks.schema.dataset import DatasetFields, DatasetSpec
@@ -65,7 +64,6 @@ __all__ = [
     "ResolvedTaskSpec",
     "ResourceDigest",
     "RecordedOpponents",
-    "RuntimeRequiredBaseline",
     "ScoringSpec",
     "SingleAnswerProtocol",
     "SingleTurnGeneration",

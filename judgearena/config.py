@@ -9,16 +9,16 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
+    CliSettingsSource,
     CliSuppress,
     InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
 
-from judgearena.deprecations import parse_cli_overrides, translate_deprecations
 from judgearena.log import get_logger
 from judgearena.models import build_default_judge_model_kwargs
 from judgearena.prompts.registry import prompt_option_files
@@ -30,15 +30,12 @@ from judgearena.prompts.spec import (
 from judgearena.tasks.registry import _canonical_sha256, get_packaged_task
 from judgearena.tasks.schema import (
     AllReferencesBaseline,
-    CategoryDefaultsBaseline,
     DatasetSpec,
     MetaEvalProtocol,
-    NoBaseline,
+    OfficialOutputsBaseline,
     ProtocolSpec,
-    RecordedOpponents,
     ResolvedTaskSpec,
     SingleAnswerProtocol,
-    TaskDefaultBaseline,
     TaskProvenance,
     TaskSpec,
 )
@@ -117,10 +114,21 @@ class ModelArgs(BaseModel):
     ``VLLM/Qwen/Qwen2.5-0.5B-Instruct``). For elo tasks this is the single
     model rated against arena opponents."""
 
-    baseline: str | None = None
-    """Opponent model for pairwise tasks (the "Model B" reference). Omit for
-    elo tasks; for pairwise tasks it defaults to the dataset-native baseline
-    when left unset."""
+    baseline: str | list[str] | None = None
+    """Compare each selected prompt against these model IDs. Omit to use the task default."""
+
+    @field_validator("baseline")
+    @classmethod
+    def _validate_baseline(cls, value):
+        if value is not None:
+            opponents = [value] if isinstance(value, str) else value
+            if not opponents or any(not name.strip() for name in opponents):
+                raise ValueError("model.baseline requires non-empty model IDs.")
+            if len(opponents) == 1:
+                return opponents[0]
+            if len(set(opponents)) != len(opponents):
+                raise ValueError("model.baseline contains duplicate opponents.")
+        return value
 
     max_out_tokens: int = 32768
     """Generation token budget for each evaluated-model answer (for vLLM, keep
@@ -367,7 +375,7 @@ class JudgeArgs(BaseModel):
 class GenerationArgs(BaseModel):
     """Generation and judge input truncation."""
 
-    model_config = ConfigDict(use_attribute_docstrings=True)
+    model_config = ConfigDict(use_attribute_docstrings=True, extra="forbid")
 
     truncate_all_input_chars: int | None = 8192
     """Character cap before model generation. None preserves the full instruction."""
@@ -507,7 +515,6 @@ class RunConfig(BaseSettings):
         )
         if isinstance(definition, BaseModel):
             definition = definition.model_dump()
-        values = translate_deprecations(values, definition.get("protocol", {}))
         for section in ("protocol", "dataset"):
             overrides = values.get(section)
             if isinstance(overrides, dict) and isinstance(
@@ -675,25 +682,21 @@ class RunConfig(BaseSettings):
                     raise ValueError(
                         "Independent single-answer evaluation does not use a baseline or swapped judging."
                     )
-            elif isinstance(protocol.baseline, RecordedOpponents):
-                if self.model.baseline is not None:
-                    raise ValueError(
-                        "model.baseline cannot override recorded_opponents."
-                    )
+            elif self.model.baseline is not None:
+                opponents = self.model.baseline
+                if isinstance(opponents, list) and self.model.name in opponents:
+                    raise ValueError("model.baseline must differ from model.name.")
             elif isinstance(protocol.baseline, AllReferencesBaseline):
                 if self.model.name in protocol.baseline.references:
                     raise ValueError(
                         "model.name must differ from the all_references models."
                     )
-                if self.model.baseline is not None:
-                    raise ValueError(
-                        "model.baseline cannot override an all_references policy."
-                    )
-            elif self.model.baseline is None and not isinstance(
-                protocol.baseline,
-                (TaskDefaultBaseline, CategoryDefaultsBaseline, NoBaseline),
+            elif protocol.baseline is None or isinstance(
+                protocol.baseline, OfficialOutputsBaseline
             ):
-                raise ValueError(f"model.baseline is required for task {self.task!r}.")
+                raise ValueError(
+                    f"Set model.baseline to one model ID or a list of opponents for task {self.task!r}."
+                )
         return self
 
     def judge_engine_kwargs(self) -> dict[str, object]:
@@ -760,28 +763,15 @@ def resolve_cli_config(
     argv, *, config_path=None, settings_cls=RunConfig, allowed_sections=None
 ):
     """Resolve task/config/CLI values before command-specific model validation."""
-    overrides = parse_cli_overrides(settings_cls, argv)
+    overrides = CliSettingsSource(settings_cls, cli_parse_args=argv)()
     values = (
-        _read_config(
-            config_path,
-            task_override=overrides.get("task"),
-            cli_elo=overrides.get("elo"),
-        )
+        _read_config(config_path, task_override=overrides.get("task"))
         if config_path
         else {}
     )
     if "task" in overrides:
         values = {**values, "task": overrides["task"]}
     values = settings_cls._merge_task_overrides(values)
-    if "elo" in overrides or "graph" in overrides:
-        if "languages" in (overrides.get("elo") or {}) and values.get("run"):
-            overrides["run"] = _merge_overrides(values["run"], overrides.get("run", {}))
-        protocol = values.get("protocol")
-        if protocol is None:
-            protocol = settings_cls._merge_task_overrides({**values, "protocol": {}})[
-                "protocol"
-            ]
-        overrides = translate_deprecations(overrides, protocol, cli=True)
     if allowed_sections is not None and (set(values) | set(overrides)) - set(
         allowed_sections
     ):
@@ -815,28 +805,12 @@ def build_run_config(argv: list[str] | None = None) -> RunConfig:
     return cfg
 
 
-def _read_config(
-    path: str | Path, *, task_override: str | None = None, cli_elo: dict | None = None
-) -> dict:
+def _read_config(path: str | Path, *, task_override: str | None = None) -> dict:
     """Read YAML, resolving component and prompt paths beside the configuration file."""
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Config file {path} must contain a top-level mapping.")
-    # Apply hard mode after both sources have supplied their legacy judge settings.
-    file_elo = data.get("elo")
-    if isinstance(file_elo, dict) and cli_elo and "languages" in cli_elo:
-        file_elo.pop("languages", None)
-    if (
-        isinstance(file_elo, dict)
-        and "soft_elo" in file_elo
-        and cli_elo
-        and (
-            cli_elo.keys()
-            & {"soft_elo", "soft_elo_temperature", "calibrate_temperature"}
-        )
-    ):
-        cli_elo.setdefault("soft_elo", file_elo.pop("soft_elo"))
     if task_override is not None and task_override != data.get("task"):
         data["task"] = task_override
         data.pop("resolved_task", None)

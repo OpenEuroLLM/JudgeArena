@@ -8,7 +8,10 @@ from pydantic import Field, model_validator
 
 from judgearena.prompts.spec import JudgePromptSpec
 from judgearena.tasks.schema.base import StrictFrozenModel
-from judgearena.tasks.schema.baselines import BaselineSpec, NoBaseline
+from judgearena.tasks.schema.baselines import (
+    BaselineSpec,
+    NoBaseline,
+)
 from judgearena.tasks.schema.metrics import ScoringSpec
 
 
@@ -100,7 +103,7 @@ class PairwiseProtocol(StrictFrozenModel):
     limit_by: str | None = Field(default=None, min_length=1)
     """Count complete groups in this column when applying the run sampling limit."""
     generation: SingleTurnGeneration | MultiTurnGeneration
-    baseline: BaselineSpec
+    baseline: BaselineSpec | None = None
     judge: PairwiseJudgeSpec
     scoring: ScoringSpec
 

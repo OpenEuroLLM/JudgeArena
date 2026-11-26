@@ -122,22 +122,24 @@ def test_elo_requires_model_path(capture_mains):
         cli_module.cli(["--task", "elo-comparia", "--judge.model", "Dummy/J"])
 
 
-def test_elo_rejects_model_path_b(capture_mains):
-    with pytest.raises(
-        SystemExit, match="model.baseline cannot override recorded_opponents"
-    ):
-        cli_module.cli(
-            [
-                "--task",
-                "elo-comparia",
-                "--model.name",
-                "Dummy/X",
-                "--model.baseline",
-                "Dummy/B",
-                "--judge.model",
-                "Dummy/J",
-            ]
-        )
+@pytest.mark.parametrize(
+    "argument, expected",
+    [("Dummy/B", "Dummy/B"), ('["Dummy/B","Dummy/C"]', ["Dummy/B", "Dummy/C"])],
+)
+def test_elo_accepts_named_baselines(capture_mains, argument, expected):
+    cli_module.cli(
+        [
+            "--task",
+            "elo-comparia",
+            "--model.name",
+            "Dummy/X",
+            "--model.baseline",
+            argument,
+            "--judge.model",
+            "Dummy/J",
+        ]
+    )
+    assert capture_mains["cfg"].model.baseline == expected
 
 
 def test_unknown_elo_task_errors(capture_mains):
@@ -148,7 +150,7 @@ def test_unknown_elo_task_errors(capture_mains):
 
 
 def test_pairwise_without_native_baseline_requires_model_path_b(capture_mains):
-    with pytest.raises(SystemExit, match="model.baseline is required"):
+    with pytest.raises(SystemExit, match="Set model.baseline to one model ID or a list of opponents"):
         cli_module.cli(
             [
                 "--task",

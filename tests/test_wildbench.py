@@ -345,12 +345,12 @@ def test_all_references_rejects_empty_or_duplicate_models(references):
 @pytest.mark.parametrize(
     "model",
     [
-        {"name": "Dummy/a", "baseline": "Dummy/b"},
+        {"name": "Dummy/a", "baseline": ["Dummy/b", "Dummy/a"]},
         {"name": "gpt-4-turbo-2024-04-09"},
     ],
 )
-def test_all_references_rejects_reference_override_and_self_comparison(model):
-    with pytest.raises(ValueError, match="all_references"):
+def test_all_references_rejects_self_comparison(model):
+    with pytest.raises(ValueError, match="must differ"):
         RunConfig(task="wildbench-reward-mix", model=model, judge={"model": "Dummy/A"})
 
 

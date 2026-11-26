@@ -16,7 +16,6 @@ from judgearena.tasks.definitions.arena_hard.dataset import ArenaHardAdapter
 from judgearena.tasks.definitions.wildbench.dataset import WildBenchAdapter
 from judgearena.tasks.registry import get_packaged_task
 from judgearena.tasks.schema import TaskSpec
-from scripts.migrate_saved_run import migrate_snapshot
 
 
 def _independent_task():
@@ -193,22 +192,8 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
         )
         if run == "replay":
             snapshot = next((tmp_path / "live").rglob("config.yaml"))
-            legacy = yaml.safe_load(snapshot.read_text())
-            prompt = legacy["judge"]["prompt"]
-            archived = snapshot.parent / prompt["user_file"]
-            archived.write_text(
-                archived.read_text().replace("{instruction}", "{user_prompt}")
-            )
-            prompt["system"] = system.read_text().replace(
-                "{instruction_json}", "{user_prompt_json}"
-            )
-            legacy["run"]["result_folder"] = str(tmp_path / run)
-            snapshot.write_text(
-                yaml.safe_dump(migrate_snapshot(legacy, snapshot.parent))
-            )
             cfg = load_config(snapshot)
-            assert cfg.judge.prompt.system == system.read_text()
-            assert "{user_prompt}" in archived.read_text()
+            cfg.run.result_folder = str(tmp_path / run)
         annotations = run_benchmark(cfg)
         assert annotations.set_index("instruction_index").completion.to_dict() == {
             1: "generated",
@@ -270,7 +255,7 @@ def test_independent_evaluation_reuses_answers_and_preserves_results(
     spec = task.model_dump()
     spec["protocol"].update(
         runner="pairwise",
-        baseline={"strategy": "runtime_required"},
+        baseline=None,
         judge={"default_prompt_preset": "single-score"},
         scoring={"metrics": [{"metric": "pairwise_win_rate"}]},
     )
@@ -626,7 +611,6 @@ def test_saved_run_replays_prompt_snapshot_after_original_changes(
 def test_public_api_runs_file_components_and_replays(
     tmp_path, monkeypatch, source_kind, capsys, caplog, isolated_task_registries
 ):
-    import yaml
 
     import judgearena.prompts.parsing as parsing
     from judgearena import (

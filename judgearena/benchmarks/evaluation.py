@@ -28,12 +28,13 @@ from judgearena.benchmarks.pairwise.comparisons import (
 from judgearena.benchmarks.pairwise.graph import (
     prepare_candidate_comparisons,
     prepare_recorded_opponents,
+    recorded_references,
     validate_graph_task,
 )
 from judgearena.benchmarks.pairwise.judging import prepare_pairwise_judging
 from judgearena.benchmarks.scoring import build_metrics, calculate_metrics
 from judgearena.datasets import load_task_data, resolve_dataset_filters
-from judgearena.datasets.data import with_instruction_metadata
+from judgearena.datasets.data import PreferenceData, with_instruction_metadata
 from judgearena.evaluate import (
     prepare_single_answer_judging,
     resolve_run_judge_prompt,
@@ -42,7 +43,7 @@ from judgearena.judging import answer_samples
 from judgearena.log import get_logger
 from judgearena.prompts.registry import prompt_metadata
 from judgearena.reports import AnnotationReport, BattleReport, ComparisonReport
-from judgearena.tasks.schema import ResolvedTaskSpec
+from judgearena.tasks.schema import RecordedOpponents, ResolvedTaskSpec
 
 if TYPE_CHECKING:
     from judgearena.benchmarks.pairwise.baselines import BaselinePlan
@@ -51,6 +52,18 @@ if TYPE_CHECKING:
     from judgearena.datasets.data import CompletionData
 
 logger = get_logger(__name__)
+
+
+def _answer_columns(data, generation_mode):
+    columns = {"model", "completion"}
+    if data.model_outputs is not None:
+        columns.update(set(data.model_outputs) - {"instruction_index"})
+    if generation_mode in (
+        "multi_turn_chat",
+        "provided_messages",
+    ):
+        columns.add("messages")
+    return columns
 
 
 def prepare_independent_judge(cfg, data, instructions, prompt=None):
@@ -62,14 +75,9 @@ def prepare_independent_judge(cfg, data, instructions, prompt=None):
             multi_turn=cfg.resolved_task.spec.protocol.generation.mode
             == "multi_turn_chat",
         )
-    columns = set(instructions) | {"model", "completion"}
-    if data.model_outputs is not None:
-        columns.update(set(data.model_outputs) - {"instruction_index"})
-    if cfg.resolved_task.spec.protocol.generation.mode in (
-        "multi_turn_chat",
-        "provided_messages",
-    ):
-        columns.add("messages")
+    columns = set(instructions) | _answer_columns(
+        data, cfg.resolved_task.spec.protocol.generation.mode
+    )
     if "messages" in instructions:
         columns.add("input_messages")
     return prepare_single_answer_judging(
@@ -109,14 +117,24 @@ def run_evaluation(
         metrics = build_metrics(resolved_task.spec.protocol.scoring.metrics)
     task_data = data if data is not None else load_task_data(resolved_task)
     comparison_rng = np.random.default_rng(cfg.run.seed)
-    sampled_opponents = (
-        opponent_panel is None
-        and resolved_task.spec.protocol.baseline.strategy == "recorded_opponents"
+    if opponent_panel is not None and cfg.model.baseline is not None:
+        raise ValueError("Choose either model.baseline or a supplied opponent panel.")
+    recorded = isinstance(resolved_task.spec.protocol.baseline, RecordedOpponents)
+    should_sample_opponents = (
+        recorded
+        and opponent_panel is None
+        and baseline_plan is None
+        and cfg.model.baseline is None
     )
-    reference_battles = None
-    if sampled_opponents:
-        opponent_panel, reference_battles, sampling_metadata = (
-            prepare_recorded_opponents(cfg, task_data, rng=comparison_rng)
+    reference_battles = (
+        recorded_references(task_data)
+        if isinstance(task_data, PreferenceData)
+        and (recorded or opponent_panel is not None)
+        else None
+    )
+    if should_sample_opponents:
+        opponent_panel, sampling_metadata = prepare_recorded_opponents(
+            cfg, task_data, rng=comparison_rng
         )
     if opponent_panel is None:
         task_data = task_data.select(
@@ -142,7 +160,7 @@ def run_evaluation(
             )
         instruction_ids = pd.Index(opponent_panel["instruction_index"])
         instructions_df = task_data.instructions.loc[instruction_ids.unique()]
-        if not sampled_opponents:
+        if not should_sample_opponents:
             opponent_panel = with_instruction_metadata(opponent_panel, instructions_df)
     task_data = preload_model_outputs(
         task_data,
@@ -156,14 +174,9 @@ def run_evaluation(
         )
     else:
         context = opponent_panel if opponent_panel is not None else instructions_df
-        output_columns = {"model", "completion"}
-        if task_data.model_outputs is not None:
-            output_columns.update(set(task_data.model_outputs) - {"instruction_index"})
-        if resolved_task.spec.protocol.generation.mode in (
-            "multi_turn_chat",
-            "provided_messages",
-        ):
-            output_columns.add("messages")
+        output_columns = _answer_columns(
+            task_data, resolved_task.spec.protocol.generation.mode
+        )
         available_columns = set(context) | {
             f"{column}_{slot}" for column in output_columns for slot in ("a", "b")
         }
@@ -181,10 +194,10 @@ def run_evaluation(
             context,
             available_columns=available_columns,
             reference_battles=reference_battles,
-            calibration_rng=comparison_rng if sampled_opponents else None,
+            calibration_rng=comparison_rng if should_sample_opponents else None,
             # Sampled battles already randomize candidate orientation.
             swap_mode="fixed"
-            if sampled_opponents and cfg.judge.swap_mode != "both"
+            if should_sample_opponents and cfg.judge.swap_mode != "both"
             else None,
         )
         if baseline_plan is not None:
@@ -211,7 +224,7 @@ def run_evaluation(
         samples, source_ids = prepare_candidate_comparisons(
             opponent_panel,
             answers,
-            rng=comparison_rng if sampled_opponents else None,
+            rng=comparison_rng if should_sample_opponents else None,
             turns=resolved_task.spec.protocol.judge.turns,
         )
     else:
@@ -262,12 +275,14 @@ def run_evaluation(
             "seed": cfg.run.seed,
             "reference_battles": reference_scores,
             "references": (
-                sorted(set(reference_battles.model_a) | set(reference_battles.model_b))
+                baseline_plan.unique_models
+                if baseline_plan
+                else sorted(
+                    set(reference_battles.model_a) | set(reference_battles.model_b)
+                )
                 if reference_battles is not None
                 else sorted(metric_data.baseline.unique())
                 if opponent_panel is not None
-                else baseline_plan.unique_models
-                if baseline_plan
                 else []
             ),
         },

@@ -5,10 +5,9 @@ import pytest
 import yaml
 
 import judgearena.datasets._arena as arena_io
-from judgearena.config import RunConfig, load_config
+from judgearena.config import load_config
 from judgearena.datasets.registry import resolve_dataset_adapter
 from judgearena.tasks.registry import get_packaged_task
-from scripts.migrate_saved_run import migrate_snapshot
 
 
 def _elo_task(task_id: str = "elo-comparia"):
@@ -64,9 +63,7 @@ def test_elo_dataset_download_uses_pinned_task_source(monkeypatch, tmp_path):
     assert captured["allow_patterns"] == ("data/*.parquet",)
 
 
-def test_combined_lmarena_reads_all_releases_in_replay_order(
-    monkeypatch, tmp_path, caplog
-):
+def test_combined_lmarena_reads_all_releases_in_replay_order(monkeypatch, tmp_path):
     turns = [{"role": "user", "content": "Q"}, {"role": "assistant", "content": "A"}]
     common = {"id": 1, "model_a": "a", "model_b": "b"}
     for release in ("55k", "100k", "140k"):
@@ -109,28 +106,12 @@ def test_combined_lmarena_reads_all_releases_in_replay_order(
         f"LMArena:1:row-{i}" for i in range(3)
     ]
 
-    cfg = RunConfig(
-        task="elo-lmarena",
-        model={"name": "Dummy/candidate"},
-        judge={"model": "Dummy/judge"},
-    )
-    saved = cfg.model_dump(mode="json")
-    saved["resolved_task"]["spec"].pop("metadata")
-    dataset = saved["resolved_task"]["spec"]["dataset"]
-    dataset.update(adapter="arena_battles", format="LMArena-140k")
-    saved["dataset"] = dataset
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(migrate_snapshot(saved, path.parent)))
-    replay = resolve_dataset_adapter(
-        load_config(path).resolved_task, tmp_path
-    ).load_data()
-    assert "stale definition hash" not in caplog.text
     current = resolve_dataset_adapter(
         _elo_task("elo-lmarena-140k"), tmp_path
     ).load_data()
-    pd.testing.assert_frame_equal(replay.battles, current.battles)
     assert current.battles["battle_id"].tolist() == ["LMArena-140k:1"]
 
+    path = tmp_path / "config.yaml"
     path.write_text(
         yaml.safe_dump(
             {

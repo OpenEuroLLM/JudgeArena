@@ -12,6 +12,7 @@ from judgearena.benchmarks.pairwise.comparisons import (
     conversation_comparisons,
     select_rows,
 )
+from judgearena.tasks.schema import NoBaseline, RecordedOpponents
 
 
 def validate_graph_task(protocol):
@@ -20,7 +21,9 @@ def validate_graph_task(protocol):
         raise ValueError(
             "Graph releases require a task that can generate and compare answers"
         )
-    if protocol.baseline.strategy not in {"recorded_opponents", "none"}:
+    if protocol.baseline is not None and not isinstance(
+        protocol.baseline, (RecordedOpponents, NoBaseline)
+    ):
         raise ValueError(
             "A supplied opponent panel requires baseline.strategy recorded_opponents or none"
         )
@@ -86,16 +89,29 @@ def _sampling_metadata(sampled, sampling, seed):
 
 
 def prepare_recorded_opponents(cfg, data, *, rng):
-    """Select candidate comparisons and retain available reference labels."""
+    """Select one recorded opponent for each sampled battle."""
     from judgearena.datasets import resolve_dataset_filters
     from judgearena.datasets.data import PreferenceData
 
     if not isinstance(data, PreferenceData):
         raise ValueError("Recorded opponents require PreferenceData")
     filtered = data.select(resolve_dataset_filters(cfg.resolved_task, cfg.run.filters))
-    battles = select_rows(filtered.battles, cfg.run.sampling, seed=cfg.run.seed)
+    battles = select_rows(
+        filtered.battles,
+        cfg.run.sampling,
+        seed=cfg.run.seed,
+        limit_by=cfg.resolved_task.spec.protocol.limit_by,
+    )
     metadata = _sampling_metadata(battles, cfg.run.sampling, cfg.run.seed)
     battles = battles.reset_index(drop=True)
+    # Keep the selected opponent in slot B until the candidate answer is available.
+    panel = swap_comparison_slots(battles, rng.choice([True, False], size=len(battles)))
+    panel = panel.drop(columns=panel.filter(regex="_a$").columns)
+    return panel, metadata
+
+
+def recorded_references(data):
+    """Keep labels on the original pairs, independently of the candidate panel."""
     references = data.battles.drop(
         columns=["pref", "pref_hard"], errors="ignore"
     ).copy()
@@ -103,7 +119,4 @@ def prepare_recorded_opponents(cfg, data, *, rng):
         references["reference_pref"] = float("nan")
     references = references.loc[references.reference_pref.notna()].copy()
     references["evaluation_model"] = None
-    # Keep the selected opponent in slot B until the candidate answer is available.
-    panel = swap_comparison_slots(battles, rng.choice([True, False], size=len(battles)))
-    panel = panel.drop(columns=panel.filter(regex="_a$").columns)
-    return panel, references, metadata
+    return references

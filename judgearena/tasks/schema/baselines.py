@@ -17,10 +17,6 @@ class RecordedOpponents(StrictFrozenModel):
     strategy: Literal["recorded_opponents"]
 
 
-class RuntimeRequiredBaseline(StrictFrozenModel):
-    strategy: Literal["runtime_required"]
-
-
 class TaskDefaultBaseline(StrictFrozenModel):
     strategy: Literal["task_default"]
     reference_id: str = Field(min_length=1)
@@ -54,7 +50,6 @@ class OfficialOutputsBaseline(StrictFrozenModel):
 BaselineSpec = Annotated[
     NoBaseline
     | RecordedOpponents
-    | RuntimeRequiredBaseline
     | TaskDefaultBaseline
     | AllReferencesBaseline
     | CategoryDefaultsBaseline

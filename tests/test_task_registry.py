@@ -111,7 +111,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     fluency = resolve_task(tasks, "fluency-french")
     assert fluency is not None
     assert fluency.spec.protocol.generation.mode == "base_completion"
-    assert fluency.spec.protocol.baseline.strategy == "runtime_required"
+    assert fluency.spec.protocol.baseline is None
     assert fluency.spec.protocol.judge.default_prompt_preset == "fluency"
     assert fluency.selection is not None
     assert fluency.selection.values == ("french",)
@@ -167,7 +167,7 @@ def test_packaged_registry_discovers_versioned_tasks():
     assert mt_bench_101.spec.protocol.generation.mode == "provided_messages"
     assert mt_bench_101.spec.protocol.generation.default_temperature == 0.0
     assert mt_bench_101.spec.protocol.generation.default_max_out_tokens == 4096
-    assert mt_bench_101.spec.protocol.baseline.strategy == "runtime_required"
+    assert mt_bench_101.spec.protocol.baseline is None
     assert mt_bench_101.spec.protocol.judge.default_prompt_preset == "mt-bench-101"
     assert mt_bench_101.spec.protocol.judge.default_temperature == 0.6
     assert mt_bench_101.spec.protocol.judge.default_max_out_tokens == 4096

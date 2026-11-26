@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Elo CLI flags and YAML keys are deprecated. Use `run.filters`, `run.sampling`, judge settings and scoring metrics instead. Existing saved runs still replay.
+- Configure opponent selection with `protocol.baseline`, filtering and sampling with `run.filters` and `run.sampling`, and Elo with `protocol.scoring.metrics`. These replace the old `elo` and `graph` settings. Use `run.sampling.limit` for the former `generation.n_instructions`.
 
 ## 0.2.0
 

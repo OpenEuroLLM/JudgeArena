@@ -64,7 +64,7 @@ def test_meta_eval_protocol_accepts_metrics_and_requires_no_baseline():
     TaskSpec.model_validate(definition)
 
     metric["metric"] = "meta_eval_agreement"
-    protocol["baseline"] = {"strategy": "runtime_required"}
+    protocol["baseline"] = {"strategy": "recorded_opponents"}
     with pytest.raises(ValidationError):
         TaskSpec.model_validate(definition)
 
