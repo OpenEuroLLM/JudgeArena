@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
@@ -294,13 +293,7 @@ def prepare_comparisons(
         source_ids = pd.Series(frame.index, index=frame.index)
     else:
         frame["source_instruction_index"] = frame.index
-        frame.index = pd.Index(
-            [
-                json.dumps([str(identity), model])
-                for identity, model in zip(frame.index, frame["model_b"], strict=True)
-            ],
-            name="comparison_id",
-        )
+        frame.index = pd.RangeIndex(len(frame), name="comparison_id")
         source_ids = frame["source_instruction_index"].copy()
     # Supplied histories may carry stable turn IDs for generation and judging.
     internal = (

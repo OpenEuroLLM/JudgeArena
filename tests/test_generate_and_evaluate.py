@@ -1079,3 +1079,45 @@ def test_missing_answer_generation_reports_model_count_and_cause(mode, tmp_path)
     assert isinstance(error.value.__cause__, ValueError)
     assert "provider" in str(error.value)
     assert "Unavailable" in str(error.value.__cause__)
+
+
+def test_multiple_baselines_preserve_mixed_instruction_ids(tmp_path, monkeypatch):
+    from judgearena.artifacts.run import read_metric_data
+    from judgearena.benchmarks.runner import run_benchmark
+    from judgearena.models import PreparedModel
+
+    ids = [1, "1"]
+    data = CompletionData.from_frames(
+        pd.DataFrame({"instruction_index": ids, "instruction": ["First", "Second"]}),
+        pd.DataFrame(
+            [(i, model, model) for i in ids for model in ("a", "b", "c")],
+            columns=["instruction_index", "model", "completion"],
+        ),
+    )
+    cfg = RunConfig(
+        task="alpaca-eval-ja",
+        model={"name": "a", "baseline": ["b", "c"]},
+        judge={"model": "Dummy/score A: 7 score B: 5"},
+        protocol={"scoring": {"metrics": [{"metric": "pairwise_win_rate"}]}},
+        run={"store_root": str(tmp_path / "cache"), "use_tqdm": False},
+    )
+    run_benchmark(cfg, data=data, output_dir=tmp_path / "first")
+    rows = read_metric_data(tmp_path / "first/outcomes.parquet")
+    assert rows.instruction_index.is_unique
+    assert list(zip(rows.source_instruction_index, rows.model_b, strict=True)) == [
+        (1, "b"),
+        ("1", "b"),
+        (1, "c"),
+        ("1", "c"),
+    ]
+    monkeypatch.setattr(
+        PreparedModel, "materialize", lambda *_: pytest.fail("cache miss")
+    )
+    run_benchmark(
+        load_config(tmp_path / "first/config.yaml"),
+        data=data,
+        output_dir=tmp_path / "replay",
+    )
+    pd.testing.assert_frame_equal(
+        rows, read_metric_data(tmp_path / "replay/outcomes.parquet")
+    )

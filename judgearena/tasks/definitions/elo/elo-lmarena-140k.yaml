@@ -5,6 +5,9 @@ description: Arena-anchored ELO evaluation using LMSYS Chatbot Arena 140k battle
 variants:
   selector: lang
   values: [en, pl, ru, zh, de, ja, es, fr, ko, pt, fa, it, tr, vi, cs, ar, uk]
+  groups:
+    # Languages in the five-language European evaluation panel.
+    eu: [en, de, fr, es, pl]
 
 dataset:
   adapter: lmarena
