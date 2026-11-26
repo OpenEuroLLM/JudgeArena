@@ -1,8 +1,14 @@
+from functools import partial
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from judgearena.benchmarks.elo.rating import fit_frozen_rating
+
+fit_fixture_battles = partial(
+    fit_frozen_rating, pref_col="pref", group_col="split_group"
+)
 
 
 def test_frozen_fit_orientation_soft_targets_and_group_bootstrap():
@@ -16,29 +22,30 @@ def test_frozen_fit_orientation_soft_targets_and_group_bootstrap():
         }
     )
     references = {"anchor": 1000.0}
-    result = fit_frozen_rating(battles, "new", references, n_bootstraps=100)
+    result = fit_fixture_battles(battles, "new", references, n_bootstraps=100)
     assert result["rating"] == pytest.approx(1000 + 400 * np.log10(0.7 / 0.3))
     assert result["ci_low"] == pytest.approx(1000 + 400 * np.log10(0.6 / 0.4))
     assert result["ci_high"] == pytest.approx(1000 + 400 * np.log10(0.8 / 0.2))
-    assert result == fit_frozen_rating(battles, "new", references, n_bootstraps=100)
-    point = fit_frozen_rating(
+    assert result == fit_fixture_battles(battles, "new", references, n_bootstraps=100)
+    point = fit_fixture_battles(
         battles.drop(columns="split_group"), "new", references, n_bootstraps=0
     )
     assert point["rating"] == result["rating"]
     assert np.isnan(point["ci_low"]) and np.isnan(point["ci_high"])
     assert references == {"anchor": 1000.0}
-    hard = fit_frozen_rating(battles, "new", references, hard=True)
+    battles["pref_hard"] = [0, 1, 0, 1]
+    hard = fit_fixture_battles(battles, "new", references, pref_col="pref_hard")
     assert hard["rating"] == hard["ci_low"] == hard["ci_high"] == float("inf")
-    battles["pref"] = 1 - battles.pref
-    assert fit_frozen_rating(battles, "new", references, hard=True)["rating"] == -float(
-        "inf"
-    )
+    battles["pref_hard"] = 1 - battles.pref_hard
+    assert fit_fixture_battles(battles, "new", references, pref_col="pref_hard")[
+        "rating"
+    ] == -float("inf")
 
     varied = battles.iloc[:2].copy()
     varied["model_a"] = "new"
     varied["model_b"] = ["weak", "strong"]
     varied["pref"] = [1 / (1 + 10 ** ((1100 - r) / 400)) for r in [800, 1200]]
-    fitted = fit_frozen_rating(varied, "new", {"weak": 800, "strong": 1200})
+    fitted = fit_fixture_battles(varied, "new", {"weak": 800, "strong": 1200})
     assert fitted["rating"] == pytest.approx(1100)
 
 
@@ -51,20 +58,20 @@ def test_frozen_fit_rejects_invalid_inputs_and_counts_missing():
             "split_group": [1, 2, 3],
         }
     )
-    result = fit_frozen_rating(battles, "new", {"anchor": 1000}, n_bootstraps=5)
+    result = fit_fixture_battles(battles, "new", {"anchor": 1000}, n_bootstraps=5)
     assert result["rating"] == result["ci_low"] == result["ci_high"] == 1000
     assert result["num_comparisons"] == 2
     assert result["num_missing"] == 1
     for refs in ({}, {"anchor": float("nan")}):
         with pytest.raises(ValueError):
-            fit_frozen_rating(battles, "new", refs)
+            fit_fixture_battles(battles, "new", refs)
     for column, value in (("pref", 2), ("split_group", None), ("model_a", "other")):
         invalid = battles.copy()
         invalid.loc[0, column] = value
         with pytest.raises(ValueError):
-            fit_frozen_rating(invalid, "new", {"anchor": 1000})
+            fit_fixture_battles(invalid, "new", {"anchor": 1000})
     with pytest.raises(ValueError):
-        fit_frozen_rating(battles.assign(pref=np.nan), "new", {"anchor": 1000})
+        fit_fixture_battles(battles.assign(pref=np.nan), "new", {"anchor": 1000})
 
 
 def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed():
@@ -97,6 +104,7 @@ def test_ordinary_frozen_scoring_reuses_candidate_fit_and_keeps_references_fixed
         candidate,
         "new",
         result["reference_ratings"],
+        pref_col="pref",
         group_col="question_id",
         n_bootstraps=20,
         seed=42,

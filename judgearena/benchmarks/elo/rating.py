@@ -71,9 +71,8 @@ def fit_frozen_rating(
     candidate: str,
     references: dict[str, float],
     *,
-    pref_col: str = "pref",
-    hard: bool = False,
-    group_col: str = "split_group",
+    pref_col: str,
+    group_col: str,
     n_bootstraps: int = 200,
     seed: int = 42,
 ) -> dict[str, float | int]:
@@ -100,8 +99,6 @@ def fit_frozen_rating(
         raise ValueError("Preferences must be between zero and one.")
     if not valid.any():
         raise ValueError("No valid candidate judgments remain.")
-    if hard:
-        preferences = hard_preferences(preferences)
     targets = preferences.where(is_b, 1 - preferences)[valid].to_numpy(dtype=float)
     opponents = opponent_ratings[valid.to_numpy()]
 
