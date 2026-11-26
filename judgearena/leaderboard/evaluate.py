@@ -8,7 +8,12 @@ import pandas as pd
 from judgearena.artifacts.evaluation import load_evaluation
 from judgearena.benchmarks.runner import run_benchmark
 from judgearena.config import RunConfig, load_config
-from judgearena.leaderboard.release import checksum, load_release, release_inputs
+from judgearena.leaderboard.release import (
+    bootstrap_settings,
+    checksum,
+    load_release,
+    release_inputs,
+)
 from judgearena.leaderboard.submissions import result_rows
 
 
@@ -20,8 +25,6 @@ def evaluate_release(
     model_outputs=None,
     stage="evaluate",
     answers=None,
-    n_bootstraps=200,
-    seed=42,
     store_root=None,
 ):
     """Vary candidate settings; delegate generation, judging and metrics to the runner."""
@@ -65,7 +68,7 @@ def evaluate_release(
         generated_path.write_text(json.dumps(generated, indent=2) + "\n")
         return generated_path
 
-    interval_settings = {}
+    interval_settings = bootstrap_settings(manifest)
     required_ratings = []
     if "frozen" in options:
         from judgearena.benchmarks.elo.scoring import frozen_metric_inputs
@@ -76,8 +79,6 @@ def evaluate_release(
             cfg.resolved_task.spec.protocol.scoring.metrics,
             ratings=frozen["ratings"],
             methods=frozen["methods"],
-            n_bootstraps=n_bootstraps,
-            seed=seed,
         )
         options.update(
             opponent_panel=frozen["panel"],
@@ -86,12 +87,9 @@ def evaluate_release(
             sampling_metadata={
                 "sampling_mode": "fixed",
                 "intervals": "conditional on frozen references",
-                "bootstrap_seed": seed,
-                "n_bootstraps": n_bootstraps,
+                **interval_settings,
             },
         )
-        if frozen["methods"]:
-            interval_settings = {"bootstrap_seed": seed, "n_bootstraps": n_bootstraps}
     evaluation_path = run_benchmark(cfg, data=data, output_dir=output, **options)
     evaluation = load_evaluation(evaluation_path)
     for name in required_ratings:

@@ -13,7 +13,21 @@ from judgearena.artifacts.evaluation import (
     metric_data_checksum,
     verify_files,
 )
-from judgearena.leaderboard.release import load_release
+from judgearena.leaderboard.release import bootstrap_settings, load_release
+
+
+def _check_bootstrap(record, expected):
+    if expected:
+        counts = record.get("n_bootstraps")
+        if isinstance(counts, int):
+            counts = dict.fromkeys(expected["n_bootstraps"], counts)
+        if (
+            record.get("bootstrap_seed") != expected["bootstrap_seed"]
+            or counts != expected["n_bootstraps"]
+        ):
+            raise ValueError(
+                "Bootstrap settings differ from the release; replay the submission"
+            )
 
 
 def _entries(collection, manifest):
@@ -22,6 +36,7 @@ def _entries(collection, manifest):
         entry = json.loads(path.read_text())
         if any(entry.get(key) != manifest[key] for key in ("version", "files")):
             raise ValueError("Collection contains a different release")
+        _check_bootstrap(entry["bootstrap"], bootstrap_settings(manifest))
         entries.append(entry)
     return entries
 
@@ -40,6 +55,8 @@ def add_submission(release, submission, collection):
     receipt = json.loads((submission / "release.json").read_text())
     if any(receipt.get(key) != manifest[key] for key in ("version", "files")):
         raise ValueError("Submission belongs to a different release")
+    intervals = bootstrap_settings(manifest)
+    _check_bootstrap(receipt, intervals)
     files = receipt.get("submission_files", {})
     if not files:
         raise ValueError("Submission has no artifact checksums; replay it first")
@@ -59,13 +76,7 @@ def add_submission(release, submission, collection):
             "Submission model does not match its config or is a reference model"
         )
     entry = {
-        "bootstrap": {
-            key: receipt[key]
-            for key in ("bootstrap_seed", "n_bootstraps")
-            if key in receipt
-        }
-        if manifest["rating_metrics"]
-        else {},
+        "bootstrap": intervals,
         "version": manifest["version"],
         "files": manifest["files"],
         "result": result,
@@ -82,9 +93,7 @@ def add_submission(release, submission, collection):
         previous = json.loads(target.read_text())
         # Replays can have different config paths while retaining identical outcomes.
         if (
-            all(
-                previous[key] == entry[key] for key in ("version", "files", "bootstrap")
-            )
+            all(previous[key] == entry[key] for key in ("version", "files"))
             and previous["result"]["model"] == result["model"]
             and _result_metrics(previous["result"]) == _result_metrics(result)
         ):
@@ -107,26 +116,30 @@ def _metric_columns(values):
     return {k: v for k, v in flat.items() if not isinstance(v, (dict, list))}
 
 
-def result_rows(result, *, overall=False, breakdown=None):
-    """Display scalar metric values, including nested values and breakdowns."""
-    rows = []
+def _grouped_rows(result):
     for name, metric in result["metrics"].items():
+        identity = {"model": result["model"], "method": name}
         values = _metric_columns(metric)
-        if values and breakdown is None:
-            rows.append({**values, "model": result["model"], "method": name})
+        if values:
+            yield None, {**values, **identity}
         for field, groups in metric.get("groups", {}).items():
-            if overall or (breakdown is not None and field != breakdown):
-                continue
             for group in groups:
-                rows.append(
+                yield (
+                    field,
                     {
                         **_metric_columns(group["values"]),
-                        "model": result["model"],
-                        "method": name,
+                        **identity,
                         field: group["group"],
-                    }
+                    },
                 )
-    return rows
+
+
+def result_rows(result, *, overall=False, breakdown=None):
+    return [
+        row
+        for field, row in _grouped_rows(result)
+        if (not overall or field is None) and (breakdown is None or field == breakdown)
+    ]
 
 
 def submission_table(
@@ -143,15 +156,7 @@ def submission_table(
     if overall and breakdown is not None:
         raise ValueError("Select overall or a breakdown, not both")
     entries = _entries(collection, manifest)
-    rows = []
-    for entry in entries:
-        rows.extend(result_rows(entry["result"]))
-    table = pd.DataFrame(rows).assign(entry_type="submission")
-    if not references.empty:
-        table = pd.concat(
-            [references.assign(entry_type="reference"), table], ignore_index=True
-        )
-    if overall or breakdown is not None:
+    if breakdown is not None:
         available = {
             field
             for entry in entries
@@ -160,27 +165,28 @@ def submission_table(
         }
         if not references.empty:
             available.add("lang")
-        if breakdown is not None and breakdown not in available:
+        if breakdown not in available:
             raise ValueError(
                 f"Unknown breakdown: {breakdown}; available: {sorted(available)}"
             )
-        selected = pd.DataFrame(
-            [
-                row
-                for entry in entries
-                for row in result_rows(
-                    entry["result"], overall=overall, breakdown=breakdown
-                )
-            ]
-        ).assign(entry_type="submission")
-        if breakdown == "lang" and not references.empty:
-            selected = pd.concat(
-                [references.assign(entry_type="reference"), selected], ignore_index=True
-            )
-        fields = list(table.columns)
-        if breakdown is not None and breakdown not in fields:
-            fields.append(breakdown)
-        table = selected.reindex(columns=fields)
+    rows = []
+    fields = {}
+    for entry in entries:
+        for field, row in _grouped_rows(entry["result"]):
+            fields.update(dict.fromkeys(row))
+            if (overall and field is not None) or (
+                breakdown is not None and field != breakdown
+            ):
+                continue
+            rows.append(row)
+    table = pd.DataFrame(rows, columns=list(fields)).assign(entry_type="submission")
+    if not references.empty:
+        reference_rows = references.assign(entry_type="reference")
+        if overall or breakdown not in (None, "lang"):
+            reference_rows = reference_rows.iloc[:0]
+        table = pd.concat([reference_rows, table], ignore_index=True)
+    if breakdown is not None and breakdown not in table:
+        table[breakdown] = pd.Series(dtype=object)
     order = [column for column in ("lang", "method", "model") if column in table]
     if sort_by is not None:
         if sort_by not in table:

@@ -1,17 +1,10 @@
 """Score fixed comparisons with the run's ordinary metric requests."""
 
 from judgearena.battles import hard_preferences, judged_battles, pairwise_aliases
-from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
 from judgearena.benchmarks.scoring import calculate_metrics
-from judgearena.leaderboard.settings import configured_metrics
 
 
-def score_metrics(cfg, outcomes, model, *, human=False):
-    metrics = tuple(
-        (request, metric)
-        for request, metric in configured_metrics(cfg)
-        if not isinstance(metric, BradleyTerryMetric)
-    )
+def score_metrics(cfg, metrics, outcomes, model, *, human=False):
     if not metrics:
         return {}
     frame = outcomes.loc[

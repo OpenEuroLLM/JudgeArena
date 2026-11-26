@@ -12,7 +12,7 @@ from judgearena.datasets.data import PreferenceData
 from judgearena.leaderboard.evaluate import evaluate_release
 from judgearena.leaderboard.prepare import sample_battles
 from judgearena.leaderboard.release import create_completion_release, create_release
-from judgearena.leaderboard.settings import LeaderboardSettings, rating_metrics
+from judgearena.leaderboard.settings import LeaderboardSettings, configured_metrics
 from judgearena.leaderboard.submissions import add_submission, submission_table
 from judgearena.tasks.schema import RecordedOpponents
 
@@ -40,10 +40,6 @@ def run_leaderboard_command(argv):
     evaluate.add_argument("--output", type=Path, required=True)
     evaluate.add_argument("--answers", type=Path)
     evaluate.add_argument("--store-root", type=Path)
-    evaluate.add_argument(
-        "--n-bootstraps", "--bootstraps", dest="n_bootstraps", type=int, default=200
-    )
-    evaluate.add_argument("--seed", type=int, default=42)
     add = commands.add_parser("add", allow_abbrev=False)
     add.add_argument("--leaderboard", type=Path, required=True)
     add.add_argument("--submission", type=Path, required=True)
@@ -116,8 +112,9 @@ def run_leaderboard_command(argv):
             validate_graph_task(cfg.resolved_task.spec.protocol)
         if args.output.exists():
             raise FileExistsError(args.output)
-        configured = rating_metrics(cfg)
         filters = resolve_dataset_filters(cfg.resolved_task, cfg.run.filters)
+        metrics = configured_metrics(cfg)
+        ratings, _ = metrics
         heldout = None
         if args.candidate:
             battles = pd.read_parquet(args.candidate / "reference_battles.parquet")
@@ -137,7 +134,7 @@ def run_leaderboard_command(argv):
                         "Completion releases use judge labels for submissions"
                     )
                 create_completion_release(
-                    cfg, data, args.output, version=settings.version
+                    cfg, data, args.output, version=settings.version, metrics=metrics
                 )
                 print(f"Release written to {args.output.resolve()}")
                 return
@@ -149,9 +146,9 @@ def run_leaderboard_command(argv):
                 data.battles,
                 settings,
                 seed=cfg.run.seed,
-                baseline_models=[m.baseline_model for _, m in configured],
+                baseline_models=[m.baseline_model for _, m in ratings],
                 languages=filters.get("lang"),
-                require_connected=bool(configured),
+                require_connected=bool(ratings),
             )
         print(
             f"Preparing {len(battles)} reference comparisons and {len(panel)} panel comparisons; labels={settings.labels}, swap_mode={cfg.judge.swap_mode}",
@@ -165,6 +162,7 @@ def run_leaderboard_command(argv):
             version=settings.version,
             labels=settings.labels,
             heldout=heldout,
+            metrics=metrics,
             preparation={
                 **settings.model_dump(),
                 "input": "candidate" if args.candidate else "task",
@@ -191,8 +189,6 @@ def run_leaderboard_command(argv):
             args.output,
             answers=args.answers,
             stage=declaration.get("stage", "evaluate"),
-            n_bootstraps=args.n_bootstraps,
-            seed=args.seed,
             store_root=args.store_root,
         )
         print(

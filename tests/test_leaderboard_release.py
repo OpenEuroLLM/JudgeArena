@@ -19,7 +19,7 @@ from judgearena.leaderboard.release import (
     fit_reference_ratings,
     load_release,
 )
-from judgearena.leaderboard.settings import rating_metrics
+from judgearena.leaderboard.settings import configured_metrics
 from judgearena.leaderboard.submissions import add_submission, submission_table
 from judgearena.models import PreparedModel
 from judgearena.prompts.parsing import score_preference
@@ -48,8 +48,8 @@ from judgearena.leaderboard.evaluate import evaluate_release
 def no_inference(*args, **kwargs):
     raise AssertionError('fresh-process cache miss')
 PreparedModel.materialize = no_inference
-evaluate_release(sys.argv[1], ModelArgs(name='Dummy/candidate'), sys.argv[2],
-                 store_root=sys.argv[3], n_bootstraps=10)
+evaluate_release(sys.argv[1], ModelArgs(name='Dummy/candidate', temperature=0.7), sys.argv[2],
+                 store_root=sys.argv[3])
 """,
             str(release),
             str(output),
@@ -120,7 +120,7 @@ def test_reference_rating_validation(arena, tmp_path):
             release, ModelArgs(name="Dummy/candidate"), tmp_path / "invalid"
         )
     assert not (tmp_path / "invalid/release.json").exists()
-    configured = rating_metrics(cfg)
+    configured, _ = configured_metrics(cfg)
     outcomes = battles.assign(pref=battles.reference_pref)
     outcomes.loc[0, "pref"] = float("nan")
     assert len(fit_reference_ratings(outcomes, configured, seed=42)) == 8
@@ -139,18 +139,29 @@ def test_frozen_graph_replay_and_collection(tmp_path, arena):
     release, output, collection = [
         tmp_path / p for p in ("release", "first", "entries")
     ]
+    cfg.run.seed = 73
+    for request in cfg.resolved_task.spec.protocol.scoring.metrics:
+        if request.name in ("elo", "soft_elo"):
+            request.parameters["n_bootstraps"] = 1 if request.name == "elo" else 2
     create_release(cfg, battles, panel, release, version="v1", labels="judge")
 
     assert pd.read_parquet(release / "outcomes.parquet").pref.iloc[0] == pytest.approx(
         score_preference(6, 8, temperature=2)
     )
     frozen = (release / "ratings.csv").read_bytes()
-    candidate = ModelArgs(name="Dummy/candidate")
-    evaluate = partial(evaluate_release, release, candidate, n_bootstraps=10)
+    candidate = ModelArgs(name="Dummy/candidate", temperature=0.7)
+    evaluate = partial(evaluate_release, release, candidate)
     generated = evaluate(tmp_path / "generated", stage="generate")
     with pytest.raises(FileNotFoundError):
         add_submission(release, generated.parent, collection)
     first = evaluate(output, answers=generated.parent / "answers.parquet")
+    receipt = json.loads((output / "release.json").read_text())
+    assert receipt["bootstrap_seed"] == 73
+    assert receipt["n_bootstraps"] == {"elo": 1, "soft_elo": 2}
+    saved = yaml.safe_load((output / "config.yaml").read_text())
+    assert saved["model"]["temperature"] == 0.7 and saved["run"]["seed"] == 73
+    for name, count in receipt["n_bootstraps"].items():
+        assert first.loc[first.method == name, "n_bootstraps"].eq(count).all()
     outcomes = pd.read_parquet(output / "outcomes.parquet")
     assert outcomes.groupby("model_b").completion_b.first().to_dict() == {
         "a": "First",
@@ -170,13 +181,13 @@ def test_frozen_graph_replay_and_collection(tmp_path, arena):
     assert add_submission(release, replay, collection) == entry
     assert (release / "ratings.csv").read_bytes() == frozen
 
-    # A replay with different interval settings cannot replace this entry.
+    # Even an empty collection must reject a receipt with different interval settings.
     receipt = replay / "release.json"
     receipt.write_text(
         json.dumps({**json.loads(receipt.read_text()), "n_bootstraps": 11})
     )
-    with pytest.raises(ValueError, match="Conflicting"):
-        add_submission(release, replay, collection)
+    with pytest.raises(ValueError, match="Bootstrap settings differ"):
+        add_submission(release, replay, tmp_path / "empty-collection")
     receipt.write_text(json.dumps({"version": "other", "files": {}}))
     with pytest.raises(ValueError, match="different release"):
         add_submission(release, replay, collection)
@@ -321,6 +332,9 @@ def test_baseline_cli_replay(tmp_path, monkeypatch):
     ):
         with pytest.raises(ValueError, match=error):
             cli(command + [flag, "changed"])
+    for flag in ("--seed", "--n-bootstraps"):
+        with pytest.raises(SystemExit):
+            cli(command + [flag, "7"])
 
 
 def test_custom_criteria_task_and_portable_replay(tmp_path, capsys):
@@ -395,7 +409,9 @@ class Metric:
     shutil.rmtree(components.parent)
     for name in ("candidate", "second"):
         output = tmp_path / name
-        evaluate_release(release, ModelArgs(name=f"Dummy/{name}"), output)
+        evaluate_release(
+            release, ModelArgs(name=f"Dummy/{name}", temperature=0.7), output
+        )
         add_submission(release, output, tmp_path / "entries")
     table = submission_table(release, tmp_path / "entries")
     assert set(table["score"].dropna()) == {7}
@@ -429,6 +445,18 @@ class Metric:
         for lang in ("en", "de")
         for model in ("candidate", "second")
     )
+
+    entry_path = next((tmp_path / "entries").glob("*.json"))
+    entry = json.loads(entry_path.read_text())
+    entry["result"]["metrics"]["custom"]["groups"]["category"] = []
+    entry_path.write_text(json.dumps(entry))
+    empty = submission_table(
+        release,
+        tmp_path / "entries",
+        breakdown="category",
+        columns=["model", "custom.count"],
+    )
+    assert empty.empty and list(empty.columns) == ["category", "model", "custom.count"]
 
     fresh_replay(release, tmp_path / "fresh", tmp_path / "cache")
     assert metrics(tmp_path / "candidate") == metrics(tmp_path / "fresh")

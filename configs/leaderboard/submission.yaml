@@ -1,4 +1,0 @@
-model:
-  name: VLLM/Qwen/Qwen3-8B
-  max_out_tokens: 4096
-  temperature: 0.0

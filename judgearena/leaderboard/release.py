@@ -24,7 +24,17 @@ from judgearena.leaderboard.prepare import (
     reference_pool,
 )
 from judgearena.leaderboard.scoring import score_metrics
-from judgearena.leaderboard.settings import rating_metrics
+from judgearena.leaderboard.settings import configured_metrics
+
+
+def bootstrap_settings(manifest):
+    methods = manifest["rating_metrics"]
+    if not methods:
+        return {}
+    return {
+        "bootstrap_seed": manifest["bootstrap_seed"],
+        "n_bootstraps": {method["name"]: method["n_bootstraps"] for method in methods},
+    }
 
 
 def load_release(path):
@@ -76,7 +86,7 @@ def write_manifest(cfg, output, **metadata):
     return manifest
 
 
-def create_completion_release(cfg, data, output, *, version):
+def create_completion_release(cfg, data, output, *, version, metrics=None):
     """Freeze selected instructions and, for pairwise runs, baseline answers."""
     from judgearena.benchmarks.pairwise.baselines import resolve_baseline_plan
     from judgearena.benchmarks.pairwise.comparisons import (
@@ -85,7 +95,8 @@ def create_completion_release(cfg, data, output, *, version):
         select_instructions,
     )
 
-    if rating_metrics(cfg):
+    ratings, _ = configured_metrics(cfg) if metrics is None else metrics
+    if ratings:
         raise ValueError(
             "Frozen ratings require a reference graph, not baseline answers"
         )
@@ -268,6 +279,7 @@ def create_release(
     labels="human",
     heldout=None,
     preparation=None,
+    metrics=None,
 ):
     """Freeze a curated graph and panel, using human labels or the configured judge.
 
@@ -282,7 +294,9 @@ def create_release(
         raise ValueError(
             "Set a fixed protocol.judge.preference_temperature before creating the release"
         )
-    configured = rating_metrics(cfg)
+    configured, observed_metrics = (
+        configured_metrics(cfg) if metrics is None else metrics
+    )
     with release_directory(cfg, output) as output:
         if labels == "human":
             outcomes = battles.assign(pref=battles.reference_pref)
@@ -301,7 +315,9 @@ def create_release(
         ratings = fit_reference_ratings(outcomes, configured, seed=cfg.run.seed)
         model_names = sorted(set(outcomes.model_a) | set(outcomes.model_b))
         observed = {
-            model: score_metrics(cfg, valid_outcomes, model, human=labels == "human")
+            model: score_metrics(
+                cfg, observed_metrics, valid_outcomes, model, human=labels == "human"
+            )
             for model in model_names
         }
         (output / "results.json").write_text(

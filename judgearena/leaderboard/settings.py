@@ -39,7 +39,10 @@ class LeaderboardSettings(BaseModel):
 
 def configured_metrics(cfg):
     """Validate the ordinary metric requests used by a release."""
-    from judgearena.benchmarks.elo.scoring import configure_frozen_metrics
+    from judgearena.benchmarks.elo.scoring import (
+        BradleyTerryMetric,
+        configure_frozen_metrics,
+    )
     from judgearena.benchmarks.scoring import build_metrics
 
     configured = build_metrics(cfg.resolved_task.spec.protocol.scoring.metrics)
@@ -48,14 +51,11 @@ def configured_metrics(cfg):
             raise metric
     if not configured:
         raise ValueError("A leaderboard requires at least one metric")
-    return configure_frozen_metrics(cfg, configured)
-
-
-def rating_metrics(cfg):
-    from judgearena.benchmarks.elo.scoring import BradleyTerryMetric
-
-    return [
-        (request.name or request.metric, metric)
-        for request, metric in configured_metrics(cfg)
-        if isinstance(metric, BradleyTerryMetric)
-    ]
+    ratings = []
+    observed = []
+    for request, metric in configure_frozen_metrics(cfg, configured):
+        if isinstance(metric, BradleyTerryMetric):
+            ratings.append((request.name or request.metric, metric))
+        else:
+            observed.append((request, metric))
+    return ratings, observed

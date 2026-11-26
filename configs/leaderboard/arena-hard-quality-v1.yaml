@@ -7,7 +7,6 @@ run:
   sampling: {limit: 10}
   seed: 42
   use_tqdm: true
-  store_root: ./cache/leaderboard
 protocol:
   runner: single_answer
   generation:

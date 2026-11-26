@@ -331,32 +331,27 @@ def configure_frozen_metrics(cfg, configured):
     return tuple(resolved)
 
 
-def frozen_metric_inputs(requests, *, ratings, methods, n_bootstraps, seed):
+def frozen_metric_inputs(requests, *, ratings, methods):
     """Bind saved reference ratings to their metric without changing judging."""
     from judgearena.benchmarks.scoring import build_metrics
-    from judgearena.tasks.schema.metrics import MetricSpec
 
-    metrics = [
-        (request, metric)
-        for request, metric in build_metrics(requests)
-        if not isinstance(metric, BradleyTerryMetric)
-    ]
-    runtime = {}
-    for method in methods:
-        name = method["name"]
-        metrics.append(
-            (
-                MetricSpec(metric="bradley_terry", name=name),
-                BradleyTerryMetric(
-                    soft=method["soft"],
-                    n_bootstraps=n_bootstraps,
-                    fit_mode="frozen",
-                    bootstrap_group="split_group",
-                ),
-            )
-        )
-        runtime[name] = {
-            "seed": seed,
-            "reference_ratings": ratings.loc[ratings.method.eq(name)],
+    overrides = {
+        method["name"]: {
+            "fit_mode": "frozen",
+            "bootstrap_group": "split_group",
+            "n_bootstraps": method["n_bootstraps"],
         }
-    return tuple(metrics), runtime
+        for method in methods
+    }
+    runtime = {
+        name: {"reference_ratings": ratings.loc[ratings.method.eq(name)]}
+        for name in overrides
+    }
+    # The frozen fitter already returns per-language groups.
+    requests = [
+        request.model_copy(update={"breakdown_by": ()})
+        if (request.name or request.metric) in overrides
+        else request
+        for request in requests
+    ]
+    return build_metrics(requests, parameter_overrides_by_metric=overrides), runtime
